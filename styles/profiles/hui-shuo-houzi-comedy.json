@@ -1,0 +1,66 @@
+{
+  "name": "肘子流搞笑",
+  "id": "hui-shuo-houzi-comedy",
+  "referenceWorks": ["大王饶命"],
+  "referenceAuthors": ["会说话的肘子"],
+  "sentence": {
+    "avgLength": 18,
+    "lengthVariance": 16,
+    "shortBurstsContext": "吐槽金句、反差萌瞬间、搞笑对话",
+    "longFlowsContext": "世界观设定、情感铺垫、剧情推进",
+    "fragmentRatio": 0.25,
+    "commaDensity": 0.07,
+    "exclamationDensity": 0.04,
+    "ellipsisDensity": 0.05,
+    "signaturePatterns": [
+      "吐槽式叙述：主角内心独白充满吐槽",
+      "反差萌：严肃场景中的搞笑元素",
+      "日常穿插：主线剧情中插入轻松日常",
+      "金句频出：每章都有可传播的搞笑金句"
+    ]
+  },
+  "lexicon": {
+    "highFreqWords": ["负面情绪", "系统", "任务", "奖励", "吐槽", "搞笑", "尴尬", "无语", "震惊", "崩溃"],
+    "signaturePhrases": ["这波不亏", "我太难了", "你认真的吗", "这也行", "离谱"],
+    "avoidWords": ["沉重", "绝望", "黑暗"],
+    "powerWords": ["崩", "裂", "炸", "秀", "皮", "坑", "骚", "溜"],
+    "sensoryWords": {
+      "visual": ["表情包式描写", "夸张动作", "尴尬场面"],
+      "auditory": ["吐槽声", "欢笑声", "尴尬的沉默"],
+      "tactile": ["面红耳赤", "浑身发抖", "嘴角抽搐"]
+    }
+  },
+  "narrative": {
+    "povStyle": "第三人称+主角内心独白",
+    "descriptionDensity": 0.15,
+    "dialogueRatio": 0.4,
+    "innerMonologueRatio": 0.25,
+    "actionRatio": 0.2,
+    "expositionStyle": "吐槽式解说",
+    "timeFlow": "轻松-紧张-搞笑-轻松",
+    "sceneTransitionStyle": "情绪过渡"
+  },
+  "emotion": {
+    "baseline": "轻松",
+    "peakType": "反差式高潮（搞笑场景突然认真）",
+    "valleyType": "短暂的感动与温情",
+    "escalationPattern": "搞笑铺垫→认真爆发→搞笑收尾",
+    "coolDownPattern": "用吐槽和搞笑快速化解紧张",
+    "signatureEmotions": ["搞笑", "感动", "热血", "温馨"]
+  },
+  "imagery": {
+    "primaryMetaphors": ["游戏比喻", "网络用语比喻", "日常比喻"],
+    "visualStyle": "明亮活泼、表情包式",
+    "colorPalette": ["亮黄", "橙色", "天蓝", "粉色", "白色"],
+    "spatialSense": "日常感强",
+    "timeImagery": "快节奏，时间跳跃频繁"
+  },
+  "rhythm": {
+    "sentenceRhythm": "短-短-短-短",
+    "paragraphRhythm": "快节奏，短段落+对话密集",
+    "chapterRhythm": "搞笑开头→剧情推进→搞笑/感动收尾",
+    "breathPoints": "搞笑日常和吐槽段落",
+    "accelerationTriggers": ["意外事件", "系统任务", "搞笑误会"],
+    "decelerationTriggers": ["温馨互动", "回忆段落", "感动瞬间"]
+  }
+}

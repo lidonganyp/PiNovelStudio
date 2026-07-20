@@ -1,0 +1,36 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-12",
+  "regressionCheck": {
+    "checked": true,
+    "appendedStart": 2628,
+    "appendedEnd": 2653,
+    "appendedExcerpt": "那团火，又轻微地动了一下——这一次，是朝他的方向。",
+    "appendedLength": 25,
+    "rawTextLength": 2628,
+    "candidateTextLength": 2653,
+    "lengthDelta": 25,
+    "appendedInTailRegion": true
+  },
+  "rawHash": "e17de1fbbcd53bf86f12ad7299368238bfb92031b546ccbddcb9f1ec19f0205c",
+  "rawManifestHash": "bb216d960809635f31c5aca846068d0e8eb95ee4e59a3cb2e7b5ce80e54645d7",
+  "pressureMeta": {
+    "causalEndPressure": {
+      "value": "火团第一次异动后的未知回应",
+      "sourceRef": "seed:ch12:fire_movement"
+    },
+    "currentHookType": "mystery_response",
+    "recentHookTypes": [
+      "cost_reveal"
+    ]
+  },
+  "patternMemoryCheck": {
+    "currentHookType": "mystery_response",
+    "recentHookTypes": [
+      "cost_reveal"
+    ],
+    "recentCount": 0,
+    "repeated": false,
+    "verdict": "ok"
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "name": "玄幻类型出厂预设",
+  "type": "xianxia",
+  "version": "1.0.0",
+  "description": "玄幻类型默认配置，聚焦世界观沉浸和设定一致性",
+
+  "metadata": {
+    "core_promise": "世界沉浸欲望——进入比现实更宏大、规则更清晰的世界",
+    "reader_contract": {
+      "allowed": ["节奏可慢"],
+      "forbidden": ["设定随意更改", "战力标准内部矛盾"]
+    },
+    "lifespan_weakness": "设定一致性崩塌",
+    "primary_quality_gate": "世界观展示"
+  },
+
+  "agent_params": {
+    "Narrator": {
+      "dialogue_ratio": 0.25,
+      "action_density": "medium",
+      "sentence_length": 32,
+      "description": "场景厚重长句(25-35字)、设定通过可感知体验传达、修炼重心在感知变化、战力遵循参照系"
+    },
+
+    "HookScorer": {
+      "hook_frequency": "5-8",
+      "preferred_hook_type": "world_reveal",
+      "description": "首选世界观揭示型，每5-8章一次"
+    },
+
+    "EmotionMetronome": {
+      "emotion_curve_template": "staircase",
+      "baseline": 3.0,
+      "peak": 7.5,
+      "trough": 2.5,
+      "cycle_length": 5,
+      "description": "阶梯上行：修炼→突破→新境界→更强对手。台阶之间是漫长的积累"
+    },
+
+    "AntiAIDetector": {
+      "anti_ai_threshold": 0.7,
+      "transition_phrase_strictness": "medium",
+      "template_pattern_strictness": "lenient",
+      "description": "中等严格"
+    },
+
+    "REM": {
+      "max_active_expectations": 5,
+      "description": "活跃预期上限5条"
+    },
+
+    "Critic": {
+      "logical_weight": 0.7,
+      "emotional_weight": 0.2,
+      "setting_weight": 0.95,
+      "description": "设定一致性权重接近命门(0.95)"
+    },
+
+    "WorldPresenter": {
+      "world_presentation_density": 0.30,
+      "info_load_per_chapter": "high",
+      "description": "信息密度上限30%"
+    },
+
+    "StyleShaper": {
+      "adjective_density": 0.20,
+      "style_vector": ["古韵", "苍茫", "肃杀", "飘逸", "道法自然"],
+      "forbidden_modernisms": ["OK", "没问题", "搞定", "上线", "复盘"],
+      "description": "形容词密度中高(15-25%)，古韵苍茫风格向量"
+    },
+
+    "EnsembleDirector": {
+      "ensemble_scene_frequency": "medium",
+      "description": "群像场景中（势力场景）"
+    },
+
+    "DetailLedger": {
+      "detail_tracking": "fine",
+      "description": "追踪精细度细"
+    },
+
+    "MidChapterChecker": {
+      "stagnation_trigger": 5,
+      "stagnation_type": "no_growth",
+      "description": "5章无成长触发停滞预警"
+    },
+
+    "ClosureEvaluator": {
+      "climax_standard": "world_closure_completeness",
+      "description": "收尾标准：世界观收束完整度"
+    },
+
+    "PacingController": {
+      "word_count_range": [3000, 5000],
+      "description": "章节字数3000-5000（最长）"
+    }
+  },
+
+  "craft_rules": [
+    {
+      "id": 503,
+      "rule": "三层信息交错释放：境界/功法/势力不同章集中，每3章为释放单元"
+    },
+    {
+      "id": 504,
+      "rule": "'吃设定'风险：前期明确限制被突破需充分铺垫；战力描述数量级差异触发警告"
+    },
+    {
+      "id": 505,
+      "rule": "修炼章节密度：设定信息≤30%，心理描写≥50%，禁止纯数据化修炼"
+    },
+    {
+      "id": 506,
+      "rule": "战力标准锁定：第5章建立参照系，同境界战力差≤10倍"
+    },
+    {
+      "id": 507,
+      "rule": "世界观三层递进：表层→中层→核心层，每层间隔≥30章"
+    },
+    {
+      "id": 508,
+      "rule": "势力差异化：主要势力≤7个，每个有独特文化标签，矛盾有设定层面原因"
+    },
+    {
+      "id": 509,
+      "rule": "主角传承不可侵犯性：核心传承确立后禁止实质削弱，限制必须同期埋突破伏笔"
+    }
+  ],
+
+  "anti_patterns": [
+    "设定内部矛盾（读者比作者更记得）",
+    "战力标准崩塌",
+    "主角核心传承被削弱",
+    "势力设定随意变更",
+    "纯数据化修炼（无感知体验）"
+  ],
+
+  "test_benchmarks": {
+    "blind_test_return_willingness": 6.5,
+    "hook_shannon_entropy": 2.0,
+    "expectation_fulfillment_rate": 0.65,
+    "patience_50chapters": 45,
+    "anti_ai_chapter_threshold": 0.6,
+    "setting_consistency_score": 0.90
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "pinovel.ending-pressure-non-tail-rejection.v1",
+  "rejectedByGenerator": false,
+  "rejectedByTailRegionCheck": true,
+  "candidatesGenerated": 1,
+  "reason": "",
+  "rawHash": "aab2c21657d05ebd0b759823c9603964cdad49bd34c6f59789cd1712d0d08829",
+  "attemptedCandidateHash": "27f98b1d477dde2655933124c4293702eb2da8d94cb9a7066439a4c1ab8dd562",
+  "midPoint": 480,
+  "tailRegionThreshold": 1201,
+  "allowedEdits": [
+    {
+      "raw": {
+        "start": 480,
+        "end": 480
+      },
+      "candidate": {
+        "start": 480,
+        "end": 490
+      }
+    }
+  ]
+}

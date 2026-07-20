@@ -1,0 +1,66 @@
+{
+  "name": "辰东流史诗",
+  "id": "chen-dong-epic",
+  "referenceWorks": ["遮天"],
+  "referenceAuthors": ["辰东"],
+  "sentence": {
+    "avgLength": 28,
+    "lengthVariance": 15,
+    "shortBurstsContext": "天地异象、古碑现世、大帝降临",
+    "longFlowsContext": "远古传说、法则推演、世界格局",
+    "fragmentRatio": 0.1,
+    "commaDensity": 0.12,
+    "exclamationDensity": 0.02,
+    "ellipsisDensity": 0.03,
+    "signaturePatterns": [
+      "古朴厚重的长句铺陈",
+      "天地异象的排比描写",
+      "古字/古碑的神秘渲染",
+      "时间跨度的宏大叙述"
+    ]
+  },
+  "lexicon": {
+    "highFreqWords": ["大帝", "古碑", "法则", "天劫", "道纹", "仙殿", "源", "圣血", "禁区", "太古"],
+    "signaturePhrases": ["天地间", "亘古长存", "万古岁月", "大道轰鸣", "仙光冲霄"],
+    "avoidWords": ["轻松", "搞笑", "可爱"],
+    "powerWords": ["震", "压", "碎", "灭", "封", "斩", "镇", "葬"],
+    "sensoryWords": {
+      "visual": ["古朴", "苍茫", "混沌", "仙光", "血月"],
+      "auditory": ["轰鸣", "低沉", "道音", "梵唱"],
+      "tactile": ["沉重", "压迫", "灼热", "冰冷"]
+    }
+  },
+  "narrative": {
+    "povStyle": "第三人称全知",
+    "descriptionDensity": 0.4,
+    "dialogueRatio": 0.15,
+    "innerMonologueRatio": 0.1,
+    "actionRatio": 0.2,
+    "expositionStyle": "沉浸式长段",
+    "timeFlow": "缓慢-加速-爆发",
+    "sceneTransitionStyle": "意境过渡"
+  },
+  "emotion": {
+    "baseline": "苍凉",
+    "peakType": "天地共鸣式",
+    "valleyType": "深沉的孤独与追问",
+    "escalationPattern": "蓄水式，长时间铺垫后爆发",
+    "coolDownPattern": "余韵悠长，3-5段回味",
+    "signatureEmotions": ["苍凉", "震撼", "敬畏", "悲壮"]
+  },
+  "imagery": {
+    "primaryMetaphors": ["天地异象比喻", "远古遗迹比喻", "宇宙尺度比喻"],
+    "visualStyle": "古朴厚重、暗色调",
+    "colorPalette": ["青铜", "暗金", "血色", "混沌灰", "星空黑"],
+    "spatialSense": "宇宙级宏大",
+    "timeImagery": "万古岁月的沧桑感"
+  },
+  "rhythm": {
+    "sentenceRhythm": "长-长-短-长",
+    "paragraphRhythm": "慢节奏，长段落铺陈",
+    "chapterRhythm": "前铺后爆，章末必有异象",
+    "breathPoints": "远古传说的叙述段落",
+    "accelerationTriggers": ["古碑现世", "大帝遗迹", "天劫降临"],
+    "decelerationTriggers": ["远古传说", "法则推演", "世界观铺陈"]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "name": "novel-studio",
+  "version": "0.1.0",
+  "description": "PiNovelStudio - Writer's Room multi-agent novel generation extension",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "clean": "node scripts/clean-dirs.mjs dist dist-eval dist-test",
+    "build": "node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist dist-eval dist-test && npx tsc -p tsconfig.prod.json && npx tsc -p tsconfig.eval.json && npx tsc -p tsconfig.test.json",
+    "build:prod": "node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist && npx tsc -p tsconfig.prod.json",
+    "build:eval": "node scripts/clean-dirs.mjs dist-eval && npx tsc -p tsconfig.eval.json",
+    "build:test": "node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist-test && npx tsc -p tsconfig.test.json",
+    "test": "node --import ./tests/setup-test-env.mjs --test tests/*.test.mjs tests-eval/*.test.mjs",
+    "test:fresh": "npm run build && node --import ./tests/setup-test-env.mjs --test tests/*.test.mjs",
+    "smoke": "node --import ./tests/setup-test-env.mjs --test tests/phase5-unified-default-path.test.mjs",
+    "simplicity-gate": "node scripts/simplicity-gate.mjs",
+    "typecheck": "npx tsc --noEmit",
+    "evolution:capture": "node scripts/evolution-cli.mjs capture",
+    "evolution:candidate": "node scripts/evolution-cli.mjs candidate",
+    "evolution:freeze": "node scripts/evolution-cli.mjs freeze",
+    "evolution:status": "node scripts/evolution-cli.mjs status",
+    "evolution:verify": "node scripts/evolution-cli.mjs verify",
+    "evolution:drill": "node scripts/evolution-cli.mjs drill",
+    "evolution:evaluate": "node scripts/evolution-cli.mjs evaluate",
+    "evolution:proxy-review": "node scripts/evolution-cli.mjs proxy-review",
+    "evolution:promote": "node scripts/evolution-cli.mjs promote",
+    "evolution:hold": "node scripts/evolution-cli.mjs hold",
+    "evolution:rollback": "node scripts/evolution-cli.mjs rollback",
+    "evolution:health": "node scripts/evolution-cli.mjs health",
+    "evolution:canary": "node scripts/evolution-cli.mjs canary",
+    "test:eval": "node --import ./tests/setup-test-env.mjs --test tests-eval/*.test.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.80.6",
+    "@sinclair/typebox": "^0.34.49",
+    "glob": "^13.0.6",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "h-voice-chapter-12",
+  "opportunityType": "voice_and_naturalness",
+  "diagnosis": "不自然 span \"隐约感到一股威压涌来\" 存在感知侵蚀/翻译腔/语病",
+  "evidenceSpans": [
+    {
+      "start": 1976,
+      "end": 1986,
+      "excerpt": "隐约感到一股威压涌来"
+    }
+  ],
+  "expectedReaderGain": "把 span 改写为母语自然表达",
+  "damageRisks": [
+    "改写可能轻微影响段落情感重量"
+  ],
+  "rewriteScope": "span_candidate",
+  "confidence": 0.6
+}

@@ -1,0 +1,36 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-17",
+  "regressionCheck": {
+    "checked": true,
+    "appendedStart": 6492,
+    "appendedEnd": 6518,
+    "appendedExcerpt": "口袋里的鳞片微微发烫，仿佛在回应他刚刚想到的那个局。",
+    "appendedLength": 26,
+    "rawTextLength": 6492,
+    "candidateTextLength": 6518,
+    "lengthDelta": 26,
+    "appendedInTailRegion": true
+  },
+  "rawHash": "33c128340a764f57907fca6a5b5e537df02e634e1d4caf108fb84f100471ad43",
+  "rawManifestHash": "bb216d960809635f31c5aca846068d0e8eb95ee4e59a3cb2e7b5ce80e54645d7",
+  "pressureMeta": {
+    "causalEndPressure": {
+      "value": "骨节异响暗示力量变化的下一步",
+      "sourceRef": "seed:ch17:bone_sound"
+    },
+    "currentHookType": "power_hint",
+    "recentHookTypes": [
+      "cost_reveal"
+    ]
+  },
+  "patternMemoryCheck": {
+    "currentHookType": "power_hint",
+    "recentHookTypes": [
+      "cost_reveal"
+    ],
+    "recentCount": 0,
+    "repeated": false,
+    "verdict": "ok"
+  }
+}

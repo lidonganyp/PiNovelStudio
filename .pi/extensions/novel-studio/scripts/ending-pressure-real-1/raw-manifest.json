@@ -1,0 +1,32 @@
+{
+  "schema": "pinovel.ending-pressure-raw-manifest.v1",
+  "sourceWorkspace": "xinmo",
+  "hashAlgorithm": "sha256",
+  "chapters": [
+    {
+      "filename": "chapter-01.md",
+      "sourcePath": "workspaces/xinmo/chapters/chapter-01.md",
+      "sha256": "aab2c21657d05ebd0b759823c9603964cdad49bd34c6f59789cd1712d0d08829"
+    },
+    {
+      "filename": "chapter-05.md",
+      "sourcePath": "workspaces/xinmo/chapters/chapter-05.md",
+      "sha256": "88187cefac1386da0526cfb39cfb64d317b84a41d8d38df08aa006d8f7d9a323"
+    },
+    {
+      "filename": "chapter-08.md",
+      "sourcePath": "workspaces/xinmo/chapters/chapter-08.md",
+      "sha256": "512ef929f7c9a95fc3edb89d0ae796d6ae702e12b39e5dc4ef038bbaaf4f3980"
+    },
+    {
+      "filename": "chapter-12.md",
+      "sourcePath": "workspaces/xinmo/chapters/chapter-12.md",
+      "sha256": "e17de1fbbcd53bf86f12ad7299368238bfb92031b546ccbddcb9f1ec19f0205c"
+    },
+    {
+      "filename": "chapter-17.md",
+      "sourcePath": "workspaces/xinmo/chapters/chapter-17.md",
+      "sha256": "33c128340a764f57907fca6a5b5e537df02e634e1d4caf108fb84f100471ad43"
+    }
+  ]
+}

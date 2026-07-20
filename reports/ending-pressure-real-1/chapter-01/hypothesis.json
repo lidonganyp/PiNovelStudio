@@ -1,0 +1,19 @@
+{
+  "id": "h-ending-chapter-01",
+  "opportunityType": "chapter_end_pressure",
+  "diagnosis": "章末锚点 \"李一凡找了根勉强安全点的树杈做依靠，然后便沉沉地昏睡过去。...\" 区域可追加基于本章因果的钩子句",
+  "evidenceSpans": [
+    {
+      "start": 2372,
+      "end": 2401,
+      "excerpt": "李一凡找了根勉强安全点的树杈做依靠，然后便沉沉地昏睡过去。"
+    }
+  ],
+  "expectedReaderGain": "章末追加基于本章因果的钩子句，提升翻页牵引力",
+  "damageRisks": [
+    "强行加钩子可能与本章已建立的事实冲突",
+    "新问题若指向未规划的下章事实会伪造悬念"
+  ],
+  "rewriteScope": "span_candidate",
+  "confidence": 0.55
+}

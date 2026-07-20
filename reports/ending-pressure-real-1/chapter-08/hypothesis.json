@@ -1,0 +1,19 @@
+{
+  "id": "h-ending-chapter-08",
+  "opportunityType": "chapter_end_pressure",
+  "diagnosis": "章末锚点 \"也没有关注到小妖已经很久没有联系过自己了。...\" 区域可追加基于本章因果的钩子句",
+  "evidenceSpans": [
+    {
+      "start": 1970,
+      "end": 1991,
+      "excerpt": "也没有关注到小妖已经很久没有联系过自己了。"
+    }
+  ],
+  "expectedReaderGain": "章末追加基于本章因果的钩子句，提升翻页牵引力",
+  "damageRisks": [
+    "强行加钩子可能与本章已建立的事实冲突",
+    "新问题若指向未规划的下章事实会伪造悬念"
+  ],
+  "rewriteScope": "span_candidate",
+  "confidence": 0.55
+}

@@ -1,0 +1,97 @@
+{
+  "$schema": "SIMPLICITY-GATE-1 模块行数豁免清单",
+  "$description": "列出超过 800 行上限的现有文件及其豁免理由。新增豁免需在 PR 中说明理由。文件被重构到 ≤800 行后应从本清单移除。本清单防止回归（现有技术债锁定），新文件必须 ≤800 行。",
+  "$limit": 800,
+  "exemptions": [
+    {
+      "path": "novelos/eval/eval-harness.ts",
+      "lines": 1362,
+      "reason": "NovelBench eval-only 模块（编译到 dist-eval/）。eval harness 逻辑集中。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/demo-4a-prep.ts",
+      "lines": 990,
+      "reason": "eval-only demo prep。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/editorial-benefit-2a-preregistration.ts",
+      "lines": 866,
+      "reason": "eval-only preregistration。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/editorial-opportunity-judge.ts",
+      "lines": 983,
+      "reason": "editorial opportunity judge，含机会检测 + span 提取。待后续迭代拆分。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/editorial-story-preservation-gate.ts",
+      "lines": 1303,
+      "reason": "editorial story preservation gate，含事件提取/分类/校验逻辑。待后续迭代拆分为事件提取 + 校验两个子模块。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/ending-craft-evidence-scanner.ts",
+      "lines": 810,
+      "reason": "收尾工艺证据扫描器，略超上限（10 行），待后续迭代微调。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/fact-continuity-guard.ts",
+      "lines": 1261,
+      "reason": "FactGuard 事实守护，含上下文构建/检查/证据逻辑。待后续迭代拆分。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/final-state-commit.ts",
+      "lines": 970,
+      "reason": "最终状态提交，含 CanonState/CharacterState/PromiseLedger/PatternMemory 四类状态 committer。待后续迭代按状态类型拆分。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/information-release-evidence-scanner.ts",
+      "lines": 829,
+      "reason": "信息释放证据扫描器，待后续迭代拆分。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/replay-provenance-guard.ts",
+      "lines": 813,
+      "reason": "eval-only replay provenance guard。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/review-surface-cli.ts",
+      "lines": 1067,
+      "reason": "eval-only review surface CLI。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/strategy-evidence-dataset.ts",
+      "lines": 923,
+      "reason": "eval-only strategy evidence dataset。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/unified-entry.ts",
+      "lines": 1070,
+      "reason": "统一主链路入口 handler，含 preflight + 编排调用 + 结果封装。待后续迭代拆分 preflight 与结果封装。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/unified-orchestrator.ts",
+      "lines": 2471,
+      "reason": "统一主链路编排核心，PLAN-simplify.md Phase 1 拆分目标（4227→2471，已完成部分相位模块抽取：orchestrator-raw/factguard/quality/commit-save/types）。剩余拆分按 Phase 1 一次一抽节奏进行。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/governance/chapter-proxy-approval-caller.ts",
+      "lines": 835,
+      "reason": "G7 章节代理审批 caller（stub + real gpt5.6-sol + endpoint 校验）。P0-EXTENSION-WORKTREE-RECOVERY-1 确认为 HEAD=34b33a4 既存状态（git diff HEAD 空），非 P0-3 引入。超 35 行，待后续迭代拆分 stub/real/endpoint-validation 子模块。",
+      "category": "planned-refactor"
+    }
+  ]
+}

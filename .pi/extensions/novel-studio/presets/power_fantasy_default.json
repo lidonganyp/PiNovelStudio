@@ -1,0 +1,148 @@
+{
+  "name": "爽文出厂预设",
+  "type": "power_fantasy",
+  "version": "1.0.0",
+  "description": "爽文类型默认配置，聚焦情绪节拍和打脸节奏",
+
+  "metadata": {
+    "core_promise": "社会性补偿欲望——代理胜利，看强者碾压弱者",
+    "reader_contract": {
+      "allowed": ["逻辑漏洞（容忍区）", "配角简化（容忍区）", "世界观简化（容忍区）"],
+      "forbidden": ["主角吃亏无反击", "反派持续占上风", "连续无爽点超过3章"]
+    },
+    "lifespan_weakness": "情绪节拍断裂",
+    "primary_quality_gate": "情绪节拍"
+  },
+
+  "agent_params": {
+    "Narrator": {
+      "dialogue_ratio": 0.30,
+      "action_density": "high",
+      "sentence_length": 15,
+      "description": "动作优先、短句为主(15字)、碾压描写≥500字、环境压缩至5%"
+    },
+
+    "HookScorer": {
+      "hook_frequency": "3-5",
+      "preferred_hook_type": "face_slapping",
+      "description": "首选公义引爆型，每3-5章一次大爽点"
+    },
+
+    "EmotionMetronome": {
+      "emotion_curve_template": "sawtooth_rising",
+      "baseline": 5.0,
+      "peak": 9.0,
+      "trough": 3.0,
+      "cycle_length": 3,
+      "max_trough_chapters": 2,
+      "description": "锯齿上升：低谷→爆发→小幅回落→更高低谷→更强爆发"
+    },
+
+    "AntiAIDetector": {
+      "anti_ai_threshold": 0.9,
+      "transition_phrase_strictness": "strict",
+      "template_pattern_strictness": "very_strict",
+      "description": "模板句式极严格（打脸套路易AI化）"
+    },
+
+    "REM": {
+      "max_active_expectations": 4,
+      "satisfaction_interval": 2,
+      "description": "活跃预期上限4条，爽点间隔2章"
+    },
+
+    "Critic": {
+      "logical_weight": 0.4,
+      "emotional_weight": 0.3,
+      "setting_weight": 0.2,
+      "description": "逻辑权重低（容忍区），情感权重中等"
+    },
+
+    "WorldPresenter": {
+      "world_presentation_density": 0.15,
+      "info_load_per_chapter": "low",
+      "description": "信息密度上限15%（容忍区）"
+    },
+
+    "StyleShaper": {
+      "adjective_density": 0.08,
+      "style_vector": ["爽利", "凌厉", "快意", "霸道", "碾压"],
+      "forbidden_modernisms": ["复盘", "赋能", "抓手", "闭环", "颗粒度"],
+      "description": "形容词密度低(0-8%)，爽利凌厉风格向量"
+    },
+
+    "EnsembleDirector": {
+      "ensemble_scene_frequency": "low",
+      "description": "群像场景低（打脸场景为主）"
+    },
+
+    "DetailLedger": {
+      "detail_tracking": "coarse",
+      "description": "追踪精细度粗"
+    },
+
+    "MidChapterChecker": {
+      "stagnation_trigger": 2,
+      "stagnation_type": "no_satisfaction",
+      "description": "2章无爽点触发停滞预警"
+    },
+
+    "ClosureEvaluator": {
+      "climax_standard": "payoff_completeness",
+      "description": "收尾标准：终极打脸完整度"
+    },
+
+    "PacingController": {
+      "word_count_range": [2000, 3000],
+      "description": "章节字数2000-3000"
+    }
+  },
+
+  "craft_rules": [
+    {
+      "id": 482,
+      "rule": "打脸节奏三段法：蓄水≤3章 → 触发（明确事件）→ 爆发≥500字（含见证者反应）"
+    },
+    {
+      "id": 483,
+      "rule": "主角吃亏容忍上限：单次无反击≤2章，累计吃亏>爽点≤3章，第4章无爽点触发预警"
+    },
+    {
+      "id": 484,
+      "rule": "升级系数强制递增：每次爽点碾压系数必须比上一次强，禁止同级重复打脸"
+    },
+    {
+      "id": 485,
+      "rule": "反派存活管理：被打脸后5章内付代价，同一反派被打脸>3次无惩戒→流失预警"
+    },
+    {
+      "id": 486,
+      "rule": "金手指成本可见性：无代价金手指使用>5次→代入感丧失"
+    },
+    {
+      "id": 487,
+      "rule": "见证者管理：每次打脸需'高价值见证者'在场，反应描写是爽感放大器"
+    },
+    {
+      "id": 488,
+      "rule": "情绪基线控制：禁止长期低基线，蓄水期每章至少1个'主角潜力'信号"
+    }
+  ],
+
+  "anti_patterns": [
+    "主角持续被动挨打无反击预期",
+    "反派嚣张超过3章无代价",
+    "爽点升级系数重复",
+    "无见证者的单方面碾压",
+    "金手指无代价频繁使用"
+  ],
+
+  "test_benchmarks": {
+    "blind_test_return_willingness": 7.5,
+    "hook_shannon_entropy": 1.8,
+    "expectation_fulfillment_rate": 0.75,
+    "patience_50chapters": 55,
+    "anti_ai_chapter_threshold": 0.7,
+    "satisfaction_interval_compliance": 0.90
+  }
+}

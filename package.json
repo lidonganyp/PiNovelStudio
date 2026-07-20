@@ -1,0 +1,21 @@
+{
+  "name": "pinovel-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PiNovelStudio - AI-driven webnovel chapter generation (PI extension workspace root)",
+  "workspaces": [
+    ".pi/extensions/novel-studio"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace novel-studio",
+    "test": "npm test --workspace novel-studio",
+    "smoke": "npm run smoke --workspace novel-studio",
+    "simplicity-gate": "npm run simplicity-gate --workspace novel-studio",
+    "typecheck": "npm run typecheck --workspace novel-studio",
+    "test:eval": "npm run test:eval --workspace novel-studio",
+    "test:all": "npm test --workspace novel-studio && npm run test:eval --workspace novel-studio"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

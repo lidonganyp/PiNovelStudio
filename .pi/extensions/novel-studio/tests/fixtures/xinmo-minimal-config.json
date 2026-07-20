@@ -1,0 +1,164 @@
+{
+  "novelTitle": "心魔",
+  "genre": "都市异能",
+  "characters": [
+    {
+      "id": "li-yifan",
+      "name": "李一凡",
+      "role": "protagonist",
+      "aliases": [
+        "一凡"
+      ]
+    },
+    {
+      "id": "li-qiang",
+      "name": "李强",
+      "role": "family",
+      "aliases": [
+        "父亲",
+        "爸"
+      ]
+    },
+    {
+      "id": "xiao-yao",
+      "name": "小妖",
+      "role": "love-interest",
+      "aliases": [
+        "萧瑶",
+        "阿瑶"
+      ]
+    },
+    {
+      "id": "chen-feng",
+      "name": "陈锋",
+      "role": "mentor",
+      "aliases": [
+        "陈队长",
+        "陈少"
+      ]
+    },
+    {
+      "id": "zhao-mingyuan",
+      "name": "赵明远",
+      "role": "supporting",
+      "aliases": [
+        "赵队长",
+        "明远"
+      ]
+    },
+    {
+      "id": "mo-lao",
+      "name": "墨老",
+      "role": "mentor",
+      "aliases": [
+        "殿主"
+      ]
+    },
+    {
+      "id": "meng-yan",
+      "name": "梦魇",
+      "role": "antagonist-ally",
+      "aliases": [
+        "噩梦"
+      ]
+    },
+    {
+      "id": "su-qing",
+      "name": "苏晴",
+      "role": "supporting",
+      "aliases": []
+    },
+    {
+      "id": "bai-xiaorou",
+      "name": "白小柔",
+      "role": "supporting",
+      "aliases": [
+        "小柔"
+      ]
+    },
+    {
+      "id": "tie-shan",
+      "name": "铁山",
+      "role": "deceased",
+      "aliases": []
+    },
+    {
+      "id": "zhang-daqiang",
+      "name": "张大强",
+      "role": "supporting",
+      "aliases": [
+        "大强哥"
+      ]
+    },
+    {
+      "id": "a-man",
+      "name": "阿满",
+      "role": "supporting-future",
+      "aliases": [
+        "七号"
+      ]
+    },
+    {
+      "id": "wan-yongfu",
+      "name": "万永福",
+      "role": "supporting",
+      "note": "三年前坑李一凡4.7万的供应商，第15章被黑西装挟持家人后主动还款4.7万"
+    },
+    {
+      "id": "da-she",
+      "name": "大蛇",
+      "role": "companion",
+      "aliases": [],
+      "note": "心魔界溶洞守护者，被梦魇控制/共享意志的将级巨蛇。第16章首次主动出洞跟随李一凡进入心魔界深层（破例）。声音：无台词，动作型角色"
+    },
+    {
+      "id": "zhanlang-leader",
+      "name": "黑水·战狼领队",
+      "role": "supporting",
+      "note": "黑水雇佣军战狼分队领队，第17章青鱼嘴任务协作"
+    },
+    {
+      "id": "heimeigui-leader",
+      "name": "白鸽·黑玫瑰领队",
+      "role": "supporting",
+      "note": "白鸽组织黑玫瑰战队领队，第17章青鱼嘴任务协作"
+    },
+    {
+      "id": "zhanlang-duiyuan",
+      "name": "战狼队员",
+      "role": "supporting",
+      "note": "黑水战狼分队普通队员，第17章青鱼嘴任务协作"
+    },
+    {
+      "id": "heimeigui-duiyuan",
+      "name": "黑玫瑰队员",
+      "role": "supporting",
+      "note": "白鸽黑玫瑰战队普通队员，第17章青鱼嘴任务协作"
+    },
+    {
+      "id": "water-monster",
+      "name": "水怪",
+      "role": "monster",
+      "note": "青鱼嘴水域妖兽，第17章攻击王研究员"
+    },
+    {
+      "id": "researcher-wang",
+      "name": "王研究员",
+      "role": "supporting",
+      "note": "镇夜司科研专家，第17章青鱼嘴采样任务成员，被水怪拖入水中"
+    },
+    {
+      "id": "researcher-li",
+      "name": "李研究员",
+      "role": "supporting",
+      "note": "镇夜司科研专家，第17章青鱼嘴采样任务成员"
+    }
+  ],
+  "worldKeyTerms": {
+    "levels": [
+      "炼体（锻骨/淬腑/易筋/洗髓/金身/法相/归一）",
+      "炼魂（灵觉/聚魂/驭心/心象/领域/魂主/心王）",
+      "妖兽鬼物（兵级/将级/王级）"
+    ]
+  }
+}

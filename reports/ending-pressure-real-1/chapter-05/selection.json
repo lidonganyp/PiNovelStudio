@@ -1,0 +1,36 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-05",
+  "regressionCheck": {
+    "checked": true,
+    "appendedStart": 3301,
+    "appendedEnd": 3326,
+    "appendedExcerpt": "门打开的瞬间，他看清了来人——制服上的徽记，黑水。",
+    "appendedLength": 25,
+    "rawTextLength": 3301,
+    "candidateTextLength": 3326,
+    "lengthDelta": 25,
+    "appendedInTailRegion": true
+  },
+  "rawHash": "88187cefac1386da0526cfb39cfb64d317b84a41d8d38df08aa006d8f7d9a323",
+  "rawManifestHash": "bb216d960809635f31c5aca846068d0e8eb95ee4e59a3cb2e7b5ce80e54645d7",
+  "pressureMeta": {
+    "causalEndPressure": {
+      "value": "体制内来客身份未明，敲门声打断早餐",
+      "sourceRef": "seed:ch05:institutional_visitor"
+    },
+    "currentHookType": "identity_mystery",
+    "recentHookTypes": [
+      "cost_reveal"
+    ]
+  },
+  "patternMemoryCheck": {
+    "currentHookType": "identity_mystery",
+    "recentHookTypes": [
+      "cost_reveal"
+    ],
+    "recentCount": 0,
+    "repeated": false,
+    "verdict": "ok"
+  }
+}

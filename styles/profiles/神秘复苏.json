@@ -1,0 +1,66 @@
+{
+  "name": "神秘复苏式都市诡异悬疑",
+  "id": "神秘复苏",
+  "referenceWorks": ["神秘复苏"],
+  "referenceAuthors": ["佛前献花"],
+  "sentence": {
+    "avgLength": 25,
+    "lengthVariance": 15,
+    "shortBurstsContext": "异常临近、敲门声中断、论坛回帖反转、危险实锤",
+    "longFlowsContext": "规则推断、物证铺陈、网络信息整理、冷静心理判断",
+    "fragmentRatio": 0.18,
+    "commaDensity": 0.12,
+    "exclamationDensity": 0.01,
+    "ellipsisDensity": 0.04,
+    "signaturePatterns": [
+      "先用日常网络闲聊降低防备，再让现实证据逐步压进来",
+      "恐怖不靠尖叫形容，靠时间、地点、声音和证据链自证",
+      "角色越冷静，异常越显得不可解释",
+      "每个悬念都留一个可回看的物证或规则线索"
+    ],
+    "forbiddenWords": ["非常", "十分", "极其", "命运的齿轮", "空气仿佛凝固"]
+  },
+  "lexicon": {
+    "richness": 0.58,
+    "idiomDensity": 1,
+    "colloquialRatio": 0.34,
+    "adverbDensity": 2,
+    "specializedTerms": ["论坛", "帖子", "录音", "敲门声", "失踪", "尸体", "医院", "停电", "异常", "物证"],
+    "preferredTransitions": ["不过", "很快", "可问题是", "更怪的是", "直到", "与此同时"],
+    "avoidWords": ["华丽", "史诗", "震撼人心", "无法言喻的恐惧"]
+  },
+  "narrative": {
+    "povStyle": "第三人称有限视角",
+    "povSwitchFreq": 0.03,
+    "innerMonologueRatio": 0.18,
+    "showTellRatio": 0.72,
+    "dialogueRatio": 0.28,
+    "fightRatio": 0.02,
+    "infoDumpStrategy": "论坛帖、聊天记录、录音和当事人描述分段释放",
+    "chapterEndPattern": "物证坐实后的危险临门",
+    "humorStyle": "网络吐槽式冷幽默，短促，不破坏恐怖"
+  },
+  "emotion": {
+    "primaryEmotions": ["好奇", "荒诞", "不安", "压迫"],
+    "satisfactionInterval": 2600,
+    "oppressionMax": 1600,
+    "tensionWavePeriod": 2,
+    "climaxPattern": "日常玩笑 -> 异常证词 -> 物证出现 -> 现实入侵",
+    "cliffhangerType": "危险进入当前空间"
+  },
+  "imagery": {
+    "colorPalette": ["手机冷光", "医院白灯", "走廊黑暗", "老旧木门"],
+    "powerVisualization": "不展示炫技，只展示异常规则造成的结果",
+    "environmentStyle": "现代日常空间写实",
+    "fightChoreography": "第一反应是观察、后退、关门、记录，而不是正面对抗",
+    "metaphorSource": ["网络信息", "医院流程", "声音传播", "生活物件"],
+    "sensoryEmphasis": ["听觉", "视觉", "触觉"]
+  },
+  "rhythm": {
+    "paragraphLength": { "avg": 85, "variance": 35 },
+    "sceneLength": { "avg": 520, "variance": 180 },
+    "actionScenePace": "中快",
+    "dialogueScenePace": "中",
+    "descriptionScenePace": "慢中"
+  }
+}

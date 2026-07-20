@@ -1,0 +1,15 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-01",
+  "regressionCheck": {
+    "checked": true,
+    "beforeSpanExcerpt": "心脏还在胸腔里疯狂跳动",
+    "afterSpanExcerpt": "心脏还在胸腔里剧烈跳动",
+    "spanChanged": true,
+    "candidateTextLength": 2402,
+    "rawTextLength": 2402,
+    "lengthDelta": 0
+  },
+  "rawHash": "aab2c21657d05ebd0b759823c9603964cdad49bd34c6f59789cd1712d0d08829",
+  "rawManifestHash": "8fca55d50b5b7c465bf553380eca7ded0fb91124f6807c08597cf82c91e2b266"
+}

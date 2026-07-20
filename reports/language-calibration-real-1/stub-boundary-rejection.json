@@ -1,0 +1,13 @@
+{
+  "schema": "pinovel.language-calibration-boundary-rejection.v1",
+  "rejected": true,
+  "candidatesGenerated": 0,
+  "reason": "span 边界违规：差异区间 [77,2402] 超出证据 span 允许区域 [55,96]（tolerance=15），输出修改了 span 外文本（校准候选被拒绝，不进入 judge）",
+  "rawHash": "aab2c21657d05ebd0b759823c9603964cdad49bd34c6f59789cd1712d0d08829",
+  "attemptedCandidateHash": "2fc89867654940e88b8d564c4bebce691cfcbd0f8b593ba1f108ad691b3eec5c",
+  "evidenceSpan": {
+    "start": 70,
+    "end": 81,
+    "excerpt": "心脏还在胸腔里疯狂跳动"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-08",
+  "regressionCheck": {
+    "checked": true,
+    "beforeSpanExcerpt": "内心的激动慢慢安静来下",
+    "afterSpanExcerpt": "内心的激动慢慢安静下来",
+    "spanChanged": true,
+    "candidateTextLength": 1992,
+    "rawTextLength": 1992,
+    "lengthDelta": 0
+  },
+  "rawHash": "512ef929f7c9a95fc3edb89d0ae796d6ae702e12b39e5dc4ef038bbaaf4f3980",
+  "rawManifestHash": "8fca55d50b5b7c465bf553380eca7ded0fb91124f6807c08597cf82c91e2b266"
+}

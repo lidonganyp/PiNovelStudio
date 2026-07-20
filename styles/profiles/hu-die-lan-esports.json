@@ -1,0 +1,66 @@
+{
+  "name": "蝴蝶蓝流电竞",
+  "id": "hu-die-lan-esports",
+  "referenceWorks": ["全职高手"],
+  "referenceAuthors": ["蝴蝶蓝"],
+  "sentence": {
+    "avgLength": 20,
+    "lengthVariance": 14,
+    "shortBurstsContext": "比赛关键时刻、操作连招、团战爆发",
+    "longFlowsContext": "战术分析、角色互动、日常对话",
+    "fragmentRatio": 0.18,
+    "commaDensity": 0.09,
+    "exclamationDensity": 0.02,
+    "ellipsisDensity": 0.03,
+    "signaturePatterns": [
+      "战术描写：操作细节与战略思维并重",
+      "群像刻画：每个角色都有独特性格和成长线",
+      "幽默日常：训练和比赛间的轻松互动",
+      "专业术语：游戏/竞技术语的自然融入"
+    ]
+  },
+  "lexicon": {
+    "highFreqWords": ["操作", "技能", "走位", "意识", "配合", "战术", "节奏", "团队", "职业", "连招"],
+    "signaturePhrases": ["操作拉满", "意识到位", "节奏起飞", "完美配合", "极限操作"],
+    "avoidWords": ["杀戮", "血腥", "恐怖"],
+    "powerWords": ["闪", "切", "控", "爆", "拉", "压", "秀", "翻"],
+    "sensoryWords": {
+      "visual": ["光效", "弹幕", "技能特效", "界面"],
+      "auditory": ["键盘声", "欢呼声", "解说声"],
+      "tactile": ["手速", "操控感", "紧张感"]
+    }
+  },
+  "narrative": {
+    "povStyle": "第三人称多视角",
+    "descriptionDensity": 0.2,
+    "dialogueRatio": 0.4,
+    "innerMonologueRatio": 0.15,
+    "actionRatio": 0.25,
+    "expositionStyle": "对话式解说",
+    "timeFlow": "正常-加速-骤停-加速",
+    "sceneTransitionStyle": "视角切换"
+  },
+  "emotion": {
+    "baseline": "热血",
+    "peakType": "团队协作式",
+    "valleyType": "挫折后的反思与成长",
+    "escalationPattern": "比赛节奏式，随赛况波动",
+    "coolDownPattern": "赛后互动，幽默化解紧张",
+    "signatureEmotions": ["热血", "感动", "幽默", "成长"]
+  },
+  "imagery": {
+    "primaryMetaphors": ["战场比喻", "棋局比喻", "舞台比喻"],
+    "visualStyle": "明亮动感、信息丰富",
+    "colorPalette": ["蓝色", "金色", "白色", "红色", "绿色"],
+    "spatialSense": "竞技场/虚拟空间",
+    "timeImagery": "比赛时钟的紧迫感"
+  },
+  "rhythm": {
+    "sentenceRhythm": "短-短-短-长",
+    "paragraphRhythm": "快节奏，对话密集",
+    "chapterRhythm": "日常-训练-比赛，章末必有精彩操作",
+    "breathPoints": "日常互动和幽默对话",
+    "accelerationTriggers": ["比赛开始", "关键团战", "逆转时刻"],
+    "decelerationTriggers": ["赛后互动", "训练日常", "角色对话"]
+  }
+}

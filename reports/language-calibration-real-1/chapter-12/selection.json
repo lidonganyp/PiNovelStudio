@@ -1,0 +1,15 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-12",
+  "regressionCheck": {
+    "checked": true,
+    "beforeSpanExcerpt": "隐约感到一股威压涌来",
+    "afterSpanExcerpt": "隐约察觉到一股威压涌",
+    "spanChanged": true,
+    "candidateTextLength": 2629,
+    "rawTextLength": 2628,
+    "lengthDelta": 1
+  },
+  "rawHash": "e17de1fbbcd53bf86f12ad7299368238bfb92031b546ccbddcb9f1ec19f0205c",
+  "rawManifestHash": "8fca55d50b5b7c465bf553380eca7ded0fb91124f6807c08597cf82c91e2b266"
+}

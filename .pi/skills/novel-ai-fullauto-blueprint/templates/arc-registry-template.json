@@ -1,0 +1,135 @@
+{
+  "_comment": "v4.0 弧线注册表模板 - ClosureTracker 接管 12 条主伏笔",
+  "_usage": "复制到 workspaces/{id}/series/arc-registry.json，替换占位符",
+  "arcs": [
+    {
+      "id": "arc-main",
+      "name": "{主线弧线名}",
+      "type": "primary",
+      "coreQuestion": "{主线核心问题}",
+      "priority": "P0",
+      "status": "opened",
+      "openedChapter": 1,
+      "expectedClosureChapter": 150
+    },
+    {
+      "id": "arc-mentor",
+      "name": "{挂壁导师弧线}",
+      "type": "relational",
+      "coreQuestion": "{导师真相 + 主角能否救回？}",
+      "priority": "P0",
+      "status": "opened",
+      "openedChapter": 1,
+      "expectedClosureChapter": 145
+    },
+    {
+      "id": "arc-villain",
+      "name": "{大反派弧线}",
+      "type": "primary",
+      "coreQuestion": "{反派身份 + 反派动机？}",
+      "priority": "P0",
+      "status": "opened",
+      "openedChapter": 1,
+      "expectedClosureChapter": 130
+    },
+    {
+      "id": "arc-cycle",
+      "name": "{反向规则/循环弧线}",
+      "type": "primary",
+      "coreQuestion": "{核心反转：为什么主角是非他不可？}",
+      "priority": "P0",
+      "status": "opened",
+      "openedChapter": 1,
+      "expectedClosureChapter": 150
+    },
+    {
+      "id": "arc-third-way",
+      "name": "第三条路",
+      "type": "primary",
+      "coreQuestion": "{终局解法：在二选一之外是否存在第三条路？}",
+      "priority": "P1",
+      "status": "opened",
+      "openedChapter": 1,
+      "expectedClosureChapter": 150
+    },
+    {
+      "id": "arc-ally-1",
+      "name": "{关键盟友弧线}",
+      "type": "relational",
+      "coreQuestion": "{盟友会站在主角这边吗？}",
+      "priority": "P1",
+      "status": "opened",
+      "openedChapter": 1,
+      "expectedClosureChapter": 90
+    },
+    {
+      "id": "arc-ally-2",
+      "name": "{次要盟友弧线}",
+      "type": "relational",
+      "coreQuestion": "{次盟友的旧事故是什么？}",
+      "priority": "P2",
+      "status": "opened",
+      "openedChapter": 1,
+      "expectedClosureChapter": 70
+    }
+  ],
+  "pending_foreshadows": [
+    {
+      "id": "F-01",
+      "description": "{核心伏笔 1}",
+      "level": "A",
+      "openedChapter": 1,
+      "expectedRecallChapter": 35,
+      "status": "opened"
+    },
+    {
+      "id": "F-02",
+      "description": "{金手指显化}",
+      "level": "B",
+      "openedChapter": 1,
+      "expectedRecallChapter": 20,
+      "status": "opened"
+    },
+    {
+      "id": "F-05",
+      "description": "{反派账户/权限痕迹}",
+      "level": "A",
+      "openedChapter": 1,
+      "expectedRecallChapter": 111,
+      "status": "opened"
+    },
+    {
+      "id": "F-07",
+      "description": "{第三条路策划备注}",
+      "level": "A",
+      "openedChapter": 1,
+      "expectedRecallChapter": 150,
+      "status": "opened"
+    },
+    {
+      "id": "F-NEW-01",
+      "description": "{前 N 次循环/样本/历史}",
+      "level": "A",
+      "openedChapter": 1,
+      "expectedRecallChapter": 70,
+      "status": "opened"
+    },
+    {
+      "id": "F-NEW-02",
+      "description": "{死亡/失败的反向条件}",
+      "level": "A",
+      "openedChapter": 1,
+      "expectedRecallChapter": 150,
+      "status": "opened"
+    }
+  ],
+  "config": {
+    "totalChapters": 150,
+    "currentChapter": 1,
+    "closureType": "fulfilling",
+    "version": "4.0.0",
+    "maxCrossVolumeArcs": 6,
+    "_v4Note": "v4.0：跨卷伏笔总数受限于 6 条（AI 跨章记忆窗口约束）"
+  },
+  "lastUpdated": ""
+}

@@ -1,0 +1,88 @@
+{
+  "name": "副本设计师·规则悬疑",
+  "id": "fuben-rule-suspense",
+  "basedOn": "wu-hu-suspense",
+  "referenceWorks": ["诡秘之主", "宿命之环", "心慕"],
+  "referenceAuthors": ["爱潜水的乌贼"],
+  "_notes": "为《副本设计师》定制：低对话比例（人物语言铁律：林觉情绪越重话越少／苏念档案敏感／沈游白级前禁止直接对话／L-17 以权限痕迹存在），克制压抑色调，规则措辞/档案残片/权限记录为情绪锚点，三色调主导（冷白/灰蓝/档案纸黄/屏幕青/副本黑）。",
+  "sentence": {
+    "avgLength": 22,
+    "lengthVariance": 16,
+    "shortBurstsContext": "规则揭示、权限异常、真相逼近、副本结算瞬间",
+    "longFlowsContext": "规则推演、档案比对、心理观察、副本设计思考",
+    "fragmentRatio": 0.22,
+    "commaDensity": 0.1,
+    "exclamationDensity": 0.005,
+    "ellipsisDensity": 0.03,
+    "signaturePatterns": [
+      "短句优先，情绪越重话越少",
+      "对话以事实问句驱动",
+      "动作-物件-停顿表达情绪",
+      "段落短，留呼吸",
+      "禁止心理独白长段",
+      "信息控制：只展示部分，暗示更多",
+      "白描留白：写出可见的十，藏着未写的九十",
+      "代价先行：每次获得规则视界都有代价"
+    ]
+  },
+  "lexicon": {
+    "highFreqWords": ["规则", "副本", "权限", "档案", "签名", "措辞", "残片", "锚点", "记录", "节点", "结算", "误差"],
+    "signaturePhrases": ["规则措辞", "权限痕迹", "档案残片", "副本结算", "假签名", "事故副本", "S 注释", "误差范围"],
+    "avoidWords": ["非常", "十分", "极其", "没问题", "搞定", "OK", "上线", "轻松", "搞笑", "无敌"],
+    "powerWords": ["扣", "压", "封", "锁", "贴", "撕", "圈", "盖", "压痕", "勾"],
+    "sensoryWords": {
+      "visual": ["冷白", "灰蓝", "档案纸黄", "屏幕青", "副本黑", "压痕", "擦痕"],
+      "auditory": ["低响", "断电", "纸面摩擦", "电流嗡鸣", "寂静", "钢笔尖"],
+      "tactile": ["冰凉", "干涩", "卡顿", "麻", "细密", "黏手"]
+    }
+  },
+  "narrative": {
+    "povStyle": "第三人称限制视角（林觉锚定）",
+    "descriptionDensity": 0.3,
+    "dialogueRatio": 0.18,
+    "innerMonologueRatio": 0.18,
+    "actionRatio": 0.25,
+    "expositionStyle": "档案/规则/权限痕迹三轨揭示",
+    "timeFlow": "正常-加速-骤停",
+    "sceneTransitionStyle": "信息链/规则措辞过渡",
+    "viewpoint": "third_person_limited",
+    "viewpointAnchor": "林觉",
+    "codeFlashLimit": 3,
+    "codeFlashRule": "全书最多三次底层代码短闪，每次不超过一小段，且必须在第三阶段及之后触发",
+    "coreEmotionAnchors": [
+      "规则措辞",
+      "S 注释",
+      "档案残片",
+      "碎片刷新时间",
+      "权限记录",
+      "假签名",
+      "事故副本入口"
+    ]
+  },
+  "emotion": {
+    "baseline": "克制压抑",
+    "peakType": "权限痕迹揭示式",
+    "valleyType": "规则失效后的失重感",
+    "escalationPattern": "档案/规则/权限三线汇聚后冷爆发",
+    "coolDownPattern": "推演式冷却，用规则措辞复盘",
+    "signatureEmotions": ["压抑", "挣扎", "决断", "紧张", "平静", "惊讶"],
+    "_signatureEmotionsRationale": "已对齐 style-fingerprint 内置词族（共11种）。本作 DNA：『压抑』为基调（沉默/低头/喘不过气），『挣扎』表克制纠结，『决断』为林觉问对问题的节点动作（咬牙/握紧/深吸一口气/迈出），『紧张』在权限异常瞬间（屏住/绷紧/心跳），『平静』表面冷静推演（冷静/沉着/从容），『惊讶』权限痕迹揭示（一愣/一怔）。原本想要的『克制/好奇/收紧/释然』不在词族中，无法被检测器命中。",
+    "behavioralOverVerbal": true,
+    "satisfactionInterval": 4500
+  },
+  "imagery": {
+    "primaryMetaphors": ["规则比喻", "档案比喻", "副本比喻", "权限痕迹比喻"],
+    "visualStyle": "冷调、低饱和、档案质感",
+    "colorPalette": ["冷白", "灰蓝", "档案纸黄", "屏幕青", "副本黑"],
+    "spatialSense": "走廊/档案室/登记楼的纵深与压抑",
+    "timeImagery": "刷新周期与卡顿并存"
+  },
+  "rhythm": {
+    "sentenceRhythm": "短-短-长-短",
+    "paragraphRhythm": "中节奏，信息密度高，段落短",
+    "chapterRhythm": "信息累积，章末以权限痕迹/规则残片收束",
+    "breathPoints": "苏念递档案/齐墨闲笔的短暂日常",
+    "accelerationTriggers": ["权限异常", "规则失效", "副本入口出现"],
+    "decelerationTriggers": ["档案比对", "规则推演", "停顿观察"]
+  }
+}

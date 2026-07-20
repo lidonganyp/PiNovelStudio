@@ -1,0 +1,66 @@
+{
+  "name": "乌贼流悬疑",
+  "id": "wu-hu-suspense",
+  "referenceWorks": ["诡秘之主", "宿命之环", "深海余烬"],
+  "referenceAuthors": ["爱潜水的乌贼"],
+  "sentence": {
+    "avgLength": 25,
+    "lengthVariance": 18,
+    "shortBurstsContext": "危险降临、失控边缘、真相揭示",
+    "longFlowsContext": "信息推理、规则分析、心理活动",
+    "fragmentRatio": 0.2,
+    "commaDensity": 0.1,
+    "exclamationDensity": 0.01,
+    "ellipsisDensity": 0.04,
+    "signaturePatterns": [
+      "信息控制：只展示部分，暗示更多",
+      "代价先行：每次获得力量都有代价",
+      "白描留白：写出可见的十，藏着未写的九十",
+      "灰暗质感：压抑中寻找光明"
+    ]
+  },
+  "lexicon": {
+    "highFreqWords": ["序列", "途径", "失控", "非凡", "灵界", "占卜", "仪式", "代价", "封印", "锚点"],
+    "signaturePhrases": ["灵体之线", "占卜感应", "失控的边缘", "非凡特性", "命运的指引"],
+    "avoidWords": ["轻松", "搞笑", "无敌"],
+    "powerWords": ["窥", "噬", "侵", "蚀", "封", "隐", "织", "噬"],
+    "sensoryWords": {
+      "visual": ["灰白", "暗红", "幽蓝", "朦胧", "扭曲"],
+      "auditory": ["低语", "呢喃", "嗡鸣", "寂静"],
+      "tactile": ["冰冷", "黏腻", "刺痛", "麻木"]
+    }
+  },
+  "narrative": {
+    "povStyle": "第三人称限制视角",
+    "descriptionDensity": 0.25,
+    "dialogueRatio": 0.3,
+    "innerMonologueRatio": 0.25,
+    "actionRatio": 0.2,
+    "expositionStyle": "推理式揭示",
+    "timeFlow": "正常-加速-骤停",
+    "sceneTransitionStyle": "信息链过渡"
+  },
+  "emotion": {
+    "baseline": "压抑",
+    "peakType": "真相揭示式",
+    "valleyType": "深层的恐惧与无力",
+    "escalationPattern": "信息累积式，线索汇聚后爆发",
+    "coolDownPattern": "理性分析式冷却，用推理平复情绪",
+    "signatureEmotions": ["恐惧", "好奇", "震撼", "释然"]
+  },
+  "imagery": {
+    "primaryMetaphors": ["灵界比喻", "命运之线比喻", "深渊比喻"],
+    "visualStyle": "灰暗朦胧、细节丰富",
+    "colorPalette": ["灰白", "暗红", "幽蓝", "深褐", "漆黑"],
+    "spatialSense": "封闭压抑，偶有开阔",
+    "timeImagery": "循环与断裂并存"
+  },
+  "rhythm": {
+    "sentenceRhythm": "长-短-短-长",
+    "paragraphRhythm": "中节奏，信息密度高",
+    "chapterRhythm": "信息累积，章末揭示关键线索",
+    "breathPoints": "日常互动的温馨段落",
+    "accelerationTriggers": ["危险逼近", "线索汇聚", "失控边缘"],
+    "decelerationTriggers": ["日常互动", "信息推理", "心理活动"]
+  }
+}

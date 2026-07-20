@@ -1,0 +1,38 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-08",
+  "regressionCheck": {
+    "checked": true,
+    "appendedStart": 1992,
+    "appendedEnd": 2016,
+    "appendedExcerpt": "门外传来了脚步声——比约定时间晚了整整三个时辰。",
+    "appendedLength": 24,
+    "rawTextLength": 1992,
+    "candidateTextLength": 2016,
+    "lengthDelta": 24,
+    "appendedInTailRegion": true
+  },
+  "rawHash": "512ef929f7c9a95fc3edb89d0ae796d6ae702e12b39e5dc4ef038bbaaf4f3980",
+  "rawManifestHash": "bb216d960809635f31c5aca846068d0e8eb95ee4e59a3cb2e7b5ce80e54645d7",
+  "pressureMeta": {
+    "causalEndPressure": {
+      "value": "队长约定逾期 + 小妖失联双重信号",
+      "sourceRef": "seed:ch08:missed_appointments"
+    },
+    "currentHookType": "suspended_action",
+    "recentHookTypes": [
+      "cost_reveal",
+      "approaching_threat"
+    ]
+  },
+  "patternMemoryCheck": {
+    "currentHookType": "suspended_action",
+    "recentHookTypes": [
+      "cost_reveal",
+      "approaching_threat"
+    ],
+    "recentCount": 0,
+    "repeated": false,
+    "verdict": "ok"
+  }
+}

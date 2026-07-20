@@ -1,0 +1,15 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-05",
+  "regressionCheck": {
+    "checked": true,
+    "beforeSpanExcerpt": "隐约感到一个黝黑的洞口",
+    "afterSpanExcerpt": "隐约察觉到一个黝黑的洞",
+    "spanChanged": true,
+    "candidateTextLength": 3302,
+    "rawTextLength": 3301,
+    "lengthDelta": 1
+  },
+  "rawHash": "88187cefac1386da0526cfb39cfb64d317b84a41d8d38df08aa006d8f7d9a323",
+  "rawManifestHash": "8fca55d50b5b7c465bf553380eca7ded0fb91124f6807c08597cf82c91e2b266"
+}

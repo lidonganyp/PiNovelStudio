@@ -1,0 +1,425 @@
+# PiNovelStudio — PI 项目指令文件
+
+## 目标架构：统一主链路（最高优先级，2026-07-10）
+
+PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [docs/top-tier-chinese-novel-system-development-plan.md](docs/top-tier-chinese-novel-system-development-plan.md)（v1.0，2026-07-10）。本节为项目最高优先级；下文任何旧规则与本节或新计划冲突时，以本节和新计划为准。
+
+### 架构决策（取代旧双模式设计）
+
+1. **单一生成主链路**：系统最终只保留 `novel_generate_chapter` 一个公开入口与一套运行时编排。不再存在 `legacy | quality_amplifier_v2` 两种生成模式，不再保留章节白名单。
+2. **raw 是内部基线与安全回退**：raw 不是另一条旧链路，而是新主链路内部的原生基线。编辑/裁判失败或候选无明确胜出时交付 raw，不交付低于 raw 的文本。
+3. **机会驱动候选**：每章先生成 raw，仅当存在可引用正文 span 证明的编辑机会时才生成 0-2 个 editorial candidate；禁止固定多候选。
+4. **LLM pairwise judge 主导文学胜负**：匿名 A/B、span 约束、可反向复判；机械 comparator 降为事实检查、风险证据与退化 veto，不再用机械总分决定 winner。
+5. **作品级 CreativeConstitution + 四类长期叙事状态**：CanonState / CharacterState / PromiseLedger / PatternMemory；状态只在最终正文选定后提交。
+6. **按模型版本隔离策略信誉**：contextual bandit 在线调整编辑策略；旧模型经验不限制新模型能力。
+
+### 取代的旧约束（不再生效）
+
+- ❌ "阶段0→阶段8必须按顺序执行，严禁跳过" —— legacy Stage0-8 编排已物理删除（`LEGACY-RUNTIME-REMOVAL-1`）；正收益资产已迁移到统一主链路 `v2/core/`。
+- ❌ `legacy | quality_amplifier_v2` 双模式与章节白名单、`generationMode` 配置。
+- ❌ 机械 comparator 11 维等权总分决定 winner / `clearWinThreshold` 一类总分差门槛。
+- ❌ "V2 在通过重跑验收前不得取代 legacy 作为默认生产链路" —— 该历史约束被本架构决策反转：不再维护双链路，统一主链路取代二者；不再以 V2 重跑验收为前置条件。
+
+### Phase 7 状态（迁移已完成）
+
+- `PINOVEL_UNIFIED_PIPELINE=1`：**生产回滚用途已退役**。Phase 7 已删除旧 v2-orchestrator（含 `V2_WHITELIST`/`isWhitelisted`/`v2NotImplemented`/`degradedTo:"legacy"`）与 `generationMode` 双模式 config，统一主链路是唯一公开生成路径，生产路径无回退到 Stage0-8 的分支。
+- 该开关仅保留为**测试基础设施**：legacy 测试套件（`tests/setup-test-env.mjs`）设置 `PINOVEL_UNIFIED_PIPELINE=1` 以覆盖已迁移的 A 类资产行为（trace、原子保存、门禁、NarrativeState 等），不代表产品模式。
+- **legacy 已物理删除（2026-07-11）**：生产入口 `index.ts` 收敛为 ~85 行（6 公开工具 + 统一主链路，零 legacy 依赖）。三 tsconfig 隔离：`tsconfig.prod.json` → `dist/`（生产入口传递依赖闭包），`tsconfig.eval.json` → `dist-eval/`（NovelBench 评测模块），`tsconfig.test.json` → `dist-test/`（测试专用 craft/agents/v2 模块）。legacy Stage0-8 编排入口、`legacy-index.ts`、`lab/`、`tsconfig.lab.json`、`dist-lab/` 均已物理删除（`LEGACY-RUNTIME-REMOVAL-1`）。生产 `dist/index.js` 不含任何 legacy 分支（`tests/dependency-boundary.test.mjs` 自动守护此约束，含 13 项断言验证 lab-only 产物不出现在 `dist/`）。
+
+### 下文旧内容的地位
+
+下文 P44 Quality Amplifier v2、老版核心架构、P13 知识检索等章节，**保留为 legacy 行为说明与历史决策参考**；其中与单主链路目标冲突的强制条款（如"阶段0-8 必须执行""双模式"）不再生效。legacy 正收益资产（中文自然度、连续性、状态管理、伏笔追踪、模型路由/熔断/trace/原子保存等）已迁移到统一主链路 `v2/core/` 对应模块。
+
+> 仍生效的铁律：`novel_generate_chapter` 是章节生成唯一公开入口；AI 不得直接撰写章节正文；正文必须经统一编排产出。这三条在单主链路目标下继续有效。
+
+### 当前项目记忆（2026-07-17）
+
+- 跨会话快照见 [docs/project-memory.md](docs/project-memory.md)。它记录当前代码基线、已完成清理、脏工作树保护、模型路由状态与授权边界。
+- 当前路由基线为 `config/model-routing.json` v4.19.0：`1A/1B/1C/1D COMPLETE_L0`（1A 异源 judge 已全量切到 gpt-5.6-sol；1C GREEN `e6f2b66` + 流水线修复 `b529c65`，Doubao span 驱动中文校准 + completeness + 中文母语语感 before/after 已落地，11/11 测试通过）；`1E` 真实 canary 为 `REQUIRES_AUTH`。
+- 7.75GB `corpus/` 已从仓库删除，生产路径对原始语料零依赖。离线数据重建必须显式使用外部语料，不得继续把“仓库内置 100+ 部全文”写成当前事实。
+- `cd15cd2` 删除 4 个 craft 文件后 `030420f`（P0 阻断项修复）已恢复并纳入版本控制，`npm run build` / `build:prod` 通过，clean checkout 完整。
+- 当前工作树包含用户正在进行的代理审批代码、staged 测试修改、未跟踪 RED 测试与模型验证输出；未经明确指示不得恢复、删除、暂存或覆盖。现有 stash 也不得擅自 `pop/drop`。
+
+---
+
+## P44 Quality Amplifier v2（legacy，2026-07-08，已被统一主链路目标取代）
+
+PiNovelStudio 的唯一存在理由是：在同等模型、同等上下文下，系统输出必须稳定优于裸模型输出。项目约束必须放大强模型能力，而不是用小学生式强控把模型能力磨平。
+
+从 P44 起，`quality_amplifier_v2` 曾作为目标生成内核设计。legacy Stage0-8 编排已物理删除，正收益资产已迁移到统一主链路；本节保留为历史决策参考。所有新增质量能力必须遵循以下原则：
+
+1. **少约束生成，多约束选择**：提示词只给清晰目标、可靠资料与关键边界，不用机械指标控制模型句子、段落、对白比例。
+2. **少强迫改文，多比较胜负**：任何 StyleShaper、patch、event rewrite、chapter rewrite 都必须产出 candidate，并与 raw/current/direct baseline A/B 比较；没有明确胜出不得覆盖正文。
+3. **少管句子，多管目标**：项目规则服务读者体验、情节推进、人物状态、群像层次、信息释放、期待兑现和中文自然度，不服务单一指标本身。
+4. **裸写是基线，不是废料**：Stage 2/raw candidate 必须保存为 baseline。后续链路若负收益，系统必须能保留 rawStage2 或 direct baseline。
+5. **小说判断是核心资产，不是硬控清单**：项目文档中的群像、情节把控、细节判断、期待兑现、伏笔、信息释放、情绪节拍等经验必须进入 `CraftJudgmentLibrary`，用于 scene contract、diagnostic 和 candidate comparator；未经 replay 证明正收益，不得直接成为生产强制规则。
+6. **gate 降权为诊断提供者**：除乱码/空文/格式损坏、大段重复污染、明确实体幻觉、严重连续性断裂、世界观硬冲突、缺关键输入等事实性硬伤外，对话比例、段落节奏、风格偏移、AI 腔、翻译腔、群像层次不足、钩子弱等只能作为 diagnostic 或 repair suggestion，不能直接触发整章重写。
+7. **默认最小修复**：修订优先级为 `no_op` → `sentence_patch` → `paragraph_patch` → `bridge_patch` → `event_patch` → `event_rewrite`。`chapter_rewrite` 仅允许灾难级失败使用。
+8. **项目必须证明正收益**：每次 v2 验收必须比较 direct baseline、rawStage2、legacy full-chain、v2 amplified。不能只以 build/test 通过宣称小说质量提升。
+
+v2 目标模块与任务清单原见 `docs/quality-amplifier-v2-design.md`（该历史设计文档已在 HISTORY-RETIREMENT-1 中删除）。本节为 legacy 行为说明与迁移参考；与上文"目标架构：统一主链路"或新计划冲突时，**以上文统一主链路目标与新计划为准**。当前架构真相源为 [docs/top-tier-chinese-novel-system-development-plan.md](docs/top-tier-chinese-novel-system-development-plan.md)（v1.1）。
+
+**版本**: v1.3 | **更新日期**: 2026-06-10
+
+## 项目定位
+
+PiNovelStudio 是基于 PI (AI Coding Agent) 的顶尖网文级小说章节生成系统。所有代码修改必须遵循以下指令。
+
+## 老版核心架构
+
+- **Writer's Room 多智能体（legacy 描述）**: 生产默认公开 6 个 `novel_*` 工具（`novel_generate_chapter` / `novel_preflight_workspace` / `novel_workspace_manager` / `novel_plan_story_outline` / `novel_strategy_policy_view` / `novel_strategy_feedback`）；章节生成唯一公开入口为 `novel_generate_chapter`，`novel_narrator` / `novel_critic` 为 legacy 内部阶段 Agent（已退役，正收益资产迁移到统一主链路）。
+- **感知锚点驱动（legacy）**: 替代原 DAG 蓝图，四步锚点搜索法；统一主链路改用 ChapterSeed + ContextCompiler。
+- **四大质量壁垒（legacy）**: 脑洞注入、风格指纹、情绪节拍、反 AI 腔检测；正收益资产已迁移到统一主链路对应 craft 模块。
+- **五层数据壁垒**: 风格指纹库→场景模式库→技法原子库→Few-Shot 黄金示例库→对比蒸馏知识库；当前运行链路已接入风格指纹、Few-Shot 与对比蒸馏，离线场景/技法/风格层继续补齐显式消费链路
+- **质量进化闭环（legacy）**: replay benchmark 只提供外部证据，默认生成链路只准入经过样本数/胜率验证的 runtime 规则。统一主链路 trace 已替代原 Stage 2/5/8 质量证据写入。
+- **阶段化生成流程（已退役）**: legacy 9 个核心阶段（阶段0-8）+ 条件触发阶段的编排已物理删除。统一主链路编排顺序见上文"生成流程"。
+
+> **阶段数说明（legacy）**：原 legacy 编排为 9 个核心阶段（阶段0-8）+ 1 个每章启用硬门禁（阶段6.5）+ 6 个条件触发阶段（1.5/1.6/4.5/4.6/5.5/8.5）。该编排已随 `LEGACY-RUNTIME-REMOVAL-1` 物理删除；统一主链路编排顺序以新计划 §3 为准。
+
+## P13 知识检索优化（2026-06-02）
+
+### 优化1: 按事件/节拍检索
+
+**问题**: 原来 Narrator 先用整个 DAG 推断一个 `sceneType`，再构造一次知识上下文；多场景章节容易被单一标签主导。
+
+**解决方案**:
+- 新增 `buildEventKnowledgeContextBlock(event, dag)` 方法，逐事件构建知识检索上下文
+- 新增 `inferEventSceneType(event)` 方法，基于单个事件的 `type/narrativeBeat/conflictLevel/emotionalArc` 推断场景类型
+- `RetrieveContext` 新增字段：`eventNarrativeBeat`, `eventConflictLevel`, `eventType`, `eventEmotionArc`
+- 评分函数新增：叙事节拍匹配、冲突等级匹配、情绪弧匹配
+
+**文件**: `craft/knowledge-retriever.ts`（`agents/narrator.ts` 已随 legacy 退役删除）
+
+### 优化2: 大纲意图对齐
+
+**问题**: 脑洞优化已接入 `outline.md`，但 Narrator 的检索上下文没有直接使用"大纲意图/本章主题分类"。
+
+**解决方案**:
+- 新增 `OutlineIntentGenerator` 模块 (`craft/outline-intent-generator.ts`)
+- 从大纲文本提取 `outlineIntent`：primary（主要意图）、secondary（次要意图）、keywords（关键词）、chapterTheme（主题）、targetEmotions（目标情绪）
+- 在阶段1后、阶段2前，将 `outlineIntent` 写入 DAG `enhancements`
+
+> **P22 更新**：`outlineIntent` 来源已迁移为 `chapterSeed.intent`，并添加 `_source: "chapterSeed"` 标记。
+> 不再从 outline.md 提取意图。短期继续写入 `dag.enhancements.outlineIntent` 以保持下游兼容，但来源标记避免误判为写前章纲。
+- Narrator 的 `buildOutlineIntentGuidanceBlock` 方法注入大纲意图指导块
+- KnowledgeRetriever 评分函数新增 `scoreOutlineIntentMatch` 方法
+
+**意图分类**: foreshadow / character / reversal / romance / setting / combat / humor / tension
+
+**文件**: `craft/outline-intent-generator.ts`, `dag/types.ts`, `index.ts`（`agents/narrator.ts` 已随 legacy 退役删除）
+
+### 优化3: 统一 Few-shot 通道
+
+**问题**: Few-shot 至少有三路：Narrator 直接取 Top3、`KnowledgeContextBuilder` 也取 Few-shot、运行时检索还可能取 Few-shot。好例子太多反而互相打架。
+
+**解决方案**:
+- 新增 `FewshotSelector` 统一管理类 (`craft/fewshot-selector.ts`)
+- 检索优先级：运行时索引 > flat JSON
+- 支持大纲意图匹配、叙事节拍匹配、冲突等级匹配
+- 设置全局预算：最多 3 个示例，每个最多 520 字符
+
+**文件**: `craft/fewshot-selector.ts`（`agents/narrator.ts` 已随 legacy 退役删除）
+
+## P22 质量进化闭环（2026-06-07）
+
+### 运行时目标
+
+本轮实现不是把 AINovelTools / PiNovelStudio 的经验机械拼接进提示词，而是把经验分成三层：
+
+- **候选经验**: AINovelTools 的质量证据、分段过门、作者学习、盲测回归等方法论，以及 `data/` 中从顶尖网文蒸馏出的场景/技法/风格经验。
+- **外部证据**: replay benchmark 对 reference/candidate 做可回放对比，聚合候选规则的样本数、胜率和 delta。
+- **运行时准入**: 只有达到 `sampleSize >= 3`、`validatedWinRate >= 0.55` 的规则进入 `data/runtime/validated-craft-rules.json` 并默认参与 Stage 2 事件级写作契约。
+
+### 已接入流程
+
+- Stage 2 逐事件生成前构建 `EventWritingContract`，由 `SegmentCraftJudge` 对关键内容覆盖、分段工艺、事件评分做硬门禁，并写入 `workspaces/{workspaceId}/traces/{chapterId}-quality-trace.json`。
+- Stage 2 的 `EventProgressionGate` 只硬守 progression 主干：`protagonist_active`、`state_delta`、`causal_chain` 及必要的信息/状态 delta。`abnormalEntryEvidence` 属于恐怖/危机类事件的类型专项义务；未满足时只能记录为 `typeSpecificObligations.abnormalEntryEvidence=UNVERIFIED` 并返回 `WARNING_PASS`，不得触发 Stage 2 rewrite/degrade/block。
+- Gate 输出 schema 必须先强制校验；缺少必填 evidence/span/metric 字段时是 `PARSE_ERROR`，重试 Gate 结果而不是重写正文。重试耗尽后上报 `CONTRACT_ERROR` 并阻断当前事件，不允许静默 DEGRADE。
+- Stage 5/8 的修订补丁必须经过 `PatchQualityComparator`；退化改写不覆盖原文，补丁取舍写入 trace。
+- Stage 8 的最终门禁必须保留 `stageResults.stage8` 证据；AntiAI 密度阈值为 `< 2%`，StyleShaper 低于阶段阈值且无法产生实质修订时必须阻断，不能 warning pass。
+- Stage 8 新增 `SceneContinuityGate` 本地硬门禁；它只针对真实 replay 暴露的明确短板补位，不重构主流程、不套外壳：线上 ID/论坛角色未经入场铺垫实体化、医院/住处等空间簇无过门跳转必须阻断，并写入 trace `gates`。
+- replay 学习链路由 `scripts/replay-benchmark/`、`scripts/learning/` 与 `data/runtime/*rules.json` 承载；runtime 规则可以为空，表示机制就绪但尚无经真实样本晋级的作者学习规则。
+- 模型 API 请求必须走 bounded timeout；默认 `PINOVEL_MODEL_REQUEST_TIMEOUT_MS=300000`，所有真实 replay 卡在模型调用时必须返回可诊断超时错误，不能无限等待。
+- 《神秘复苏》第1章 replay 已通过 `novel_generate_chapter` 统一编排成功跑通，但当前 `ch1-current-metrics.json` 仍为负收益；只能作为短板定位与候选规则来源，不得当作质量正收益样本。
+
+### 验收边界
+
+只通过 build/test 不能声称“小说质量已经提升”。必须同时具备真实 reference/candidate replay、规则晋级、下一轮生成 trace 中出现 active validated rule，以及人工抽检或盲测复核，才可以宣称质量闭环产生正收益。
+
+## 代码规范
+
+### TypeScript
+
+- 使用 ES Module（import/export）
+- 严格类型：所有函数参数和返回值必须有类型注解
+- 类优先：核心逻辑用 class 封装，导出工厂函数 `createXxx()`
+- 错误处理：使用 try-catch，不抛出未捕获异常
+- 文件头注释：每个文件必须有模块说明注释
+
+### Python（数据处理脚本）
+
+- Python 3.10+ 语法
+- 使用 argparse 处理命令行参数
+- dataclass 定义数据结构
+- 类型注解：所有函数参数和返回值
+- UTF-8 编码：读写文件必须指定 encoding="utf-8"
+- 中文编码兼容：语料文件需支持 GBK/GB18030 自动检测
+
+### 文件组织
+
+```
+.pi/extensions/novel-studio/
+├── agents/          # Agent 实现（每个 Agent 一个文件）
+├── api/             # 外部 API 封装
+├── craft/           # 质量壁垒引擎
+│   ├── brainhole-engine.ts          # 脑洞注入引擎
+│   ├── fewshot-selector.ts          # P13新增：统一 Few-shot 选择器
+│   ├── knowledge-context.ts        # 轻量级知识上下文构建器
+│   ├── knowledge-retriever.ts       # 运行时知识检索器
+│   ├── outline-intent-generator.ts # P13新增：大纲意图提取器
+│   └── ...                         # 其他质量引擎
+├── dag/             # DAG 引擎
+├── prompts/         # Agent 提示词模板
+├── utils/           # 工具函数
+└── workspace/       # Workspace 管理
+
+data/                # 数据访问层（TypeScript）
+├── runtime/         # 运行时索引（通过 manifest 准入控制）
+├── fewshots/        # Few-shot 黄金示例
+└── contrastive/     # 对比蒸馏知识库
+scripts/             # 数据处理脚本（Python）
+styles/profiles/     # 风格指纹 JSON
+brainholes/patterns/ # 脑洞模式 Markdown
+```
+
+## 关键约束
+
+1. **DAG 不可变**: DAG 一旦构建并通过验证，后续 Agent 只能添加增强信息，不能修改核心事件
+2. **风格一致性**: 所有生成文本必须通过 StyleShaper 匹配检查，偏差 > 30% 需要重写
+3. **反 AI 检测**: 最终文本必须通过 AntiAIDetector 检查，AI 特征词密度 < 2%
+4. **情绪节拍**: 章节情绪曲线必须符合 EmotionMetronome 预设模式
+5. **脑洞注入**: 每章至少注入 1 个脑洞模式变体
+6. **P13知识检索**: 按事件粒度检索（type/narrativeBeat/conflictLevel/emotionalArc），避免单一标签主导
+7. **P13大纲对齐**: outlineIntent 指导 Narrator 生成方向，确保章节服务于本章主题
+8. **P22细节锚点先行**: 写前输入是 ChapterSeed/感知锚点；章纲是写后骨架总结，不是写前蓝图。SeedReadinessGate 替代 OutlineReadinessGate
+
+## 生成流程
+
+> **当前真相源**：统一主链路为唯一生成路径。`novel_generate_chapter` → `v2/core/unified-entry.ts:runUnifiedPipeline` → `v2/core/unified-orchestrator.ts`，编排顺序为 `Preflight → ContextCompiler → ChapterIntent → Raw candidate → FactGuard → EditorialOpportunity → EditorialCandidate (0-2) → PairwiseJudge → SelectionPolicy → SpanRepair → FinalFactRecheck → FinalStateCommit → AtomicSave + Trace`。完整设计见 [docs/top-tier-chinese-novel-system-development-plan.md](docs/top-tier-chinese-novel-system-development-plan.md) §3。
+
+> **legacy Stage0-8 已物理删除**（`LEGACY-RUNTIME-REMOVAL-1`）：原阶段0-8 编排入口、`legacy-index.ts`、`lab/`、`tsconfig.lab.json`、`dist-lab/` 均已删除，生产路径无回退到 Stage0-8 的分支。下文不再保留 Stage0-8 流程描述；其正收益资产（中文自然度、连续性、状态管理、伏笔追踪、模型路由/熔断/trace/原子保存等）已迁移到统一主链路对应模块。
+
+## 数据管线
+
+```bash
+# 完整管线（原始 corpus 不在仓库；必须提供外部语料路径）
+python scripts/run-pipeline.py --all --input D:/external-corpus --skip-check
+
+# 单步执行
+python scripts/preprocess.py --input D:/external-corpus --output corpus/clean/
+python scripts/extract-style.py --input corpus/clean/ --output data/styles/
+python scripts/extract-scenes.py --input corpus/clean/ --output data/scenes/
+python scripts/mine-techniques.py --input corpus/clean/ --output data/techniques/
+python scripts/build-fewshots.py --scenes data/scenes/ --styles data/styles/ --output data/fewshots/
+python scripts/contrastive-distill.py --generate-samples --output data/contrastive/
+```
+
+## 测试要求
+
+- TypeScript: 编译无错误
+- Python: 脚本可独立运行
+- 数据管线: 每步输出 JSON 格式正确
+
+## AI 路由策略
+
+| 任务类型 | 推荐模型 | 原因 |
+|---------|---------|------|
+| 规划/分析 | PI 默认模型 | 结构化推理 |
+| 文学创作(Stage 2 主力 / raw 正文) | Claude Opus 4.6 | MODEL-ROUTING-CLAUDE46-1B：`narrator_primary` / `stage2_narrator` / `v2_rawstage2` / `v2_amplified` 全部切换到 Claude Opus 4.6；raw 失败由 `v2_rawstage2.fallback=[]` hard block，不静默切换其他正文模型 |
+| 中文校准候选(受限) | Doubao Seed 2.1 Pro | MODEL-ROUTING-CLAUDE46-1C：Doubao 降为受限中文校准器，仅 `v2_chinese_calibration` 在有 raw span 证据时调用；不能直接覆盖 raw，必须经 FactGuard / pairwise judge / SelectionPolicy |
+| 文学裁判(opportunity judge + pairwise + reverse review) | gpt-5.6-sol（异源 judge） | MODEL-ROUTING-CLAUDE46-1A/1E-fix：`v2_opportunity_judge` / `v2_literary_judge` 走 GPT 异源 judge，模型从 gpt-5.5 全量切到 gpt-5.6-sol（与 `novel_quality_judge` 一致，通过 `NOVELOS_JUDGE_*` env 解析端点）；Claude 不得同时担任同一候选对的生成者与文学裁判；冲突或失败保留 raw |
+| 质量审查 | local / quad-gates | Critic 四门判定已改为本地运行 |
+| 结构检查 | GPT 5.5 | 指令跟随精确，模式检测最规范 |
+| 角色塑造 | Claude Opus 4.6 | MODEL-ROUTING-CLAUDE46-1B：`character_agent` 切换到 Claude Opus 4.6；角色心理深度、矛盾感与动机审查更稳 |
+| 风格塑形(Stage 5/8) | Claude Opus 4.6 | MODEL-ROUTING-CLAUDE46-1B：`style_shaper` / `stage5_style_shaper` / `stage8_final_gate` 切换到 Claude Opus 4.6 |
+| 世界观/骨架/脑洞轻量生成 | GPT 5.5 | v4.5.0 起 DeepSeek 退出默认质量链路；Stage 1.6/3/4.5/脑洞注入已迁移到 GPT 5.5 |
+| 开发验证(GLM) | GLM 5.2 | MODEL-ROUTING-CLAUDE46-1D：GLM 仅作开发验证，只允许显式 `modelTestRoute=glm` / NovelBench lab route；不得进入生产默认或 fallback。`narrator_testing_glm` / `style_shaper_testing_glm` / `chinese_naturalizer_glm` 显式 `fallback=[]` + lab_testing 标注 |
+
+> **路由真相源**：`config/model-routing.json` v4.19.0 (MODEL-ROUTING-CLAUDE46-1B+1D+1E-fix) 为路由唯一真相源，本表与之同步；不一致时以 `model-routing.json` 为准。AGENTS.md 路由表为人类可读摘要，不作为运行时路由依据。历史 v4.9.0 Doubao 主写决策保留在 `_migration_notes` 中作参考，不再作为当前态。
+
+### Stage 8→Stage 2 对白回环路由（P42 续·P1+P4）
+
+当 Stage 8 诊断 `stage8_dialogue_ratio.stage2RewriteRecommended=true` 时，触发全章节重跑回环，按 `config.stage2LoopbackEscalation`（默认 `ernie_then_gpt`）升级路由：
+
+| 顺序 | modelTestRoute | 映射路由 | 角色 |
+|------|----------------|----------|------|
+| 1 | `ernie` | `narrator_testing_ernie` | ERNIE 5.1 优先（中文模型优先） |
+| 2（末位兜底） | `gpt` | `narrator_testing_gpt` | GPT 5.5 末位兜底（bounded 例外） |
+
+- **生产主路由 `narrator_primary`=Doubao 不变**；回环仅走测试通道，不改变生产路由。
+- `stage2LoopbackMaxAttempts` 截断序列长度（默认 2 = ERNIE+GPT；1 = 仅 ERNIE）。
+- `stage2LoopbackEscalation="disabled"` 或 `stage2LoopbackMaxAttempts=0` 可关闭回环。
+- 回环通过后 `stage8_dialogue_ratio` 用新测量值覆盖 + 替换 `finalText`；未通过保留原稿 + 写 `recoverableEnvelope` 到 trace + 保留原 `[review]` blocker。
+- 防无限循环：`stage8_loopback` 硬标记，`shouldFireLoopback` 二次判定直接 false。
+- micro-section `loopback_dialogue_events` scope：仅回环重跑中的对白承载事件触发微小节，普通生成路径零行为变化。
+- **质量状态归一化（P42 续·P0）**：回环通过后必须 `_uqe.voidSignals("8-dialogue-ratio", ...)` 作废原 3 条 review 信号（`dialogue_ratio`/`functional_dialogue_deficit`/`short_command_excess`），并基于新测量值重写 review 信号（仅当回环后仍有缺口时）。否则 `aggregateDeliveryStatus` 仍会因旧 review 信号落入 `completed_with_review` → `draft_needs_review`，回环"通过"却无法正式交付。voided 信号保留在 envelope 作审计痕迹，且 `extractQualityBlockers` / `buildCategorizedQualityReport` 均跳过 voided 信号，避免报告层仍显示已作废的旧 review。
+- **状态产物同步（P42 续·P0 Round 2）**：回环通过后 `finalText` 已替换为新稿，但外层 `narratorResult.pendingStateCommit` 与 `stageResults.stage3/stage4` 仍基于旧稿。必须用 `LoopbackOutcome.acceptedNarratorResult` 覆盖外层 `narratorResult` + `stageResults.stage2`，并在新 `finalText` 上重跑 Stage 3（`handleSkeletonConsistency`）+ Stage 4（`handleDetailLedger deferWrite:true`），覆盖 `stageResults.stage3/stage4`。否则最终提交的 `skeleton.json` / `unsettled-details.json` / `narrative-state.json` / 角色更新仍来自旧正文，跨章状态会漂。Stage 3/4 重跑失败只写 warning signal，不阻断交付（正文已通过回环验收；状态产物缺失可由人工补，污染主线状态不可逆）。
+- **新正文本地复检（P42 续·P1）**：回环替换 `finalText` 后必须本地复检段落节奏（`analyzeChapterParagraphRhythm`）+ AntiAI 密度（`handleAntiAIDetector({enableLLM:false})`），更新 `stage8_paragraph_rhythm_final` / `stage8Results.antiAI`，并作废原段落节奏 review 信号。新正文若引入 AI 腔（`effectiveDensity>=0.02`）或节奏超限，必须写新 critical/review 信号 → `draft_needs_review`。
+- bounded trade-off：悬念密度基于 DAG（回环不改 DAG，无需复检）；StyleShaper/SceneContinuityGate 为 LLM-based，narrator 内部已跑 anti-ai，本地复检不重跑（成本与 bounded 原则权衡）。回环 newText 重验 Stage 3/4（P0 Round 2 状态产物同步）+ 本地复检段落节奏/AntiAI；不重跑 Stage 5/6.5/7 的 LLM-based 门禁与 SceneContinuityGate。
+
+## 生产规则
+
+### 世界观强制注入
+- 生成章节前，必须从 `workspaces/{id}/config.json` 加载世界观（genre, subGenres, 角色列表）
+- 世界观信息通过 `worldContext` 参数注入 Narrator system prompt
+- **世界观缺失 = 生产阻断**，必须让用户补全后再生成
+
+### 类型路由策略
+
+- `novel_type_router` 已接入统一主链路 Preflight/ContextCompiler 阶段，执行三源融合识别（config声明 + 内容推断 + 漂移检测）
+- **默认策略为软门禁**：类型路由失败只记录警告，不阻断章节生成
+- Narrator 有 fallback 机制，会从 `type-profile.json` 或 `config.json` 推断类型参数
+- 如需硬阻断，可在 `config.json` 设置 `forceTypeBlock: true`
+
+> **设计理由**：类型档案不属于主文档五层数据壁垒（风格指纹→场景→技法→Few-Shot→对比蒸馏），是增强能力而非强制前置。
+
+### 状态维护与事务边界
+
+章节生成流程的事务边界如下：
+1. **原子事务**：章节文件保存是原子操作（临时文件 → rename），失败会回滚
+2. **章节保存后执行**：模式疲劳检测、债务净增量检查、角色生命周期更新、伏笔追踪器更新
+3. **状态隔离**：章节保存成功后才执行状态维护，避免失败章节污染全局状态
+
+> **注意**：`triggerPostChapterStages` 中的能力（伏笔追踪器等）直接写文件，与章节文件不是同一事务。默认模式下后置能力失败不影响章节文件。如需严格一致性，可在 `config.json` 设置 `strictPostChapter: true`，此时后置能力失败将回滚章节文件。
+
+### 章节生成铁律（最高优先级）
+
+> ⛔ **严禁 AI 直接输出章节正文内容！**
+> ⛔ **严禁 AI 自行生成任何章节内容！** 所有正文必须通过 `novel_generate_chapter` 统一编排生成。
+> ⚠️ **legacy Stage0-8 已物理删除**：编排顺序由统一主链路 `raw → editorial → judge → select` 决定（见新计划 §3）。生产路径无 Stage0-8 回退分支；正收益资产已迁移到 `v2/core/` 对应模块。
+
+1. **章节生成唯一公开入口**：
+   - `novel_generate_chapter` → 统一章节生成编排器，走 `raw → editorial → judge → select` 主链路（见新计划 §3）。legacy Stage0-8 工具库已物理删除，不存在"迁移期可调用 legacy 编排"的回退路径。
+   - `novel_narrator` / `novel_critic` 是内部阶段 Agent，不作为外部独立入口调用。
+   - 其他 `novel_*` 质检、投放、润色工具由 `novel_generate_chapter` 在对应阶段内部调用，禁止手动拆开流程替代统一编排器。
+
+2. **AI 的角色仅限于**：
+   - 读取上下文文件（Preflight/ContextCompiler）
+   - 调用 `novel_generate_chapter`
+   - 解析工具返回结果
+   - 向用户展示中间产物和最终结果
+   - 根据统一编排器返回的重写约束、阻断原因或人工审阅点，重新发起生成或交由用户修正
+
+3. **禁止行为**：
+   - ❌ 禁止 AI 自行撰写任何章节正文
+   - ❌ 禁止绕开 `novel_generate_chapter` 自行拼接生成链路（legacy Stage0-8 已删除，统一编排器是唯一编排路径）
+   - ❌ 禁止用 AI 推测替代工具返回结果
+   - ❌ 禁止直接调用 `novel_narrator` 输出章节正文
+   - ❌ 禁止直接调用 `novel_critic` 替代质量审查
+   - ❌ 禁止在未通过 `novel_generate_chapter` 的情况下输出"第X章"内容
+
+4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.19.0）：
+   - `v2_rawstage2` / `v2_amplified` → Claude Opus 4.6，route-level `fallback=[]`；raw 失败 hard block，不静默切换其他正文模型
+   - `v2_chinese_calibration` → Doubao Seed 2.1 Pro；仅允许有 raw span 证据的 `voice_and_naturalness` hypothesis 触发中文校准候选，`MODEL-ROUTING-CLAUDE46-1C` 已 `COMPLETE_L0`（span 级局部编辑 + span 边界检查 + completeness + 中文母语语感 before/after）
+   - `v2_opportunity_judge` / `v2_literary_judge` → gpt-5.6-sol 异源 judge（通过 `NOVELOS_JUDGE_*` env 解析端点）；Claude 不得自审同一候选对
+   - `style_shaper` / `stage5_style_shaper` / `stage8_final_gate` / `character_agent` → Claude Opus 4.6
+   - `novel_critic` → local / quad-gates；其他结构化检查按配置路由到 GPT 5.5
+   - GLM 5.2 仅允许显式开发/NovelBench testing route，生产默认和 fallback 禁止使用；Qwen、ERNIE 当前 disabled
+
+### 流程节点铁律（统一主链路口径）
+- ~~阶段0→阶段8必须按顺序执行，严禁跳过~~ —— 已废止，legacy Stage0-8 已物理删除。统一主链路编排顺序以新计划 §3 为准。
+- Preflight 前置检查：config.json、角色档案（必需）；前章 narrative-state（第 2 章及以后必需，第 1 章跳过）；series/outline.md（可选，仅高层背景参考）
+- **任何前置条件不满足 → 停止并告知用户缺失项，不得继续**
+- **缺少 series/outline.md 不得阻断生成**；Seed 不足时阻断，提示补种子源（不提示补章纲）
+- 统一主链路的 FactGuard / RiskAnalyzer / FinalFactRecheck 等检查即使无 LLM 增强也要执行本地规则
+
+### 稳定性门槛与阻断治理（治理方案新增）
+
+把"随机阻断"治理成可预检、可诊断、可恢复、可回放的稳定生成系统。所有阻断必须有结构化证据，所有模型随机失败必须进入 bounded recovery。
+
+**FailureEnvelope 阻断归因**：所有 Stage/Gate 失败（Preflight/ContextCompiler/Raw/FactGuard/Editorial/Judge/Selection + 顶层 catch）归一成 `FailureEnvelope`（stage/gate/severity/reason/evidence/recoverable/retryPlan/userActionRequired），写入 `workspaces/{id}/traces/{chapterId}-quality-trace.json` 的 `failureEnvelopes` 数组，并通过 `withFailureReturn` 返回给调用方。不再只返回笼统的"章节生成失败"。
+
+**novel_preflight_workspace 生成前预检**：统一主链路 Preflight 阶段调用 `preflightWorkspace`，检查 config/角色档案/前章 skeleton/ChapterSeed 可生长性/manifest/模型 timeout/字数预算。预检失败不进入模型生成；缺 `series/outline.md` 不阻断；Seed 不足提示补种子源（不提示补章纲）。
+
+**Gate 级恢复策略**（`craft/event-recovery-config.ts` 配置化预算）：
+- schema/parse → `retry_gate`（只重试 gate 输出，不重写正文，`schemaMaxAttempts=2`）
+- anti_ai → `rewrite_event`（带 detection snippet，`antiAiMaxAttempts=2`）→ 仍失败才 hard_block
+- segment_contract → `rewrite_event`（只重写当前事件，`contractMaxAttempts=2`）
+- event_progression → 保留主干硬门禁（`progressionMaxAttempts=1`）；类型专项义务按既有规则 warning/pass/block
+- scene_continuity → `bridge_patch`（过 PatchQualityComparator）
+- style → `style_patch`（span 级局部 patch；comparator 拒绝后缩小范围或重做，不覆盖原文）
+- suspense_density → `local_repair`（局部增加 hook beat，再重跑悬念密度检查）→ 仍低于阈值才 hard_block
+
+**Attempt History**：每次事件级重写必须调用 `makeRecoveryAttempt` 记录原因和命中证据，追加到 `recoveryAttempts`；重写耗尽后调用 `qualityTraceRecorder.recordFailureEnvelope(envelope, recoveryAttempts)` 把最终失败 envelope + attempt history 写入 trace。不允许无限循环；每次重写必须传入上一次 gate 的具体 failure evidence。
+
+**PatchQualityComparator 唯一补丁权威**：SpanRepair 修订补丁必须经过 comparator；退化改写（agency 稀释 / score 跨 70 阈值回落 / 新增 critical issue）`accepted=false` 时原文不被覆盖，补丁取舍写入 trace。禁止 patch comparator 拒绝后仍覆盖原文。
+
+**Replay Matrix**：`scripts/replay-generation-matrix.mjs` 支持多 workspace/章节/sample 批量 replay，输出 `reports/generation-blocker-matrix.json`（原始矩阵）+ `reports/generation-blocker-summary.md`（仪表盘：总成功率/首次成功率/自动恢复后成功率/Top 10 blocker/stage 分布/gate 分布/需用户补输入的失败/仍需系统修复的失败/样例 trace 路径）。trace 副本复制到 `reports/traces/` 避免多次采样覆盖。
+
+**稳定性门槛**（验收口径，必须通过真实 workspace replay 验证）：
+| 指标 | 目标 |
+|------|------|
+| Preflight 可解释率 | 100%（所有预检阻断有 `severity=preflight` envelope + fixInstructions） |
+| 所有阻断都有 FailureEnvelope | 100%（无 silent degrade） |
+| 自动恢复后成功率 | ≥ 85% |
+| 未分类失败 | 0（每条失败能定位 stage/gate/reason/evidence） |
+| 无限等待模型调用 | 0（`PINOVEL_MODEL_REQUEST_TIMEOUT_MS` bounded timeout，replay 脚本 `--timeout-ms` 兜底） |
+| 真实 replay trace 留存率 | 100%（每条 sample 有 tracePath 或 traceArchivePath） |
+
+**严禁**：
+- 禁止绕开 `novel_generate_chapter`
+- 禁止 AI 直接生成章节正文
+- 禁止把 Stage 8 硬门禁改成默认 warning pass
+- 禁止 parser/schema 错误直接触发正文重写（应只 `retry_gate`）
+- 禁止 patch comparator 拒绝后仍覆盖原文
+- 禁止无 trace 的 silent degrade
+
+## CodeGraph 集成规范（P21 新增）
+
+### 概述
+CodeGraph 是本地代码知识图谱工具，通过 MCP 协议为 AI Agent 提供预索引的代码结构查询能力。
+
+### 使用原则
+> **核心原则**：对于"X 是如何工作的"、"架构是什么"、"X 如何到达 Y"、"X 在哪里"等问题，Agent 应该用少量 CodeGraph 调用回答（通常零文件读取），而不是用 grep+Read 重新推导。
+
+### MCP 工具集
+
+| 工具 | 用途 |
+|------|------|
+| `codegraph_query` | 按名称搜索符号 |
+| `codegraph_context` | 构建任务相关的代码上下文（搜索+节点+调用者+被调者） |
+| `codegraph_trace` | 追踪两个符号之间的调用路径（需 MCP 服务运行） |
+| `codegraph_callers` | 查找什么调用了某函数 |
+| `codegraph_callees` | 查找某函数调用了什么 |
+| `codegraph_impact` | 分析更改符号会影响的代码 |
+| `codegraph_node` | 获取符号详情（含源码）（需 MCP 服务运行） |
+| `codegraph_explore` | 返回相关符号源码和关系图（需 MCP 服务运行） |
+| `codegraph_files` | 获取索引的文件结构 |
+| `codegraph_status` | 检查索引健康状态 |
+
+> **CLI 命令**：直接运行 `npx @colbymchenry/codegraph <command>`，如 `codegraph query "函数名"`，`codegraph callers "符号名"`
+
+### 使用场景
+
+**必须使用 CodeGraph**（而非 grep/Read）：
+1. 查找符号/函数/类的定义位置
+2. 了解代码架构和模块关系
+3. 追踪调用链（callers/callees）
+4. 理解模块间的依赖关系
+5. 搜索代码结构而非文本内容
+
+**可以使用 grep/Read**：
+1. 搜索特定文本内容（如日志信息、注释）
+2. 读取已知文件的特定部分
+3. 搜索非结构化文本
+
+### 代码修改流程
+
+1. **修改前**：使用 CodeGraph 理解代码结构和关系
+2. **修改中**：按需使用 Read/Edit 工具
+3. **修改后**：运行 `codegraph sync` 更新索引（如有需要）
+
+### 索引维护
+- 索引已包含 112 个文件，3,017 个节点，6,968 条边
+- 语言覆盖：TypeScript (70文件)、JavaScript (32文件)、Python (10文件)
+- 修改代码后自动同步，无需手动更新

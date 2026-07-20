@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist-eval"
+  },
+  "files": ["novelbench/index.ts", "eval/replay-runner.ts", "eval/replay-case-extractor.ts", "eval/replay-delta-analyzer.ts", "types/pi-coding-agent.d.ts", "novelos/eval/eval-types.ts", "novelos/eval/fixtures.ts", "novelos/eval/eval-harness.ts", "novelos/eval/stub-agent-model.ts", "novelos/eval/blind-test-pack.ts", "novelos/eval/judge-model-adapter.ts", "novelos/eval/pairwise-judge.ts", "novelos/eval/judge-calibration.ts", "novelos/eval/judge-human-alignment.ts", "novelos/eval/prompt-context-ablation.ts", "novelos/eval/reference-guided-prompt-ablation.ts", "novelos/eval/final-decision.ts", "v2/core/replay-provenance-guard.ts", "v2/core/strategy-evidence-store.ts", "v2/core/machine-review-schema.ts", "v2/core/editorial-benefit-2a-preregistration.ts", "v2/core/demo-4a-prep.ts", "v2/core/frontier-snapshot.ts", "v2/core/human-rubric.ts", "v2/core/real-quality-acceptance.ts"],
+  "include": []
+}

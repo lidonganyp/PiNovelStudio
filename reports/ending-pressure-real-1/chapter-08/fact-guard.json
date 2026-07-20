@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "hardBlocks": [],
+  "errors": [],
+  "constraintManifestHash": null,
+  "unauthorizedHighImpactDiagnostics": [],
+  "factGuardReason": "FactGuard 通过（6 类硬阻断检查 + 高影响新设定 review 诊断）"
+}

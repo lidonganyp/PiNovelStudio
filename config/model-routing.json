@@ -1,0 +1,989 @@
+{
+  "_comment": "PiNovelStudio AI Model Routing",
+  "_version": "4.19.0",
+  "_updated": "2026-07-17",
+  "disabled_providers": ["qwen", "ernie"],
+  "_migration_notes": [
+    "v4.19.0 (MODEL-ROUTING-CLAUDE46-1E-fix): V2 异源 judge 路由模型从 gpt-5.5 全量切到 gpt-5.6-sol，与 novel_quality_judge 一致走第三方兼容端点。v2_opportunity_judge / v2_literary_judge 新增 base_url_env=NOVELOS_JUDGE_BASE_URL / api_key_env=NOVELOS_JUDGE_API_KEY / model_env=NOVELOS_JUDGE_MODEL；model 字段从 gpt-5.5 改为 gpt-5.6-sol。provider=gpt 与 fallback=[] 不变，仍受生产 provider allowlist + fail-closed 约束。gpt-5.6-sol 非官方 OpenAI model ID，必须通过 NOVELOS_JUDGE_* env 解析端点/密钥/模型，不进生产 fallback 链。本版本只是路由模型契约实现，不声称质量正收益；真实 canary 仍需 1E 授权。",
+    "v4.18.0 (MODEL-ROUTING-CLAUDE46-1B+1D): Claude Opus 4.6 全项目切换 + GLM 生产隔离。raw 正文与普通 editorial candidate 主写从 Doubao 切到 Claude Opus 4.6（narrator_primary / stage2_narrator / v2_rawstage2 / v2_amplified / v2_direct_claude / narrator_testing_claude / style_shaper / stage5_style_shaper / stage8_final_gate / character_agent / providers.claude(/.claude_backup) / model_analysis.claude(/.claude_backup) 全部统一切换到 claude-opus-4-6；best_of_n_config.models 不再把 Doubao 声明为唯一正式正文模型，改为 [claude-opus-4-6]）。Doubao 不再是正文主写：降为受限中文校准器（仅 1C 的 v2_chinese_calibration 路由在有 raw span 证据时调用），narrator_testing / chinese_naturalizer / chinese_editor_judge / style_shaper_testing 等 Doubao 测试/校准路由保留，但 model_analysis.doubao.role 改为历史说明，assigned_nodes 移除 stage2_narrator 与 narrator_primary。fallback.doubao=[] 不变（Doubao 不再进入任何生产 fallback 链）；fallback.claude=[gpt] 不变（Claude 4.6 失败回退 GPT 结构化节点，但 raw 正文失败由 v2_rawstage2.fallback=[] hard block，不静默切换其他正文模型）。GLM 生产隔离：narrator_testing_glm / style_shaper_testing_glm / chinese_naturalizer_glm 显式 fallback=[]，不再继承 provider 级 fallback；与既有 nb4_*_glm / nb5_judge_glm / reference_analyzer_glm 一起标注 lab/testing。scripts/invoke-generate-chapter.mjs 默认 modelTestRoute=glm 但日志明确 development route lock。未做：1C span 驱动校准、1E 真实 canary（需另行授权）。本版本只是静态路由契约实现，不声称质量正收益。",
+    "v4.17.0 (provider 停用策略): Qwen 与 ERNIE 无可用余额，加入 disabled_providers 并由配置解析与 fallback manager 双重 hard block；Doubao 保留为 Stage 2 主写直至余额耗尽，fallback.doubao=[]，失败即停止；开发章节调用脚本默认 modelTestRoute=glm。历史 provider 元数据仅用于旧 trace/replay 解析，不代表可调用。",
+    "v4.16.0 (NB-5 Reference-aware Judge 路由): 新增 2 条 lab-only 路由供 NovelBench Reference-aware Judge 做匿名 pairwise + 反向复判 + 5 维度评分 + span 引用：nb5_judge_glm（provider=glm, model=glm-5.2, temperature=0.2, max_tokens=8192, fallback=[]）、nb5_judge_doubao（provider=doubao, model=doubao-seed-2-1-pro-260628, temperature=0.2, max_tokens=8192, fallback=[]）。fallback=[] 保证失败时不回退（项目约束：临时/批量测试仅允许 GLM/Doubao，必须 PINOVEL_DISABLE_FALLBACK=1 + PINOVEL_BENCHMARK_COST_PROFILE=package_screening）。max_tokens=8192 容纳含 5 维度评分 + winningSpans/losingSpans 的结构化 JSON 输出。⚠️ temperature/max_tokens 实际生效位置在 provider 级 per-route map（getAgentModelConfig 不读 route-level 字段），故 glm/doubao provider 的 temperature/max_tokens map 已同步添加 nb5_* 条目。lab-only，仅 NovelBench evaluator 通过 reference-aware-judge.mjs --model glm|doubao 调用。正式质量结论仍需在 GPT/Claude frozen set 上复验。",
+    "v4.15.0 (NB-4 Generation Matrix B0-B4 路由): 新增 4 条 lab-only 路由供 NovelBench Generation Matrix 五层能力叠加对比：nb4_generate_glm（provider=glm, model=glm-5.2, temperature=0.72, max_tokens=8192, fallback=[]）、nb4_judge_glm（temperature=0.2, max_tokens=4096, fallback=[]）、nb4_generate_doubao（provider=doubao, model=doubao-seed-2-1-pro-260628, temperature=0.72, max_tokens=8192, fallback=[]）、nb4_judge_doubao（temperature=0.2, max_tokens=4096, fallback=[]）。fallback=[] 保证失败时不回退到 GPT/Claude/ERNIE（项目约束：临时/批量测试仅允许 GLM/Doubao，必须 PINOVEL_DISABLE_FALLBACK=1 + PINOVEL_BENCHMARK_COST_PROFILE=package_screening）。generate 路由用于 B0(直接基线)/B1(上下文增强)/B2(意图增强)/B3(编辑改写)，judge 路由用于 B4(匿名 pairwise 裁判 B2 vs B3)。temperature=0.72 与 narrator_testing_glm/narrator_primary 对齐保证生成可比性；judge temperature=0.2 适合结构化 JSON 输出。⚠️ temperature/max_tokens 实际生效位置在 provider 级 per-route map（getAgentModelConfig 不读 route-level 字段），故 glm/doubao provider 的 temperature/max_tokens map 已同步添加 nb4_* 条目。lab-only，仅 NovelBench generator 通过 generation-matrix.mjs --model glm|doubao 调用。正式质量结论仍需在 GPT/Claude frozen set 上复验。",
+    "v4.14.0 (NB-3R Reference Analyzer 真实校准路由): 新增 reference_analyzer_glm（provider=glm, model=glm-5.2, fallback=[]）与 reference_analyzer_doubao（provider=doubao, model=doubao-seed-2-1-pro-260628, fallback=[]）两条 lab-only 校准路由，供 NB-3R 在 ≥100 章真实 reference 上做 GLM/Doubao 提取校准。fallback=[] 保证失败时不回退到 GPT/Claude（按项目约束：临时/批量测试仅允许 GLM/Doubao，必须 PINOVEL_DISABLE_FALLBACK=1）。生产 reference_analyzer（GPT-5.5）保持不变，正式质量结论仍需在 GPT/Claude frozen set 上复验。CLI 通过 --route reference_analyzer_glm|reference_analyzer_doubao 选择。⚠️ 温度/max_tokens 实际生效位置：getAgentModelConfig 只读 provider 级 per-route map（provider.temperature[agentName] / provider.max_tokens[agentName]），不读 route-level 的 temperature/max_tokens 字段；因此 reference_analyzer_glm/doubao 的 temperature=0.2 / max_tokens=16384 必须在 glm/doubao provider 的 per-route map 中添加条目才能生效（route-level 字段仅作文档）。max_tokens=16384 容纳 12 类资产 + spans 的冗长 JSON 输出（dry-run 确认 8192/4096 会被截断导致 JSON 不完整）。",
+    "v4.13.0 (NB-3 Reference Analyzer 路由): 新增 reference_analyzer 路由（provider=gpt, model=gpt-5.5, temperature=0.2, max_tokens=8192）供 NovelBench 隐藏 Reference Analyzer 提取 12 类叙事资产。schema-heavy 结构化提取任务，GPT 5.5 适合；temperature=0.2 稳定输出；max_tokens=8192 容纳长章资产。lab-only，仅 NovelBench evaluator 调用，不进生产 novel_generate_chapter 路径，不进 fallback 链。fallback 继承 provider 级 fallback.gpt=[claude]。",
+    "v4.12.0 (P44 Layer 2 EditorialPlan 重设计): 新增 v2_editorial_planner 路由（provider=gpt, model=gpt-5.5, temperature=0.3, max_tokens=4096）供 EditorialPlanPlanner 生成编辑意图简报。amplified 生成方式从'带规则重写 rawStage2'改为'编辑意图驱动的新候选'：EditorialPlanPlanner 产出 6 字段意图 + 3-5 个变体策略，CandidateGenerator 按 variantStrategies 展开多个 editorial_amplified 候选（kind=editorial_amplified, route=v2_amplified 复用 Doubao）。editorial_amplified 通过 classifyCandidateSource 归入 amplified source，流经 FinalSelector clearWin 4 门，不破坏 FinalSelectedSource union。停止 Phase D 的'行动词必须保留/感知词禁止/钩子不得弱化'等生成期硬约束。Layer 1 选择保护层（rawStage2 baseline + clearWin + 负收益保留）不动。Layer 3 comparator 校准为后续 Phase。fallback 链继承 provider 级 fallback.gpt=[claude]，不新增 provider 级 fallback 条目。",
+    "v4.10.0 (P40-T05 Stage 2 微小节失败触发式结构修复路由): 新增 stage2_repair_gpt 路由（provider=gpt, model=gpt-5.5, temperature=0.4, max_tokens=4096）作为 MicroSectionGate BLOCK 时的结构化修复路由，仅在 dialogue_propulsion_insufficient / conflict_progress_missing / state_delta_missing / anchor_coverage_missing / word_count_out_of_range / boundary_violation 等结构缺口时按 gapEvidence 调用。Claude/Doubao/ERNIE 修复复用现有 narrator_testing_claude / chinese_naturalizer / narrator_testing_ernie 路由，避免在 config 新增多条高度重复 route。stage2_repair_gpt 不作为正文 fallback，不替换 narrator_primary（仍为 Doubao），每次调用必写 trace。fallback=[claude]，与既有 fallback.gpt 链路一致。",
+    "v4.9.0 (P39 中文训练模型主写切换): 基于用户提供的 Doubao-Seed-2.1-pro 与 ERNIE 5.1 离线评测，Stage 2 生产正文主写从 GPT/Claude 系列切换为 Doubao Seed 2.1 Pro，以从源头治理 xinmo 第17章暴露的英文语感/翻译腔。ERNIE 5.1 晋级为 Stage 2 中文备援候选与显式测试路由；fallback.doubao=[ernie]，fallback.ernie=[]，避免 Doubao 不可用时静默退回 GPT/Claude 正文并复发英文语感。GPT/Claude 保留在结构化规划、质量审查、StyleShaper/Final Gate、显式 baseline 测试等节点。",
+    "v4.8.0 (ERNIE 5.1 主力备选候选接入): 新增百度千帆 ERNIE 5.1 作为内容生成主力备选候选（narrator_backup_ernie）。配置为 OpenAI 兼容协议（qianfan.baidubce.com/v2，Bearer 鉴权），thinking 默认 disabled 以避免思维链泄露。新增 narrator_testing_ernie / style_shaper_testing_ernie / chinese_naturalizer_ernie 三条测试路由供 A/B 对比（modelTestRoute='ernie'）。fallback.ernie=[gpt, claude] 保证 ERNIE 失败时回退到生产模型。P35 治理约束：ERNIE 暂不进入 stage2 生产 fallback 链、不替换 narrator_backup（仍为 claude）、不进 best_of_n_config.models（仍为 [claude-opus-4-8, gpt-5.5]），需经 replay benchmark 验证（sampleSize>=3, validatedWinRate>=0.55）后再晋级到生产 fallback / best_of_n。model_strategy.narrator_backup_ernie 为候选标注字段，不改变 narrator_primary/narrator_backup 生产路由。",
+    "v4.7.0 (P37 Stage 2 English-tone root fix): xinmo chapter 17 showed severe translationese in a clean Claude Stage 2 draft. Production Stage 2 prose now defaults to GPT 5.5; Claude Opus 4.8 is retained as backup and explicit modelTestRoute=claude comparison route. Doubao remains excluded from production Stage 2 fallback and stays limited to chinese_naturalizer/testing.",
+    "v4.6.0 (P35 Stage 2 fallback 污染治理): 收紧生产 fallback 链，禁止 Stage 2 生产主写静默兜底到 Doubao/DeepSeek/GLM/Qwen。fallback.claude 由 [gpt, doubao, deepseek] 收紧为 [gpt]；fallback.gpt 由 [claude, doubao, deepseek] 收紧为 [claude]；fallback.doubao 设为 []（Doubao 不再作为任何生产节点的 fallback，仅用于 chinese_naturalizer/doubao-auto 受限 patch 与显式 modelTestRoute=doubao 测试通道）；fallback.deepseek 收紧为 [gpt]；fallback.glm/qwen 收紧为 [gpt, claude]（测试链路兜底到生产模型）。理由：第17章生成时 Claude 余额不足触发 narrator_primary 内部 provider fallback 污染到 Doubao，与质量优先路由策略冲突。Stage 2 生产主写只允许 Claude Opus 4.8 → GPT 5.5；Claude+GPT 均不可用时 hard block，禁止静默生成 Doubao 正文。NarratorAgent 新增 assertProductionStage2Provider guard（modelTestRoute===undefined 且 usedProvider 不在 [claude, gpt] 时阻断，写入 stage2.production_provider_guard gate）；execute 顶层 catch 新增 stage2_model_unavailable FailureEnvelope（Claude+GPT 均不可用时 hard_block，userActionRequired 列出充值/配置 GPT_API_KEY/使用 modelTestRoute=doubao）。审计脚本新增 PRODUCTION_STAGE2_FORBIDDEN_PROVIDER_FALLBACK 污染判定。",
+    "v4.5.0 (P35 质量优先路由收紧): DeepSeek 完全退出默认质量链路。Stage1.6/Stage3/Stage4.5/brainhole_injector 全部迁移到 GPT 5.5。DeepSeek 仅保留测试路由（narrator_testing_deepseek/style_shaper_testing_deepseek/chinese_naturalizer_deepseek）供 A/B 对比，不作为任何默认生产节点。理由：P35 范式门禁要求节点间一致性，deepseek-v4-flash 在结构化规划/骨架/读者期望评分节点上的质量未经跨章验证；GPT 5.5 在同类结构化任务上已有稳定记录（Stage0/1/1.5/4/4.6/5.5/6/7/8.5 等），统一到 GPT 可减少节点间路由碎片。",
+    "v4.4.0 (P35 中文网文范式优先): New paradigm_judge route (provider=gpt, model=gpt-5.5, fallback=claude) for Stage 8 LLM judge校准4软维度. Doubao upgraded from explicit opt-in to conditional mandatory (chineseNaturalizerRoute accepts 'doubao-auto' for auto-trigger when paradigmScore.nativeNaturalnessVerdict==='repair'). Claude remains Stage 2 primary + Stage 5/8 style authority but is now constrained by chinese-webnovel-paradigm gates. GPT owns structure/gates/state/diagnosis + paradigm judge. Doubao owns Chinese母语化/翻译腔修补. GLM/Qwen remain test-only (not promoted by 'Chinese model identity' alone). DeepSeek remains low-risk lightweight nodes only; not assigned core content nodes when quality is priority.",
+    "v4.3.0 (P34-T09 final decision): Freeze the production decision on current verified evidence. Claude Opus 4.8 remains the Stage 2 production primary and Stage 5/8 prose/style authority. GPT 5.5 is promoted to the first Stage 2 candidate/backup and the critical/high-value Best-of-N challenger. Doubao is no longer the narrator backup; it remains the dedicated Chinese naturalizer and explicit Doubao test route. DeepSeek remains lightweight world/skeleton/brainhole routing. GLM/Qwen remain test-only candidates.",
+    "v4.2.0 (reverted from v4.2.1-doubao-test): Reverted Doubao back out of the production primary route to comply with the hard constraint \"do not promote Doubao to production primary until replay evidence passes\". Stage 2 narrator and Stage 5 style shaping use Claude Opus 4.8 again; Doubao Seed 2.1 Pro remains in providers, narrator_backup, narrator_testing, best_of_n, and fallback. Doubao quality testing is enabled via .env override (PINOVEL_RHYTHM_ADAPTER=doubao) plus the P28 reload mechanism, not by editing the production routing config.",
+    "v4.2.0: Rebalanced routing after Doubao chapter tests. Claude Opus 4.8 is restored as the primary top-webnovel prose and style model; Doubao Seed 2.1 Pro remains for Chinese naturalness/testing and fallback comparison; GPT 5.5 owns structured planning and deterministic gates; DeepSeek V4 Flash owns lightweight world/skeleton/brainhole work.",
+    "Inactive providers remain in the provider catalog so existing .env keys and manual connectivity checks are preserved, but GLM, Qwen, Claude Backup, and GPT Backup are removed from active stage routing, agent routing, best-of candidates, and fallback chains."
+  ],
+  "model_analysis": {
+    "claude": {
+      "model": "claude-opus-4-6",
+      "strengths": [
+        "long-form Chinese prose control",
+        "subtle character psychology",
+        "webnovel rhythm and scene-level tension",
+        "style-preserving revision"
+      ],
+      "assigned_nodes": [
+        "stage2_narrator",
+        "narrator_primary",
+        "stage5_style_shaper",
+        "stage8_final_gate",
+        "narrator_testing_claude",
+        "style_shaper",
+        "character_agent",
+        "v2_direct_claude",
+        "v2_rawstage2",
+        "v2_amplified"
+      ]
+    },
+    "gpt": {
+      "model": "gpt-5.5",
+      "strengths": [
+        "schema-following",
+        "logic and dependency checks",
+        "structured planning",
+        "rule-based quality gates"
+      ],
+      "assigned_nodes": [
+        "stage0_readiness",
+        "stage1_anchor_dag",
+        "stage1_5_reader_preplan",
+        "stage1_6_world_preplan",
+        "stage3_skeleton",
+        "stage4_detail_ledger",
+        "stage4_5_reader_post",
+        "stage4_6_world_scan",
+        "stage5_5_mid_checker",
+        "stage6_emotion",
+        "stage7_supporting",
+        "stage8_5_ending",
+        "narrator_testing_gpt",
+        "anti_ai_detector",
+        "dependency_checker",
+        "type_contract_engine",
+        "drama_coach",
+        "brainhole_injector"
+      ]
+    },
+    "deepseek": {
+      "model": "deepseek-v4-flash",
+      "strengths": [
+        "fast lightweight generation",
+        "world presentation planning",
+        "skeleton extraction",
+        "brainhole variation ideation"
+      ],
+      "assigned_nodes": [],
+      "inactive_reason": "v4.5.0 质量优先路由收紧：DeepSeek 退出所有默认生产节点。Stage1.6/Stage3/Stage4.5/brainhole 已迁移至 GPT 5.5。仅保留测试路由（narrator_testing_deepseek 等）供 A/B 对比，不出现在 stage_routing/agent_routing 默认路径。"
+    },
+    "doubao": {
+      "model": "doubao-seed-2-1-pro-260628",
+      "strengths": [
+        "Chinese phrasing naturalness",
+        "local idiom and sentence texture",
+        "anchor-to-event conversion",
+        "native Chinese webnovel rhythm",
+        "concrete suspense detail handling"
+      ],
+      "assigned_nodes": [
+        "chinese_naturalizer",
+        "chinese_editor_judge",
+        "narrator_testing",
+        "style_shaper_testing",
+        "v2_chinese_calibration"
+      ],
+      "role": "v4.18.0 (历史): v4.9.0 起 Doubao 曾作为 Stage 2 生产主写，但 MODEL-ROUTING-CLAUDE46-1B 起 raw 正文与普通 editorial candidate 主写统一切到 Claude Opus 4.6；Doubao 降为受限中文校准器（仅 v2_chinese_calibration 在有 raw span 证据时调用，1C 实现）。narrator_testing / chinese_naturalizer / chinese_editor_judge / style_shaper_testing 等 Doubao 测试/校准路由保留，但 Doubao 不再担任正文主写，不再进入 best_of_n_config.models，fallback.doubao=[] 保证不进入任何生产 fallback 链。v4.9.0 历史离线评测保留为参考，不再作为当前态陈述。"
+    },
+    "qwen": {
+      "model": "qwen3.7-plus",
+      "strengths": [
+        "Chinese general writing fallback"
+      ],
+      "assigned_nodes": [],
+      "inactive_reason": "No node remains where it is the best-fit model after Claude/GPT/DeepSeek/Doubao rebalance."
+    },
+    "glm": {
+      "model": "glm-5.2",
+      "strengths": [
+        "structured Chinese coding endpoint experiments"
+      ],
+      "assigned_nodes": [],
+      "inactive_reason": "Historical active route only; no current production chapter node selects it."
+    },
+    "claude_backup": {
+      "model": "claude-opus-4-6",
+      "strengths": [
+        "manual alternate endpoint for Claude"
+      ],
+      "assigned_nodes": [],
+      "inactive_reason": "Kept as credentials/provider catalog only; automatic fallback now avoids duplicate Claude endpoints."
+    },
+    "gpt_backup": {
+      "model": "gpt-5.5",
+      "strengths": [
+        "manual alternate endpoint for GPT"
+      ],
+      "assigned_nodes": [],
+      "inactive_reason": "Kept as credentials/provider catalog only; automatic fallback now avoids duplicate GPT endpoints."
+    },
+    "ernie": {
+      "model": "ernie-5.1",
+      "strengths": [
+        "Chinese native phrasing and webnovel rhythm",
+        "long-form Chinese prose control",
+        "Baidu Qianfan OpenAI-compatible endpoint",
+        "low-cost Chinese content generation alternative"
+      ],
+      "assigned_nodes": [
+        "narrator_backup",
+        "narrator_testing_ernie",
+        "style_shaper_testing_ernie",
+        "chinese_naturalizer_ernie"
+      ],
+      "role": "v4.9.0 Stage 2 中文备援候选。离线评测显示 ERNIE 擅长过 gate 的中文正文、动作-决策-后果链和局部修复，但段落节奏比 Doubao 更碎，因此先作为 Doubao 后的中文模型 fallback 与显式测试路由。thinking 默认 disabled 以避免思维链泄露。"
+    }
+  },
+  "model_strategy": {
+    "narrator_primary": "claude-opus-4-6",
+    "narrator_reason": "MODEL-ROUTING-CLAUDE46-1B: raw 正文与普通 editorial candidate 主写统一切到 Claude Opus 4.6。Claude 4.6 是 raw 正文唯一正式主写；失败时由 v2_rawstage2.fallback=[] hard block，不静默切换其他正文模型（Doubao/GLM/GPT）。Doubao 降为受限中文校准器（仅 1C v2_chinese_calibration 在有 raw span 证据时调用）。历史 v4.9.0 Doubao 主写决策保留在 _migration_notes 作参考，不再作为当前态陈述。",
+    "narrator_backup": null,
+    "narrator_backup_reason": "Claude 4.6 是唯一正式正文主写；raw 失败由 v2_rawstage2.fallback=[] hard block，不静默切换其他正文模型。Doubao 不再担任正文备援，仅作受限中文校准器。",
+    "narrator_candidate": null,
+    "narrator_testing": "doubao-seed-2-1-pro-260628",
+    "chinese_naturalizer": "doubao-seed-2-1-pro-260628",
+    "style_shaper": "claude-opus-4-6",
+    "style_shaper_reason": "MODEL-ROUTING-CLAUDE46-1B: StyleShaper 与 Stage 8 final gate 统一切到 Claude Opus 4.6。",
+    "stage2_loopback_policy": "disabled",
+    "stage2_loopback_policy_reason": "ERNIE 已停用；对白回环不再调用 ERNIE，避免无余额 provider 被触发。",
+    "stage2_loopback_gpt": "gpt-5.5",
+    "stage2_loopback_execution_note": "对白回环策略已禁用。历史 ERNIE 路由元数据仅用于旧 trace/replay 解析，不允许发起新调用。"
+  },
+  "providers": {
+    "glm": {
+      "name": "GLM-5.2",
+      "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+      "api_key_env": "GLM_API_KEY",
+      "model": "glm-5.2",
+      "protocol": "openai",
+      "request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "temperature": {
+        "narrator_primary": 0.72,
+        "narrator_draft": 0.72,
+        "narrator_testing": 0.72,
+        "narrator_testing_glm": 0.72,
+        "narrator_backup": 0.72,
+        "style_shaper": 0.45,
+        "stage8_final_gate": 0.25,
+        "reference_analyzer_glm": 0.2,
+        "nb4_generate_glm": 0.72,
+        "nb4_judge_glm": 0.2,
+        "nb5_judge_glm": 0.2
+      },
+      "max_tokens": {
+        "narrator_primary": 8192,
+        "narrator_draft": 8192,
+        "narrator_testing": 8192,
+        "narrator_testing_glm": 8192,
+        "narrator_backup": 8192,
+        "style_shaper": 8000,
+        "stage8_final_gate": 4096,
+        "reference_analyzer_glm": 16384,
+        "nb4_generate_glm": 8192,
+        "nb4_judge_glm": 4096,
+        "nb5_judge_glm": 8192
+      }
+    },
+    "deepseek": {
+      "name": "DeepSeek V4 Flash",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-flash",
+      "protocol": "openai",
+      "request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "temperature": {
+        "worldbuilder": 0.45,
+        "world_preplan": 0.45,
+        "skeleton_extractor": 0.2,
+        "reader_expectation_post": 0.2,
+        "brainhole_injector": 0.7,
+        "narrator_testing_deepseek": 0.72,
+        "style_shaper_testing_deepseek": 0.45,
+        "chinese_naturalizer_deepseek": 0.45
+      },
+      "max_tokens": {
+        "worldbuilder": 4096,
+        "world_preplan": 4096,
+        "skeleton_extractor": 4096,
+        "reader_expectation_post": 4096,
+        "brainhole_injector": 4096,
+        "narrator_testing_deepseek": 8192,
+        "style_shaper_testing_deepseek": 8000,
+        "chinese_naturalizer_deepseek": 8192
+      }
+    },
+    "qwen": {
+      "name": "Qwen 3.7 Plus",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "QWEN_API_KEY",
+      "model": "qwen3.7-plus",
+      "protocol": "openai",
+      "temperature": {
+        "narrator_primary": 0.72,
+        "narrator_backup": 0.72,
+        "narrator_testing": 0.72,
+        "narrator_testing_qwen": 0.72,
+        "style_shaper_testing_qwen": 0.45,
+        "chinese_naturalizer_qwen": 0.45,
+        "mid_chapter_checker": 0.15
+      },
+      "max_tokens": {
+        "narrator_primary": 8192,
+        "narrator_backup": 8192,
+        "narrator_testing": 8192,
+        "narrator_testing_qwen": 8192,
+        "style_shaper_testing_qwen": 8000,
+        "chinese_naturalizer_qwen": 8192,
+        "mid_chapter_checker": 4096
+      }
+    },
+    "claude": {
+      "name": "Claude Opus 4.6",
+      "base_url": "https://aimagichub.xyz/v1",
+      "api_key_env": "CLAUDE_API_KEY",
+      "model": "claude-opus-4-6",
+      "protocol": "openai",
+      "_protocol_note": "P34-T09: switched from anthropic to openai. wildroamguides.com 的 Anthropic 处理器 (/v1/messages) 对长生成请求返回 504 Gateway time-out；OpenAI 处理器 (/v1/chat/completions) 正常。2026-07-04 切换到 aimagichub.xyz 新端点（OpenAI 协议）。生产主路由仍走此 OpenAI 协议。",
+      "temperature": {
+        "critic": 0,
+        "critic_review": 0,
+        "character_agent": 0.7,
+        "narrator_primary": 0.72,
+        "narrator_draft": 0.72,
+        "narrator_testing": 0.72,
+        "narrator_testing_claude": 0.72,
+        "narrator_backup": 0.72,
+        "style_shaper": 0.45,
+        "stage8_final_gate": 0.25,
+        "v2_direct_claude": 0.72
+      },
+      "max_tokens": {
+        "critic": 4096,
+        "critic_review": 4096,
+        "character_agent": 4096,
+        "narrator_primary": 8192,
+        "narrator_draft": 8192,
+        "narrator_testing": 8192,
+        "narrator_testing_claude": 8192,
+        "narrator_backup": 8192,
+        "style_shaper": 8000,
+        "stage8_final_gate": 4096,
+        "v2_direct_claude": 8192
+      }
+    },
+    "claude_backup": {
+      "name": "Claude Opus 4.6 Backup (NewAPI)",
+      "base_url": "https://aimagichub.xyz/v1",
+      "api_key_env": "CLAUDE_BACKUP_API_KEY",
+      "model": "claude-opus-4-6",
+      "protocol": "openai",
+      "temperature": {
+        "critic": 0,
+        "critic_review": 0,
+        "character_agent": 0.7,
+        "narrator_primary": 0.72,
+        "narrator_draft": 0.72,
+        "narrator_testing": 0.72,
+        "narrator_backup": 0.72,
+        "style_shaper": 0.45,
+        "stage8_final_gate": 0.25
+      },
+      "max_tokens": {
+        "critic": 4096,
+        "critic_review": 4096,
+        "character_agent": 4096,
+        "narrator_primary": 8192,
+        "narrator_draft": 8192,
+        "narrator_testing": 8192,
+        "narrator_backup": 8192,
+        "style_shaper": 8000,
+        "stage8_final_gate": 4096
+      }
+    },
+    "gpt": {
+      "name": "GPT 5.5",
+      "base_url": "https://shunfen6.win/v1",
+      "api_key_env": "GPT_API_KEY",
+      "model": "gpt-5.5",
+      "protocol": "openai",
+      "temperature": {
+        "architect": 0.15,
+        "chapter_outline_generator": 0.15,
+        "outline_planner": 0.15,
+        "reader_expectation_preplan": 0.1,
+        "detail_ledger": 0,
+        "world_scan": 0,
+        "info_release_detector": 0,
+        "emotion_metronome": 0,
+        "supporting_check": 0,
+        "ending_craft": 0,
+        "anti_ai_detector": 0,
+        "type_contract_engine": 0,
+        "drama_coach": 0.2,
+        "dependency_checker": 0,
+        "mid_chapter_checker": 0.15,
+        "narrator_primary": 0.72,
+        "stage2_narrator": 0.72,
+        "narrator_backup": 0.72,
+        "narrator_testing_gpt": 0.72,
+        "style_shaper_testing_gpt": 0.45,
+        "chinese_naturalizer_gpt": 0.45,
+        "paradigm_judge": 0.3,
+        "stage2_repair_gpt": 0.4,
+        "v2_direct_gpt": 0.72,
+        "v2_editorial_planner": 0.3,
+        "reference_analyzer": 0.2
+      },
+      "max_tokens": {
+        "architect": 4096,
+        "chapter_outline_generator": 4096,
+        "outline_planner": 4096,
+        "reader_expectation_preplan": 4096,
+        "detail_ledger": 4096,
+        "world_scan": 4096,
+        "info_release_detector": 4096,
+        "emotion_metronome": 4096,
+        "supporting_check": 4096,
+        "ending_craft": 4096,
+        "anti_ai_detector": 2048,
+        "type_contract_engine": 4096,
+        "drama_coach": 4096,
+        "dependency_checker": 2048,
+        "mid_chapter_checker": 4096,
+        "narrator_primary": 8192,
+        "stage2_narrator": 8192,
+        "narrator_backup": 8192,
+        "narrator_testing_gpt": 8192,
+        "style_shaper_testing_gpt": 8000,
+        "chinese_naturalizer_gpt": 8192,
+        "paradigm_judge": 4096,
+        "stage2_repair_gpt": 4096,
+        "v2_direct_gpt": 8192,
+        "v2_editorial_planner": 4096,
+        "reference_analyzer": 16384
+      }
+    },
+    "gpt_backup": {
+      "name": "GPT 5.5 Backup (NewAPI)",
+      "base_url": "https://shunfen6.win/v1",
+      "api_key_env": "GPT_BACKUP_API_KEY",
+      "model": "gpt-5.5",
+      "protocol": "openai",
+      "temperature": {
+        "architect": 0.15,
+        "chapter_outline_generator": 0.15,
+        "outline_planner": 0.15,
+        "reader_expectation_preplan": 0.1,
+        "detail_ledger": 0,
+        "world_scan": 0,
+        "info_release_detector": 0,
+        "emotion_metronome": 0,
+        "supporting_check": 0,
+        "ending_craft": 0,
+        "anti_ai_detector": 0,
+        "type_contract_engine": 0,
+        "drama_coach": 0.2,
+        "dependency_checker": 0
+      },
+      "max_tokens": {
+        "architect": 4096,
+        "chapter_outline_generator": 4096,
+        "outline_planner": 4096,
+        "reader_expectation_preplan": 4096,
+        "detail_ledger": 4096,
+        "world_scan": 4096,
+        "info_release_detector": 4096,
+        "emotion_metronome": 4096,
+        "supporting_check": 4096,
+        "ending_craft": 4096,
+        "anti_ai_detector": 2048,
+        "type_contract_engine": 4096,
+        "drama_coach": 4096,
+        "dependency_checker": 2048
+      }
+    },
+    "doubao": {
+      "name": "Doubao Seed 2.1 Pro",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key_env": "ARK_API_KEY",
+      "model": "doubao-seed-2-1-pro-260628",
+      "protocol": "openai",
+      "request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "temperature": {
+        "narrator_backup": 0.72,
+        "narrator_testing": 0.72,
+        "narrator_primary": 0.72,
+        "stage2_narrator": 0.72,
+        "style_shaper": 0.45,
+        "chinese_naturalizer": 0.45,
+        "chinese_editor_judge": 0.3,
+        "v2_direct_doubao": 0.72,
+        "v2_rawstage2": 0.72,
+        "v2_amplified": 0.72,
+        "reference_analyzer_doubao": 0.2,
+        "nb4_generate_doubao": 0.72,
+        "nb4_judge_doubao": 0.2,
+        "nb5_judge_doubao": 0.2
+      },
+      "max_tokens": {
+        "narrator_backup": 8192,
+        "narrator_testing": 8192,
+        "narrator_primary": 8192,
+        "stage2_narrator": 8192,
+        "style_shaper": 8000,
+        "chinese_naturalizer": 8192,
+        "chinese_editor_judge": 4096,
+        "v2_direct_doubao": 8192,
+        "v2_rawstage2": 8192,
+        "v2_amplified": 8192,
+        "reference_analyzer_doubao": 16384,
+        "nb4_generate_doubao": 8192,
+        "nb4_judge_doubao": 4096,
+        "nb5_judge_doubao": 8192
+      }
+    },
+    "ernie": {
+      "name": "ERNIE 5.1 (Baidu Qianfan)",
+      "base_url": "https://qianfan.baidubce.com/v2",
+      "api_key_env": "ERNIE_API_KEY",
+      "model": "ernie-5.1",
+      "protocol": "openai",
+      "_endpoint_note": "v4.8.0: 百度千帆 ModelBuilder V2 接口（OpenAI 兼容）。完整 endpoint = base_url + /chat/completions（由 routed-chat.ts joinUrl 拼接）。鉴权：Authorization: Bearer <ERNIE_API_KEY>。参考：https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb",
+      "request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "temperature": {
+        "narrator_testing_ernie": 0.72,
+        "style_shaper_testing_ernie": 0.45,
+        "chinese_naturalizer_ernie": 0.45,
+        "narrator_backup_ernie": 0.72
+      },
+      "max_tokens": {
+        "narrator_testing_ernie": 8192,
+        "style_shaper_testing_ernie": 8000,
+        "chinese_naturalizer_ernie": 8192,
+        "narrator_backup_ernie": 8192
+      }
+    }
+  },
+  "stage_routing": {
+    "stage0_readiness": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Structured preflight/readiness checks."
+    },
+    "stage1_anchor_dag": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Anchor search and DAG planning require strict instruction following."
+    },
+    "stage1_5_reader_preplan": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Reader expectation planning is a structured reasoning task."
+    },
+    "stage1_6_world_preplan": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。世界观呈现规划属于结构化推理任务；GPT 5.5 在同类结构化节点已有稳定记录，统一质量链路。"
+    },
+    "stage2_narrator": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "MODEL-ROUTING-CLAUDE46-1B: Stage 2 production primary switched to Claude Opus 4.6. raw 正文唯一正式主写；失败时由 v2_rawstage2.fallback=[] hard block，不静默切换 Doubao/GLM/GPT。Doubao 降为受限中文校准器（仅 1C v2_chinese_calibration 在有 raw span 证据时调用）。历史 v4.9.0 Doubao 主写决策保留在 _migration_notes，不再作为当前态。"
+    },
+    "stage3_skeleton": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。骨架提取与一致性摘要是结构化状态任务；GPT 5.5 已稳定承担 Stage4/4.6/5.5/6/7 等同类节点。"
+    },
+    "stage4_detail_ledger": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Detail ledger requires structured state updates."
+    },
+    "stage4_5_reader_post": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。读者期望后评分是结构化评分任务，与 Stage1.5 preplan 对称，统一走 GPT 5.5。"
+    },
+    "stage4_6_world_scan": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "World scan is a structured consistency check."
+    },
+    "stage5_style_shaper": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "MODEL-ROUTING-CLAUDE46-1B: Claude Opus 4.6 primary style shaping model; Stage 8 remains independent review. Doubao available via .env override for Chinese naturalization testing."
+    },
+    "stage5_5_mid_checker": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Mid-chapter stagnation detection is a structured gate."
+    },
+    "stage6_emotion": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Emotion metronome requires deterministic scoring."
+    },
+    "stage7_supporting": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Supporting character health is a structured check."
+    },
+    "stage8_final_gate": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "Final gate needs prose-level judgment plus style sensitivity."
+    },
+    "stage8_5_ending": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Ending craft checks are schema-heavy diagnostics."
+    }
+  },
+  "agent_routing": {
+    "architect": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 1 anchor search and DAG planning."
+    },
+    "chapter_outline_generator": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 0 planning and outline generation."
+    },
+    "outline_planner": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 0 planning and outline generation."
+    },
+    "reader_expectation_preplan": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 1.5 reader expectation preplan."
+    },
+    "worldbuilder": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。Stage 1.6 世界观呈现规划，统一质量链路。"
+    },
+    "world_preplan": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。Stage 1.6 世界观呈现规划，统一质量链路。"
+    },
+    "narrator_primary": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "MODEL-ROUTING-CLAUDE46-1B: Stage 2 production prose primary switched to Claude Opus 4.6. raw 正文唯一正式主写；失败时由 v2_rawstage2.fallback=[] hard block。Doubao 降为受限中文校准器（1C v2_chinese_calibration span 驱动）。历史 v4.9.0 Doubao 主写决策保留在 _migration_notes，不再作为当前态。"
+    },
+    "narrator_testing": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "note": "Dedicated Doubao explicit test route retained for Chinese-naturalness comparison; not a Stage 2 backup."
+    },
+    "narrator_testing_glm": {
+      "provider": "glm",
+      "model": "glm-5.2",
+      "fallback": [],
+      "lab_testing": true,
+      "note": "P34-T05/P39/MODEL-ROUTING-CLAUDE46-1D: Dedicated GLM test route for A/B comparison. Only used when novel_generate_chapter is invoked with modelTestRoute='glm'. Does NOT modify the production narrator_primary route (now Claude Opus 4.6). GLM only participates as a candidate test route; never promoted to primary. fallback=[] 显式声明：失败时不继承 provider 级 fallback，hard block 不回退到 GPT/Claude/Doubao（lab/testing 隔离）。lab_testing=true 标注此路由仅供开发验证，不进入生产 stage_routing / agent_routing 默认路径。"
+    },
+    "narrator_testing_gpt": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "P34-T09/P39: Dedicated GPT test route for model-node fit matrix and explicit baseline comparison. Production narrator_primary now uses Doubao."
+    },
+    "narrator_testing_claude": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "MODEL-ROUTING-CLAUDE46-1B: Dedicated Claude test route for explicit modelTestRoute='claude' baselines. Updated to Claude Opus 4.6 alongside production narrator_primary."
+    },
+    "narrator_testing_deepseek": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash",
+      "note": "P34-T09: Dedicated DeepSeek test route for model-node fit matrix. Only used when modelTestRoute='deepseek'."
+    },
+    "narrator_testing_ernie": {
+      "provider": "ernie",
+      "model": "ernie-5.1",
+      "note": "v4.9.0: 百度千帆 ERNIE 5.1 测试路由与 Stage 2 中文备援候选。仅当 novel_generate_chapter 以 modelTestRoute='ernie' 调用时触发 A/B 对比；生产 fallback 仅允许 Doubao→ERNIE，不回退到 GPT/Claude 正文。thinking 默认 disabled 避免思维链泄露。P40-T05 复用为 MicroSectionGate 连续失败时的 ERNIE 备援修复路由（ernie_backup_rewrite 策略）。"
+    },
+    "stage2_repair_gpt": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "P40-T05: Stage 2 微小节失败触发式结构修复路由。仅在 MicroSectionGate BLOCK 时按 gapEvidence 调用，不作为正文 fallback，不替换 narrator_primary（仍为 Doubao）。每次调用必写 trace。fallback=[claude]，与既有 fallback.gpt 链路一致。temperature=0.4 适合结构化修复指令；max_tokens=4096 足以容纳单个 100~300 字小节的修复输出。"
+    },
+    "style_shaper_testing_glm": {
+      "provider": "glm",
+      "model": "glm-5.2",
+      "fallback": [],
+      "lab_testing": true,
+      "note": "P34-T09/MODEL-ROUTING-CLAUDE46-1D: GLM StyleShaper test route. Only used when styleShaperRoute='glm'. fallback=[] 显式声明：失败时不继承 provider 级 fallback（lab/testing 隔离）。lab_testing=true 标注此路由仅供开发验证。"
+    },
+    "style_shaper_testing_gpt": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "P34-T09: GPT StyleShaper test route. Only used when styleShaperRoute='gpt'."
+    },
+    "style_shaper_testing_deepseek": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash",
+      "note": "P34-T09: DeepSeek StyleShaper test route. Only used when styleShaperRoute='deepseek'."
+    },
+    "style_shaper_testing_qwen": {
+      "provider": "qwen",
+      "model": "qwen3.7-plus",
+      "note": "P34-T09: Qwen StyleShaper test route. Only used when styleShaperRoute='qwen'."
+    },
+    "style_shaper_testing_ernie": {
+      "provider": "ernie",
+      "model": "ernie-5.1",
+      "note": "v4.8.0: ERNIE StyleShaper 测试路由。仅当 styleShaperRoute='ernie' 触发，用于风格塑形 A/B 对比。"
+    },
+    "chinese_naturalizer_glm": {
+      "provider": "glm",
+      "model": "glm-5.2",
+      "fallback": [],
+      "lab_testing": true,
+      "note": "P34-T09/MODEL-ROUTING-CLAUDE46-1D: GLM Chinese naturalizer test route. Only used when chineseNaturalizerRoute='glm'. fallback=[] 显式声明：失败时不继承 provider 级 fallback（lab/testing 隔离）。lab_testing=true 标注此路由仅供开发验证。"
+    },
+    "chinese_naturalizer_gpt": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "P34-T09: GPT Chinese naturalizer test route. Only used when chineseNaturalizerRoute='gpt'."
+    },
+    "chinese_naturalizer_deepseek": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash",
+      "note": "P34-T09: DeepSeek Chinese naturalizer test route. Only used when chineseNaturalizerRoute='deepseek'."
+    },
+    "chinese_naturalizer_qwen": {
+      "provider": "qwen",
+      "model": "qwen3.7-plus",
+      "note": "P34-T09: Qwen Chinese naturalizer test route. Only used when chineseNaturalizerRoute='qwen'."
+    },
+    "chinese_naturalizer_ernie": {
+      "provider": "ernie",
+      "model": "ernie-5.1",
+      "note": "v4.8.0: ERNIE 中文母语化测试路由。仅当 chineseNaturalizerRoute='ernie' 触发，用于中文自然度 A/B 对比。"
+    },
+    "style_shaper_testing": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "note": "P30: Dedicated Doubao StyleShaper test route for A/B comparison. Only used when novel_generate_chapter is invoked with styleShaperRoute='doubao'. Does NOT modify the production style_shaper main route (still Claude)."
+    },
+    "chinese_naturalizer": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "note": "P31/P39: Dedicated Doubao Chinese naturalizer route for Stage 2.7 patch. Since Doubao is now also the Stage 2 primary, this route remains a constrained patch path for explicit/auto naturalization and is still separate from narrator_primary trace semantics."
+    },
+    "paradigm_judge": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "P35: Stage 8 中文网文范式 LLM judge route. Single bounded call per chapter to calibrate 4 soft dimensions (爽点压迫感/信息释放/章尾钩子/类型契合度). timeoutMs=300000. Fallback to local proxy score on timeout/parse_error. Provider must stay gpt (GLM/Qwen not allowed in production routing). P36: remains the Stage 8 主裁，不替换。"
+    },
+    "chinese_editor_judge": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "note": "P36: Stage 8 Doubao 中文编辑副裁。只评中文母语自然度/网文口吻/对白自然度/句段节奏/爽点兑现质感/编辑建议可执行性。不得替代 GPT paradigm_judge 主裁，第一阶段不直接 hard block，只写 trace / review signal。不进入 Stage 2 fallback。触发由 PINOVEL_STAGE8_CHINESE_EDITOR_JUDGE=off|conditional|always 控制，默认 conditional。"
+    },
+    "skeleton_extractor": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。Stage 3 骨架提取与一致性，统一质量链路。"
+    },
+    "dependency_checker": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Structured dependency and causality validation."
+    },
+    "detail_ledger": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 4 detail ledger."
+    },
+    "reader_expectation_post": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。Stage 4.5 读者期望后评分，统一质量链路。"
+    },
+    "world_scan": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 4.6 world scan."
+    },
+    "info_release_detector": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Structured information release detection."
+    },
+    "style_shaper": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "MODEL-ROUTING-CLAUDE46-1B: Claude Opus 4.6 primary style shaper. Doubao available via .env override for Chinese naturalization testing."
+    },
+    "mid_chapter_checker": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 5.5 mid-chapter checker."
+    },
+    "emotion_metronome": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 6 emotion metronome."
+    },
+    "supporting_check": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 7 supporting character health."
+    },
+    "stage8_final_gate": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "Final style and prose-quality judgment."
+    },
+    "ending_craft": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Stage 8.5 ending craft checks."
+    },
+    "critic": {
+      "provider": "local",
+      "model": "quad-gates",
+      "note": "Quality review uses local Quad Gates; no remote model is selected."
+    },
+    "character_agent": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "Character depth and dialogue nuance."
+    },
+    "brainhole_injector": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "v4.5.0: 迁移自 DeepSeek。脑洞变体创意注入；GPT 5.5 在结构化创意变体任务上更稳定，与质量链路统一。"
+    },
+    "anti_ai_detector": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Structured anti-AI pattern detection."
+    },
+    "type_contract_engine": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Type contract analysis."
+    },
+    "drama_coach": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "Drama structure and tension analysis."
+    },
+    "v2_direct_gpt": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "P14/Task 16: V2 Quality Amplifier direct baseline 候选路由（GPT）。生成最小编辑型 prompt 的 GPT 候选，用于 A/B 对比与 direct baseline 降级。不属于 Stage 2 生产路由，不在 MAIN_ROUTE_AGENTS 白名单内，可自由 fallback。fallback 链继承 provider 级 fallback.gpt=[claude]，不影响 legacy narrator_testing_gpt 等路由。"
+    },
+    "v2_direct_claude": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "note": "P14/Task 16: V2 Quality Amplifier style-aware 候选路由（Claude）。注入风格指纹参考的 Claude 候选。fallback 链继承 provider 级 fallback.claude=[gpt]，不影响 legacy style_shaper / character_agent 等路由。MODEL-ROUTING-CLAUDE46-1B: 模型统一切换到 claude-opus-4-6。"
+    },
+    "v2_direct_doubao": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "note": "P14/Task 16: V2 Quality Amplifier Doubao direct 候选路由。fallback 链继承 provider 级 fallback.doubao=[ernie]，与 narrator_primary 共享 provider 级 fallback 但路由定义独立。"
+    },
+    "v2_rawstage2": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "fallback": [],
+      "note": "MODEL-ROUTING-CLAUDE46-1A: V2 raw 候选路由（统一主链路 raw 正文生成）。Claude Opus 4.6 是 raw 正文唯一正式主写；fallback=[] 保证失败时 hard block，不静默切换其他正文模型（Doubao/GLM/GPT）。provider allowlist: 只允许 claude。1B 起全项目 Claude 路由统一切换到 claude-opus-4-6；本路由在 1A 已显式声明 provider/model/fallback。"
+    },
+    "v2_amplified": {
+      "provider": "claude",
+      "model": "claude-opus-4-6",
+      "fallback": [],
+      "note": "MODEL-ROUTING-CLAUDE46-1A: V2 amplified 候选路由（普通 editorial candidate 生成）。与 v2_rawstage2 同 provider/model；fallback=[] 保证普通编辑候选失败 hard block，不静默切换其他正文模型。provider allowlist: 只允许 claude。中文校准候选走 v2_chinese_calibration（Doubao span 驱动），与本路由隔离。"
+    },
+    "v2_chinese_calibration": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "fallback": [],
+      "note": "MODEL-ROUTING-CLAUDE46-1A/1C: V2 中文校准候选路由（span 驱动）。Doubao 仅处理有正文 span 证据的翻译腔、中文不自然、对白口吻问题；只能作为候选，不能直接覆盖 raw，必须经 FactGuard / StoryPreservation / 语言风险 before-after / 匿名 pairwise judge / SelectionPolicy。fallback=[] 保证失败时不回退 Claude/GLM/GPT。provider allowlist: 只允许 doubao。无语言风险 span 时调用次数为 0（1C span 驱动）。"
+    },
+    "v2_opportunity_judge": {
+      "provider": "gpt",
+      "model": "gpt-5.6-sol",
+      "base_url_env": "NOVELOS_JUDGE_BASE_URL",
+      "api_key_env": "NOVELOS_JUDGE_API_KEY",
+      "model_env": "NOVELOS_JUDGE_MODEL",
+      "fallback": [],
+      "note": "MODEL-ROUTING-CLAUDE46-1A/1E-fix: V2 编辑机会 LLM 裁判路由（opportunity judge）。异源 judge：不得由 Claude 或 Doubao 自审其生成的编辑机会。MODEL-ROUTING-CLAUDE46-1E-fix: 模型从 gpt-5.5 切到 gpt-5.6-sol（与 novel_quality_judge 一致的第三方兼容端点，model/base_url/api_key 全部从 NOVELOS_JUDGE_* env 读取，不进生产 fallback 链；gpt-5.6-sol 非官方 OpenAI model ID）。fallback=[] 保证失败时不回退 Claude/Doubao/GLM，保留 raw（不静默切换 judge provider）。provider allowlist: 只允许 gpt。"
+    },
+    "v2_literary_judge": {
+      "provider": "gpt",
+      "model": "gpt-5.6-sol",
+      "base_url_env": "NOVELOS_JUDGE_BASE_URL",
+      "api_key_env": "NOVELOS_JUDGE_API_KEY",
+      "model_env": "NOVELOS_JUDGE_MODEL",
+      "fallback": [],
+      "note": "MODEL-ROUTING-CLAUDE46-1A/1E-fix: V2 pairwise 文学裁判路由（pairwise judge + reverse review）。异源 judge：Claude 不得同时担任同一候选对的生成者与文学裁判。匿名 A/B + 反向复判 + span 证据；冲突或失败保留 raw。MODEL-ROUTING-CLAUDE46-1E-fix: 模型从 gpt-5.5 切到 gpt-5.6-sol（与 novel_quality_judge 一致的第三方兼容端点，model/base_url/api_key 全部从 NOVELOS_JUDGE_* env 读取，不进生产 fallback 链；gpt-5.6-sol 非官方 OpenAI model ID）。fallback=[] 保证失败时不回退 Claude/Doubao/GLM。provider allowlist: 只允许 gpt。"
+    },
+    "v2_editorial_planner": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "P44 Layer 2: EditorialPlanPlanner 路由。生成编辑意图简报（6 字段 + variantStrategies），供 editorial_amplified 候选生成。fallback 链继承 provider 级 fallback.gpt=[claude]，不新增 provider 级 fallback 条目。temperature/max_tokens 见 providers.gpt 段。"
+    },
+    "novel_quality_judge": {
+      "provider": "gpt",
+      "model": "gpt-5.6-sol",
+      "base_url_env": "NOVELOS_JUDGE_BASE_URL",
+      "api_key_env": "NOVELOS_JUDGE_API_KEY",
+      "model_env": "NOVELOS_JUDGE_MODEL",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "fallback": [],
+      "_comment": "P1-2 第三方兼容路由，模型/Base URL/Key 全部从 env 读取，不硬编码。GPT-5.6-sol 非官方 OpenAI model ID。仅用于 NovelOS eval 脚本盲测裁判（pairwise judge + calibration），不进生产 fallback 链，不在 novel_generate_chapter 生产路径调用。fallback=[] 保证失败时不污染生产 GPT/Claude 路由。"
+    },
+    "reference_analyzer": {
+      "provider": "gpt",
+      "model": "gpt-5.5",
+      "note": "NB-3: Reference Analyzer 路由（GPT-5.5 baseline）。提取 12 类叙事资产（EventGraph/CharacterStateDelta/CanonStateDelta/PromiseMovement/InformationRelease/CharacterChoice/CostConsequence/SceneTransition/EndingFunction/VoiceFingerprint/DialogueRole + reference source spans），schema-heavy 结构化任务，GPT 5.5 适合。⚠️ temperature/max_tokens 实际生效位置在 gpt provider 的 per-route map（getAgentModelConfig 不读 route-level 字段）；真正生效值见 providers.gpt.temperature.reference_analyzer=0.2 / providers.gpt.max_tokens.reference_analyzer=16384。max_tokens=16384 容纳 12 类资产 + spans 的冗长 JSON 输出（NB-3R dry-run 确认默认 4096 会截断导致 JSON 不完整；与 reference_analyzer_glm/doubao 统一）。lab-only，仅 NovelBench evaluator 调用，不进生产 novel_generate_chapter 路径，不进 fallback 链。fallback 继承 provider 级 fallback.gpt=[claude]。"
+    },
+    "reference_analyzer_glm": {
+      "provider": "glm",
+      "model": "glm-5.2",
+      "temperature": 0.2,
+      "max_tokens": 16384,
+      "fallback": [],
+      "note": "NB-3R: Reference Analyzer GLM 校准路由。在 ≥100 章真实 reference 上做 GLM 提取校准，与 reference_analyzer (GPT-5.5) 对照。fallback=[] 保证失败时不回退到 GPT/Claude（项目约束：临时/批量测试仅允许 GLM/Doubao）。⚠️ temperature/max_tokens 实际生效位置在 glm provider 的 per-route map（getAgentModelConfig 不读 route-level 字段）；此处 route-level temperature=0.2/max_tokens=16384 仅作文档，真正生效值见 providers.glm.temperature.reference_analyzer_glm=0.2 / providers.glm.max_tokens.reference_analyzer_glm=16384。max_tokens=16384 容纳 12 类资产 + spans 的冗长 JSON 输出（dry-run 确认 4096 默认值会被截断导致 JSON 不完整）。lab-only，仅 NovelBench evaluator 通过 analyze-references.mjs --route reference_analyzer_glm 调用。正式质量结论仍需在 GPT/Claude frozen set 上复验。"
+    },
+    "reference_analyzer_doubao": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "temperature": 0.2,
+      "max_tokens": 16384,
+      "fallback": [],
+      "note": "NB-3R: Reference Analyzer Doubao 校准路由。在 ≥100 章真实 reference 上做 Doubao 提取校准，与 reference_analyzer (GPT-5.5) 对照。fallback=[] 保证失败时不回退到 GPT/Claude（项目约束：临时/批量测试仅允许 GLM/Doubao）。⚠️ temperature/max_tokens 实际生效位置在 doubao provider 的 per-route map（getAgentModelConfig 不读 route-level 字段）；此处 route-level temperature=0.2/max_tokens=16384 仅作文档，真正生效值见 providers.doubao.temperature.reference_analyzer_doubao=0.2 / providers.doubao.max_tokens.reference_analyzer_doubao=16384。max_tokens=16384 容纳 12 类资产 + spans 的冗长 JSON 输出。lab-only，仅 NovelBench evaluator 通过 analyze-references.mjs --route reference_analyzer_doubao 调用。正式质量结论仍需在 GPT/Claude frozen set 上复验。"
+    },
+    "nb4_generate_glm": {
+      "provider": "glm",
+      "model": "glm-5.2",
+      "temperature": 0.72,
+      "max_tokens": 8192,
+      "fallback": [],
+      "note": "NB-4: Generation Matrix B0-B3 GLM 生成路由。五层能力叠加对比中 B0(直接基线)/B1(上下文增强)/B2(意图增强)/B3(编辑改写) 共用的 GLM 生成路由。fallback=[] 保证失败时不回退到 GPT/Claude/ERNIE（项目约束：临时/批量测试仅允许 GLM/Doubao）。temperature=0.72 与 narrator_testing_glm 对齐，保证生成可比性；max_tokens=8192 容纳 2000-3000 字章节正文。⚠️ temperature/max_tokens 实际生效位置在 glm provider 的 per-route map（getAgentModelConfig 不读 route-level 字段）；真正生效值见 providers.glm.temperature.nb4_generate_glm=0.72 / providers.glm.max_tokens.nb4_generate_glm=8192。lab-only，仅 NovelBench generator 通过 generation-matrix.mjs --model glm 调用。正式质量结论仍需在 GPT/Claude frozen set 上复验。"
+    },
+    "nb4_judge_glm": {
+      "provider": "glm",
+      "model": "glm-5.2",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "fallback": [],
+      "note": "NB-4: Generation Matrix B4 Judge GLM 裁判路由。匿名 pairwise 比较 B2 vs B3，输出严格 JSON {winner, reason}。fallback=[] 保证失败时不回退（保守回退 B2）。temperature=0.2 适合结构化判断；max_tokens=4096 容纳 JSON 输出。⚠️ 真正生效值见 providers.glm.temperature.nb4_judge_glm=0.2 / providers.glm.max_tokens.nb4_judge_glm=4096。lab-only。"
+    },
+    "nb4_generate_doubao": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "temperature": 0.72,
+      "max_tokens": 8192,
+      "fallback": [],
+      "note": "NB-4: Generation Matrix B0-B3 Doubao 生成路由。五层能力叠加对比中 B0/B1/B2/B3 共用的 Doubao 生成路由。fallback=[] 保证失败时不回退到 ERNIE/GPT/Claude（项目约束）。temperature=0.72 与 narrator_primary 对齐；max_tokens=8192 容纳章节正文。⚠️ 真正生效值见 providers.doubao.temperature.nb4_generate_doubao=0.72 / providers.doubao.max_tokens.nb4_generate_doubao=8192。lab-only。"
+    },
+    "nb4_judge_doubao": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "fallback": [],
+      "note": "NB-4: Generation Matrix B4 Judge Doubao 裁判路由。匿名 pairwise 比较 B2 vs B3，输出严格 JSON。fallback=[] 保证失败时不回退（保守回退 B2）。temperature=0.2 适合结构化判断；max_tokens=4096 容纳 JSON 输出。⚠️ 真正生效值见 providers.doubao.temperature.nb4_judge_doubao=0.2 / providers.doubao.max_tokens.nb4_judge_doubao=4096。lab-only。"
+    },
+    "nb5_judge_glm": {
+      "provider": "glm",
+      "model": "glm-5.2",
+      "temperature": 0.2,
+      "max_tokens": 8192,
+      "fallback": [],
+      "note": "NB-5: Reference-aware Judge GLM 裁判路由。匿名 pairwise + 反向复判 + 5 维度评分 + span 引用。fallback=[] 保证失败时不回退。temperature=0.2 适合结构化判断；max_tokens=8192 容纳含 5 维度+span 的结构化 JSON。⚠️ 真正生效值见 providers.glm.temperature.nb5_judge_glm / providers.glm.max_tokens.nb5_judge_glm。lab-only。"
+    },
+    "nb5_judge_doubao": {
+      "provider": "doubao",
+      "model": "doubao-seed-2-1-pro-260628",
+      "temperature": 0.2,
+      "max_tokens": 8192,
+      "fallback": [],
+      "note": "NB-5: Reference-aware Judge Doubao 裁判路由。匿名 pairwise + 反向复判 + 5 维度评分 + span 引用。fallback=[] 保证失败时不回退。temperature=0.2 适合结构化判断；max_tokens=8192 容纳含 5 维度+span 的结构化 JSON。⚠️ 真正生效值见 providers.doubao.temperature.nb5_judge_doubao / providers.doubao.max_tokens.nb5_judge_doubao。lab-only。"
+    }
+  },
+  "best_of_n_config": {
+    "enabled": true,
+    "models": [
+      "claude-opus-4-6"
+    ],
+    "n_candidates": {
+      "normal": 0,
+      "critical": 2,
+      "high_value": 2
+    },
+    "judge": {
+      "provider": "gpt",
+      "model": "gpt-5.5"
+    }
+  },
+  "fallback": {
+    "claude": [
+      "gpt"
+    ],
+    "gpt": [
+      "claude"
+    ],
+    "deepseek": [
+      "gpt"
+    ],
+    "doubao": [
+    ],
+    "glm": [],
+    "qwen": [],
+    "ernie": []
+  },
+  "retry": {
+    "max_retries": 3,
+    "retry_delay_ms": 1000,
+    "total_timeout_ms": 120000
+  }
+}

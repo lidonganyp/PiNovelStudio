@@ -1,0 +1,6 @@
+{
+  "packages": ["novel-studio"],
+  "extensions": ["./.pi/extensions/novel-studio"],
+  "skills": ["./.pi/skills"],
+  "prompts": ["./.pi/extensions/novel-studio/prompts"]
+}

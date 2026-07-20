@@ -1,0 +1,215 @@
+# ch13 显式契约（P29 迁移参照 fixture）
+# 来源：workspaces/xinmo/series/ch13-outline-explicit.md 迁移到双轨制
+# 用途：PR-1 ~ PR-4 的 contract compiler/verifier 真实输入
+# 注意：本文件仅为测试 fixture，不进入正式 workspace 生效
+
+chapter: 13
+title: 踏实
+chapterType: escalation
+
+# 章节级生成意图（给 narrator 的高层背景，不 hard block）
+chapterIntent: |
+  李一凡在债务清零、首次任务获胜后的次日，重新审视自己的处境与未来。
+  本章建立第二阶段的「境界数值锚点」起点，同步推进吞天兽逆鳞驯化的第二步，
+  并通过小妖/战队的聚餐邀请，第一次让李一凡从「被动求生」转向「主动选择关系」。
+
+events:
+  - id: E1
+    name: 清晨的踏实与不踏实
+    type: scene
+    conflictLevel: 1
+    emotionArc: 疲惫 → 平静 → 一丝隐忧
+    wordCountTarget: 500-700
+
+    # 自然语言生成意图（给 narrator，不 hard block）
+    generationIntent: |
+      李一凡早晨醒来，桌上的吞天兽逆鳞还在，掌心三四厘米的悬浮高度没变。
+      他把鳞片收进盒子，走出房间，看见李强已经在厨房煮粥，灶台上多了一碟昨天没有的酱菜。
+      父子俩简短地吃了早饭，李强没再提钱，只问他今天要不要去训练馆。
+      李一凡注意到，李强坐下时膝盖动作比平时慢半拍——那条退役战将的旧伤，多年没怎么犯过。
+      父亲嘴上说"没事"，李一凡却把这一笔记在心里。
+
+    # 机器可验证锚点（给 narrator + verifier，可 hard block）
+    acceptanceAnchors:
+      verbatim:
+        - text: "没事。"
+          note: 李强台词，必须逐字出现
+
+      facts:
+        - id: kitchen_stove
+          mode: any  # 任一命中即可
+          terms: [粥锅, 白雾, 酱菜罐, 标签]
+          note: 灶台细节至少出现一个感知锚点词
+
+        - id: father_knee
+          mode: all  # 全部命中
+          terms: [膝盖, 慢半拍]
+          aliases:
+            慢半拍: [慢了半拍, 慢半拍迟滞]
+          note: 李强膝盖慢半拍动作
+
+      anchors:
+        - 粥锅冒着白雾
+        - 酱菜罐底贴着泛黄的标签
+        - 李强膝盖动作比平时慢半拍
+
+    # 语义检查（只 warning / human review，不 hard block）
+    semanticChecks:
+      - 主角对父亲旧伤的内心反应（约1句）
+      - 家传旧手表特写继续（可选）
+
+  - id: E2
+    name: 训练馆的镜子
+    type: scene
+    conflictLevel: 2
+    emotionArc: 自省 → 不甘 → 决心
+    wordCountTarget: 600-800
+
+    generationIntent: |
+      李一凡来到镇夜司的训练馆，今天没有团队训练。
+      墨老在识海中告诉他，他现在正式踏进炼体筑体境、炼魂灵觉境圆满、空间异能开发度约30%。
+      听起来不错，但墨老紧接着补一刀：第二阶段的低阶妖兽群体战不会再让他「被分一只」打，下次单挑可能就是整窝。
+      墨老恢复度大约25%，沉睡周期不规律，意味着任何时刻底牌都可能空窗。
+      李一凡对着训练馆的镜子做了几组空间穿梭+匕首突刺，每次穿梭的距离误差还在30厘米左右。
+
+    acceptanceAnchors:
+      verbatim:
+        - text: "整窝"
+          note: 墨老口述的群体战威胁关键词
+
+      facts:
+        - id: realm_level
+          mode: all
+          terms: [炼体筑体境, 灵觉境]
+          # normalizer: "灵觉境" 子串命中 "炼魂灵觉境圆满"
+          note: 当前境界数值锚点
+
+        - id: space_progress
+          mode: any
+          terms: [三成, 30%]
+          # normalizer: 三成 / 30% / 百分之三十 归一
+          aliases:
+            三成: [百分之三十, 约三成, 三成左右]
+          note: 空间异能开发度
+
+        - id: molao_recovery
+          mode: any
+          terms: [二十五, 25%, 二成半]
+          # normalizer: 二十五 / 25% / 二成半 归一
+          note: 墨老恢复度
+
+        - id: shuttle_deviation
+          mode: any
+          terms: [三十厘米, 30厘米, 30cm]
+          # normalizer: 厘米 / cm / 公分 归一
+          aliases:
+            三十厘米: [30公分, 三十公分]
+          note: 空间穿梭误差
+
+        - id: sleep_cycle
+          mode: all
+          terms: [沉睡周期, 不规律]
+          note: 墨老沉睡周期不规律
+
+      anchors:
+        - 训练馆的镜面反射
+        - 汗水滴在地胶上的闷响
+        - 墨老气息时隐时现的飘忽感
+
+    semanticChecks:
+      - 空间穿梭+匕首刺击的具体落点偏差描写（约1句）
+      - 主角对"30%"真实含义的自省（约1句）
+
+  - id: E3
+    name: 聚餐邀请落地
+    type: dialogue
+    conflictLevel: 2
+    emotionArc: 忐忑 → 错愕 → 微妙的近 → 警觉
+    wordCountTarget: 700-900
+
+    generationIntent: |
+      李一凡训练完出门，小妖、苏晴、白小柔在训练馆门口的奶茶店等他。
+      三人是来兑现「之前的聚餐」——铁山牺牲、陈锋卸任之后欠下的那场聚餐。
+      小妖说今晚一起吃个饭，地点不是高档场所，就是楚城内城东区一家老字号烤串店。
+      苏晴话不多但比平时多看了李一凡两眼；
+      白小柔随口提了一句"赵队最近有点忙，今晚不去"，
+      话音轻飘，却让李一凡想起赵明远昨天没在车上多解释任务的细节。
+      李一凡答应了聚餐，但脑子里第一次开始有意识地"读"别人的话。
+
+    acceptanceAnchors:
+      verbatim:
+        - text: "赵队最近有点忙，今晚不去"
+          note: 白小柔台词，必须逐字出现
+
+      facts:
+        - id: three_people
+          mode: all
+          terms: [小妖, 苏晴, 白小柔]
+          note: 三人同时在训练馆外出现
+
+        - id: gathering_place
+          mode: any
+          terms: [烤串, 老字号, 不是高档]
+          note: 聚餐地点性质说明
+
+      anchors:
+        - 奶茶店的塑料杯壁上的水珠
+        - 小妖墨绿色短风衣下摆被风掀起
+        - 白小柔吸管在杯底搅动的咕咕声
+
+    semanticChecks:
+      - 李一凡首次"读人"意识（一句心理动作描述）
+      - 苏晴比平时多看李一凡两眼的细节（可选）
+
+  - id: E4
+    name: 夜里第二次祭炼
+    type: revelation
+    conflictLevel: 3
+    emotionArc: 专注 → 拉锯 → 短暂同步 → 后怕
+    wordCountTarget: 1000-1300
+
+    generationIntent: |
+      聚餐后回到家，李一凡再次取出吞天兽逆鳞。
+      这一次他依旧用「融入」的心法，但心里多了一个清晰的画面——
+      白天在训练馆镜子里那个穿梭误差30厘米的自己，以及聚餐桌上小妖那个"眼神里有一点别的东西"的瞬间。
+      他不再试图压制兽王意志，而是把"自己的不甘"也送给它——不是模仿，是真的不甘。
+      鳞片中的火，第一次和他的呼吸短暂同步了两下。
+      但仅仅两下之后，兽王意志在他识海里掀起一道短促的撕裂，疼痛感真实到他从床上摔了下来。
+      墨老在识海中沉默了很久，才说一句"你这小子，没那么乖"，但语气里没有责备。
+      鳞片回到悬浮，李一凡的额角全是汗。
+
+    acceptanceAnchors:
+      verbatim:
+        - text: "你这小子，没那么乖"
+          note: 墨老原话（原「」标签改为 verbatim）
+
+      facts:
+        - id: scale_height
+          mode: all
+          terms: [三厘米, 一厘米]
+          # normalizer: 厘米 / cm / 公分 归一
+          aliases:
+            三厘米: [3厘米, 3cm, 三公分]
+            一厘米: [1厘米, 1cm, 一公分]
+          note: 鳞片悬浮高度从3厘米拉近到1厘米
+
+        - id: breath_sync
+          mode: all
+          terms: [呼吸, 两下]
+          # 正文实际用"对上了"表达"同步"（见 blocked-v3.md L209/L215/L237）
+          # "同步"语义由 generationIntent 传达给 narrator，不作为硬锚点
+          note: 呼吸与意志短暂同步两下（正文可能用"对上/节律对上"表达"同步"）
+
+        - id: body_reaction
+          mode: any
+          terms: [摔下, 闷响, 床沿]
+          note: 识海撕裂身体反应（从床上摔下）
+
+      anchors:
+        - 鳞片掌心悬浮高度从3厘米拉近到1厘米
+        - 识海撕裂时背脊一阵冷汗
+        - 地板上摔下来的闷响
+
+    semanticChecks:
+      - 主角心境收束句（"用真的自己去换信任"语义之一）
+      - 白天训练馆镜子画面在祭炼时回闪（可选）

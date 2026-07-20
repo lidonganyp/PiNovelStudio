@@ -1,0 +1,64 @@
+{
+  "styles": [
+    {
+      "id": "tomato-fresh",
+      "name": "番茄流爽文",
+      "referenceAuthors": ["我吃西红柿"],
+      "referenceWorks": ["盘龙", "吞噬星空", "斗罗大陆"],
+      "description": "快节奏、光效丰富、爽点密集、主角升级驱动",
+      "bestFor": ["玄幻", "仙侠", "系统流"],
+      "status": "created",
+      "profile": "profiles/tomato-fresh.json"
+    },
+    {
+      "id": "chen-dong-epic",
+      "name": "辰东流史诗",
+      "referenceAuthors": ["辰东"],
+      "referenceWorks": ["遮天"],
+      "description": "宏大叙事、法则体系、古朴沉重、天地异象",
+      "bestFor": ["玄幻", "仙侠"],
+      "status": "created",
+      "profile": "profiles/chen-dong-epic.json"
+    },
+    {
+      "id": "wu-hu-suspense",
+      "name": "乌贼流悬疑",
+      "referenceAuthors": ["爱潜水的乌贼"],
+      "referenceWorks": ["诡秘之主", "宿命之环", "深海余烬"],
+      "description": "信息控制、代价先行、冰山法则、灰暗质感",
+      "bestFor": ["都市异能", "悬疑", "克苏鲁"],
+      "status": "created",
+      "profile": "profiles/wu-hu-suspense.json"
+    },
+    {
+      "id": "wang-yu-cultivation",
+      "name": "忘语流修仙",
+      "referenceAuthors": ["忘语"],
+      "referenceWorks": ["凡人修仙传"],
+      "description": "循序渐进、内视描写、冷静克制、实用主义主角",
+      "bestFor": ["仙侠", "修真"],
+      "status": "created",
+      "profile": "profiles/wang-yu-cultivation.json"
+    },
+    {
+      "id": "hu-die-lan-esports",
+      "name": "蝴蝶蓝流电竞",
+      "referenceAuthors": ["蝴蝶蓝"],
+      "referenceWorks": ["全职高手"],
+      "description": "团队群像、战术描写、幽默日常、成长型主角",
+      "bestFor": ["电竞", "竞技", "团队题材"],
+      "status": "created",
+      "profile": "profiles/hu-die-lan-esports.json"
+    },
+    {
+      "id": "hui-shuo-houzi-comedy",
+      "name": "肘子流搞笑",
+      "referenceAuthors": ["会说话的肘子"],
+      "referenceWorks": ["大王饶命"],
+      "description": "幽默吐槽、日常穿插、轻松节奏、反差萌",
+      "bestFor": ["都市异能", "搞笑"],
+      "status": "created",
+      "profile": "profiles/hui-shuo-houzi-comedy.json"
+    }
+  ]
+}

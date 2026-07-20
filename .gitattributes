@@ -1,0 +1,18 @@
+# PiNovelStudio .gitattributes
+#
+# 默认行为：文本文件遵循 core.autocrlf（Windows 上 true）。
+# 例外：evidence artifact 的 SHA-256 是 provenance 真相源，必须跨平台字节稳定。
+# 强制 binary 避免 checkout 时 LF→CRLF 转换破坏哈希校验。
+
+# EDITORIAL-BENEFIT-2A：冻结预登记 artifact（含真实 B4 产物副本）
+reports/editorial-benefit-2a/** binary
+
+# EDITORIAL-BENEFIT-2B/2C：冻结真实 on/off 消融运行 + judge/proxy 双证据裁决 artifact（候选 SHA-256 是 provenance 真相源）
+reports/editorial-benefit-2b/** binary
+reports/editorial-benefit-2c/** binary
+
+# DEMO-4A-PREP：冻结 B0/B2 层对预登记 artifact（含真实 Case A R3 产物副本）
+reports/demo-4a-prep/** binary
+
+# REVIEW-SURFACE-1-REAL-ADOPTION：冻结真实 verdict CLI show golden stdout（exact-match 回归基准）
+reports/review-surface-1-golden/** binary

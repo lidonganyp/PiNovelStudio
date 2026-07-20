@@ -1,0 +1,58 @@
+{
+  "_comment": "PiNovelStudio 质量门控默认配置",
+  "_version": "1.0.0",
+
+  "quad_gates": {
+    "gate_1_narrative_world_rules": {
+      "description": "叙事与世界规则",
+      "checks": ["硬红线", "角色行为一致性", "因果链完整性", "世界规则遵守"],
+      "pass_threshold": 0.8,
+      "blocker_on_fail": true
+    },
+    "gate_2_reader_retention": {
+      "description": "追读力",
+      "checks": ["钩子设置", "情绪曲线", "信息落点", "翻页密度"],
+      "pass_threshold": 0.7,
+      "blocker_on_fail": false
+    },
+    "gate_3_top_works_comparison": {
+      "description": "文学质量",
+      "checks": ["语言张力", "五感描写", "对话自然度", "描写生动性"],
+      "pass_threshold": 0.7,
+      "blocker_on_fail": false
+    },
+    "gate_4_style_consistency": {
+      "description": "风格一致性",
+      "checks": ["指纹匹配度", "与已发布章节的一致性"],
+      "pass_threshold": 0.75,
+      "blocker_on_fail": false
+    }
+  },
+
+  "emotion_metronome": {
+    "default_satisfaction_interval": 5000,
+    "default_max_oppression": 3000,
+    "default_hook_interval": 2000,
+    "min_emotion_diversity": 3,
+    "climax_position_range": [0.7, 0.85],
+    "require_cliffhanger_ending": true
+  },
+
+  "anti_ai": {
+    "green_threshold": 0.1,
+    "yellow_threshold": 0.3,
+    "max_rewrite_rounds": 2,
+    "enabled_patterns": "all"
+  },
+
+  "brainhole": {
+    "default_aggressiveness": 0.7,
+    "default_auto_threshold": 0.6,
+    "max_per_chapter": 2
+  },
+
+  "style": {
+    "max_reshape_rounds": 2,
+    "min_style_match": 0.7
+  }
+}

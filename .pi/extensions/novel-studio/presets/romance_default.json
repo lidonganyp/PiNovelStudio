@@ -1,0 +1,149 @@
+{
+  "name": "言情类型出厂预设",
+  "type": "romance",
+  "version": "1.0.0",
+  "description": "言情类型默认配置，聚焦情感密度和CP化学反应",
+
+  "metadata": {
+    "core_promise": "情感代入欲望——感受被爱/爱人的每一寸波动",
+    "reader_contract": {
+      "allowed": ["世界观简化（容忍区）"],
+      "forbidden": ["CP一方长期缺席", "感情逻辑跳跃", "无预警BE"]
+    },
+    "lifespan_weakness": "对话工艺失效 + 情感密度不足",
+    "primary_quality_gate": "对话工艺 + 情绪节拍"
+  },
+
+  "agent_params": {
+    "Narrator": {
+      "dialogue_ratio": 0.50,
+      "inner_monologue_ratio": 0.30,
+      "action_density": "low",
+      "sentence_length": 25,
+      "description": "对话45-55%承载情感张力、CP在场时每段含情感信息、情感密度≥60%、每2-3章张力后释放糖分"
+    },
+
+    "HookScorer": {
+      "hook_frequency": "2-3",
+      "preferred_hook_type": "emotion_suspense",
+      "description": "首选情感悬置型，每2-3章一次"
+    },
+
+    "EmotionMetronome": {
+      "emotion_curve_template": "wave_advance",
+      "baseline": 6.0,
+      "peak": 8.5,
+      "trough": 4.0,
+      "cycle_length": 4,
+      "tension_to_sugar_ratio": "3:1",
+      "description": "波浪推进：张力→释放→甜蜜→新张力。3章张力后需要1章糖分"
+    },
+
+    "AntiAIDetector": {
+      "anti_ai_threshold": 0.7,
+      "transition_phrase_strictness": "medium",
+      "template_pattern_strictness": "medium",
+      "description": "中等严格"
+    },
+
+    "REM": {
+      "max_active_expectations": 3,
+      "cp_presence_ratio": 0.6,
+      "description": "活跃预期上限3条，CP在场率≥60%/章"
+    },
+
+    "Critic": {
+      "logical_weight": 0.3,
+      "emotional_weight": 0.9,
+      "setting_weight": 0.2,
+      "description": "情感逻辑权重最高(0.9)"
+    },
+
+    "WorldPresenter": {
+      "world_presentation_density": 0.10,
+      "info_load_per_chapter": "minimal",
+      "description": "信息密度上限10%（容忍区）"
+    },
+
+    "StyleShaper": {
+      "adjective_density": 0.16,
+      "style_vector": ["细腻", "缱绻", "暗涌", "怦然", "欲说还休"],
+      "forbidden_modernisms": ["复盘", "赋能", "OK", "上线", "搞定"],
+      "description": "形容词密度中高(12-20%)，细腻缱绻风格向量"
+    },
+
+    "EnsembleDirector": {
+      "ensemble_scene_frequency": "low_medium",
+      "description": "群像场景低中（CP为主）"
+    },
+
+    "DetailLedger": {
+      "detail_tracking": "medium",
+      "description": "追踪精细度中等"
+    },
+
+    "MidChapterChecker": {
+      "stagnation_trigger": 1,
+      "stagnation_type": "no_emotion_interaction",
+      "description": "1章无情感互动触发停滞预警（最严格）"
+    },
+
+    "ClosureEvaluator": {
+      "climax_standard": "emotional_climax_completeness",
+      "description": "收尾标准：情感升华完整度"
+    },
+
+    "PacingController": {
+      "word_count_range": [2000, 3500],
+      "description": "章节字数2000-3500"
+    }
+  },
+
+  "craft_rules": [
+    {
+      "id": 496,
+      "rule": "情感密度下限：每章≥1500字有效情感互动，禁止连续3章纯情节推进"
+    },
+    {
+      "id": 497,
+      "rule": "CP在场率：主CP有效戏份≥60%/章，双方同时缺席≤1章/10章"
+    },
+    {
+      "id": 498,
+      "rule": "第三者安全频率：每30章1次主要威胁，介入后10章内给消解或升级信号"
+    },
+    {
+      "id": 499,
+      "rule": "甜度-张力平衡：3章张力→1章糖分（推荐），禁止连续5章纯张力"
+    },
+    {
+      "id": 500,
+      "rule": "情感逻辑跳跃检测：每次感情重大变化必须有明确'情感事件'触发"
+    },
+    {
+      "id": 501,
+      "rule": "第六章前必须给HE信心信号，85%后禁止引入新BE可能性"
+    },
+    {
+      "id": 502,
+      "rule": "CP化学反应一致性：情感动力全书一致，底层'不灭情感信号'不能切断"
+    }
+  ],
+
+  "anti_patterns": [
+    "CP互动缺席超过3章",
+    "感情逻辑跳跃（无情感事件触发）",
+    "无预警BE",
+    "连续5章纯张力无糖分",
+    "85%后引入新BE可能性"
+  ],
+
+  "test_benchmarks": {
+    "blind_test_return_willingness": 7.8,
+    "hook_shannon_entropy": 1.5,
+    "expectation_fulfillment_rate": 0.70,
+    "patience_50chapters": 62,
+    "anti_ai_chapter_threshold": 0.7,
+    "emotion_density_stability": 0.85
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "h-voice-chapter-05",
+  "opportunityType": "voice_and_naturalness",
+  "diagnosis": "不自然 span \"隐约感到一个黝黑的洞口\" 存在感知侵蚀/翻译腔/语病",
+  "evidenceSpans": [
+    {
+      "start": 2344,
+      "end": 2355,
+      "excerpt": "隐约感到一个黝黑的洞口"
+    }
+  ],
+  "expectedReaderGain": "把 span 改写为母语自然表达",
+  "damageRisks": [
+    "改写可能轻微影响段落情感重量"
+  ],
+  "rewriteScope": "span_candidate",
+  "confidence": 0.6
+}

@@ -1,0 +1,66 @@
+{
+  "name": "番茄流爽文",
+  "id": "tomato-fresh",
+  "referenceWorks": ["盘龙", "吞噬星空", "斗罗大陆"],
+  "referenceAuthors": ["我吃西红柿"],
+  "sentence": {
+    "avgLength": 22,
+    "lengthVariance": 12,
+    "shortBurstsContext": "战斗爆发、技能释放、情绪高潮",
+    "longFlowsContext": "修炼感悟、世界观解说、势力介绍",
+    "fragmentRatio": 0.15,
+    "commaDensity": 0.08,
+    "exclamationDensity": 0.03,
+    "ellipsisDensity": 0.01,
+    "signaturePatterns": [
+      "短句爆发+感叹收尾",
+      "连续动作描写用顿号连接",
+      "力量描写用光效+数字量化",
+      "感叹句在战斗中高频出现"
+    ]
+  },
+  "lexicon": {
+    "highFreqWords": ["力量", "气息", "光芒", "轰鸣", "突破", "境界", "法则", "领域", "灵魂", "血脉"],
+    "signaturePhrases": ["一股恐怖的气息", "金色的光芒", "空间裂缝", "灵魂震荡", "血脉之力"],
+    "avoidWords": ["犹豫", "退缩", "恐惧", "绝望"],
+    "powerWords": ["轰", "爆", "碎", "裂", "震", "破", "斩", "灭"],
+    "sensoryWords": {
+      "visual": ["金色", "银色", "血红", "漆黑", "璀璨"],
+      "auditory": ["轰鸣", "炸裂", "低沉", "尖锐"],
+      "tactile": ["灼热", "冰冷", "沉重", "轻灵"]
+    }
+  },
+  "narrative": {
+    "povStyle": "第三人称全知",
+    "descriptionDensity": 0.3,
+    "dialogueRatio": 0.25,
+    "innerMonologueRatio": 0.15,
+    "actionRatio": 0.3,
+    "expositionStyle": "穿插式",
+    "timeFlow": "加速-正常-加速",
+    "sceneTransitionStyle": "硬切"
+  },
+  "emotion": {
+    "baseline": "昂扬",
+    "peakType": "爆发式",
+    "valleyType": "短暂压抑后快速反弹",
+    "escalationPattern": "阶梯式上升",
+    "coolDownPattern": "快速冷却，2-3句过渡",
+    "signatureEmotions": ["热血", "震撼", "痛快", "期待"]
+  },
+  "imagery": {
+    "primaryMetaphors": ["光效比喻（金光、银光、血光）", "自然力量比喻（雷霆、风暴、火山）", "动物比喻（龙、虎、鹰）"],
+    "visualStyle": "高饱和度、强对比",
+    "colorPalette": ["金色", "银色", "血红", "深紫", "漆黑"],
+    "spatialSense": "宏大开阔",
+    "timeImagery": "瞬间爆发为主"
+  },
+  "rhythm": {
+    "sentenceRhythm": "短-短-长-短",
+    "paragraphRhythm": "快节奏，短段落为主",
+    "chapterRhythm": "前慢后快，章末必有爽点",
+    "breathPoints": "战斗间隙的修炼感悟",
+    "accelerationTriggers": ["敌人挑衅", "力量觉醒", "保护欲触发"],
+    "decelerationTriggers": ["战后恢复", "势力介绍", "修炼解说"]
+  }
+}

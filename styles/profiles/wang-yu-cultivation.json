@@ -1,0 +1,66 @@
+{
+  "name": "忘语流修仙",
+  "id": "wang-yu-cultivation",
+  "referenceWorks": ["凡人修仙传"],
+  "referenceAuthors": ["忘语"],
+  "sentence": {
+    "avgLength": 24,
+    "lengthVariance": 10,
+    "shortBurstsContext": "斗法关键时刻、危机应对",
+    "longFlowsContext": "修炼过程、丹药炼制、功法推演",
+    "fragmentRatio": 0.12,
+    "commaDensity": 0.11,
+    "exclamationDensity": 0.01,
+    "ellipsisDensity": 0.02,
+    "signaturePatterns": [
+      "内视描写：经脉、灵力、丹田的精确描述",
+      "循序渐进：修炼的每一步都有详细过程",
+      "冷静克制：情绪描写内敛，以行动表达",
+      "实用主义：主角的每个选择都基于利益权衡"
+    ]
+  },
+  "lexicon": {
+    "highFreqWords": ["灵力", "丹田", "经脉", "法器", "符箓", "丹药", "阵法", "灵石", "境界", "神识"],
+    "signaturePhrases": ["灵力运转", "神识扫过", "法诀一掐", "灵光一闪", "面色一沉"],
+    "avoidWords": ["热血", "激情", "狂暴"],
+    "powerWords": ["凝", "炼", "封", "破", "遁", "隐", "摄", "镇"],
+    "sensoryWords": {
+      "visual": ["灵光", "青芒", "金丝", "黑气", "白雾"],
+      "auditory": ["嗡鸣", "轻响", "低鸣", "无声"],
+      "tactile": ["温热", "冰寒", "酥麻", "沉重"]
+    }
+  },
+  "narrative": {
+    "povStyle": "第三人称限制视角",
+    "descriptionDensity": 0.35,
+    "dialogueRatio": 0.2,
+    "innerMonologueRatio": 0.2,
+    "actionRatio": 0.25,
+    "expositionStyle": "过程式详解",
+    "timeFlow": "匀速-加速-匀速",
+    "sceneTransitionStyle": "时间跳跃"
+  },
+  "emotion": {
+    "baseline": "冷静",
+    "peakType": "内敛式高潮",
+    "valleyType": "谨慎的忧虑与算计",
+    "escalationPattern": "缓慢积累，关键时刻果断出手",
+    "coolDownPattern": "迅速恢复冷静，开始分析局势",
+    "signatureEmotions": ["谨慎", "决断", "满足", "警惕"]
+  },
+  "imagery": {
+    "primaryMetaphors": ["灵力流动比喻", "天地灵气比喻", "丹药炼制比喻"],
+    "visualStyle": "清冷素雅、细节精确",
+    "colorPalette": ["青色", "白色", "金色", "玄黑", "碧绿"],
+    "spatialSense": "精确可控",
+    "timeImagery": "修炼中的漫长岁月感"
+  },
+  "rhythm": {
+    "sentenceRhythm": "中-中-短-中",
+    "paragraphRhythm": "中节奏，过程描写详尽",
+    "chapterRhythm": "铺垫-行动-收获，章末必有进展",
+    "breathPoints": "修炼过程的详细描写",
+    "accelerationTriggers": ["危机逼近", "斗法开始", "宝物现世"],
+    "decelerationTriggers": ["修炼过程", "丹药炼制", "功法推演"]
+  }
+}

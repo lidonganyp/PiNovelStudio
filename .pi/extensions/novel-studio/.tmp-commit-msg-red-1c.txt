@@ -1,0 +1,27 @@
+RED: EVOLUTION-RELEASE-GOVERNANCE-1C 授权卡 + Provider Runner + CLI 测试
+
+新增 1C 测试与最小源码脚手架（RED 状态，待 GREEN 实现）：
+
+测试文件（3 个）：
+- tests/evolution-release-governance-1c-authorization-card.test.mjs
+  授权卡 schema/有效期/releaseId 覆盖/预算/文件加载（21 用例）
+- tests/evolution-release-governance-1c-provider-runner.test.mjs
+  stub 端到端 + real 授权边界（REQUIRES_AUTH）（12 用例）
+- tests/evolution-release-governance-1c-cli.test.mjs
+  proxy-review / evaluate CLI 子命令（10 用例）
+
+源码脚手架（RED stub，校验/逻辑未实现）：
+- v2/governance/authorization-card.ts
+- v2/governance/proxy-approval-provider-runner.ts
+- test/test-modules.ts 加入 1C 模块到 dist-test barrel
+
+RED 验证：build 三目标通过；1C 聚焦测试 31 用例 3 pass / 28 fail
+（fail 为 stub 抛错，符合 RED 预期）。
+
+1C 范围（计划 §12.2）：
+- 真实 provider runner：接 1B proxy-approval-caller，本地 stub 端到端
+- evolution:proxy-review / evolution:evaluate CLI：artifact 落盘 + provenance 绑定
+- 授权边界：无授权卡不得调用真实模型
+- 不切换 active pointer，不接 novel_generate_chapter
+
+真相源：docs/evolution-release-governance-development-plan.md §6 / Phase G4 / 1C 任务卡

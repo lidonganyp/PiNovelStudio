@@ -1,0 +1,15 @@
+{
+  "finalSelectedSource": "raw",
+  "finalSelectedCandidateId": "candidate:raw:chapter-17",
+  "regressionCheck": {
+    "checked": true,
+    "beforeSpanExcerpt": "李一凡注意到他收紧的下颌线",
+    "afterSpanExcerpt": "李一凡看见他收紧的下颌线。",
+    "spanChanged": true,
+    "candidateTextLength": 6491,
+    "rawTextLength": 6492,
+    "lengthDelta": -1
+  },
+  "rawHash": "33c128340a764f57907fca6a5b5e537df02e634e1d4caf108fb84f100471ad43",
+  "rawManifestHash": "8fca55d50b5b7c465bf553380eca7ded0fb91124f6807c08597cf82c91e2b266"
+}

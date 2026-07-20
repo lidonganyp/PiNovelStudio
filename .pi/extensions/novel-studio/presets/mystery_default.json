@@ -1,0 +1,148 @@
+{
+  "name": "悬疑类型出厂预设",
+  "type": "mystery",
+  "version": "1.0.0",
+  "description": "悬疑类型默认配置，聚焦逻辑链闭合和信息控制",
+
+  "metadata": {
+    "core_promise": "认知掌控欲望——参与式智力游戏，猜真相或拍案叫绝",
+    "reader_contract": {
+      "allowed": ["慢热"],
+      "forbidden": ["神探降临型揭示", "章内无信息进账", "假线索无合理原因"]
+    },
+    "lifespan_weakness": "逻辑链不闭合",
+    "primary_quality_gate": "收尾工艺 + 连环预期"
+  },
+
+  "agent_params": {
+    "Narrator": {
+      "dialogue_ratio": 0.35,
+      "action_density": "medium",
+      "sentence_length": 22,
+      "description": "每段叙述都是线索载体、过渡句允许保留、内心独白展示推理路径、每章≥2新分析节点"
+    },
+
+    "HookScorer": {
+      "hook_frequency": "every_chapter",
+      "preferred_hook_type": "info_gap",
+      "description": "首选信息差型，每章1次"
+    },
+
+    "EmotionMetronome": {
+      "emotion_curve_template": "undercurrent",
+      "baseline": 4.0,
+      "peak": 7.0,
+      "trough": 3.5,
+      "cycle_length": 1,
+      "description": "暗流涌动：表面平静但后台信息持续推进"
+    },
+
+    "AntiAIDetector": {
+      "anti_ai_threshold": 0.5,
+      "transition_phrase_strictness": "lenient",
+      "template_pattern_strictness": "strict",
+      "info_repeat_strictness": "very_strict",
+      "description": "过渡句阈值放宽至0.5（信息控制型过渡是有意为之），信息重复极严格"
+    },
+
+    "REM": {
+      "max_active_expectations": 6,
+      "info_intake_per_chapter": 2,
+      "description": "活跃预期上限6条，每章≥2条新信息"
+    },
+
+    "Critic": {
+      "logical_weight": 0.9,
+      "emotional_weight": 0.2,
+      "setting_weight": 0.6,
+      "description": "逻辑权重最高(0.9)"
+    },
+
+    "WorldPresenter": {
+      "world_presentation_density": 0.25,
+      "info_load_per_chapter": "medium",
+      "description": "信息密度上限25%"
+    },
+
+    "StyleShaper": {
+      "adjective_density": 0.10,
+      "style_vector": ["冷峻", "克制", "精密", "暗流涌动", "抽丝剥茧"],
+      "forbidden_modernisms": ["没问题", "搞定", "OK", "上线"],
+      "description": "形容词密度中等(10%)，冷峻克制风格向量"
+    },
+
+    "EnsembleDirector": {
+      "ensemble_scene_frequency": "medium_high",
+      "description": "群像场景中高（嫌疑人群场）"
+    },
+
+    "DetailLedger": {
+      "detail_tracking": "fine",
+      "description": "追踪精细度极细"
+    },
+
+    "MidChapterChecker": {
+      "stagnation_trigger": 3,
+      "stagnation_type": "no_new_info",
+      "description": "3章无新信息触发停滞预警"
+    },
+
+    "ClosureEvaluator": {
+      "climax_standard": "logic_chain_completeness",
+      "description": "收尾标准：逻辑链闭合率"
+    },
+
+    "PacingController": {
+      "word_count_range": [2500, 4000],
+      "description": "章节字数2500-4000"
+    }
+  },
+
+  "craft_rules": [
+    {
+      "id": 489,
+      "rule": "信息碎片投放：每章2-4条新信息（<2→空章，>4→过载），表层+深层各≥1条"
+    },
+    {
+      "id": 490,
+      "rule": "红鲱鱼安全比例：全书假线索≤40%，单章≤50%，每条必须有合理假原因"
+    },
+    {
+      "id": 491,
+      "rule": "'提前猜中'风险：70%章节前猜中→给成就感，30%前猜中→必须引入反转层"
+    },
+    {
+      "id": 492,
+      "rule": "线索可核查性：关键线索投放时给足够信息可标记，禁止事后线索"
+    },
+    {
+      "id": 493,
+      "rule": "暗流控制：表面可平静但后台必须有信息推进，禁止连续3章无情节推进"
+    },
+    {
+      "id": 494,
+      "rule": "嫌疑人动机完整性：每个嫌疑人必须有独立可理解的作案动机"
+    },
+    {
+      "id": 495,
+      "rule": "收尾逻辑链验证：所有悬念标记必须有明确闭合，揭示不超过3章"
+    }
+  ],
+
+  "anti_patterns": [
+    "章内无信息进账（白读了这章）",
+    "神探降临型揭示",
+    "假线索无合理原因",
+    "关键线索事后补充",
+    "连续3章无情节推进"
+  ],
+
+  "test_benchmarks": {
+    "blind_test_return_willingness": 7.0,
+    "hook_shannon_entropy": 2.5,
+    "expectation_fulfillment_rate": 0.85,
+    "patience_50chapters": 50,
+    "anti_ai_chapter_threshold": 0.5,
+    "info_intake_per_chapter": 2.0
+  }
+}

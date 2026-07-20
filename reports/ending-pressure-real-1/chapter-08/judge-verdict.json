@@ -1,0 +1,67 @@
+{
+  "firstRound": {
+    "degraded": false,
+    "verdict": {
+      "winner": "tie",
+      "confidence": "uncertain",
+      "decisiveReasons": [
+        {
+          "dimension": "整体",
+          "betterCandidate": "neither",
+          "evidenceA": [],
+          "evidenceB": [],
+          "explanation": "两版质量接近，无明显胜出"
+        }
+      ],
+      "factualRisks": [],
+      "regressionRisks": [],
+      "constitutionAlignment": "两者均对齐"
+    },
+    "mapping": {
+      "leftCandidateId": "candidate:raw:chapter-08",
+      "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1784424056952",
+      "leftLabel": "A",
+      "rightLabel": "B",
+      "orderRandomized": false,
+      "seed": 42
+    }
+  },
+  "reverseRound": {
+    "degraded": false,
+    "verdict": {
+      "winner": "tie",
+      "confidence": "uncertain",
+      "decisiveReasons": [
+        {
+          "dimension": "整体",
+          "betterCandidate": "neither",
+          "evidenceA": [],
+          "evidenceB": [],
+          "explanation": "两版质量接近，无明显胜出"
+        }
+      ],
+      "factualRisks": [],
+      "regressionRisks": [],
+      "constitutionAlignment": "两者均对齐"
+    },
+    "mapping": {
+      "leftCandidateId": "candidate:raw:chapter-08",
+      "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1784424056952",
+      "leftLabel": "B",
+      "rightLabel": "A",
+      "orderRandomized": true,
+      "seed": 42
+    }
+  },
+  "reverseReviewed": true,
+  "rounds": 2,
+  "mapping": {
+    "leftCandidateId": "candidate:raw:chapter-08",
+    "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1784424056952",
+    "leftLabel": "A",
+    "rightLabel": "B",
+    "orderRandomized": false,
+    "seed": 42
+  },
+  "auditSummary": "两轮一致确认（首轮 winner=null，反向 winner=null）：两轮均判 tie/不确定，保留 raw（首轮 confidence=uncertain）"
+}

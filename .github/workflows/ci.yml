@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Clean checkout verification
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build production, eval, and test closures
+        run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Run unified-pipeline smoke test
+        run: npm run smoke
+
+      - name: Run simplicity gate
+        run: npm run simplicity-gate
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+
+      - name: Verify tracked files remain unchanged
+        run: git diff --exit-code

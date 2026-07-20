@@ -1,0 +1,209 @@
+# PiNovelStudio
+
+# =============================================================================
+# 环境变量 (绝对不能提交)
+# =============================================================================
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.rerun
+
+# =============================================================================
+# 敏感配置 (API 密钥、凭证等)
+# =============================================================================
+**/secrets/
+**/credentials/
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/service-account*.json
+
+# =============================================================================
+# 依赖 (通过 npm install 恢复)
+# =============================================================================
+node_modules/
+.pnp
+.pnp.js
+
+# =============================================================================
+# 构建产物（三 tsconfig：dist/ 生产 + dist-eval/ 评测 + dist-test/ 测试）
+# =============================================================================
+dist/
+dist-eval/
+dist-test/
+build/
+*.js.map
+.pi/extensions/novel-studio/build-info.json
+# 测试生成的盲测 fixture 产物（A/B/C.txt + mapping.csv），不纳入版本控制
+.pi/extensions/novel-studio/reports/
+
+# =============================================================================
+# 临时文件
+# =============================================================================
+.tmp/
+*.tmp
+*.log
+# 管线运行 marker（如 extract-done.marker，由 wait-and-report.mjs 仅写不读，运行时自动重建）
+*.marker
+
+# =============================================================================
+# Trae IDE 本地文档与规则（含 API 密钥风险，绝不提交）
+# =============================================================================
+.trae/
+# Trae IDE 分享包缓存（IDE 自动生成的 HTML zip，非项目内容）
+.trae-html-share-packages/
+npm-debug.log*
+*.disabled
+*.dryrun.json
+
+# =============================================================================
+# Python 缓存
+# =============================================================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+
+# =============================================================================
+# 数据备份 (用户本地备份，不纳入版本控制)
+# =============================================================================
+data_backup/
+*.bak
+*.backup
+# 路由对比基线备份（本地保留，不纳入版本控制）
+config/model-routing.json.*-backup
+
+# =============================================================================
+# 工作区文件 (用户创作内容，不纳入版本控制)
+# =============================================================================
+.workspaces/
+workspaces/
+# NovelOS agent loop trajectory 临时产物（Step 5：workspaces/{id}/novelos-sessions/{sessionId}/）
+**/novelos-sessions/
+
+# =============================================================================
+# 语料数据 (版权内容) + 大型场景/技法数据 (>100MB)
+# =============================================================================
+corpus/
+delete/
+data/*
+!data/runtime/
+!data/fewshots/
+data/runtime/*
+!data/runtime/candidate-rules.json
+!data/runtime/validated-craft-rules.json
+!data/runtime/style-lessons.json
+!data/runtime/scenes-index.json
+!data/runtime/contrastive-rules-index.json
+!data/runtime/fewshot-index.json
+# P42 candidate 规则产物（candidate seed，待 replay 晋级到 validated-craft-rules.json）
+# 与 candidate-rules.json 同属"机制就绪、待样本晋级"的产物，需纳入版本控制
+!data/runtime/p42-candidate-collocation-rules.json
+!data/runtime/p42-candidate-focus-rules.json
+!data/runtime/p42-candidate-detail-function-rules.json
+
+# NovelBench 语料审计产物（仅元数据，无正文，可提交）
+!data/novelbench/
+data/novelbench/*
+!data/novelbench/corpus-manifest.jsonl
+!data/novelbench/chapter-splits/
+# chapter-splits：仅 manifest 入库；286 per-book .jsonl 可由 split-chapters.mjs 从语料重新生成
+data/novelbench/chapter-splits/*.jsonl
+!data/novelbench/chapter-splits/manifest-split.jsonl
+!data/novelbench/calibration/
+!data/novelbench/reports/
+!data/novelbench/reports/corpus-audit-stats.md
+!data/novelbench/reports/chapter-split-stats.md
+!data/novelbench/reports/dataset-stats.md
+!data/novelbench/reports/calibration-stats.md
+!data/novelbench/datasets/
+# NovelBench 原文派生物（不入库）
+data/novelbench/generation-inputs/
+data/novelbench/chapter-bodies/
+data/novelbench/reports/samples/
+data/novelbench/datasets/generation-inputs/
+data/novelbench/datasets/reference-bundles/
+# NB-2R：generator-bundles/ 为 sanitized JSON（无正文/无 sourcePath），可入库
+# data/novelbench/datasets/generator-bundles/ 由 build-datasets.mjs 生成，默认 tracked
+# NB-3：reference-assets 含从原章提取的叙事资产 + spans（evaluator-only，不入库）
+data/novelbench/reference-assets/
+# NB-4：generation-matrix 含 B0-B4 各层模型原始输出正文（可重新生成，不入库）
+data/novelbench/generation-matrix/
+data/novelbench/generation-matrix-rerun/
+# NB-5：judge-results 含裁判 verdicts（可重新生成，不入库）
+# 但保留 summary/manifest 作为 GO/HOLD 决策证据
+!data/novelbench/judge-results/
+!data/novelbench/judge-results-doubao/
+data/novelbench/judge-results/*/
+data/novelbench/judge-results-doubao/*/
+!data/novelbench/judge-results/summary*.json
+!data/novelbench/judge-results/manifest.jsonl
+!data/novelbench/judge-results-doubao/summary*.json
+!data/novelbench/judge-results-doubao/manifest.jsonl
+# NB-5 R5 rerun：judge-results-rerun 含裁判 verdicts（可重新生成，不入库）
+# 但保留 summary/manifest 作为 GO/HOLD 决策证据
+!data/novelbench/judge-results-rerun/
+!data/novelbench/judge-results-rerun/glm/
+!data/novelbench/judge-results-rerun/doubao/
+data/novelbench/judge-results-rerun/*/*/
+!data/novelbench/judge-results-rerun/*/summary*.json
+!data/novelbench/judge-results-rerun/*/manifest.jsonl
+
+# =============================================================================
+# 评测运行产物 (日志、PID、临时输出)
+# =============================================================================
+docs/evals/
+.pi/replay-runs/
+.codex-run-logs/
+
+# 评测报告历史归档（本地保留，不纳入版本控制；仅 reports/current/ tracked）
+reports/*
+!reports/current/
+!reports/current/**
+# HUMAN-PROXY-PROVENANCE-1：gpt5.6-sol verdict 落盘的生产 evidence artifact，需纳入版本控制
+!reports/human-proxy-provenance/
+!reports/human-proxy-provenance/**
+# EDITORIAL-BENEFIT-2A：advisory on/off 消融预登记冻结 artifact（含真实 B4 产物副本），需纳入版本控制
+!reports/editorial-benefit-2a/
+!reports/editorial-benefit-2a/**
+# EDITORIAL-BENEFIT-2B/2C：真实 on/off 消融运行 + judge/proxy 双证据裁决 artifact，需纳入版本控制（防清理工作区证据丢失）
+!reports/editorial-benefit-2b/
+!reports/editorial-benefit-2b/**
+!reports/editorial-benefit-2c/
+!reports/editorial-benefit-2c/**
+# DEMO-4A-PREP：B0/B2 层对预登记冻结 artifact（含真实 Case A R3 产物副本），需纳入版本控制
+!reports/demo-4a-prep/
+!reports/demo-4a-prep/**
+# REVIEW-SURFACE-1-REAL-ADOPTION：真实 Case04/05/08 verdict CLI show golden 输出，需纳入版本控制
+!reports/review-surface-1-golden/
+!reports/review-surface-1-golden/**
+# LANGUAGE-CALIBRATION-REAL-1：5 章真实 raw 文本 + stub 链路逐章产物（raw/candidate/hypothesis/fact-guard/judge-verdict/selection），需纳入版本控制
+!reports/language-calibration-real-1/
+!reports/language-calibration-real-1/**
+
+# =============================================================================
+# IDE 配置 (仅保留最小必要)
+# =============================================================================
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# =============================================================================
+# Windows 临时文件
+# =============================================================================
+Thumbs.db
+nul
+Desktop.ini
+
+# CodeGraph local index cache
+.codegraph/
