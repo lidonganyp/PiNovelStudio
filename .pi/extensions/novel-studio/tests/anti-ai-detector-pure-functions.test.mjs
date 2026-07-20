@@ -22,13 +22,15 @@ import assert from "node:assert/strict";
 
 import {
   removeExactRepeatedSentences,
-  autoPatchAIPatterns,
-  repairIdiomStackingLocally,
   classifyPatternResidueKind,
   isStructuralResidueBlocklisted,
   buildAntiAILLMDetectionTextWindow,
   isTextActuallyComplete,
 } from "../dist/craft/anti-ai-detector.js";
+import {
+  autoPatchAIPatterns,
+  repairIdiomStackingLocally,
+} from "../dist-test/craft/anti-ai-auto-patch.js";
 
 // ============================================================================
 // removeExactRepeatedSentences

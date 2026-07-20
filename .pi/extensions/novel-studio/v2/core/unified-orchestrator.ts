@@ -27,6 +27,7 @@
 
 import { writeFileSync, mkdirSync, renameSync, existsSync } from "fs";
 import { join, dirname } from "path";
+import { createHash } from "node:crypto";
 import type {
   Candidate,
   CandidateKind,
@@ -48,6 +49,7 @@ import {
 } from "./editorial-strategy-registry.js";
 import { createJudgeArbitrator } from "./judge-arbitrator.js";
 import type { ArbitratorResult } from "./judge-arbitrator.js";
+import { getJudgeConstitutionConsumedFields } from "./judge-prompt-builder.js";
 import {
   createFinalStateCommit,
   loadStateStore,
@@ -311,7 +313,19 @@ export class UnifiedOrchestrator {
 
     const warnings: string[] = [];
     const stageResults: Record<string, unknown> = {};
+    stageResults.judgeAlignmentGate = {
+      naturalHumanAlignmentPassed: input.allowAutomaticLiterarySelection === true,
+      automaticLiterarySelectionEnabled: input.allowAutomaticLiterarySelection === true,
+      mode: input.allowAutomaticLiterarySelection === true
+        ? "automatic_selection"
+        : "advisory_candidates_human_review",
+    };
     const candidates: Candidate[] = [];
+    const previewStartedAt = Date.now();
+    const previewBudget = input.fullPipelinePreview && input.previewTotalTimeoutMs
+      ? { totalMs: input.previewTotalTimeoutMs, capped: false, elapsedMs: 0 }
+      : null;
+    if (previewBudget) stageResults.previewBudget = previewBudget;
 
     const controlPlane = input.controlPlane ?? buildTrustedControlPlane({
       taskId: "UNIFIED-PIPELINE-COMPAT",
@@ -376,6 +390,18 @@ export class UnifiedOrchestrator {
     const stageTiming: Record<string, number> = {};
     stageResults.modelCalls = modelCallLog;
     stageResults.stageTiming = stageTiming;
+    if (input.qualityExperiment) {
+      stageResults.qualityExperiment = {
+        arm: input.qualityExperiment.arm,
+        sampleIndex: input.qualityExperiment.sampleIndex,
+        isolated: true,
+        sceneSolutionSource: input.qualityExperiment.arm === "raw"
+          ? "none"
+          : input.qualityExperiment.arm === "oracle_scene"
+            ? "human_oracle"
+            : "automated_search",
+      };
+    }
 
     // 计数装饰器：拦截每次模型调用，记录 route/kind/model/duration/ts。
     // 包装后的 fn 传给 oppJudge/candGen/arb；generateRaw 经 orchInput 使用包装版。
@@ -389,6 +415,19 @@ export class UnifiedOrchestrator {
       if (!fn) return undefined;
       return async (genInput: ModelGenerateInput) => {
         const start = Date.now();
+        if (previewBudget) {
+          const elapsedMs = Date.now() - previewStartedAt;
+          const remainingMs = previewBudget.totalMs - elapsedMs;
+          previewBudget.elapsedMs = elapsedMs;
+          if (remainingMs <= 0) {
+            previewBudget.capped = true;
+            throw new Error(`fullPipelinePreview total timeout exceeded ${previewBudget.totalMs}ms`);
+          }
+          genInput = {
+            ...genInput,
+            timeoutMs: Math.max(1, Math.min(genInput.timeoutMs ?? remainingMs, remainingMs)),
+          };
+        }
         const capability: CapabilityName = fnKind === "generationModelGenerate"
           ? "model.generate"
           : "model.judge";
@@ -440,7 +479,9 @@ export class UnifiedOrchestrator {
             expectedModel: expectedLock.model,
             actualProvider: output.provider,
             actualModel: output.model,
+            ...(genInput.promptProfile ? { promptProfile: genInput.promptProfile as ModelCallEntry["promptProfile"] } : {}),
           });
+          if (previewBudget) previewBudget.elapsedMs = Date.now() - previewStartedAt;
           return output;
         } catch (e) {
           // Step 1d 修复：失败请求也计数，否则 used=0 但 attempts=1，预算门控失效。
@@ -464,7 +505,9 @@ export class UnifiedOrchestrator {
             expectedModel: expectedLock.model,
             failurePhase: capability,
             errorClass: e instanceof Error ? e.constructor.name : typeof e,
+            ...(genInput.promptProfile ? { promptProfile: genInput.promptProfile as ModelCallEntry["promptProfile"] } : {}),
           });
+          if (previewBudget) previewBudget.elapsedMs = Date.now() - previewStartedAt;
           throw e;
         }
       };
@@ -509,8 +552,8 @@ export class UnifiedOrchestrator {
     //       超限抛错；stage5b 串行循环仍有 break 作为双保险。
     // used 用 Object.defineProperty 作 live getter（= modelCallLog.length，含 failed 调用），
     // 所有早返回路径（deliverRaw/hardBlock）自动带准确 used，无需改 helper 签名。
-    const SOFT = Number(process.env.PINOVEL_MODEL_CALL_SOFT ?? 6);
-    const HARD = Number(process.env.PINOVEL_MODEL_CALL_HARD ?? 10);
+    const SOFT = Number(process.env.PINOVEL_MODEL_CALL_SOFT ?? (input.positiveGainProductionEnabled ? 8 : 6));
+    const HARD = Number(process.env.PINOVEL_MODEL_CALL_HARD ?? (input.positiveGainProductionEnabled ? 14 : 10));
     const modelBudget: {
       soft: number; hard: number; used: number; capped: boolean;
     } = { soft: SOFT, hard: HARD, used: 0, capped: false };
@@ -526,10 +569,30 @@ export class UnifiedOrchestrator {
     // 这样 raw 模型调用抛错时 hardBlock 路径仍保留实际 consumedFields（不再丢失为 []）。
     // 不重复构建 prompt：buildRawPrompt 只调用一次，结果传给 generateRaw。
     const rawPrompt = buildRawPrompt(orchInput);
+    if (orchInput.promptPatternResolution) {
+      stageResults.promptPatterns = {
+        ...orchInput.promptPatternResolution.trace,
+        patternIds: orchInput.promptPatternResolution.patternIds,
+        consumedByRawPrompt: rawPrompt.consumedFields.includes("promptPatterns"),
+      };
+    }
     stageResults.chapterIntent = {
       summary: buildIntentSummary(intent),
       fieldSourceRefs: intent.fieldSourceRefs ?? {},
       consumedFields: rawPrompt.consumedFields,
+    };
+    stageResults.chapterContract = rawPrompt.chapterContract;
+    stageResults.promptAdapter = {
+      profile: rawPrompt.promptAdapter.profile,
+      runtimePolicy: rawPrompt.promptAdapter.runtimePolicy,
+      route: RAW_ROUTE,
+    };
+    stageResults.rawPromptConstraintAudit = rawPrompt.promptConstraintAudit;
+    stageResults.methodologyPolicy = rawPrompt.methodologyPolicy;
+    stageResults.constitutionConsumption = {
+      raw: rawPrompt.constitutionConsumedFields,
+      editorial: [],
+      judge: [],
     };
     // QUALITY-4：本章相关承诺状态写入 stageResults.promiseContext 供 trace 审计。
     // 含 selected promise list、sourceRefs、consumedByRawPrompt；空时写 emptyReason 不静默。
@@ -614,29 +677,14 @@ export class UnifiedOrchestrator {
     // 均声称质量评测，关键字段为空时无法可靠评测，必须阻断并提示补充种子源。
     const underSpecifiedFields = intent.underSpecifiedFields ?? [];
     const isUnderSpecified = underSpecifiedFields.length > 0;
-    if (
-      (input.evalMode === "B3" || input.evalMode === "B4") &&
-      isUnderSpecified
-    ) {
-      const CRITICAL_FIELDS = [
-        "focusCharacterGoals",
-        "choicesAndCosts",
-        "expectedIrreversibleChange",
-        "selectedPromisesToAdvance",
-        "causalEndPressure",
-      ];
-      const criticalEmpty = underSpecifiedFields.filter((f) =>
-        CRITICAL_FIELDS.includes(f),
-      );
-      if (criticalEmpty.length > 0) {
-        return this.hardBlock(
-          input,
-          "under_specified",
-          `evalMode=${input.evalMode} 阻断：ChapterIntent 关键字段为空，请补充种子源（focusCharacterGoals/choicesAndCosts/expectedIrreversibleChange/selectedPromisesToAdvance/causalEndPressure）；空字段：${criticalEmpty.join("、")}`,
-          stageResults,
-        );
-      }
-    }
+    stageResults.intentCompleteness = {
+      underSpecifiedFields,
+      advisoryOnly: true,
+      blocking: false,
+      reason: isUnderSpecified
+        ? "字段缺失只表示本章没有可靠来源，不强迫每章具备选择代价、不可逆变化或固定章末压力"
+        : null,
+    };
 
     // ── 阶段 1: 生成 raw ──────────────────────────────────────────────
     let rawText: string;
@@ -966,6 +1014,25 @@ export class UnifiedOrchestrator {
     );
     stageResults.rawFactGuard = factGuardResult;
     if (!factGuardResult.ok) {
+      if (input.fullPipelinePreview) {
+        stageResults.productionFinalPreviewBlockedCandidate = {
+          id: rawCandidate.id,
+          textHash: createHash("sha256").update(rawText, "utf8").digest("hex"),
+          characterCount: rawText.length,
+          contextHash: rawCandidate.contextHash,
+          route: rawCandidate.route,
+          candidateCount: 1,
+        };
+      }
+      if (input.qualityExperiment) {
+        stageResults.qualityExperimentRawCandidate = {
+          id: rawCandidate.id,
+          textHash: createHash("sha256").update(rawText, "utf8").digest("hex"),
+          characterCount: rawText.length,
+          contextHash: rawCandidate.contextHash,
+          route: rawCandidate.route,
+        };
+      }
       if (input.evalMode === "B4") {
         // B4 eval：raw FactGuard 阻断 → 回退 one_shot_raw 基线（保留评估信号，不 hard block）
         warnings.push(
@@ -997,6 +1064,13 @@ export class UnifiedOrchestrator {
     // **不改变机会判定/候选生成逻辑**：advisory 只是额外上下文；
     // opportunity 返回 no-op 时仍交付 raw（advisory 不强制 candidate）。
     // scanner/advisory 异常只写 skipped + warning，不阻断流程。
+    if (input.qualityExperiment) {
+      warnings.push(
+        `qualityExperiment=${input.qualityExperiment.arm}:${input.qualityExperiment.sampleIndex}; isolated after raw FactGuard`,
+      );
+      return this.deliverRaw(input, rawCandidate, warnings, stageResults, null, [], candidates);
+    }
+
     const rawCraftAdvisory = timeSync("stage2.5_rawCraftAdvisory", () =>
       runRawCraftAdvisory(rawText, rawCandidateId, input, stageResults, warnings)
     );
@@ -1034,11 +1108,15 @@ export class UnifiedOrchestrator {
     const oppResult = await timeAsync("stage3_editorialOpportunity", () =>
       oppJudge.judge({
         rawText,
+        rawCandidateId,
         intent,
         longTermState: context.longTermState ?? null,
         constitution: constitution,
+        context,
+        voiceFingerprints: input.voiceFingerprints,
+        previousEmotionState: input.previousEmotionState,
         characterNames,
-        // P1-9：传入 modelGenerate 启用 LLM 结构化判断为主导；LLM 失败自动降级本地阈值
+        // P1-9：传入 modelGenerate 启用 LLM 结构化判断；失败时本地信号只写 trace 并保留 raw
         // REAL-QUALITY-1-PREFLIGHT：opportunity judge 走 judge 轨（nb4_judge_glm），
         // 不再用 generation 轨（nb4_generate_glm）。
         modelGenerate: wrappedJudgeModelGenerate!,
@@ -1055,20 +1133,34 @@ export class UnifiedOrchestrator {
       noOpReason: oppResult.noOpReason ?? null,
       llmJudged: oppResult.llmJudged,
       llmFallbackReason: oppResult.llmFallbackReason ?? null,
+      schemaRepairAttempts: oppResult.schemaRepairAttempts,
       signals: oppResult.scannedSignals.map((s) => ({
         opportunityType: s.opportunityType,
         triggered: s.triggered,
       })),
     };
+    stageResults.craftPhenomenonReport = oppResult.craftPhenomenonReport;
 
-    // 无 hypothesis → 交付 raw + warning（无编辑机会）
+    // 无可引用 raw span 的 hypothesis 时，任何正收益候选都不得生成。
+    // 这保持统一主链路的机会驱动边界：raw 是基线，候选数量必须为 0。
     if (oppResult.hypotheses.length === 0) {
+      stageResults.positiveGainCandidates = {
+        status: "retired_from_production",
+        rawBaselineMutated: false,
+        failureReason: "global_scene_candidate_admission_retired",
+      };
       warnings.push(
         `无编辑机会（${oppResult.noOpReason ?? "无 hypothesis"}），交付 raw`
       );
       return this.deliverRaw(input, rawCandidate, warnings, stageResults, null, oppResult.hypotheses, candidates);
     }
 
+    const positiveGainCandidates: Candidate[] = [];
+    stageResults.positiveGainCandidates = {
+      status: "retired_from_production",
+      rawBaselineMutated: false,
+      failureReason: "global_scene_candidate_admission_retired",
+    };
     // 策略注册表（Stage 3.5 过滤与 Stage 4 候选生成共用）
     const strategyRegistry = createEditorialStrategyRegistry();
 
@@ -1119,7 +1211,7 @@ export class UnifiedOrchestrator {
       });
 
       // 无已准入选中策略且无 candidate 静态 fallback 时，合法交付 raw。
-      if (activeHypotheses.length === 0) {
+      if (activeHypotheses.length === 0 && positiveGainCandidates.length === 0) {
         warnings.push(
           `策略选择后无可用策略（${strategySelection.notes.join("; ")}），交付 raw`
         );
@@ -1138,7 +1230,7 @@ export class UnifiedOrchestrator {
     const nonAgenticCallCount = modelCallLog.filter(
       (e) => e.kind !== AGENTIC_RAW_KIND
     ).length;
-    if (nonAgenticCallCount >= SOFT) {
+    if (nonAgenticCallCount >= SOFT && positiveGainCandidates.length === 0) {
       modelBudget.capped = true;
       warnings.push(
         `模型调用达软上限（非 agentic ${nonAgenticCallCount}/${SOFT}，总 ${modelCallLog.length}），跳过 editorial 候选生成，交付 raw`
@@ -1148,8 +1240,16 @@ export class UnifiedOrchestrator {
 
     // ── 阶段 4: EditorialCandidateGenerator 生成 editorial 候选 ───────
     const candGen = createEditorialCandidateGenerator();
-    let editorialCandidates: Candidate[] = [];
+    let editorialCandidates: Candidate[] = [...positiveGainCandidates];
     try {
+      if (positiveGainCandidates.length > 0) {
+        stageResults.editorialCandidateGeneration = {
+          count: positiveGainCandidates.length,
+          failures: [],
+          noOpReason: null,
+          source: "positive_gain_production",
+        };
+      } else {
       const genResult = await timeAsync("stage4_editorialCandidate", () =>
         candGen.generate({
           rawText,
@@ -1158,10 +1258,12 @@ export class UnifiedOrchestrator {
           hypotheses: activeHypotheses,
           intent,
           context,
+          constitution,
           contextHash: rawCandidate.contextHash,
           chapterNumber,
           // Step 1c：传 wrappedModelGenerate 以计入 modelCallLog 遥测
           modelGenerate: wrappedModelGenerate!,
+          writerPromptProfile: input.rawPromptProfile,
           strategyRegistry,
           timeoutMs: input.timeoutMs ?? DEFAULT_RAW_TIMEOUT_MS,
           // QUALITY-11：raw 阶段 craft evidence advisory（诊断上下文，注入 candidate prompt）。
@@ -1171,6 +1273,11 @@ export class UnifiedOrchestrator {
         })
       );
       editorialCandidates = genResult.candidates;
+      (stageResults.constitutionConsumption as {
+        raw: string[];
+        editorial: string[];
+        judge: string[];
+      }).editorial = genResult.constitutionConsumedFields;
       stageResults.editorialCandidateGeneration = {
         count: genResult.candidates.length,
         failures: genResult.failures,
@@ -1180,6 +1287,7 @@ export class UnifiedOrchestrator {
         warnings.push(
           `editorial 候选生成部分失败：${genResult.failures.map((f) => f.reason).join("; ")}`
         );
+      }
       }
     } catch (e: unknown) {
       // editorial 生成异常 → 交付 raw + warning
@@ -1240,7 +1348,7 @@ export class UnifiedOrchestrator {
     const editorialFactGuardResults: Array<{ candidateId: string; passed: boolean; errors: string[] }> = [];
     timeSync("stage5a_editorialFactGuard", () => {
       for (const ec of editorialCandidates) {
-        const fg = checkCandidateFactGuard(ec.text, input);
+        const fg = checkCandidateFactGuard(ec.text, input, rawCandidate.text);
         editorialFactGuardResults.push({
           candidateId: ec.id,
           passed: fg.ok,
@@ -1261,13 +1369,8 @@ export class UnifiedOrchestrator {
       return this.deliverRaw(input, rawCandidate, warnings, stageResults, null, oppResult.hypotheses, candidates);
     }
 
-    // ── 阶段 5a.1: EditorialStoryPreservationGate — 故事骨架保持门禁（DEMO-3-R2）──
-    // 在 FactGuard（事实硬伤）之后、LanguageRisk/JudgeArbitrator 之前，
-    // 对每个通过 FactGuard 的 editorial 候选做确定性故事骨架保持检查。
-    // 漂移候选（删除 raw 关键事件 + 新增替换故事线）被拒绝，不进入裁判（不覆盖 raw）。
-    // 本地确定性检查（无 LLM 调用），不影响模型预算。
-    // 根因：Case A R1 暴露 editorial 删除 raw 黑雾/蚀神瘴/禁星渊主线并新增洪摩逆推/灵脉水道，
-    // prompt 软约束无法阻止，FactGuard 只查事实硬伤，LLM judge 评质量不评故事保真。
+    // EditorialStoryPreservation 只提供结构诊断证据。其事件抽取是启发式的，
+    // 不得在事实/完整性门禁之外机械淘汰文学候选。
     const storyPreservedCandidates: Candidate[] = [];
     const storyPreservationResults: Array<{
       candidateId: string;
@@ -1275,6 +1378,13 @@ export class UnifiedOrchestrator {
     }> = [];
     timeSync("stage5a.1_editorialStoryPreservation", () => {
       for (const ec of validEditorialCandidates) {
+        // B/C 是从同一事实与意图重新生成的替代 raw 草稿，不是对 A 的编辑改写；
+        // 要求其复制 A 的事件骨架会错误消灭搜索差异。事实/连续性仍由 FactGuard
+        // 校验，文学胜负仍由异源 judge 与 raw 比较。
+        if (ec.kind !== "editorial_amplified") {
+          storyPreservedCandidates.push(ec);
+          continue;
+        }
         const report = checkEditorialStoryPreservation({
           rawText: rawCandidate.text,
           editorialText: ec.text,
@@ -1285,13 +1395,8 @@ export class UnifiedOrchestrator {
           entityCoverage: "characters_only",
         });
         storyPreservationResults.push({ candidateId: ec.id, report });
-        if (report.preserved) {
-          storyPreservedCandidates.push(ec);
-        } else {
-          warnings.push(
-            `editorial 候选 ${ec.id} 故事骨架漂移被拒绝：${report.reason}`
-          );
-        }
+        storyPreservedCandidates.push(ec);
+        if (!report.preserved) warnings.push(`editorial 候选 ${ec.id} 故事保持诊断：${report.reason}`);
       }
     });
     stageResults.editorialStoryPreservation = storyPreservationResults.map(
@@ -1316,25 +1421,16 @@ export class UnifiedOrchestrator {
       })
     );
 
-    // 所有 editorial 候选都漂移 → 交付 raw + warning（fallbacked=true）
-    if (storyPreservedCandidates.length === 0) {
-      warnings.push(
-        "所有 editorial 候选均未通过 StoryPreservationGate（故事骨架漂移），交付 raw"
-      );
-      return this.deliverRaw(
-        input,
-        rawCandidate,
-        warnings,
-        stageResults,
-        null,
-        oppResult.hypotheses,
-        candidates
-      );
-    }
-
-    // 用通过故事保持门禁的候选替代 validEditorialCandidates 进入后续 stage
+    // 所有通过事实门禁的候选继续进入逐章比较；诊断只附在 trace。
     validEditorialCandidates.length = 0;
     validEditorialCandidates.push(...storyPreservedCandidates);
+
+    if (validEditorialCandidates.length === 0) {
+      warnings.push("通过最终候选前置门禁的 editorial 候选为空，交付 raw");
+      return this.deliverRaw(
+        input, rawCandidate, warnings, stageResults, null, oppResult.hypotheses, candidates,
+      );
+    }
 
     // ── 阶段 5a.5: LanguageRiskAnalyzer — 全候选语言风险扫描（A4，计划 §3）──
     // 对进入裁判的全部候选（raw + 有效 editorial）调用 LanguageRiskLibrary.scan()，
@@ -1353,6 +1449,11 @@ export class UnifiedOrchestrator {
     // 对全部 0-2 个有效 editorial 候选分别与 raw 做 pairwise 裁判，
     // 选出胜出的 editorial（若有多个胜出，取胜因最强的）。
     const arb = createJudgeArbitrator();
+    (stageResults.constitutionConsumption as {
+      raw: string[];
+      editorial: string[];
+      judge: string[];
+    }).judge = getJudgeConstitutionConsumedFields(constitution);
     const arbitrationResults: Array<{ candidate: Candidate; result: ArbitratorResult }> = [];
     // Step 4c：opt-in 并行裁判。默认 1=串行（行为零变化）；PINOVEL_PARALLEL_CANDIDATES=2 启用并行。
     const parallelJudge = Number(process.env.PINOVEL_PARALLEL_CANDIDATES ?? 1) === 2;
@@ -1379,6 +1480,7 @@ export class UnifiedOrchestrator {
                   arbitratorModelGenerate: wrappedArbitratorModelGenerate,
                   seed: input.seed,
                   timeoutMs: input.timeoutMs,
+                  allowAutomaticLiterarySelection: input.allowAutomaticLiterarySelection,
                 });
                 return { candidate: ec, result };
               } catch (e: unknown) {
@@ -1417,6 +1519,7 @@ export class UnifiedOrchestrator {
             arbitratorModelGenerate: wrappedArbitratorModelGenerate,
             seed: input.seed,
             timeoutMs: input.timeoutMs,
+            allowAutomaticLiterarySelection: input.allowAutomaticLiterarySelection,
           });
           arbitrationResults.push({ candidate: ec, result });
         } catch (e: unknown) {
@@ -1442,23 +1545,63 @@ export class UnifiedOrchestrator {
     // 1. 收集 editorial 胜出的结果（finalSelectedCandidateId === editorial.id）
     // 2. 若有 editorial 胜出，取胜因最强者（clear > 两轮一致 > 仲裁）
     // 3. 若无 editorial 胜出，交付 raw
-    const selectionOutcome = timeSync("stage6_selection", () =>
-      this.selectBestCandidate(rawCandidate, arbitrationResults)
+    const editorialWins = arbitrationResults.filter(
+      ({ candidate, result }) => result.finalSelectedCandidateId === candidate.id,
     );
+    let editorialFinal: {
+      leftCandidateId: string;
+      rightCandidateId: string;
+      result: ArbitratorResult;
+    } | null = null;
+    if (editorialWins.length > 1) {
+      if (modelCallLog.length >= HARD) {
+        modelBudget.capped = true;
+        warnings.push("多个 editorial 均胜过 raw，但模型调用预算不足，无法直接决赛，保留 raw");
+      } else {
+        try {
+          const [left, right] = editorialWins;
+          const result = await timeAsync("stage5b_editorialFinal", () =>
+            arb.arbitrate({
+              rawCandidate: left.candidate,
+              editorialCandidate: right.candidate,
+              intent,
+              constitution,
+              modelGenerate: wrappedJudgeModelGenerate!,
+              arbitratorModelGenerate: wrappedArbitratorModelGenerate,
+              seed: input.seed,
+              timeoutMs: input.timeoutMs,
+              allowAutomaticLiterarySelection: input.allowAutomaticLiterarySelection,
+            })
+          );
+          editorialFinal = {
+            leftCandidateId: left.candidate.id,
+            rightCandidateId: right.candidate.id,
+            result,
+          };
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          warnings.push(`editorial 胜者直接决赛异常，保留 raw：${msg}`);
+        }
+      }
+    }
+
+    const selectionOutcome = timeSync("stage6_selection", () =>
+      this.selectBestCandidate(rawCandidate, arbitrationResults, editorialFinal));
     const { finalText, selectedSource, selectedCandidateId, judgeResult, selectionWarnings } = selectionOutcome;
     warnings.push(...selectionWarnings);
 
     stageResults.judgeArbitration = {
-      reverseReviewed: judgeResult.reverseReviewed,
-      arbitrationTriggered: judgeResult.arbitrationTriggered,
-      conflicted: judgeResult.conflicted,
-      finalSelectedCandidateId: judgeResult.finalSelectedCandidateId,
-      auditSummary: judgeResult.auditSummary,
-      rounds: judgeResult.rounds.map((r) => ({
+      reverseReviewed: judgeResult?.reverseReviewed ?? false,
+      arbitrationTriggered: judgeResult?.arbitrationTriggered ?? false,
+      conflicted: judgeResult?.conflicted ?? false,
+      finalSelectedCandidateId: judgeResult?.finalSelectedCandidateId ?? null,
+      auditSummary: judgeResult?.auditSummary ?? "machine judge unavailable; raw baseline preserved",
+      rounds: judgeResult?.rounds.map((r) => ({
         round: r.round,
         winnerCandidateId: r.winnerCandidateId,
         degraded: r.result.degraded,
-      })),
+      })) ?? [],
+      advisoryOnly: input.allowAutomaticLiterarySelection !== true,
       allArbitrations: arbitrationResults.map(({ candidate, result }) => ({
         candidateId: candidate.id,
         finalSelectedCandidateId: result.finalSelectedCandidateId,
@@ -1466,6 +1609,16 @@ export class UnifiedOrchestrator {
         reverseReviewed: result.reverseReviewed,
         arbitrationTriggered: result.arbitrationTriggered,
       })),
+      editorialFinal: editorialFinal ? {
+        leftCandidateId: editorialFinal.leftCandidateId,
+        rightCandidateId: editorialFinal.rightCandidateId,
+        finalSelectedCandidateId: editorialFinal.result.finalSelectedCandidateId,
+        decisive: this.isDecisiveEditorialFinal(editorialFinal.result),
+        conflicted: editorialFinal.result.conflicted,
+        reverseReviewed: editorialFinal.result.reverseReviewed,
+        arbitrationTriggered: editorialFinal.result.arbitrationTriggered,
+        auditSummary: editorialFinal.result.auditSummary,
+      } : null,
     };
 
     // ── 阶段 5c: QUALITY-14 JudgeEvidenceAdvisoryAttachment — 裁判证据审计附件 ──
@@ -1490,8 +1643,13 @@ export class UnifiedOrchestrator {
     // 冻结计划 §8.1：B0/B1/B2/B3 在 eval 分支已返回；此处只有 B4 eval 和非 eval 生产路径。
     // 非 eval：硬伤 → hard block（不交付有事实硬伤的正文）。
     // B4 eval：硬伤 → 回退 raw 基线（保留评估信号，不 hard block）。
+    const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId);
     const finalFactRecheck = timeSync("stage6.5_finalFactRecheck", () =>
-      checkCandidateFactGuard(finalText, input)
+      checkCandidateFactGuard(
+        finalText,
+        input,
+        selectedSource === "raw" ? undefined : rawCandidate.text,
+      )
     );
     stageResults.finalFactRecheck = {
       selectedSource,
@@ -1528,7 +1686,6 @@ export class UnifiedOrchestrator {
     // ── 阶段 6.6: 最终正文灾难级完整性门禁 ───────────────────────────
     // 只阻断确定性的模型/传输截断；开放式钩子和普通缺标点仅进入 review。
     // 必须位于 state.commit / chapter.save 之前，确保不完整正文零副作用。
-    const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId);
     const finalTextCompleteness = timeSync("stage6.6_finalTextCompleteness", () =>
       scanFinalTextCompleteness(finalText, {
         finishReason: selectedCandidate?.finishReason,
@@ -1566,6 +1723,26 @@ export class UnifiedOrchestrator {
         },
       );
     }
+
+    stageResults.finalSelection = {
+      selectedSource,
+      selectedCandidateId,
+      finalTextLength: finalText.length,
+      evalMode: input.evalMode ?? null,
+    };
+    runStructuralEvidenceScan(finalText, selectedCandidateId, input, stageResults, warnings);
+    runInformationReleaseScan(finalText, selectedCandidateId, input, stageResults, warnings);
+    runEndingCraftScan(finalText, selectedCandidateId, input, stageResults, warnings);
+    runCraftEvidenceEnvelope(finalText, selectedCandidateId, stageResults, warnings);
+    runQualityEvidenceRunReport(
+      selectedSource,
+      selectedCandidateId,
+      finalText,
+      candidates.some((candidate) => candidate.kind === "editorial_amplified"),
+      stageResults,
+      warnings,
+    );
+    exportQualityEvidenceReport(this, input, stageResults, warnings);
 
     // ── 阶段 6.7: P0-3 代理审批（opt-in，在 commitAndSave 前） ──────────
     // 计划 §6.3 line 117-122：FinalFactRecheck → ChapterProxyApproval → saveProxyApprovedDraft
@@ -1735,46 +1912,6 @@ export class UnifiedOrchestrator {
       stageResults.strategyOutcomes = { skipped: true, reason: "fullPipelinePreview=true（预览模式不记录策略学习 outcome）" };
     }
 
-    stageResults.finalSelection = {
-      selectedSource,
-      selectedCandidateId,
-      finalTextLength: finalText.length,
-      evalMode: input.evalMode ?? null,
-    };
-
-    // ── QUALITY-3：结构证据扫描（finalText 确定后，trace 返回前）──
-    // 只诊断不改文，不触发语言润色/候选生成，不阻断生成。
-    runStructuralEvidenceScan(finalText, selectedCandidateId, input, stageResults, warnings);
-
-    // ── QUALITY-8：信息释放证据扫描（finalText 确定后，trace 返回前）──
-    // 只诊断不改文，不触发语言润色/候选生成，不阻断生成。
-    runInformationReleaseScan(finalText, selectedCandidateId, input, stageResults, warnings);
-
-    // ── QUALITY-9：章末收束/钩子证据扫描（finalText 确定后，trace 返回前）──
-    // 只诊断不改文，不触发语言润色/候选生成，不阻断生成。
-    runEndingCraftScan(finalText, selectedCandidateId, input, stageResults, warnings);
-
-    // ── QUALITY-10：质量证据统一汇总（三源扫描后，trace 返回前）──
-    // 只汇总不评分，不触发语言润色/候选生成，不阻断生成。
-    runCraftEvidenceEnvelope(finalText, selectedCandidateId, stageResults, warnings);
-
-    // ── QUALITY-15：单次生成运行质量证据报告（QUALITY-10 envelope 后，trace 返回前）──
-    // 把 QUALITY-10~14 证据链汇总为 stageResults.qualityEvidenceRunReport，供人工复盘。
-    // 只做报告不做裁判/门禁，不改 finalText，不进 judge prompt（judge 已返回），不阻断生成。
-    runQualityEvidenceRunReport(
-      selectedSource,
-      selectedCandidateId,
-      finalText,
-      candidates.some((c) => c.kind === "editorial_amplified"),
-      stageResults,
-      warnings
-    );
-
-    // ── QUALITY-16：导出 qualityEvidenceRunReport 为可复盘产物（QUALITY-15 后，trace 返回前）──
-    // 把 report 持久化为 JSON 文件到 traces 目录，供人工审阅和后续 UI/CLI 消费。
-    // 只做导出不做裁判/门禁，不改 finalText，不进 judge prompt，不阻断生成。
-    exportQualityEvidenceReport(this, input, stageResults, warnings);
-
     return {
       status: "ok",
       workspaceId,
@@ -1802,8 +1939,7 @@ export class UnifiedOrchestrator {
         : chapterFilePath(input),
       // FULL-PIPELINE-PREVIEW-1：标记本次运行为完整链路只读预览。
       isPreviewRun: Boolean(input.fullPipelinePreview),
-      // INTENT-COMPLETENESS-1：标记 ChapterIntent 含空关键字段（under-specified）。
-      // 普通生成模式不阻断（仅作标记），evalMode + 关键字段为空时已在 raw 生成前阻断。
+      // 固定字段完整性只保留为 trace 诊断，不阻断生成或评测。
       isUnderSpecified,
     };
   }
@@ -1838,7 +1974,12 @@ export class UnifiedOrchestrator {
    */
   private selectBestCandidate(
     rawCandidate: Candidate,
-    arbitrationResults: Array<{ candidate: Candidate; result: ArbitratorResult }>
+    arbitrationResults: Array<{ candidate: Candidate; result: ArbitratorResult }>,
+    editorialFinal: {
+      leftCandidateId: string;
+      rightCandidateId: string;
+      result: ArbitratorResult;
+    } | null = null,
   ): {
     finalText: string;
     selectedSource: "raw" | "editorial";
@@ -1870,6 +2011,29 @@ export class UnifiedOrchestrator {
         selectedSource: "raw",
         selectedCandidateId: rawCandidate.id,
         judgeResult: firstResult,
+        selectionWarnings,
+      };
+    }
+
+    if (editorialWins.length > 1) {
+      const finalWinnerId = editorialFinal?.result.finalSelectedCandidateId ?? null;
+      const finalWinner = editorialWins.find(({ candidate }) => candidate.id === finalWinnerId);
+      if (!editorialFinal || !finalWinner || !this.isDecisiveEditorialFinal(editorialFinal.result)) {
+        selectionWarnings.push("多个 editorial 均胜过 raw，但直接决赛未形成明确胜者，保留 raw");
+        return {
+          finalText: rawCandidate.text,
+          selectedSource: "raw",
+          selectedCandidateId: rawCandidate.id,
+          judgeResult: editorialFinal?.result ?? editorialWins[0].result,
+          selectionWarnings,
+        };
+      }
+      selectionWarnings.push(`editorial 直接决赛选中 ${finalWinner.candidate.id}`);
+      return {
+        finalText: finalWinner.candidate.text,
+        selectedSource: "editorial",
+        selectedCandidateId: finalWinner.candidate.id,
+        judgeResult: editorialFinal.result,
         selectionWarnings,
       };
     }
@@ -1916,6 +2080,22 @@ export class UnifiedOrchestrator {
     // 需要仲裁（或冲突保留但最终选中 editorial —— 实际上冲突时保留 raw，
     // 此分支仅覆盖仲裁后选中 editorial 的情况）
     return 1;
+  }
+
+  private isDecisiveEditorialFinal(result: ArbitratorResult): boolean {
+    if (result.firstRound.degraded || result.firstRound.winnerCandidateId === null) {
+      return false;
+    }
+    if (!result.reverseReviewed) return true;
+    if (!result.conflicted) {
+      return result.reverseRound?.winnerCandidateId === result.finalSelectedCandidateId;
+    }
+    return Boolean(
+      result.arbitrationTriggered
+      && result.arbitrationRound
+      && !result.arbitrationRound.degraded
+      && result.arbitrationRound.winnerCandidateId === result.finalSelectedCandidateId,
+    );
   }
 
   // ==========================================================================
@@ -2144,6 +2324,35 @@ export class UnifiedOrchestrator {
       );
     }
 
+    stageResults.finalSelection = {
+      selectedSource: "raw",
+      selectedCandidateId: rawCandidate.id,
+      finalTextLength: rawCandidate.text.length,
+      degradedToRaw: !input.evalMode,
+      evalMode: input.evalMode ?? null,
+    };
+    runStructuralEvidenceScan(
+      rawCandidate.text, rawCandidate.id, input, stageResults, warnings,
+    );
+    runInformationReleaseScan(
+      rawCandidate.text, rawCandidate.id, input, stageResults, warnings,
+    );
+    runEndingCraftScan(
+      rawCandidate.text, rawCandidate.id, input, stageResults, warnings,
+    );
+    runCraftEvidenceEnvelope(
+      rawCandidate.text, rawCandidate.id, stageResults, warnings,
+    );
+    runQualityEvidenceRunReport(
+      "raw",
+      rawCandidate.id,
+      rawCandidate.text,
+      candidates.some((candidate) => candidate.kind === "editorial_amplified"),
+      stageResults,
+      warnings,
+    );
+    exportQualityEvidenceReport(this, input, stageResults, warnings);
+
     // Eval 模式：跳过 commitAndSave（不写章节文件、不提交状态）
     // FULL-PIPELINE-PREVIEW-1：完整链路预览也跳过 commitAndSave（不写章节、不提交状态）。
     let commitOutcome: { ok: boolean; error?: string; stateCommit: { committed: number; rejected: number } | null };
@@ -2223,61 +2432,6 @@ export class UnifiedOrchestrator {
       );
     }
 
-    stageResults.finalSelection = {
-      selectedSource: "raw",
-      selectedCandidateId: rawCandidate.id,
-      finalTextLength: rawCandidate.text.length,
-      degradedToRaw: !input.evalMode, // eval 模式非降级，是预期行为
-      evalMode: input.evalMode ?? null,
-    };
-
-    // ── QUALITY-3：raw fallback 路径也必须有 structuralEvidence ──
-    // 任务规格 §6："raw fallback 路径也必须有 structuralEvidence"。
-    // 只诊断不改文，不触发语言润色/候选生成，不阻断生成。
-    runStructuralEvidenceScan(
-      rawCandidate.text, rawCandidate.id, input, stageResults, warnings
-    );
-
-    // ── QUALITY-8：raw fallback 路径也必须有 informationReleaseEvidence ──
-    // 任务规格 §5："raw 交付、editorial 交付都要有 evidence"。
-    // 只诊断不改文，不触发语言润色/候选生成，不阻断生成。
-    runInformationReleaseScan(
-      rawCandidate.text, rawCandidate.id, input, stageResults, warnings
-    );
-
-    // ── QUALITY-9：raw fallback 路径也必须有 endingCraftEvidence ──
-    // 任务规格 §接入边界："raw 交付、editorial 交付都要有 evidence"。
-    // 只诊断不改文，不触发语言润色/候选生成，不阻断生成。
-    runEndingCraftScan(
-      rawCandidate.text, rawCandidate.id, input, stageResults, warnings
-    );
-
-    // ── QUALITY-10：raw fallback 路径也必须有 craftEvidenceEnvelope（三源汇总）──
-    // 任务规格 §接入边界："raw 交付、editorial 交付都要有 envelope"。
-    // 只汇总不评分，不触发语言润色/候选生成，不阻断生成。
-    runCraftEvidenceEnvelope(
-      rawCandidate.text, rawCandidate.id, stageResults, warnings
-    );
-
-    // ── QUALITY-15：deliverRaw 路径也生成运行报告（说明无 editorial candidate 胜出）──
-    // 任务规格 §接入边界："no-op/raw-only 路径应能生成报告，说明无 editorial candidate"。
-    // hasEditorialCandidate 由 candidates 中是否存在 editorial_amplified kind 决定
-    // （deliverRaw 不代表无 candidate 生成，只代表 raw 胜出或无 hypothesis）。
-    // 只做报告不做裁判/门禁，不改 finalText，不阻断生成。
-    runQualityEvidenceRunReport(
-      "raw",
-      rawCandidate.id,
-      rawCandidate.text,
-      candidates.some((c) => c.kind === "editorial_amplified"),
-      stageResults,
-      warnings
-    );
-
-    // ── QUALITY-16：deliverRaw 路径也导出 report（raw/no-op 路径必须能导出）──
-    // 任务规格 §接入边界："raw/no-op 路径也必须能导出 report"。
-    // 只做导出不做裁判/门禁，不改 finalText，不阻断生成。
-    exportQualityEvidenceReport(this, input, stageResults, warnings);
-
     return {
       status: "ok",
       workspaceId: input.workspaceId,
@@ -2352,24 +2506,30 @@ export class UnifiedOrchestrator {
     // ── QUALITY-3：hardBlock 路径跳过结构证据扫描，但写清 skipped reason ──
     // 任务规格 §6："hardBlock/raw 生成失败路径可跳过，但要写清 skipped reason"。
     // 无 finalText 可扫描，只记录 skipped reason 供 trace 审计。
-    stageResults.chapterQualityEvidence = skippedChapterQualityEvidence(
-      "",
-      `hardBlock at stage=${stage}：${reason}（无 finalText 可扫描）`
-    );
+    if (!stageResults.chapterQualityEvidence) {
+      stageResults.chapterQualityEvidence = skippedChapterQualityEvidence(
+        "",
+        `hardBlock at stage=${stage}：${reason}（无 finalText 可扫描）`
+      );
+    }
     // ── QUALITY-8：hardBlock 路径跳过信息释放扫描，但写清 skipped reason ──
     // 任务规格 §5："hardBlock 路径写 skipped reason"。
     // 无 finalText 可扫描，只记录 skipped reason 供 trace 审计。
-    stageResults.informationReleaseEvidence = skippedInformationReleaseEvidence(
-      "",
-      `hardBlock at stage=${stage}：${reason}（无 finalText 可扫描）`
-    );
+    if (!stageResults.informationReleaseEvidence) {
+      stageResults.informationReleaseEvidence = skippedInformationReleaseEvidence(
+        "",
+        `hardBlock at stage=${stage}：${reason}（无 finalText 可扫描）`
+      );
+    }
     // ── QUALITY-9：hardBlock 路径跳过章末收束扫描，但写清 skipped reason ──
     // 任务规格 §接入边界："hardBlock 路径写 skipped reason"。
     // 无 finalText 可扫描，只记录 skipped reason 供 trace 审计。
-    stageResults.endingCraftEvidence = skippedEndingCraftEvidence(
-      "",
-      `hardBlock at stage=${stage}：${reason}（无 finalText 可扫描）`
-    );
+    if (!stageResults.endingCraftEvidence) {
+      stageResults.endingCraftEvidence = skippedEndingCraftEvidence(
+        "",
+        `hardBlock at stage=${stage}：${reason}（无 finalText 可扫描）`
+      );
+    }
     // ── QUALITY-10：hardBlock 路径也写 craftEvidenceEnvelope（标记 skipped/missing）──
     // 任务规格 §接入边界："hardBlock 路径也要有 envelope，但标记 skipped/missing reports"。
     // 三个 source 都已写为 skipped，envelope 自动识别为 skipped envelope。
@@ -2378,9 +2538,11 @@ export class UnifiedOrchestrator {
     // ── QUALITY-15：hardBlock 路径写 skipped report（不伪造成功报告）──
     // 任务规格 §接入边界："hardBlock 路径可写 skipped report，或保持 undefined，
     // 但不得伪造成功报告"。此处写 skipped report 供 trace 审计，明确无可用证据。
-    stageResults.qualityEvidenceRunReport = skippedQualityEvidenceRunReport(
-      `hardBlock at stage=${stage}：${reason}（无 finalText，无可用证据）`
-    );
+    if (!stageResults.qualityEvidenceRunReport) {
+      stageResults.qualityEvidenceRunReport = skippedQualityEvidenceRunReport(
+        `hardBlock at stage=${stage}：${reason}（无 finalText，无可用证据）`
+      );
+    }
 
     // ── QUALITY-16：hardBlock 路径导出 skipped report（不伪造成功报告）──
     // 任务规格 §接入边界："hardBlock 路径若已有 skipped report，可以导出 skipped report；

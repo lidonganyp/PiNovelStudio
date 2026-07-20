@@ -130,11 +130,11 @@ function captureFingerprint() {
     budgetMaxCalls: 10,
     timeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS ?? 300000),
     fallbackPolicy: "hard_block",
-    generationModel: "claude-opus-4-6",
+    generationModel: "gemini-3.1-pro-preview",
     judgeModel: "gpt5.6-sol",
     proxyApprovalModel: "gpt5.6-sol",
     envSwitchNames: ["V2_FORCE_STUB", "NOVEL_TEST_TOOLS", "NOVEL_DEBUG_TOOLS", "PINOVEL_UNIFIED_PIPELINE", "PINOVEL_DISABLE_FALLBACK"],
-    secretEnvNames: ["GLM_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY", "CLAUDE_API_KEY", "GPT_API_KEY", "ARK_API_KEY", "ERNIE_API_KEY"],
+    secretEnvNames: ["GLM_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY", "CLAUDE_API_KEY", "GEMINI_API_KEY", "GPT_API_KEY", "ARK_API_KEY", "ERNIE_API_KEY"],
   });
 }
 

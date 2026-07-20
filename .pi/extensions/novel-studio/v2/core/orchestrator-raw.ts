@@ -26,6 +26,17 @@ import { compileWorldPresentationContext, type WorldPresentationContext } from "
 import { compileEnsembleLayeringContext, type EnsembleLayeringContext } from "./ensemble-layering-compiler.js";
 import { compileIdentityContract } from "./identity-contract-compiler.js";
 import { compileOntologyContract, type OntologyContract } from "./ontology-contract-compiler.js";
+import { localizeLlmText } from "../../utils/llm-language-guard.js";
+import {
+  adaptWriterPrompt,
+  buildChapterContract,
+  resolveWriterPromptProfile,
+  type AdaptedWriterPrompt,
+  type ChapterContract,
+} from "./model-prompt-adapter.js";
+import { compileMethodologyApplicationReport, type MethodologyApplicationReport } from "./methodology-policy.js";
+import { auditPrompt } from "./prompt-constraint-audit.js";
+import type { CandidatePromptProfile } from "./types.js";
 
 // ==========================================================================
 // raw 生成
@@ -42,7 +53,7 @@ import { compileOntologyContract, type OntologyContract } from "./ontology-contr
  */
 export async function generateRaw(
   input: UnifiedOrchestratorInput,
-  prebuiltPrompt: { systemPrompt: string; userPrompt: string }
+  prebuiltPrompt: { systemPrompt: string; userPrompt: string; promptAdapter?: AdaptedWriterPrompt }
 ): Promise<{ text: string; model: string; finishReason?: string; maxTokens?: number }> {
   const { systemPrompt, userPrompt } = prebuiltPrompt;
   const route = RAW_ROUTE;
@@ -59,6 +70,7 @@ export async function generateRaw(
       userPrompt,
       kind: "raw_chapter",
       timeoutMs,
+      promptProfile: prebuiltPrompt.promptAdapter?.profile,
     };
     const output = await input.modelGenerate(genInput);
     lastText = output.text ?? "";
@@ -92,7 +104,7 @@ export async function generateRaw(
  *   intent/context 字段丰富度决定（B0=空 intent/context，B1=仅 context，
  *   B2=完整 intent+context），主链路流程差异由 evalMode 控制。
  */
-export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt: string; userPrompt: string; consumedFields: string[]; promiseContext: PromiseContext; expectationContext: ExpectationContext; genreContract: GenreContractContext; dialogueCraft: DialogueCraftContext; emotionRhythm: EmotionRhythmContext; supportingFunction: SupportingFunctionContext; knowledgeConsumption: KnowledgeConsumptionContext; characterVoiceContext: CharacterVoiceContext; worldPresentationContext: WorldPresentationContext; ensembleLayeringContext: EnsembleLayeringContext; identityContract: import("./identity-contract-compiler.js").IdentityContract; ontologyContract: OntologyContract } {
+export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt: string; userPrompt: string; consumedFields: string[]; constitutionConsumedFields: string[]; promptConstraintAudit: CandidatePromptProfile; methodologyPolicy: MethodologyApplicationReport; promiseContext: PromiseContext; expectationContext: ExpectationContext; genreContract: GenreContractContext; dialogueCraft: DialogueCraftContext; emotionRhythm: EmotionRhythmContext; supportingFunction: SupportingFunctionContext; knowledgeConsumption: KnowledgeConsumptionContext; characterVoiceContext: CharacterVoiceContext; worldPresentationContext: WorldPresentationContext; ensembleLayeringContext: EnsembleLayeringContext; identityContract: import("./identity-contract-compiler.js").IdentityContract; ontologyContract: OntologyContract; chapterContract: ChapterContract; promptAdapter: AdaptedWriterPrompt } {
   const { intent, context, constitution } = input;
   const parts: string[] = [];
   // INTENT-1：实际进入 prompt 的章卡字段清单，写入 stageResults.chapterIntent 供 trace 审计。
@@ -226,226 +238,18 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
     parts.push(`【前文】\n${input.evalPrefix}`);
   }
 
-  parts.push(`你是顶尖网文作家。请写第${input.chapterNumber}章完整正文。标题中的章节号必须是第${input.chapterNumber}章，不得写成其他章节。`);
-  parts.push("格式硬边界：不得重复输出相同段落或列表项；如需回顾同一信息，只概述一次。");
-  consumedFields.push("format.noExactDuplicate");
-  if (input.contextSafety) {
-    parts.push(`约束清单：${input.contextSafety.manifest.manifestId} / ${input.contextSafety.manifest.manifestHash}`);
-    consumedFields.push("constraintManifest");
-  }
-
-  if (intent.chapterFunction) {
-    parts.push(`本章功能：${intent.chapterFunction}`);
-    consumedFields.push("chapterFunction");
-  }
-  if (intent.readerExperience.length > 0) {
-    parts.push(`读者体验目标：${intent.readerExperience.join("、")}`);
-    consumedFields.push("readerExperience");
-  }
-  if (intent.currentPressure.length > 0) {
-    parts.push(`当前压力：${intent.currentPressure.join("；")}`);
-    consumedFields.push("currentPressure");
-  }
-  if (intent.inviolableFacts.length > 0) {
-    parts.push(`不可破坏的事实（必须遵守）：${intent.inviolableFacts.join("；")}`);
-    consumedFields.push("inviolableFacts");
-  }
-  // QUALITY-7：原 flat `本章相关角色：${relevantCharacters.join("、")}` 注入已移除，
-  // 由下方 QUALITY-7 compact block（含 焦点/在场 层级标签）取代（compact block 是其严格超集）。
-  if (constitution?.protagonistCoreConflict) {
-    parts.push(`主角核心冲突：${constitution.protagonistCoreConflict}`);
-    consumedFields.push("constitution.protagonistCoreConflict");
-  }
-  // QUALITY-6：原 flat worldRules.slice(0,5).map(r=>r.description) 注入已移除，
-  // 由下方 QUALITY-6 compact block（含 type/chapterActivated/affectedCharacters/genrePromises）取代。
-  // REAL-QUALITY-4：前章悬置状态桥接上下文（不可跳过，独立 block，不参与 facts.slice(0,10) 截断）。
-  // 必须位于"已确立事实参考"之前，让模型优先承接前章末状态，避免跨章因果断裂。
-  if (context.bridgeContext && context.bridgeContext.available) {
-    const bc = context.bridgeContext;
-    const bridgeParts: string[] = [];
-    if (bc.lastEventSummary) bridgeParts.push(`前章末事件：${bc.lastEventSummary}`);
-    if (bc.endingEmotion) bridgeParts.push(`结尾情绪：${bc.endingEmotion}`);
-    if (bc.openHooks.length > 0) bridgeParts.push(`开放钩子：${bc.openHooks.join(" / ")}`);
-    if (bc.unresolvedTensions.length > 0) bridgeParts.push(`未解张力：${bc.unresolvedTensions.join(" / ")}`);
-    if (bc.introducedCharacters.length > 0) bridgeParts.push(`新登场角色：${bc.introducedCharacters.join(" / ")}`);
-    if (bridgeParts.length > 0) {
-      parts.push(`前章悬置状态（本章必须承接，不得跳过）：${bridgeParts.join("；")}`);
-      consumedFields.push("context.bridgeContext");
-    }
-  }
-  if (context.facts.length > 0) {
-    const factStrs = context.facts.slice(0, 10).map((f) => f.content);
-    parts.push(`已确立事实参考：${factStrs.join("；")}`);
-    consumedFields.push("context.facts");
-  }
-
-  // ── INTENT-1：8 个新章卡字段消费（编辑型方向，非机械配额） ──
-  // 每项用 optional chaining defensive 消费：stub intent（无新字段）不受影响；
-  // builder 产出的真实 intent 在对应内容非空时拼入 prompt，并记入 consumedFields。
-  if (intent.concreteDelivery && intent.concreteDelivery.length > 0) {
-    parts.push(`本章具体交付：${intent.concreteDelivery.join("；")}`);
-    consumedFields.push("concreteDelivery");
-  }
-  if (intent.focusCharacterGoals && intent.focusCharacterGoals.length > 0) {
-    const goalStrs = intent.focusCharacterGoals.map((g) => `${g.character}——${g.goal}`);
-    parts.push(`焦点角色目标：${goalStrs.join("；")}`);
-    consumedFields.push("focusCharacterGoals");
-  }
-  if (intent.resistance && intent.resistance.length > 0) {
-    parts.push(`本章阻力：${intent.resistance.join("；")}`);
-    consumedFields.push("resistance");
-  }
-  if (intent.choicesAndCosts && intent.choicesAndCosts.length > 0) {
-    const ccStrs = intent.choicesAndCosts.map((c) => `${c.choice} → 代价：${c.cost}`);
-    parts.push(`选择与代价：${ccStrs.join("；")}`);
-    consumedFields.push("choicesAndCosts");
-  }
-  if (intent.expectedIrreversibleChange && intent.expectedIrreversibleChange.length > 0) {
-    parts.push(`预期不可逆变化：${intent.expectedIrreversibleChange.join("；")}`);
-    consumedFields.push("expectedIrreversibleChange");
-  }
-  if (intent.selectedPromisesToAdvance && intent.selectedPromisesToAdvance.length > 0) {
-    const paStrs = intent.selectedPromisesToAdvance.map((p) => `${p.promiseId}——${p.description}`);
-    parts.push(`本章选中的承诺：${paStrs.join("；")}`);
-    consumedFields.push("selectedPromisesToAdvance");
-  }
-  if (intent.causalEndPressure && intent.causalEndPressure.length > 0) {
-    parts.push(`章末因果压力方向：${intent.causalEndPressure.join("；")}`);
-    consumedFields.push("causalEndPressure");
-  }
-  if (intent.factAndCharacterKnowledgeForbiddenZones && intent.factAndCharacterKnowledgeForbiddenZones.length > 0) {
-    parts.push(`事实与人物知识禁区：${intent.factAndCharacterKnowledgeForbiddenZones.join("；")}`);
-    consumedFields.push("factAndCharacterKnowledgeForbiddenZones");
-  }
-
-  // ── QUALITY-4：本章相关承诺状态 compact block（只含 selectedPromisesToAdvance 命中项） ──
-  // 非 full PromiseLedger；已 fulfilled/broken 降级为 inspect；空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/对白比例/段落长度/固定冲突数等机械指标。
-  if (promiseContextResult.promptBlock) {
-    parts.push(promiseContextResult.promptBlock);
-    consumedFields.push("promiseContext");
-    promiseContext.consumedByRawPrompt = true;
-  } else {
-    promiseContext.consumedByRawPrompt = false;
-  }
-
-  // ── EXPECTATION-LEDGER-1：本章相关读者期待 compact block（只含 selectedExpectationsToAdvance 命中项） ──
-  // 非 full ExpectationLedger；fulfilled 降级为 inspect；escalated → escalate；
-  // delayed 保留 delayReason；空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/固定兑现章数等机械指标。
-  if (expectationContextResult.promptBlock) {
-    parts.push(expectationContextResult.promptBlock);
-    consumedFields.push("expectationContext");
-    expectationContext.consumedByRawPrompt = true;
-  } else {
-    expectationContext.consumedByRawPrompt = false;
-  }
-
-  // ── GENRE-CONTRACT-1：本章类型读者承诺 compact block ──
-  // 含 declaredGenre/driftGenre、entries（constitution + type-dataset 命中）、fulfillmentEvidence；
-  // 空（无类型数据）时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/固定冲突数/固定兑现章数等机械指标；advisory 非硬门。
-  if (genreContractResult.promptBlock) {
-    parts.push(genreContractResult.promptBlock);
-    consumedFields.push("genreContract");
-    genreContract.consumedByRawPrompt = true;
-  } else {
-    genreContract.consumedByRawPrompt = false;
-  }
-
-  // ── DIALOGUE-CRAFT-1：本章发言角色声音指纹 compact block ──
-  // 仅本章发言角色（focusCharacterGoals ∪ relevantCharacters 命中）；
-  // 指纹带来源样章/接受稿；缺失时降级为 CharacterVoice 弱代理（写明 confidence + proxyNote）；
-  // raw 生成前 rawText=null，对白工艺 advisory 为空（无诊断对象），canTriggerEditorialOpportunity=false；
-  // 空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/dialogueRatioGate/dialogueRatioThreshold/passed/blocked 等机械指标；advisory 非硬门。
-  const hasReliableDialogueFingerprint = dialogueCraft.speakingCharacters.some(
-    (entry) => entry.hasFingerprint && entry.recoveryMode === "fingerprint",
-  );
-  if (dialogueCraftResult.promptBlock && hasReliableDialogueFingerprint) {
-    parts.push(dialogueCraftResult.promptBlock);
-    consumedFields.push("dialogueCraft");
-    dialogueCraft.consumedByRawPrompt = true;
-  } else {
-    dialogueCraft.consumedByRawPrompt = false;
-  }
-
-  // ── EMOTION-RHYTHM-1：本章情绪节拍 compact block ──
-  // 含目标情绪（intent.readerExperience）+ 前态情绪 + 章尾情绪落点；
-  // raw 生成前 rawText=null，只输出目标与前态（无转折扫描）；空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 satisfactionInterval/climaxPositionRange/emotionDensityThreshold/dialogueRatio/curveSmoothness/
-  // maxOppressionLength 等机械指标；advisory 非硬门；不接管 finalText。
-  if (emotionRhythmResult.promptBlock) {
-    parts.push(emotionRhythmResult.promptBlock);
-    consumedFields.push("emotionRhythm");
-    emotionRhythm.consumedByRawPrompt = true;
-  } else {
-    emotionRhythm.consumedByRawPrompt = false;
-  }
-
-  // ── SUPPORTING-FUNCTION-1：配角章节功能 compact block ──
-  // 含激活配角（relevantCharacters - focusCharacterGoals）的功能 hypothesis（foil/witness/obstacle/helper/cost-bearer）；
-  // raw 生成前 rawText=null，功能待扫描（primaryFunction=null, verified=false）；空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/minSupportingCount/maxSupportingCount/headcountQuota/rotationQuota 等机械指标；
-  // 不更新永久角色身份；"companion/supporting"等静态 role 不冒充本章叙事功能；advisory 非硬门。
-  if (supportingFunctionResult.promptBlock) {
-    parts.push(supportingFunctionResult.promptBlock);
-    consumedFields.push("supportingFunction");
-    supportingFunction.consumedByRawPrompt = true;
-  } else {
-    supportingFunction.consumedByRawPrompt = false;
-  }
-
-  // ── KNOWLEDGE-CONSUMPTION-1：参考示例 compact block ──
-  // 含每条示例的 provenance(source)/qualityScore/selectionReason(匹配维度)/tokenCost 估算；
-  // manifestApproved=false 或无匹配示例时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 forcedImitation/mandatoryTemplate/requiredExamples 等强制字段；
-  // advisory 非强制模仿；不接管 finalText；不阻断正文生成。
-  if (knowledgeConsumptionResult.promptBlock) {
-    parts.push(knowledgeConsumptionResult.promptBlock);
-    consumedFields.push("knowledgeConsumption");
-    knowledgeConsumption.consumedByRawPrompt = true;
-  } else {
-    knowledgeConsumption.consumedByRawPrompt = false;
-  }
-
-  // ── QUALITY-5：本章相关角色状态提示 compact block ──
-  // 非 full characterStates；intent-only 不进入 prompt（voiceHints 为空时过滤）；
-  // 空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/对白比例/段落长度/固定冲突数等机械指标。
-  if (characterVoiceResult.promptBlock) {
-    parts.push(characterVoiceResult.promptBlock);
-    consumedFields.push("characterVoiceContext");
-    characterVoiceContext.consumedByRawPrompt = true;
-  } else {
-    characterVoiceContext.consumedByRawPrompt = false;
-  }
-
-  // ── QUALITY-6：本章世界约束 compact block（类型标注 + 本章激活标记 + 类型承诺） ──
-  // 取代原 flat first-5 description 注入（compact block 是其严格超集，含 type/chapterActivated/affectedCharacters/genrePromises）；
-  // 空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/对白比例/段落长度/固定冲突数等机械指标。
-  if (worldPresentationResult.promptBlock) {
-    parts.push(worldPresentationResult.promptBlock);
-    consumedFields.push("worldPresentationContext");
-    worldPresentationContext.consumedByRawPrompt = true;
-  } else {
-    worldPresentationContext.consumedByRawPrompt = false;
-  }
-
-  // ── QUALITY-7：本章角色层次 compact block（焦点/在场分层） ──
-  // 取代原 flat `本章相关角色：` 名字注入（compact block 是其严格超集，含 焦点/在场 层级标签）；
-  // 空时不加入 prompt（emptyReason 写 stageResults）。
-  // 不含 aggregateQualityScore/totalScore/对白比例/段落长度/固定冲突数/人数配额等机械指标。
-  if (ensembleLayeringResult.promptBlock) {
-    parts.push(ensembleLayeringResult.promptBlock);
-    consumedFields.push("ensembleLayeringContext");
-    ensembleLayeringContext.consumedByRawPrompt = true;
-  } else {
-    ensembleLayeringContext.consumedByRawPrompt = false;
-  }
-
-  parts.push("要求：写出自然流畅的中文网文章节正文，有完整的情节推进、角色行动和章末钩子。不要写大纲或注释，直接输出正文。");
+  // Diagnostic and experiment modules are compiled for trace/evaluation only.
+  // They must not prescribe how the raw chapter is written.
+  promiseContext.consumedByRawPrompt = false;
+  expectationContext.consumedByRawPrompt = false;
+  genreContract.consumedByRawPrompt = false;
+  dialogueCraft.consumedByRawPrompt = false;
+  emotionRhythm.consumedByRawPrompt = false;
+  supportingFunction.consumedByRawPrompt = false;
+  knowledgeConsumption.consumedByRawPrompt = false;
+  characterVoiceContext.consumedByRawPrompt = false;
+  worldPresentationContext.consumedByRawPrompt = false;
+  ensembleLayeringContext.consumedByRawPrompt = false;
 
   // ── CANON-IDENTITY-1：角色身份契约 compact block ──
   // 从 characterStates 编译身份契约；raw prompt 与 FactGuard 消费同一 contract（id/hash 一致）。
@@ -485,10 +289,72 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
     consumedFields.push("ontologyContract");
   }
 
+  const sharedContext = parts.join("\n\n");
+  const chapterContract = buildChapterContract(input);
+  const contractFields: Array<[keyof ChapterContract, string]> = [
+    ["overallPlotDirection", "overallPlotDirection"],
+    ["chapterFunction", "chapterFunction"],
+    ["previousState", "previousState"],
+    ["relevantCharacters", "relevantCharacters"],
+    ["characterMotivations", "characterMotivations"],
+    ["eventSummaries", "authorEventSummaries"],
+    ["mustInclude", "authorMustInclude"],
+    ["stateChanges", "authorStateChanges"],
+    ["foreshadowing", "foreshadowing"],
+    ["causalRelations", "causalRelations"],
+    ["endingTarget", "endingTarget"],
+    ["inviolableFacts", "inviolableFacts"],
+    ["stateConstraints", "factAndCharacterKnowledgeForbiddenZones"],
+  ];
+  for (const [field, traceName] of contractFields) {
+    const value = chapterContract[field];
+    if (Array.isArray(value) && value.length > 0 && !consumedFields.includes(traceName)) {
+      consumedFields.push(traceName);
+    }
+  }
+  const promptAdapter = adaptWriterPrompt({
+    profile: input.rawPromptProfile ?? resolveWriterPromptProfile({
+      route: "v2_rawstage2_gemini31",
+      provider: "gemini31",
+      model: "gemini-3.1-pro-preview",
+    }),
+    chapterNumber: input.chapterNumber,
+    contract: chapterContract,
+    sharedContext,
+  });
+  const userPrompt = localizeLlmText(promptAdapter.userPrompt);
+  const systemPrompt = localizeLlmText(promptAdapter.systemPrompt);
+  const constitutionConsumedFields = collectConstitutionFieldsInPrompt(userPrompt, constitution);
+  // Audit only system-authored instructions plus ChapterContract. evalPrefix is
+  // accepted prose and may legitimately quote wording that resembles a rule.
+  const auditAdapter = adaptWriterPrompt({
+    profile: promptAdapter.profile,
+    chapterNumber: input.chapterNumber,
+    contract: chapterContract,
+    sharedContext: "",
+  });
+  const promptConstraintAudit = auditPrompt(
+    localizeLlmText(auditAdapter.systemPrompt),
+    localizeLlmText(auditAdapter.userPrompt),
+  );
+  if (promptConstraintAudit.type === "control") {
+    throw new Error("raw_prompt_prose_freedom_violation: 检测到机械正文执行约束");
+  }
+  const methodologyPolicy = compileMethodologyApplicationReport([
+    ...consumedFields,
+    ...constitutionConsumedFields,
+  ]);
+  if (methodologyPolicy.violations.length > 0) {
+    throw new Error(`raw_prompt_methodology_authority_violation: ${methodologyPolicy.violations.join(";")}`);
+  }
+
   return {
-    systemPrompt: "你是顶尖网文作家，擅长写出自然流畅、有张力的中文网文章节。",
-    userPrompt: parts.join("\n\n"),
+    systemPrompt,
+    userPrompt,
     consumedFields,
+    constitutionConsumedFields,
+    promptConstraintAudit,
+    methodologyPolicy,
     promiseContext,
     expectationContext,
     genreContract,
@@ -501,7 +367,36 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
     ensembleLayeringContext,
     identityContract,
     ontologyContract,
+    chapterContract,
+    promptAdapter,
   };
+}
+
+function collectConstitutionFieldsInPrompt(
+  prompt: string,
+  constitution: UnifiedOrchestratorInput["constitution"]
+): string[] {
+  if (!constitution) return [];
+  const fields: string[] = [];
+  const includesAny = (values: string[] | undefined): boolean =>
+    Array.isArray(values) && values.some((value) => value.length > 0 && prompt.includes(value));
+
+  if (constitution.workIdentity && prompt.includes(constitution.workIdentity)) {
+    fields.push("constitution.workIdentity");
+  }
+
+  if (includesAny(constitution.readerPromise)) fields.push("constitution.readerPromise");
+  if (includesAny(constitution.genrePromises)) fields.push("constitution.genrePromises");
+  if (
+    constitution.protagonistCoreConflict &&
+    prompt.includes(constitution.protagonistCoreConflict)
+  ) {
+    fields.push("constitution.protagonistCoreConflict");
+  }
+  if (includesAny(constitution.thematicQuestions)) fields.push("constitution.thematicQuestions");
+  if (includesAny(constitution.aestheticDirection)) fields.push("constitution.aestheticDirection");
+  if (includesAny(constitution.forbiddenDrift)) fields.push("constitution.forbiddenDrift");
+  return fields;
 }
 
 /**

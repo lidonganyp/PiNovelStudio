@@ -7,10 +7,11 @@
  * 设计原则：
  * - 没有 span 的 diagnosis 只能当备注，不能触发候选
  * - 每个候选只携带一个主要 hypothesis，避免目标互相稀释（Phase 3 落实）
- * - confidence 0-1，低于阈值不生成候选
+ * - confidence 0-1，只作诊断证据，不作为机械候选门槛
  */
 
 import type { TextSpan } from "./types.js";
+import type { CraftPhenomenonDomain } from "./craft-phenomenon-report.js";
 
 // ============================================================================
 // 类型定义
@@ -37,6 +38,8 @@ export interface EditorialHypothesis {
   damageRisks: string[];
   rewriteScope: RewriteScope;
   confidence: number;
+  /** Methodology domain that motivated this hypothesis, when available. */
+  craftDomain?: CraftPhenomenonDomain;
 }
 
 // ============================================================================
@@ -89,31 +92,6 @@ function validateSpan(span: TextSpan, rawText: string, index: number): string | 
 }
 
 // ============================================================================
-// 候选生成准入
-// ============================================================================
-
-/** 默认置信度门槛：低于此值不生成候选 */
-export const DEFAULT_CONFIDENCE_THRESHOLD = 0.4;
-
-export function shouldGenerateCandidate(
-  h: EditorialHypothesis,
-  rawText: string,
-  threshold: number = DEFAULT_CONFIDENCE_THRESHOLD
-): { generate: boolean; reason: string } {
-  const validation = validateHypothesis(h, rawText);
-  if (!validation.ok) {
-    return { generate: false, reason: `hypothesis 校验失败：${validation.errors.join("; ")}` };
-  }
-  if (h.confidence < threshold) {
-    return {
-      generate: false,
-      reason: `confidence ${h.confidence} 低于门槛 ${threshold}，不生成候选`,
-    };
-  }
-  return { generate: true, reason: "通过校验且置信度达标" };
-}
-
-// ============================================================================
 // 一章最多 2 个候选的准入控制
 // ============================================================================
 
@@ -136,9 +114,6 @@ export function selectHypothesesForCandidates(
     }
     viable.push(h);
   }
-  // 按 confidence 降序
-  viable.sort((a, b) => b.confidence - a.confidence);
-
   const selected: EditorialHypothesis[] = [];
   const rejected: EditorialHypothesis[] = [];
   const usedTypes = new Set<EditorialOpportunityType>();
@@ -153,30 +128,8 @@ export function selectHypothesesForCandidates(
       reasons.push(`${h.id} 跳过：与已选 hypothesis 的 opportunityType ${h.opportunityType} 冲突`);
       continue;
     }
-    // Step 4a：第 2 候选需高置信（默认 0.7）；第 1 候选不受此门限制。
-    // 防止日常生成因低置信第 2 候选稀释目标；评测时调低阈值或提高 maxCandidates。
-    if (selected.length >= 1) {
-      const secondCandidateThreshold = Number(process.env.PINOVEL_SECOND_CANDIDATE_CONFIDENCE ?? 0.7);
-      if (h.confidence < secondCandidateThreshold) {
-        rejected.push(h);
-        reasons.push(`${h.id} 跳过：第 2 候选置信度 ${h.confidence.toFixed(2)} < 阈值 ${secondCandidateThreshold}`);
-        continue;
-      }
-    }
     selected.push(h);
     usedTypes.add(h.opportunityType);
   }
   return { selected, rejected, reasons };
-}
-
-export function createEditorialHypothesisStore(): {
-  validate: typeof validateHypothesis;
-  shouldGenerate: typeof shouldGenerateCandidate;
-  select: typeof selectHypothesesForCandidates;
-} {
-  return {
-    validate: validateHypothesis,
-    shouldGenerate: shouldGenerateCandidate,
-    select: selectHypothesesForCandidates,
-  };
 }

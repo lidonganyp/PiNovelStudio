@@ -53,10 +53,9 @@
  */
 
 import { parseArgs } from "node:util";
-import { writeFileSync, existsSync, readFileSync } from "node:fs";
-import { resolve, dirname, join } from "node:path";
+import { writeFileSync, existsSync } from "node:fs";
+import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const PROJECT_ROOT = resolve(__filename, "..", "..", "..");
@@ -73,6 +72,7 @@ const { values } = parseArgs({
   options: {
     "case-set": { type: "string" },
     "reference-source": { type: "string" },
+    "reference-registry": { type: "string" },
     "tracks": { type: "string", default: "A,B" },
     "samples-per-case": { type: "string", default: "2" },
     "output": { type: "string" },
@@ -145,6 +145,9 @@ const caseSetPath = resolve(values["case-set"]);
 const referenceSourcePath = values["reference-source"]
   ? resolve(values["reference-source"])
   : null;
+const referenceRegistryPath = values["reference-registry"]
+  ? resolve(values["reference-registry"])
+  : null;
 const tracks = values.tracks.split(",").map((s) => s.trim()).filter(Boolean);
 const samplesPerCase = parseInt(values["samples-per-case"] ?? "2", 10);
 const outputPath = values.output ? resolve(values.output) : null;
@@ -197,11 +200,7 @@ function makeInlineStubReference(referenceId) {
     `身后传来叹息，冰冷的气息掠过他的后颈。`;
 }
 
-function makeResolveReference(caseSet, referenceSourcePath, isStub) {
-  // 真实模式：从 reference source 文件读取，按 caseSet 中的 referenceId 切片
-  // 简化：CLI 不维护 ReferenceRegistry，直接读整个 source 文件并按 hash 切片
-  // 真实生产实现应在 dataset-builder 阶段注册 ReferenceRecord，这里只做简化读取
-
+async function makeResolveReference(caseSet, referenceSourcePath, referenceRegistryPath, isStub) {
   if (isStub && !referenceSourcePath) {
     return (referenceId) => makeInlineStubReference(referenceId);
   }
@@ -220,27 +219,33 @@ function makeResolveReference(caseSet, referenceSourcePath, isStub) {
     process.exit(1);
   }
 
-  // 简化：读整个文件作为 reference（真实实现应按 referenceId 切片）
-  // 这里使用 referenceId 的 hash 决定从哪个 offset 切片（伪切片，仅 CLI demo）
-  const sourceBuffer = readFileSync(referenceSourcePath);
-  // 尝试 UTF-8 解码（生产应使用 decodeNovelSourceBuffer）
-  let sourceText;
-  try {
-    sourceText = sourceBuffer.toString("utf-8");
-  } catch {
-    sourceText = sourceBuffer.toString("latin1");
+  if (!referenceRegistryPath) {
+    process.stderr.write(
+      "错误：真实模式必须提供 --reference-registry；禁止按 referenceId hash 从整本文件伪切片。\n",
+    );
+    process.exit(1);
+  }
+  if (!existsSync(referenceRegistryPath)) {
+    process.stderr.write(`错误：reference registry 文件不存在：${referenceRegistryPath}\n`);
+    process.exit(1);
   }
 
+  // evaluator-only：registry 记录 referenceId -> sourcePath + offset + bodyHash。
+  // 解析必须以 registry 的物理 offset/hash 为准；绝不按 referenceId 做随机切片。
+  const registryModulePath = join(EXT_ROOT, "dist-eval", "novelbench", "reference-registry.js");
+  const registryModule = await import(`file://${registryModulePath}`);
+  const registry = new registryModule.ReferenceRegistry(referenceRegistryPath);
+  registry.load();
   return (referenceId) => {
-    // 简化：按 referenceId 的 hash 决定切片起点
-    const hash = createHash("sha256").update(referenceId).digest("hex");
-    const offset = parseInt(hash.slice(0, 8), 16) % Math.max(1, sourceText.length - 5000);
-    const length = 3000; // 每章 ~3000 字
-    return sourceText.slice(offset, offset + length).trim();
+    const body = registry.resolve(referenceId);
+    if (!body) {
+      throw new Error(`reference resolve failed: ${referenceId}（registry offset/hash 校验失败）`);
+    }
+    return body;
   };
 }
 
-const resolveReference = makeResolveReference(caseSet, referenceSourcePath, isStub);
+const resolveReference = await makeResolveReference(caseSet, referenceSourcePath, referenceRegistryPath, isStub);
 
 let result;
 

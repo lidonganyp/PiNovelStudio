@@ -10,7 +10,7 @@
  *  2. 角色档案目录存在且非空
  *  3. 第 2 章及以后存在前章 skeleton.json
  *  4. ChapterSeed 可生长性（worldConstraint / characterState / previousContinuation / currentPressure / candidateAnchors）
- *  5. 显式章纲 ch{N}-outline-explicit.md 解析（P26新增：事件数/事件ID/感知锚点/参与角色/必须包含）
+ *  5. 显式章纲 ch{N}-outline-explicit.md 解析（事件数/内容摘要/参与角色）
  *  6. style fingerprint / fewshot / runtime manifest 可读
  *  7. 模型 timeout / env 配置
  *  8. 章节字数预算合理性
@@ -31,7 +31,7 @@ import { createSeedReadinessChecker } from "./seed-readiness-checker.js";
 import { getModelRequestTimeoutMs } from "../api/request-timeout.js";
 // P26新增：统一显式章纲解析器，Stage 0/Preflight 提前校验显式章纲
 // P27新增：hasVerifiableMandatoryElements 用于 mandatoryElements 可验证性校验
-import { parseExplicitOutline, hasVerifiableMandatoryElements } from "./explicit-outline-parser.js";
+import { parseExplicitOutline } from "./explicit-outline-parser.js";
 
 export interface PreflightBlockingItem {
   /** 检查项标识，如 "config_missing" / "characters_missing" / "seed_readiness" */
@@ -366,7 +366,7 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
           reason: `ChapterSeed 种子可生长性不足（score=${readinessReport.score}/100, status=${readinessReport.status}）`,
           fixInstruction: readinessReport.blockingReasons.length > 0
             ? readinessReport.blockingReasons.join("; ")
-            : `补充种子源：角色状态 / 当前压力 / 未结账细节 / 世界约束 / 候选感知锚点（不要补章纲）`,
+            : `补充事实性种子源：角色状态 / 前章状态 / 世界约束；作者章纲可补本章功能与事件内容，不需要补正文写法`,
           evidence: {
             score: readinessReport.score,
             status: readinessReport.status,
@@ -397,13 +397,13 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
   // ────────────────────────────────────────────────────────────────
   // 检查 5: 显式章纲 ch{N}-outline-explicit.md（P26新增）
   //
-  // 用户提供的 per-chapter 事件契约。存在时必须能解析出 ≥1 个事件，
-  // 且每个事件必须包含：事件 ID、感知锚点、参与角色、必须包含字段。
+  // 用户提供的 per-chapter 事件契约。存在时必须能解析出 ≥1 个事件。
+  // 内容摘要和参与角色用于传递作者意图；感知、文风和机械验收字段不阻断。
   // 解析失败 → 阻断在模型前，不消耗生成。
   //
   // 严禁：
   //   - 章纲非空但 0 事件 → explicit_outline_parse_error 阻断
-  //   - 事件缺感知锚点/参与角色/必须包含 → explicit_outline_field_missing 阻断
+  //   - 事件缺内容摘要/参与角色 → explicit_outline_field_missing 阻断
   //   - 不存在 ch{N}-outline-explicit.md → 跳过（不阻断，走默认 ChapterSeed 链路）
   // ────────────────────────────────────────────────────────────────
   const explicitOutlinePath = join(workspacePath, "series", `ch${chapterNumber}-outline-explicit.md`);
@@ -426,7 +426,7 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
         });
         checks.explicitOutline = { passed: false, detail: { parseError: parsed.parseError } };
       } else if (parsed.events.length > 0) {
-        // 5b: 事件字段完整性检查（感知锚点 / 参与角色 / 必须包含）
+        // 5b: 只检查叙事内容字段，不检查正文执行方式或机械可验证性。
         const missingFieldEvents: Array<{
           outlineEventId: string;
           title: string;
@@ -434,9 +434,8 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
         }> = [];
         for (const ev of parsed.events) {
           const missingFields: string[] = [];
-          if (ev.perceptualAnchors.length === 0) missingFields.push("感知锚点");
           if (ev.characters.length === 0) missingFields.push("参与角色");
-          if (ev.mandatoryElements.length === 0) missingFields.push("必须包含");
+          if (!ev.summary?.trim()) missingFields.push("内容摘要");
           if (missingFields.length > 0) {
             missingFieldEvents.push({
               outlineEventId: ev.outlineEventId,
@@ -449,7 +448,7 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
         if (missingFieldEvents.length > 0) {
           blockingItems.push({
             check: "explicit_outline_field_missing",
-            reason: `显式章纲事件缺少必须字段（感知锚点/参与角色/必须包含）：${missingFieldEvents.map(e => `${e.outlineEventId}(${e.missingFields.join("+")})`).join(", ")}`,
+            reason: `显式章纲事件缺少叙事内容字段（内容摘要/参与角色）：${missingFieldEvents.map(e => `${e.outlineEventId}(${e.missingFields.join("+")})`).join(", ")}`,
             fixInstruction: `在 workspaces/${workspaceId}/series/ch${chapterNumber}-outline-explicit.md 中为以下事件补全字段：${missingFieldEvents.map(e => `${e.outlineEventId} 缺 ${e.missingFields.join("、")}`).join("; ")}`,
             evidence: {
               outlineEventCount: parsed.events.length,
@@ -462,54 +461,18 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
             detail: { outlineEventCount: parsed.events.length, missingFieldEvents },
           };
         } else {
-          // P27新增：5c mandatoryElements 可验证性检查
-          // 字段齐全但 mandatoryElements 全是停用词/泛化术语（如"主角"、"场景"、"情绪"）
-          // → 无法形成可验证事件契约 → 阻断，不允许进入模型生成。
-          const unverifiableEvents: Array<{
-            outlineEventId: string;
-            title: string;
-            mandatoryElements: string[];
-          }> = [];
-          for (const ev of parsed.events) {
-            if (!hasVerifiableMandatoryElements(ev.mandatoryElements)) {
-              unverifiableEvents.push({
-                outlineEventId: ev.outlineEventId,
-                title: ev.title,
-                mandatoryElements: ev.mandatoryElements,
-              });
-            }
-          }
-          if (unverifiableEvents.length > 0) {
-            blockingItems.push({
-              check: "explicit_outline_contract_error",
-              reason: `显式章纲事件 mandatoryElements 无法形成可验证项（全是停用词/泛化术语）：${unverifiableEvents.map(e => `${e.outlineEventId}(${e.mandatoryElements.length === 0 ? "空" : JSON.stringify(e.mandatoryElements)})`).join(", ")}`,
-              fixInstruction: `在 workspaces/${workspaceId}/series/ch${chapterNumber}-outline-explicit.md 中为以下事件的 \`必须包含\` 字段补全可验证元素（动作/物件/台词/状态变化等具体名词，禁止只用"主角/场景/情绪/类型"等泛化词）：${unverifiableEvents.map(e => e.outlineEventId).join(", ")}`,
-              evidence: {
-                outlineEventCount: parsed.events.length,
-                unverifiableEvents,
-                outlinePath: `series/ch${chapterNumber}-outline-explicit.md`,
-              },
-            });
-            checks.explicitOutline = {
-              passed: false,
-              detail: { outlineEventCount: parsed.events.length, unverifiableEvents },
-            };
-          } else {
-            checks.explicitOutline = {
-              passed: true,
-              detail: {
-                outlineEventCount: parsed.events.length,
-                events: parsed.events.map(e => ({
-                  outlineEventId: e.outlineEventId,
-                  title: e.title,
-                  sceneType: e.sceneType,
-                  anchorCount: e.perceptualAnchors.length,
-                  characterCount: e.characters.length,
-                  mandatoryCount: e.mandatoryElements.length,
-                })),
-              },
-            };
-          }
+          checks.explicitOutline = {
+            passed: true,
+            detail: {
+              outlineEventCount: parsed.events.length,
+              events: parsed.events.map(e => ({
+                outlineEventId: e.outlineEventId,
+                title: e.title,
+                characterCount: e.characters.length,
+                hasSummary: Boolean(e.summary?.trim()),
+              })),
+            },
+          };
         }
       } else {
         // 章纲为空文件（hasNonEmptyOutline=false）→ 视为无显式契约，不阻断

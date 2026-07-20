@@ -98,22 +98,21 @@ export class StoryOutlinePlanner {
     try {
       this.assertSupportedMode(mode);
 
-      // P22: 旧模式 outline_to_chapter_outlines / full_pipeline 已下线。
-      // 显式章纲已废止，章节生成写前输入改为 ChapterSeed + 感知锚点。
-      // 保留类型联合仅为向后兼容已序列化输入；运行时硬拒绝，引导用户使用新链路。
+      // 旧批量拆章模式仍下线。作者可直接维护 ch{N}-outline-explicit.md，
+      // 其叙事内容契约由 ChapterSeedBuilder 读取；本工具不自动编造章节契约。
       if (mode === "outline_to_chapter_outlines" || mode === "full_pipeline") {
         return {
           status: "error",
           mode,
           message:
-            "模式 " + mode + " 已在 P22 下线：显式章纲已废止，不再生成 ch*-outline-explicit.md。" +
-            "章节生成写前输入改为 ChapterSeed + 感知锚点，唯一入口是 novel_generate_chapter。",
+            "模式 " + mode + " 已下线：系统不自动批量拆分章节契约。" +
+            "作者可维护 ch{N}-outline-explicit.md 的章节功能、事件内容、状态变化、伏笔、因果与章末目标；唯一正文入口仍是 novel_generate_chapter。",
           fullOutline: null,
           chapterOutlines: [],
           llmUsed: false,
           errorCode: "MODE_DEPRECATED",
           suggestion:
-            "如需生成高层背景参考文件，请使用 mode=idea_to_outline。" +
+            "如需生成整体剧情方向，请使用 mode=idea_to_outline。" +
             "如需生成章节正文，请调用 novel_generate_chapter。",
         };
       }

@@ -35,6 +35,7 @@ import {
 } from "../dist/v2/governance/chapter-proxy-approval-draft-checkpoint.js";
 import { loadProxyApprovalFeedback } from "../dist/v2/governance/chapter-proxy-approval-feedback-recorder.js";
 import { runFinalization } from "../dist-test/v2/governance/chapter-proxy-approval-finalization-entry.js";
+import { loadUserRevisionDelta } from "../dist-test/v2/core/user-revision-delta.js";
 
 // ============================================================================
 // helpers
@@ -217,6 +218,14 @@ test("entry accept_with_edits: 真实 FactGuard 通过 -> commitAndSave 写入 e
     assert.equal(records[0].editedTextDiff.same, false, "原稿与用户稿应不同");
     assert.equal(records[0].proxyJudgmentBias.userAcceptedSource, "user_edited");
     assert.equal(records[0].proxyJudgmentBias.aligned, false, "用户修改视为与代理推荐不一致");
+
+    assert.ok(result.revisionDeltaPath, "accept_with_edits 成功后应保存 revision delta");
+    assert.equal(existsSync(result.revisionDeltaPath), true);
+    const revisionDelta = loadUserRevisionDelta(result.revisionDeltaPath);
+    assert.equal(revisionDelta.selectedCandidateId, "cand-raw-001");
+    assert.equal(revisionDelta.systemSelectedText, makeDraftOptions().finalText);
+    assert.equal(revisionDelta.userFinalText, editedText);
+    assert.ok(revisionDelta.modifiedSpans.length > 0);
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

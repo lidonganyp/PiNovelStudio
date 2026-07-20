@@ -68,6 +68,12 @@ export interface ParsedExplicitOutlineEvent {
   emotionalArc?: string;
   /** `伏笔埋设` 字段原文，伏笔追踪器消费 */
   foreshadowing?: string;
+  /** `人物动机` 字段拆分后的作者声明，不推断未写明的心理活动 */
+  characterMotivations?: string[];
+  /** `因果关系` / `因果链` 字段拆分后的作者声明 */
+  causalRelations?: string[];
+  /** `章末目标` / `章末落点`，事件内声明时保留 */
+  endingTarget?: string;
   /** `字数目标` 字段原文（如 "500-700"），事件级字数预算 */
   wordCountTarget?: string;
   /** `禁止` / `禁止包含` 字段拆分后的禁令清单（覆盖验收负向校验） */
@@ -328,6 +334,13 @@ export function parseExplicitOutline(outline: string): ParsedExplicitOutline {
     const conflictLevelRaw = extractOutlineField(section, "冲突等级");
     const emotionalArcRaw = extractOutlineField(section, "情绪弧");
     const foreshadowingRaw = extractOutlineField(section, "伏笔埋设");
+    const characterMotivationsRaw = extractOutlineField(section, "人物动机");
+    const causalRelationsRaw =
+      extractOutlineField(section, "因果关系") ||
+      extractOutlineField(section, "因果链");
+    const endingTargetRaw =
+      extractOutlineField(section, "章末目标") ||
+      extractOutlineField(section, "章末落点");
     const wordCountTargetRaw = extractOutlineField(section, "字数目标");
     const forbiddenRaw =
       extractOutlineField(section, "禁止包含") ||
@@ -373,6 +386,9 @@ export function parseExplicitOutline(outline: string): ParsedExplicitOutline {
       conflictLevel,
       emotionalArc: emotionalArcRaw || undefined,
       foreshadowing: foreshadowingRaw || undefined,
+      characterMotivations: characterMotivationsRaw ? splitFieldItems(characterMotivationsRaw) : undefined,
+      causalRelations: causalRelationsRaw ? splitFieldItems(causalRelationsRaw) : undefined,
+      endingTarget: endingTargetRaw || undefined,
       wordCountTarget: wordCountTargetRaw || undefined,
       forbiddenElements: forbiddenRaw ? splitFieldItems(forbiddenRaw) : undefined,
       location: locationRaw || undefined,

@@ -14,9 +14,16 @@ export function toTypeBoxSchema(raw: any): TSchema {
   }
 
   const props: Record<string, TSchema> = {};
+  const stringSchema = (value: any): TSchema => {
+    const options = value.description ? { description: value.description } : {};
+    if (Array.isArray(value.enum) && value.enum.every((item: unknown) => typeof item === "string")) {
+      return Type.String({ ...options, enum: [...value.enum] });
+    }
+    return Type.String(options);
+  };
   for (const [key, val] of Object.entries(raw.properties as Record<string, any>)) {
     if (val.type === "string") {
-      props[key] = Type.Optional(Type.String(val.description ? { description: val.description } : {}));
+      props[key] = Type.Optional(stringSchema(val));
     } else if (val.type === "number") {
       props[key] = Type.Optional(Type.Number(val.description ? { description: val.description } : {}));
     } else if (val.type === "boolean") {
@@ -33,7 +40,7 @@ export function toTypeBoxSchema(raw: any): TSchema {
     }
     const desc = (raw.properties[key] as any)?.description;
     if ((raw.properties[key] as any)?.type === "string") {
-      props[key] = Type.String(desc ? { description: desc } : {});
+      props[key] = stringSchema(raw.properties[key]);
     } else if ((raw.properties[key] as any)?.type === "number") {
       props[key] = Type.Number(desc ? { description: desc } : {});
     } else if ((raw.properties[key] as any)?.type === "boolean") {

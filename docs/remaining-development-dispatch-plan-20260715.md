@@ -12,6 +12,12 @@
 
 ## 0. 2026-07-17 当前状态与唯一下一任务
 
+> **2026-07-17 路由状态补充**：`MODEL-ROUTING-CLAUDE46-1A/1B/1D` 已完成 `COMPLETE_L0`（`85242c5` / `d3cc205`）；`MODEL-ROUTING-CLAUDE46-1C` 的 RED 测试已存在但当前为 `7 tests / 2 pass / 5 fail`，因此它是当前唯一明确的 `READY_LOCAL` 工程任务。`1E` 真实 canary 仍为 `REQUIRES_AUTH`。跨会话摘要见 `docs/project-memory.md`。
+
+> **语料清理补充**：7.75GB `corpus/` 已在 `aae05a9` 删除，生产路径零依赖；离线蒸馏只允许使用外部语料输入，不得把原始全文重新作为仓库内置资产描述。
+
+> **P0 清理收口补充**：基线 `cd15cd2` 删除 `progression-profiles.ts`、`micro-section-repair-planner.ts`、`outline-readiness-checker.ts`、`dialogue-deficit-feedback.ts` 后，保留消费者仍直接 import 对应模块。最初复验 clean 状态构建失败；随后工作树以未跟踪文件恢复 4 个模块，完整 `npm run build` 通过。当前第一优先 LOCAL 任务仍是 `DEAD-SOURCE-CLEANUP-IMPORT-FIX`：明确保留并纳入版本控制，或完成消费者解耦后真正删除；不得留下 clean checkout 缺文件的状态。收口后再推进 `MODEL-ROUTING-CLAUDE46-1C`。
+
 本节覆盖下方 2026-07-15 波次中的陈旧“待执行/最后阶段”措辞；下方历史任务卡继续保留作审计记录，不再单独决定当前派工。
 
 ### 0.1 已确认完成
@@ -49,18 +55,18 @@
 
 ### 0.2 当前唯一下一任务
 
-**所有 LOCAL 任务均已完成 `COMPLETE_L0`，无 `READY_LOCAL` 任务可执行。**
+**当前先处理 `DEAD-SOURCE-CLEANUP-IMPORT-FIX` P0 构建阻断；随后处理 `MODEL-ROUTING-CLAUDE46-1C READY_LOCAL_RED`。**
 
-`FACT-GUARD-QUOTE-EXEMPTION-PROD-TRIGGER-1`、`LANGUAGE-RISK-EQUIVALENCE-MIGRATION-1` 与 `DEAD-SOURCE/LEGACY-TEST-CLEANUP-CONTINUATION` 均已于 2026-07-17 完成 `COMPLETE_L0`：三个任务实际状态都是"实现与测试已在 baseline `a5fbdb7` 中、生产路径触发证据已完整确认、文档纠正收口"，无新代码变更。§0.4 优先级列表中剩余的 `EVOLUTION-RELEASE-GOVERNANCE-G7` 真实 `gpt5.6-sol` 章节代理审批、`CLEAN-LONGFORM-WINDOW-5` ch3-ch6、`RECOVERY-6` 重建 ch3 冻结 raw 证据均为 `REQUIRES_AUTH`，需独立任务卡、frontier、预算和用户明确授权后才可真实运行，当前不启动。**当前无 LOCAL 任务可派工，等待用户对 §0.4 中 `REQUIRES_AUTH` 任务的授权决定。**
+`FACT-GUARD-QUOTE-EXEMPTION-PROD-TRIGGER-1` 与 `LANGUAGE-RISK-EQUIVALENCE-MIGRATION-1` 已完成 `COMPLETE_L0`。`DEAD-SOURCE/LEGACY-TEST-CLEANUP-CONTINUATION` 的最新提交 `cd15cd2` 尚未闭环：当前依靠未跟踪恢复文件通过三构建，必须将恢复文件纳入版本控制或完成消费者解耦。之后再推进 `MODEL-ROUTING-CLAUDE46-1C`。§0.4 中真实代理审批、长窗口与 Recovery-6 继续保持 `REQUIRES_AUTH`，当前不启动。
 
 | 字段 | 当前约束 |
 |---|---|
-| status | `READY_LOCAL` 任务队列已空；剩余任务均为 `REQUIRES_AUTH`，等待用户授权。 |
-| objective | 无 LOCAL 任务可执行；如需推进 `REQUIRES_AUTH` 任务，须由用户出具新独立任务卡、frontier、预算与授权。 |
-| scope | 不调用真实模型、不生成章节正文、不修改统一编排器主流程；stash 处置（drop / keep）由用户决定。 |
-| acceptance | 不适用（无 LOCAL 任务）。 |
+| status | `DEAD-SOURCE-CLEANUP-IMPORT-FIX = P0 READY_LOCAL`；其后 `MODEL-ROUTING-CLAUDE46-1C = READY_LOCAL_RED`。 |
+| objective | 先恢复 prod/eval/test 三构建，再完成 Doubao span 驱动中文校准候选。 |
+| scope | 仅本地代码、mock/stub/fixture 与离线测试；不调用真实模型、不生成章节正文；stash 处置由用户决定。 |
+| acceptance | clean checkout 可完成三构建且无依赖未跟踪文件；随后 1C 满足有 span 才走 Doubao、无 span 零调用、span 外改写与风险退化被拒。 |
 | negative verification | 不得在用户未授权前启动 `REQUIRES_AUTH` 任务；不得擅自 drop stash；不得宣称质量正收益或生产晋级。 |
-| reporting | 本节为 LOCAL 任务队列收敛点；后续 `REQUIRES_AUTH` 任务由独立任务卡承载。 |
+| reporting | 1C 完成前不得宣称 `1A-1D COMPLETE_L0`；后续 `REQUIRES_AUTH` 任务由独立任务卡承载。 |
 
 ### 0.3 已发现但暂停的本地工作簇
 
@@ -69,9 +75,11 @@
 
 ### 0.4 后续优先级
 
-1. `EVOLUTION-RELEASE-GOVERNANCE-G7` 真实 `gpt5.6-sol` 章节代理审批（`REQUIRES_AUTH`，需独立预算与授权卡）；其余 G7 本地切片（schema/registry/runner/P0/checkpoint/Review Surface/定稿/反馈/健康/触发时机/生产入口消费链收口）均已完成 `COMPLETE_L0`。Canon/Character/Promise 状态派生（当前仅注入空 `StagedStateUpdate` 派生 pattern entries）留待后续切片。
-2. 从 clean ch2 frontier 规划 `CLEAN-LONGFORM-WINDOW-5` 的 ch3-ch6 独立授权卡（`REQUIRES_AUTH`，工作树已收敛，前置条件已满足）。
-3. `RECOVERY-6` 重建 ch3 冻结 raw 证据（`REQUIRES_AUTH`，待 ch4 三章验收后启动）。
+1. `DEAD-SOURCE-CLEANUP-IMPORT-FIX`：修复 `cd15cd2` 删除后的悬空 import，恢复三构建（P0 `READY_LOCAL`）。
+2. `MODEL-ROUTING-CLAUDE46-1C` Doubao span 驱动中文校准（`READY_LOCAL_RED`，不得调用真实模型）。
+3. `EVOLUTION-RELEASE-GOVERNANCE-G7` 真实 `gpt5.6-sol` 章节代理审批（`REQUIRES_AUTH`，需独立预算与授权卡）；Canon/Character/Promise 状态完整重新派生仍留待后续工程切片。
+4. 从 clean ch2 frontier 规划 `CLEAN-LONGFORM-WINDOW-5` 的 ch3-ch6 独立授权卡（`REQUIRES_AUTH`）。
+5. `RECOVERY-6` 重建 ch3 冻结 raw 证据（`REQUIRES_AUTH`，待 ch4 三章验收后启动）。
 
 ## 1. 先纠正原 AI 清单
 

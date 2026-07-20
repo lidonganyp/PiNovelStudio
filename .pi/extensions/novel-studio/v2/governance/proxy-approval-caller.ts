@@ -45,6 +45,7 @@ import {
   callOpenAIChatCompletions,
   validateJudgeEndpoint,
 } from "./chapter-proxy-approval-caller.js";
+import { localizeLlmMessages, localizeLlmText } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // 类型
@@ -92,15 +93,12 @@ export interface StubProxyApprovalCallerOptions {
   modelVersion?: string;
 }
 
-const REAL_PROXY_APPROVAL_SYSTEM_PROMPT = `You are an independent production-release reviewer.
-Compare the anonymous A/B evidence package without inferring implementation identity.
-The user message identifies which anonymous label is the release candidate under review.
-Return JSON only with: verdict, rationale, winningSpans, losingSpans, risks.
-verdict must be APPROVE_DEV only when the candidate is a clear overall win with no factual,
-state-consistency, provenance, or protocol veto. Use REJECT when the current baseline is clearly
-better, HOLD when evidence is insufficient, conflicting, tied, or order-sensitive, and QUARANTINE
-for contamination, identity leakage, or protocol violations. Span arrays must contain only span IDs
-present in the supplied package.`;
+const REAL_PROXY_APPROVAL_SYSTEM_PROMPT = `你是独立的生产发布复核员。
+比较匿名的甲乙证据包，不得推断实现身份。用户消息会说明哪个匿名标签是待审发布候选。
+只输出结构化数据，字段为：结论、理由、胜出片段、落败片段、风险。
+只有当候选整体明确胜出，且不存在事实、状态一致性、来源或协议否决时，结论才可为“批准开发”。
+当前基线明显更好时用“拒绝”；证据不足、冲突、平局或顺序敏感时用“暂缓”；
+存在污染、身份泄漏或协议违规时用“隔离”。片段数组只能包含证据包中已有的片段编号。`;
 
 export const REAL_PROXY_APPROVAL_PROMPT_HASH =
   "sha256:" + createHash("sha256").update(REAL_PROXY_APPROVAL_SYSTEM_PROMPT, "utf-8").digest("hex");
@@ -124,17 +122,25 @@ function parseRealProxyVerdictOutput(text: string): RealProxyVerdictOutput {
     throw new Error("gpt5.6-sol release proxy output must be a JSON object");
   }
   const obj = parsed as Record<string, unknown>;
-  if (typeof obj.verdict !== "string") {
+  const verdictValue = obj.verdict ?? obj["结论"];
+  if (typeof verdictValue !== "string") {
     throw new Error("gpt5.6-sol release proxy output is missing verdict");
   }
   const stringArray = (value: unknown): string[] =>
     Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  const localizedVerdicts: Record<string, RawVerdict> = {
+    批准开发: "APPROVE_DEV",
+    拒绝: "REJECT",
+    暂缓: "HOLD",
+    隔离: "QUARANTINE",
+  };
+  const rationaleValue = obj.rationale ?? obj["理由"];
   return {
-    verdict: normalizeVerdict(obj.verdict as RawVerdict),
-    rationale: typeof obj.rationale === "string" ? obj.rationale : "",
-    winningSpans: stringArray(obj.winningSpans),
-    losingSpans: stringArray(obj.losingSpans),
-    risks: stringArray(obj.risks),
+    verdict: normalizeVerdict(localizedVerdicts[verdictValue] ?? verdictValue as RawVerdict),
+    rationale: typeof rationaleValue === "string" ? rationaleValue : "",
+    winningSpans: stringArray(obj.winningSpans ?? obj["胜出片段"]),
+    losingSpans: stringArray(obj.losingSpans ?? obj["落败片段"]),
+    risks: stringArray(obj.risks ?? obj["风险"]),
   };
 }
 
@@ -166,23 +172,31 @@ export function createRealGpt56SolReleaseProxyApprovalCallerFromEnv(): ProxyAppr
         candidateLabel: "A" | "B",
         comparison: AnonymousApprovalPacket["forward"],
       ): Promise<{ output: RealProxyVerdictOutput; model: string }> => {
-        const response = await callOpenAIChatCompletions([
+        const response = await callOpenAIChatCompletions(localizeLlmMessages([
           { role: "system", content: REAL_PROXY_APPROVAL_SYSTEM_PROMPT },
           {
             role: "user",
-            content: JSON.stringify({
-              candidateLabel,
-              comparison,
-              rawBaseline: packet.rawBaseline,
-              fixedCase: packet.fixedCase,
-              fixedModel: packet.fixedModel,
-              fixedSeed: packet.fixedSeed,
-              factGuard: packet.factGuard,
-              stateConsistency: packet.stateConsistency,
-              costProfile: packet.costProfile,
-            }),
+            content: localizeLlmText(JSON.stringify({
+              待审候选标签: candidateLabel === "A" ? "甲" : "乙",
+              匿名比较: {
+                甲方正文: comparison.textA,
+                乙方正文: comparison.textB,
+                证据片段: comparison.spans.map((span) => ({
+                  片段编号: span.id,
+                  原文: span.text,
+                  所属候选: span.side === "A" ? "甲" : "乙",
+                })),
+              },
+              原始基线: packet.rawBaseline.text,
+              固定样例: packet.fixedCase,
+              固定模型: packet.fixedModel,
+              固定随机种子: packet.fixedSeed,
+              事实守卫: packet.factGuard,
+              状态一致性: packet.stateConsistency,
+              成本概况: packet.costProfile,
+            })),
           },
-        ], {
+        ]), {
           timeoutMs: opts.budget.timeoutMs,
           responseFormat: "json_object",
         });

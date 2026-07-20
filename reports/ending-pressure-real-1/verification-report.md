@@ -40,12 +40,12 @@
 
 | opportunityType | triggered | evidenceSpanCount | reason |
 |---|---|---|---|
-| chapter_end_pressure | false | 0 | 章末区域已含钩子信号，无需编辑 |
-| character_choice | true | 3 | 主角行动词密度 1.25/千字 < 1.5，行动稀疏 |
-| voice_and_naturalness | false | 0 | 感知侵蚀词 0 < 3，无需编辑 |
+| chapter_end_pressure | false | 0 | 章末区域已含钩子信号 |
+| character_choice | true | 3 | 主角行动词密度 1.25/千字 < 1.5 |
+| voice_and_naturalness | false | 0 | 感知词项 0 < 3 |
 | reader_payoff | false | 0 | 无开放承诺可评估 |
-| information_dramatization | false | 0 | 未检测到大段信息倾泻段落 |
-| ensemble_function | false | 0 | 相关角色 1 < 3，群像机会不足 |
+| information_dramatization | false | 0 | 未命中长说明段词项信号 |
+| ensemble_function | false | 0 | 相关角色 1 < 3 |
 
 #### EditorialHypothesis（手工构造 chapter_end_pressure）
 
@@ -109,12 +109,12 @@
 
 | opportunityType | triggered | evidenceSpanCount | reason |
 |---|---|---|---|
-| chapter_end_pressure | false | 0 | 章末区域已含钩子信号，无需编辑 |
-| character_choice | true | 3 | 主角行动词密度 0.91/千字 < 1.5，行动稀疏 |
-| voice_and_naturalness | false | 1 | 感知侵蚀词 1 < 3，无需编辑 |
+| chapter_end_pressure | false | 0 | 章末区域已含钩子信号 |
+| character_choice | true | 3 | 主角行动词密度 0.91/千字 < 1.5 |
+| voice_and_naturalness | false | 1 | 感知词项 1 < 3 |
 | reader_payoff | false | 0 | 无开放承诺可评估 |
-| information_dramatization | false | 0 | 未检测到大段信息倾泻段落 |
-| ensemble_function | false | 0 | 相关角色 1 < 3，群像机会不足 |
+| information_dramatization | false | 0 | 未命中长说明段词项信号 |
+| ensemble_function | false | 0 | 相关角色 1 < 3 |
 
 #### EditorialHypothesis（手工构造 chapter_end_pressure）
 
@@ -178,12 +178,12 @@
 
 | opportunityType | triggered | evidenceSpanCount | reason |
 |---|---|---|---|
-| chapter_end_pressure | false | 0 | 章末区域已含钩子信号，无需编辑 |
-| character_choice | true | 2 | 主角行动词密度 1.00/千字 < 1.5，行动稀疏 |
-| voice_and_naturalness | false | 0 | 感知侵蚀词 0 < 3，无需编辑 |
+| chapter_end_pressure | false | 0 | 章末区域已含钩子信号 |
+| character_choice | true | 2 | 主角行动词密度 1.00/千字 < 1.5 |
+| voice_and_naturalness | false | 0 | 感知词项 0 < 3 |
 | reader_payoff | false | 0 | 无开放承诺可评估 |
-| information_dramatization | false | 0 | 未检测到大段信息倾泻段落 |
-| ensemble_function | false | 0 | 相关角色 1 < 3，群像机会不足 |
+| information_dramatization | false | 0 | 未命中长说明段词项信号 |
+| ensemble_function | false | 0 | 相关角色 1 < 3 |
 
 #### EditorialHypothesis（手工构造 chapter_end_pressure）
 
@@ -247,12 +247,12 @@
 
 | opportunityType | triggered | evidenceSpanCount | reason |
 |---|---|---|---|
-| chapter_end_pressure | false | 0 | 章末区域已含钩子信号，无需编辑 |
-| character_choice | false | 8 | 主角行动词密度 3.04/千字 ≥ 1.5，无需编辑 |
-| voice_and_naturalness | false | 1 | 感知侵蚀词 1 < 3，无需编辑 |
+| chapter_end_pressure | false | 0 | 章末区域已含钩子信号 |
+| character_choice | false | 8 | 主角行动词密度 3.04/千字 ≥ 1.5 |
+| voice_and_naturalness | false | 1 | 感知词项 1 < 3 |
 | reader_payoff | false | 0 | 无开放承诺可评估 |
-| information_dramatization | false | 0 | 未检测到大段信息倾泻段落 |
-| ensemble_function | false | 0 | 相关角色 1 < 3，群像机会不足 |
+| information_dramatization | false | 0 | 未命中长说明段词项信号 |
+| ensemble_function | false | 0 | 相关角色 1 < 3 |
 
 #### EditorialHypothesis（手工构造 chapter_end_pressure）
 
@@ -316,12 +316,12 @@
 
 | opportunityType | triggered | evidenceSpanCount | reason |
 |---|---|---|---|
-| chapter_end_pressure | false | 0 | 章末区域已含钩子信号，无需编辑 |
-| character_choice | false | 11 | 主角行动词密度 1.69/千字 ≥ 1.5，无需编辑 |
-| voice_and_naturalness | false | 1 | 感知侵蚀词 1 < 3，无需编辑 |
+| chapter_end_pressure | false | 0 | 章末区域已含钩子信号 |
+| character_choice | false | 11 | 主角行动词密度 1.69/千字 ≥ 1.5 |
+| voice_and_naturalness | false | 1 | 感知词项 1 < 3 |
 | reader_payoff | false | 0 | 无开放承诺可评估 |
-| information_dramatization | false | 0 | 未检测到大段信息倾泻段落 |
-| ensemble_function | false | 0 | 相关角色 1 < 3，群像机会不足 |
+| information_dramatization | false | 0 | 未命中长说明段词项信号 |
+| ensemble_function | false | 0 | 相关角色 1 < 3 |
 
 #### EditorialHypothesis（手工构造 chapter_end_pressure）
 
@@ -401,7 +401,10 @@
 按 2026-07-19 核验结论，以下三点仍属 `REQUIRES_AUTH / Partial`，未通过完整验收：
 
 1. **仓库中无五章真实 evidence 输入文件**：当前没有符合 `EndingPressureSample` schema 的真实 Claude Opus 4.6 + gpt-5.6-sol evidence 落盘文件；本切片的 stub 候选用人工指定的章末锚点 + 手工追加钩子句，**不是真实模型生成证据**。
-2. **provenance 防伪不完整**：`validateRealProvenance` 当前只检查字符串/哈希格式，未核验 `tracePath` 存在、request ID 与 trace 对应、响应 hash 与落盘原始响应一致，因此目前仍可伪造。需在 REQUIRES_AUTH 切片补齐「trace 存在性 + request ID↔trace 对应 + 响应 hash↔落盘原始响应」三项绑定。
+2. **provenance 防伪：Layer A `COMPLETE_L0`，Layer B `REQUIRES_AUTH`**：
+    - **Layer A 已修复**（`v2/core/real-quality-acceptance.ts:validateRealProvenance`）：tracePath 存在性 + 路径穿越（含符号链接）+ JSON schema 完整性 + generator/judge model 与 trace.llmTimings 一致性。13/13 测试通过。
+    - **Layer B 待 REQUIRES_AUTH 切片**：requestId/responseHash 落盘 + 集合 membership 校验。
+    - **缺口原因**：`LLMTimingEntry`（`craft/quality-trace-recorder.ts:310-329`）当前不存储 `requestId` 和 `responseHash` 字段；修复需扩展 trace schema + 修改 `api/fallback-manager.ts` 3 个 emit 站点（约 line 553/742/920）+ 修改多个 provider 适配器。后续与真实 gpt-5.6-sol 调用验收合并切片。
 3. **文学净正收益证据缺失**：当前 5 章 stub 候选均 tie → SelectionPolicy raw 兜底，`candidateClearWins=0`；未产出 B4 vs B0 真实对比的净正收益证据。
 
 ### 后续 REQUIRES_AUTH 切片需要
@@ -416,7 +419,7 @@
 
 ---
 
-**生成时间**: 2026-07-19T01:20:56.980Z
+**生成时间**: 2026-07-20T17:46:59.990Z
 **脚本**: `scripts/ending-pressure-real-1/run-verification.mjs`
 **模式**: stub
-**Git HEAD（仅基准提交，不代表脏工作树快照）**: 75982e02f7bec61ce85f8a85345cbb88846de150
+**Git HEAD（仅基准提交，不代表脏工作树快照）**: e3fa509347cbe85bdee7f4f2a290f69a453b446f

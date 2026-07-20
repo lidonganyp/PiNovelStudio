@@ -2,7 +2,7 @@
 
 > 顶尖网文级小说章节生成系统
 >
-> **版本**: v2.0 | **更新日期**: 2026-07-17
+> **版本**: v2.0 | **更新日期**: 2026-07-20
 
 ## 项目概述
 
@@ -10,10 +10,10 @@ PiNovelStudio 是一个基于 PI (AI Coding Agent) 的**中文长篇小说章节
 
 ## 核心特性
 
-- **统一主链路生成内核**: `novel_generate_chapter` 唯一公开入口；raw 基线 → 机会驱动 editorial candidate（0-2 个）→ LLM pairwise judge 匿名 A/B → selection policy → span repair → 原子保存
+- **统一主链路生成内核**: `novel_generate_chapter` 唯一公开入口；raw 基线 → 机会驱动 editorial candidate（0-2 个）→ 匿名 pairwise judge 证据 → 人工对齐闸门 → selection policy → span repair → 原子保存
 - **6 个公开工具**: `novel_generate_chapter` / `novel_preflight_workspace` / `novel_workspace_manager` / `novel_plan_story_outline` / `novel_strategy_policy_view` / `novel_strategy_feedback`
 - **机会驱动候选**: 每章先生成 raw，仅当存在可引用正文 span 证明的编辑机会时才生成 0-2 个 editorial candidate；禁止固定多候选
-- **LLM pairwise judge 主导文学胜负**: 匿名 A/B、span 约束、可反向复判；机械 comparator 降为事实检查与退化 veto
+- **人工对齐优先的文学选择**: 匿名 A/B、span 约束和反向复判继续提供事实、结构与风险证据；当前 GPT/Gemini judge 均未通过自然人金标，自动文学选择关闭，候选不能覆盖 Gemini raw
 - **四类长期叙事状态**: CanonState / CharacterState / PromiseLedger / PatternMemory；状态只在最终正文选定后提交
 - **三 tsconfig 构建隔离**: `dist/`（生产入口）+ `dist-eval/`（NovelBench 评测）+ `dist-test/`（测试专用模块）；生产闭包零 legacy 依赖
 - **模型请求超时保护**: 所有模型 API 请求使用 bounded timeout，默认 300000ms，可通过 `PINOVEL_MODEL_REQUEST_TIMEOUT_MS` 覆盖
@@ -29,9 +29,11 @@ PI Agent（编排大脑）
     → PairwiseJudge (匿名 A/B, span 约束, 可反向复判)
     → SelectionPolicy → SpanRepair → FinalFactRecheck → FinalStateCommit → AtomicSave + Trace
 
-AI 路由策略（真相源: config/model-routing.json v4.19.0）:
-├── Claude Opus 4.6: raw 正文 + 普通 editorial candidate
-├── gpt-5.6-sol: opportunity/pairwise/reverse 异源 judge（通过 NOVELOS_JUDGE_* env 解析端点）
+AI 路由策略（真相源: config/model-routing.json v4.29.0）:
+├── Gemini 3.1 Pro: 默认 raw 正文 + 普通 editorial candidate，使用 Gemini 专用路由与 Prompt；fallback=[]
+├── Claude Opus 4.6: 显式 `writerModel=claude` 正文备选，并继续负责风格塑形、终审与角色节点；不作为静默 fallback
+├── 同模型 bounded best-of-3: 显式 `boundedBestOf3=true` 时由当前主写生成 raw + 最多 2 个场景解法候选；Gemini 4 次尝试中 2 次受控且均由 raw 胜出，默认关闭
+├── gpt-5.6-sol: opportunity/pairwise/reverse 异源 judge（advisory-only；人工对齐通过前不得自动替换 Gemini raw）
 ├── GPT 5.5: 结构化节点（类型路由/依赖检查/Anti-AI 检测等）
 ├── Doubao Seed 2.1 Pro: 受限 span 驱动中文校准候选（1C COMPLETE_L0）
 ├── GLM 5.2: 显式开发验证 / NovelBench lab route，生产默认禁用
@@ -100,7 +102,7 @@ PINOVEL_MODEL_REQUEST_TIMEOUT_MS=300000
 
 ## 开发路线图
 
-当前跨会话状态、已完成清理、授权边界和已知阻断见 [项目记忆](./docs/project-memory.md)。截至 2026-07-17，模型路由 `1A/1B/1C/1D` 已完成 L0（Claude 4.6 主写、Doubao span 驱动中文校准、gpt-5.6-sol 异源 judge、GLM 开发隔离）；真实 canary `1E` 需要用户授权。
+当前跨会话状态、已完成清理、授权边界和已知阻断见 [项目记忆](./docs/project-memory.md)。截至 2026-07-20，Gemini 3.1 Pro Preview 已成为默认主写并启用 `gemini_writer_v2`；Claude 4.6 为显式备选。AI 文学 judge 尚未通过自然人对齐，当前只提供诊断证据，不能自动覆盖 Gemini raw。
 
 ### Phase 1: 基础架构 ✅
 
@@ -195,9 +197,9 @@ Preflight: 本地预检（config/角色档案/ChapterSeed 可生长性，不调�
 
 - **raw 基线**: 模型原生生成文本，是内部基线与安全回退；编辑层失败或候选无明确胜出时交付 raw
 - **editorial candidate**: 机会驱动的编辑候选，必须有可引用正文 span 证明的编辑机会才生成
-- **PairwiseJudge**: LLM 匿名 A/B 裁判，决定文学胜负；机械 comparator 仅做事实检查与退化 veto
+- **PairwiseJudge**: LLM 匿名 A/B 裁判，提供逐维证据；未通过自然人对齐前不得决定生产文学胜负
 - **四类长期叙事状态**: CanonState（正典）/ CharacterState（角色）/ PromiseLedger（承诺账本）/ PatternMemory（模式记忆）
-- **ChapterSeed + 感知锚点**: 写前输入种子包，不是章纲蓝图；章纲是写后骨架总结
+- **ChapterSeed + 作者章节契约**: 写前提供整体方向、章节功能、前文状态、人物动机、伏笔、因果、硬事实与章末目标；不指定正文表达方式
 
 ## 文档
 

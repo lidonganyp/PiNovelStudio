@@ -158,9 +158,8 @@ function runDuplicateScan(text, knownNames = []) {
 
 test("FACT-GUARD-QUOTE-EXEMPTION-PROD-TRIGGER-1 RED: 冻结 ch3 raw 引号包裹注释+回忆 → QuoteExemption 命中，duplicate_scan 不 hard block", (t) => {
   if (!CH3_RAW) {
-    assert.fail(
-      `无法加载冻结 ch3 raw 文本，证据文件缺失。尝试路径：\n${candidatePaths.join("\n")}`,
-    );
+    t.skip(`${FROZEN_EVIDENCE_LOST_SKIP_REASON}；尝试路径：${candidatePaths.join(" | ")}`);
+    return;
   }
   // 冻结证据丢失检测：原始冻结 raw（4a2e...）已被覆写为不同 hash，永久丢失。
   // 用户授权 SKIP+文档+机制修复：已实现 HOLD-aware 不可变保护防止复发，

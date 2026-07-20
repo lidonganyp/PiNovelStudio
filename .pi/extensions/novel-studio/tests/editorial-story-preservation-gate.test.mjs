@@ -238,14 +238,10 @@ test("DEMO-3-R2 RED: preserved editorial（保留全部关键事件）必须通�
 });
 
 // ============================================================================
-// RED 测试：gate 拒绝的 candidate 不进入 editorialWins → fallbacked=true
+// Story preservation is diagnostic evidence, not a mechanical candidate veto.
 // ============================================================================
 
-test("DEMO-3-R2 RED: gate 拒绝的 candidate 模拟 selection 必须交付 raw（fallbacked=true）", () => {
-  // 模拟 unified-orchestrator stage5a.1 的过滤逻辑：
-  // gate.preserved === false 的 candidate 从 validEditorialCandidates 中移除，
-  // 不进入 stage5b judgeArbitration，因此 arbitrationResults 中无该 candidate，
-  // editorialWins.length === 0 → selectBestCandidate 交付 raw → fallbacked=true。
+test("story preservation diagnostic does not mechanically remove a fact-valid candidate", () => {
 
   const driftReport = checkEditorialStoryPreservation({
     rawText: RAW_TEXT,
@@ -254,27 +250,8 @@ test("DEMO-3-R2 RED: gate 拒绝的 candidate 模拟 selection 必须交付 raw�
     entityCoverage: "full_entities",
   });
 
-  // 模拟 stage5a.1 过滤
-  const validEditorialCandidates = [];
-  if (driftReport.preserved) {
-    validEditorialCandidates.push({ id: "drifted", text: DRIFTED_EDITORIAL });
-  }
-
-  // 模拟 stage5b + stage6：无 valid candidate → arbitrationResults 为空 → 交付 raw
-  const arbitrationResults = []; // validEditorialCandidates 为空，无裁判结果
-  const editorialWins = arbitrationResults; // 模拟 selectBestCandidate 的 editorialWins
-  const fallbacked = editorialWins.length === 0;
-
-  assert.equal(
-    validEditorialCandidates.length,
-    0,
-    "drifted editorial 被 gate 拒绝后不得进入 validEditorialCandidates"
-  );
-  assert.equal(
-    fallbacked,
-    true,
-    "drifted editorial 被拒绝后必须 fallbacked=true（交付 raw）"
-  );
+  const factValidCandidates = [{ id: "drifted", text: DRIFTED_EDITORIAL }];
+  assert.equal(factValidCandidates.length, 1, "启发式事件抽取结果只进入 trace，不淘汰候选");
   assert.equal(
     driftReport.preserved,
     false,

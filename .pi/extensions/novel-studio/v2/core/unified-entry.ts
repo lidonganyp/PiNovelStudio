@@ -60,6 +60,7 @@ import { createContextualStrategySelector } from "../learning/contextual-strateg
 import { createStrategyOutcomeRecorder } from "../learning/strategy-outcome-recorder.js";
 // Step 5：NovelOS agentic_raw 候选源（shadow 模式，PINOVEL_NOVELOS_SHADOW=1 时启用）
 import { createAgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-candidate-source.js";
+import { createBlockedRawRecovery } from "./blocked-raw-recovery.js";
 import {
   buildTrustedControlPlane,
   type CapabilityName,
@@ -71,6 +72,12 @@ import { compileContextSafety, createConstraintManifest } from "./context-safety
 // 在 ContextCompiler 之前执行；未审批 release / fingerprint 不匹配 / 无 active pointer 时 hard block。
 // PINOVEL_DEV_MODE=1 时 bypass（非生产开发模式）；evalMode 在上方已 bypass（不进入此处）。
 import { evaluateProductionReleaseGate } from "../governance/production-release-gate.js";
+import {
+  resolveWriterPromptProfile,
+  type WriterPromptProfile,
+} from "./model-prompt-adapter.js";
+import { loadPromptPatternLibrary } from "./prompt-pattern-library.js";
+import { compileOntologyContract } from "./ontology-contract-compiler.js";
 
 function loadOntologyLevels(workspaceId: string, projectRoot: string): string[] {
   try {
@@ -121,12 +128,37 @@ export interface UnifiedPipelineEvalInput {
   evalModelGenerate?: ModelGenerateFn;
   /** Eval 异构仲裁 modelGenerate（B4 judge 用）；不传则复用 evalModelGenerate */
   evalArbitratorModelGenerate?: ModelGenerateFn;
+  /** Eval 生成模型对应的提示词表达层；用于模型适配消融。 */
+  evalPromptProfile?: WriterPromptProfile;
   /**
    * Eval 已知角色名（DEMO-3-R2.4 新增）。
    * 传入 StoryPreservationGate 的 knownEntities，使 R2.2 门禁能在真实管线内执行。
    * 不传时为空数组（门禁返回 unverifiable）。
    */
   evalCharacterNames?: string[];
+}
+
+function validateQualityExperiment(
+  experiment: import("./types.js").QualityExperimentControl | undefined,
+  fullPipelinePreview: boolean,
+  sceneSolution: import("./scene-solution-search.js").SceneSolutionCard | null | undefined,
+): void {
+  if (!experiment) return;
+  if (!fullPipelinePreview) {
+    throw new Error("qualityExperiment requires fullPipelinePreview=true");
+  }
+  if (!["raw", "scene", "oracle_scene"].includes(experiment.arm)) {
+    throw new Error(`unsupported quality experiment arm: ${String(experiment.arm)}`);
+  }
+  if (!Number.isInteger(experiment.sampleIndex) || experiment.sampleIndex < 1 || experiment.sampleIndex > 3) {
+    throw new Error("quality experiment sampleIndex must be an integer between 1 and 3");
+  }
+  if (experiment.arm === "raw" && sceneSolution) {
+    throw new Error("raw quality experiment must not include sceneSolution");
+  }
+  if (experiment.arm !== "raw" && !sceneSolution) {
+    throw new Error(`${experiment.arm} quality experiment requires sceneSolution`);
+  }
 }
 
 // ============================================================================
@@ -152,14 +184,119 @@ export interface UnifiedPipelineEvalInput {
  */
 export function resolveModelTestRouteLock(
   modelTestRoute: string | undefined,
-): { generateRoute: string; judgeRoute: string } | null {
+): { generateRoute: string; judgeRoute: string; provider: string; model: string } | null {
   if (modelTestRoute === "glm") {
     return {
       generateRoute: "nb4_generate_glm",
       judgeRoute: "nb4_judge_glm",
+      provider: "glm",
+      model: "glm-5.2",
+    };
+  }
+  if (modelTestRoute === "doubao") {
+    return {
+      generateRoute: "nb4_generate_doubao",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "doubao",
+      model: "doubao-seed-2-1-pro-260628",
+    };
+  }
+  if (modelTestRoute === "gpt56") {
+    return {
+      generateRoute: "nb4_generate_gpt56",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "gpt",
+      model: "gpt-5.6-sol",
+    };
+  }
+  if (modelTestRoute === "claude48") {
+    return {
+      generateRoute: "nb4_generate_claude48",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "claude",
+      model: "claude-opus-4-8",
+    };
+  }
+  if (modelTestRoute === "fable5") {
+    return {
+      generateRoute: "nb4_generate_fable5",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "claude",
+      model: "claude-fable-5",
+    };
+  }
+  if (modelTestRoute === "grok45") {
+    return {
+      generateRoute: "nb4_generate_grok45",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "grok45",
+      model: "grok-4.5",
+    };
+  }
+  if (modelTestRoute === "gemini31") {
+    return {
+      generateRoute: "nb4_generate_gemini31",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "gemini31",
+      model: "gemini-3.1-pro-preview",
     };
   }
   return null;
+}
+
+export interface WriterModelRouteLock {
+  rawRoute: string;
+  amplifiedRoute: string;
+  judgeRoute: string;
+  provider: string;
+  model: string;
+  promptProfile: WriterPromptProfile;
+}
+
+/** Resolve the production writer without changing the heterogeneous GPT judge. */
+export function resolveWriterModelRouteLock(
+  writerModel: "claude" | "gemini31" | undefined,
+): WriterModelRouteLock | null {
+  if (writerModel === "claude") {
+    return {
+      rawRoute: "v2_rawstage2",
+      amplifiedRoute: "v2_amplified",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "claude",
+      model: "claude-opus-4-6",
+      promptProfile: "claude_writer_v1",
+    };
+  }
+  if (writerModel === "gemini31" || writerModel === undefined) {
+    return {
+      rawRoute: "v2_rawstage2_gemini31",
+      amplifiedRoute: "v2_amplified_gemini31",
+      judgeRoute: "v2_opportunity_judge",
+      provider: "gemini31",
+      model: "gemini-3.1-pro-preview",
+      promptProfile: "gemini_writer_v2",
+    };
+  }
+  return null;
+}
+
+/** Route only prose generation calls; calibration and judge routes retain their own providers. */
+export function wrapModelGenerateForWriterLock(
+  modelGenerate: ModelGenerateFn,
+  lock: WriterModelRouteLock | null,
+): ModelGenerateFn {
+  if (!lock) return modelGenerate;
+  return async (input: ModelGenerateInput) => {
+    const forcedRoute = input.route === "v2_rawstage2"
+      ? lock.rawRoute
+      : input.route === "v2_amplified"
+        ? lock.amplifiedRoute
+        : input.route;
+    if (forcedRoute === input.route) return modelGenerate(input);
+    input.requestedRoute = forcedRoute;
+    const output = await modelGenerate({ ...input, route: forcedRoute });
+    return { ...output, route: input.route, requestedRoute: forcedRoute };
+  };
 }
 
 /**
@@ -175,14 +312,14 @@ export function resolveModelTestRouteLock(
  *   也记录 requestedRoute/provider，至少记录锁定目标 provider=glm"）。
  * - 返回的 output.route 被改回原始 input.route（如 v2_rawstage2/v2_amplified），
  *   使 candidate.route（= output.route，由 editorial-candidate-generator 填入）
- *   与 final-selector 的语义映射保持不变，不破坏选择/trace/报告契约。
+ *   与 SelectionPolicy / JudgeArbitrator 的语义映射保持不变，不破坏选择/trace/报告契约。
  * - output.requestedRoute 设为 forcedRoute，由 orchestrate 的 wrapModelFn 透传到
  *   modelCallLog.requestedRoute（成功路径），提供"实际请求路由"证据（计划 §trace requestedRoute）。
  * - output.provider/model 由底层 fn 透传（stub 推导 / legacy 从 usedProvider/usedModel 读取）。
  *
  * 与 eval-pipeline-adapter.wrapModelGenerateWithRoute 的区别：
  * 后者不保留 output.route 语义（eval benchmark 不关心 candidate.route 契约）；
- * 本函数为生产路径设计，必须保留语义 route 以不破坏 final-selector。
+ * 本函数为生产路径设计，必须保留语义 route 以不破坏 SelectionPolicy 契约。
  */
 export function wrapModelGenerateLockedToRoute(
   modelGenerate: ModelGenerateFn,
@@ -241,7 +378,8 @@ export function wrapModelGenerateLockedToRoute(
  */
 export function buildStagedStateUpdate(
   seed: ChapterSeed,
-  chapterNumber: number
+  chapterNumber: number,
+  ontologyLevels: string[] = [],
 ): StagedStateUpdate {
   const sourceChapter = `ch${chapterNumber}`;
   const now = new Date().toISOString();
@@ -301,6 +439,38 @@ export function buildStagedStateUpdate(
       // participation 只记录本章是否实际出现；config.role 是静态元数据，
       // 不能仅因角色名命中就提交为本章关系/身份事实。
       value: "present",
+    });
+  }
+
+  // 3.1 CharacterState：只从显式不可逆变化中派生已注册境界更新。
+  const registeredRealms = compileOntologyContract(ontologyLevels).entries.flatMap((entry) => entry.terms);
+  const transitionPattern = /迈入|突破|晋升|进阶|升至|升到|达到|到达|踏入|进入/;
+  const stagedRealmCharacters = new Set<string>();
+  for (const change of seed.intent?.expectedIrreversibleChange ?? []) {
+    if (!transitionPattern.test(change)) continue;
+    const character = [...characters]
+      .sort((a, b) => b.name.length - a.name.length)
+      .find((candidate) => change.includes(candidate.name)
+        || (candidate.aliases ?? []).some((alias) => alias.length > 0 && change.includes(alias)));
+    if (!character || stagedRealmCharacters.has(character.name)) continue;
+    const realmTerm = registeredRealms
+      .sort((a, b) => b.length - a.length)
+      .find((term) => change.includes(term));
+    if (!realmTerm) continue;
+    const escapedRealm = realmTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const realmValue = change.match(new RegExp(`${escapedRealm}(?:境|期|阶|级)?(?:初期|中期|后期|巅峰)?`))?.[0];
+    if (!realmValue) continue;
+    stagedRealmCharacters.add(character.name);
+    additions.push({
+      kind: "character",
+      id: `character:${character.name}:realm`,
+      sourceChapter,
+      sourceRef: `seed:character:${character.name}:realm`,
+      confidence: 0.75,
+      lastUpdated: now,
+      characterId: character.name,
+      field: "realm",
+      value: realmValue,
     });
   }
 
@@ -690,24 +860,47 @@ export async function runUnifiedPipeline(
     chapterId,
     chapterNumber,
     projectRoot,
+    writerModel,
     modelTestRoute,
     previewOnly,
     fullPipelinePreview,
+    qualityExperiment,
+    boundedBestOf3,
     candidateTimeoutMs,
+    previewTotalTimeoutMs,
     evalMode,
     evalPrefix,
     evalIntent,
     evalContext,
     evalModelGenerate,
     evalArbitratorModelGenerate,
+    evalPromptProfile,
     evalCharacterNames,
+    sceneSolution,
+    craftGenes,
+    promptPatternIds,
   } = input;
+
+  const promptPatternResolution = loadPromptPatternLibrary(projectRoot, {
+    mode: evalMode === undefined ? "production" : "evaluation",
+    ...(evalMode !== undefined && promptPatternIds
+      ? { explicitPatternIds: promptPatternIds }
+      : {}),
+  });
 
   // ── FULL-PIPELINE-PREVIEW-1：归一化 previewOnly（已弃用）为 fullPipelinePreview ──
   // 旧 previewOnly 字段曾是"FactGuard 后直接返回 raw"的短路径；
   // 现归一化为完整链路只读预览（行为升级：执行完整 editorial/judge/select，但跳过所有副作用）。
   // 二者都为 true 时以 fullPipelinePreview 显式为准；都不为 true 时按正常生产链路。
   const effectiveFullPipelinePreview = Boolean(fullPipelinePreview || previewOnly);
+  validateQualityExperiment(qualityExperiment, effectiveFullPipelinePreview, sceneSolution);
+  if (writerModel && modelTestRoute) {
+    throw new Error("writerModel 与 modelTestRoute 不能同时设置；生产写作模型与实验路由必须显式分离");
+  }
+
+  if (input.recoverBlockedRaw && !writerModel) {
+    throw new Error("recoverBlockedRaw 要求显式 writerModel，以确保冻结 raw 与当前正文模型一致");
+  }
 
   // ── bounded 超时预算（与 v2-orchestrator 一致，仅当用户未显式设置时提升） ──
   const BOUNDED_TIMEOUT_DEFAULT_MS = 600000;
@@ -765,6 +958,10 @@ export async function runUnifiedPipeline(
       projectRoot,
       intent: evalIntent,
       context: evalContext,
+      sceneSolution,
+      craftGenes,
+      promptPatternResolution,
+      rawPromptProfile: evalPromptProfile,
       constitution: evalContext.constitution ?? null,
       characterNames: evalCharacterNames ?? [],
       modelGenerate: evalModelGenerate,
@@ -821,12 +1018,17 @@ export async function runUnifiedPipeline(
   }
 
   const useStub = process.env.V2_FORCE_STUB === "1";
-  const routeLock = resolveModelTestRouteLock(modelTestRoute);
-  const generationModelLock = routeLock
-    ? { route: routeLock.generateRoute, provider: "glm", model: "glm-5.2" }
+  const testRouteLock = resolveModelTestRouteLock(modelTestRoute);
+  const writerRouteLock = testRouteLock ? null : resolveWriterModelRouteLock(writerModel);
+  const generationModelLock = testRouteLock
+    ? { route: testRouteLock.generateRoute, provider: testRouteLock.provider, model: testRouteLock.model }
+    : writerRouteLock
+      ? { route: writerRouteLock.rawRoute, provider: writerRouteLock.provider, model: writerRouteLock.model }
     : { route: "runtime", provider: "runtime", model: "runtime" };
-  const judgeModelLock = routeLock
-    ? { route: routeLock.judgeRoute, provider: "glm", model: "glm-5.2" }
+  const judgeModelLock = testRouteLock
+    ? { route: testRouteLock.judgeRoute, provider: "gpt", model: "gpt-5.6-sol" }
+    : writerRouteLock
+      ? { route: writerRouteLock.judgeRoute, provider: "gpt", model: "gpt-5.6-sol" }
     : { route: "runtime", provider: "runtime", model: "runtime" };
   const controlPlane = buildTrustedControlPlane({
     taskId: `NOVEL-GENERATE:${workspaceId}:${chapterId}`,
@@ -842,7 +1044,7 @@ export async function runUnifiedPipeline(
     generationLock: generationModelLock,
     judgeLock: judgeModelLock,
     modelTransport: useStub ? "stub" : "network",
-    enforceModelLocks: routeLock !== null,
+    enforceModelLocks: testRouteLock !== null || writerRouteLock !== null,
   });
   const stateReadDecision = controlPlane.policy.authorize(
     "state.read",
@@ -916,6 +1118,16 @@ export async function runUnifiedPipeline(
     // INTENT-1：接线 pendingCosts（seed.currentPressure.pendingCosts），
     // 供 ChapterIntentBuilder 派生 choicesAndCosts / expectedIrreversibleChange。
     pendingCosts: seed.currentPressure?.pendingCosts ?? [],
+    choicesAndCosts: seed.intent?.choicesAndCosts ?? [],
+    expectedIrreversibleChange: seed.intent?.expectedIrreversibleChange ?? [],
+    causalEndPressure: seed.intent?.causalEndPressure ?? [],
+    authorChapterContract: seed.authorChapterContract,
+    overallPlotDirection: seed.highLevelDirection?.backgroundNotes ?? [],
+    previousState: [
+      seed.previousChapterContinuation?.lastEventSummary,
+      ...(seed.previousChapterContinuation?.openHooks ?? []),
+      ...(seed.previousChapterContinuation?.unresolvedTensions ?? []),
+    ].filter((value): value is string => Boolean(value?.trim())),
   };
 
   const intentBuilder = createChapterIntentBuilder();
@@ -950,12 +1162,24 @@ export async function runUnifiedPipeline(
   // 路由仍由 input.route 决定（v2_rawstage2/v2_amplified 走 Claude，v2_opportunity_judge/
   // v2_literary_judge 走 GPT），baseModelGenerate 仅按 input.route 调用 callWithFallback。
   const modelGenerate: ModelGenerateFn = baseModelGenerate;
-  const generationModelGenerate: ModelGenerateFn = routeLock
-    ? wrapModelGenerateLockedToRoute(baseModelGenerate, routeLock.generateRoute)
+  const generationModelGenerate: ModelGenerateFn = testRouteLock
+    ? wrapModelGenerateLockedToRoute(baseModelGenerate, testRouteLock.generateRoute)
+    : wrapModelGenerateForWriterLock(baseModelGenerate, writerRouteLock);
+  const judgeModelGenerate: ModelGenerateFn = testRouteLock
+    ? wrapModelGenerateLockedToRoute(baseModelGenerate, testRouteLock.judgeRoute)
     : baseModelGenerate;
-  const judgeModelGenerate: ModelGenerateFn = routeLock
-    ? wrapModelGenerateLockedToRoute(baseModelGenerate, routeLock.judgeRoute)
-    : baseModelGenerate;
+  const blockedRawRecovery = input.recoverBlockedRaw
+    ? createBlockedRawRecovery({
+        projectRoot,
+        workspaceId,
+        chapterId,
+        chapterNumber,
+        writerModel,
+        generationModelGenerate,
+      })
+    : null;
+  const effectiveGenerationModelGenerate = blockedRawRecovery?.generationModelGenerate
+    ?? generationModelGenerate;
 
   // ── 4. characterNames：从 seed 角色列表派生（CANON-IDENTITY-1: 含 aliases） ──
   const characterNames = (seed.characters ?? []).flatMap((c) => [c.name, ...(c.aliases ?? [])]);
@@ -988,7 +1212,8 @@ export async function runUnifiedPipeline(
       "narrative state staging denied",
     );
   }
-  const stagedStateUpdate = buildStagedStateUpdate(seed, chapterNumber);
+  const ontologyLevels = loadOntologyLevels(workspaceId, projectRoot);
+  const stagedStateUpdate = buildStagedStateUpdate(seed, chapterNumber, ontologyLevels);
   const policyStore = loadStrategyPolicyStore(workspaceId, projectRoot);
   const strategySelector = createContextualStrategySelector();
   const outcomeRecorder = createStrategyOutcomeRecorder();
@@ -1008,7 +1233,7 @@ export async function runUnifiedPipeline(
     context: contextSafety.workingContext,
     constitution: context.constitution ?? null,
     characterNames,
-    ontologyLevels: loadOntologyLevels(workspaceId, projectRoot),
+    ontologyLevels,
     modelGenerate,
     // REAL-QUALITY-1-PREFLIGHT：双轨路由锁定（modelTestRoute=glm 时）
     // - generationModelGenerate：raw + editorial candidate → nb4_generate_glm
@@ -1017,7 +1242,7 @@ export async function runUnifiedPipeline(
     // 路由由 input.route 决定（v2_rawstage2/v2_amplified→Claude，v2_opportunity_judge/
     // v2_literary_judge→GPT）。未锁定时不 wrap，但 track 分离仍让 trace 可证明异源。
     // 不传 arbitratorModelGenerate：编排器 fallback 到 judgeModelGenerate（仲裁也走 nb4_judge_glm）。
-    generationModelGenerate,
+    generationModelGenerate: effectiveGenerationModelGenerate,
     judgeModelGenerate,
     timeoutMs: candidateTimeoutMs,
     stagedStateUpdate,
@@ -1027,6 +1252,22 @@ export async function runUnifiedPipeline(
     agenticCandidateSource,
     controlPlane,
     contextSafety,
+    sceneSolution,
+    craftGenes,
+    promptPatternResolution: evalMode === undefined ? undefined : promptPatternResolution,
+    positiveGainPromptPatternResolution: evalMode === undefined ? promptPatternResolution : undefined,
+    positiveGainProductionEnabled: false,
+    positiveGainCandidateLimit: boundedBestOf3 ? 2 : 1,
+    // HUMAN-JUDGE-ALIGNMENT-GATE-2: both GPT and Gemini judges disagree with the
+    // current natural-human gold pair. Keep machine literary verdicts advisory.
+    allowAutomaticLiterarySelection: false,
+    rawPromptProfile: testRouteLock
+      ? resolveWriterPromptProfile({
+          route: testRouteLock.generateRoute,
+          provider: testRouteLock.provider,
+          model: testRouteLock.model,
+        })
+      : writerRouteLock?.promptProfile ?? "gemini_writer_v2",
     // REAL-QUALITY-1-PREFLIGHT：透传 seed 让 Thompson Sampling / judge 匿名 A/B
     // 可复现。未传时 orchestrator 内部 rng 回退到 Math.random（非确定性），
     // 仅已准入 active 策略参与 Thompson Sampling；candidate 不受随机阈值过滤。
@@ -1034,7 +1275,12 @@ export async function runUnifiedPipeline(
     seed: input.seed,
     previewOnly,
     fullPipelinePreview: effectiveFullPipelinePreview,
+    qualityExperiment,
+    previewTotalTimeoutMs,
   });
+  if (blockedRawRecovery) {
+    orchResult.stageResults.blockedRawRecovery = blockedRawRecovery.provenance;
+  }
 
   // ── 5.1 保存策略信誉库（P1-7：在线学习持久化 / A5：仅成功交付才落盘）──
   // 编排器在 Stage 7.1（最终事实复检 + 正文保存成功之后）才通过 outcomeRecorder

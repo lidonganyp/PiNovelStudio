@@ -12,7 +12,6 @@ import { APIFallbackManager } from "../api/fallback-manager.js";
 import { getTypeAwareAntiAIThreshold, getTypeProfile } from "./type-profile-manager.js";
 import { getLLMCache } from "../utils/llm-cache.js";
 import { getAgentModelConfig } from "../utils/config.js";
-import { buildHumanPurposeWritingRulesBlock } from "./human-purpose-writing-rules.js";
 import { ANTI_AI_PROMPT_RESOURCE_PATTERNS } from "./anti-ai-prompt-resources.js";
 import type { NovelType } from "./type-profile-types.js";
 
@@ -2691,15 +2690,6 @@ export function createAntiAIDetector(options?: {
   return new AntiAIDetector(options);
 }
 
-// 自动修复函数已提取到 anti-ai-auto-patch.ts（refactor，行为零变化）
-// re-export 保持向后兼容：现有消费者仍从 anti-ai-detector.js 导入这些符号
-export {
-  type AutoPatchResult,
-  autoPatchAIPatterns,
-  type IdiomStackingRepairResult,
-  repairIdiomStackingLocally,
-} from "./anti-ai-auto-patch.js";
-
 // ============================================================================
 // P1-3: 路由 LLM 增强检测
 // ============================================================================
@@ -2859,8 +2849,6 @@ export async function analyzeWithLLM(
 ### 12. 每句功能审计
 - 每句话必须命中：推进情节、埋伏笔、体现性格、制造冲突、承载情绪转折之一
 - 如果删除一句后信息和情绪都不损失，应判定为 AI 腔废句
-
-${buildHumanPurposeWritingRulesBlock({ includeProtagonistAgencyRules: true })}
 
 ## 输出格式
 请返回 JSON 格式的检测结果：

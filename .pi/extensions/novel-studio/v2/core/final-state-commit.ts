@@ -12,7 +12,7 @@
  * 路径：workspaces/{id}/narrative-state-store.json（迁移期独立文件，Phase 7 与 legacy 合并）
  */
 
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from "fs";
 import { join, dirname } from "path";
 import { createHash } from "node:crypto";
 import { compactNarrativeMemory, type MemoryCompactionReport } from "./memory-compactor.js";
@@ -290,6 +290,13 @@ export function validateSemanticSupport(
 
   if (entry.kind === "character") {
     const value = entry.value ?? "";
+    if (entry.field === "realm") {
+      const normalizedSentence = normalizeClaim(subjectSentence.excerpt);
+      const normalizedRealm = normalizeClaim(value);
+      return normalizedRealm.length > 0 && normalizedSentence.includes(normalizedRealm)
+        ? { supported: true, reason: "主体所在句覆盖境界状态值", evidenceSpan: subjectSentence }
+        : { supported: false, reason: `semantic-unsupported：realm="${value}" 缺少同句完整境界证据` };
+    }
     if (DEATH_TERMS.test(value)) {
       const evidence = findEvidenceInSentence(subjectSentence, DEATH_EVIDENCE);
       if (evidence) {
@@ -547,7 +554,7 @@ export function reanchorStagedStateToFinalText(
     }
     if (entry.kind === "character") {
       // B2：角色名在最终正文中定位 span
-      const span = findPromiseSpanInText(entry.characterId, finalText);
+      const span = findPromiseSpanInText(entry.field === "realm" ? entry.value : entry.characterId, finalText);
       // REAL-QUALITY-4A：语义支持校验（阻止"角色死亡""关系误分类"一类名称级误锚定）
       const semantic = validateSemanticSupport(entry, finalText, span);
       if (!semantic.supported) {
@@ -627,7 +634,9 @@ export function saveStateStore(
   const path = stateStorePath(workspaceId, projectRoot);
   mkdirSync(dirname(path), { recursive: true });
   const out: NarrativeStateStore = { ...store, updatedAt: new Date().toISOString() };
-  writeFileSync(path, JSON.stringify(out, null, 2), "utf-8");
+  const tmpPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(out, null, 2), "utf-8");
+  renameSync(tmpPath, path);
 }
 
 function emptyStore(workspaceId: string): NarrativeStateStore {

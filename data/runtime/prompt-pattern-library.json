@@ -1,0 +1,351 @@
+{
+  "schemaVersion": "1.0.0",
+  "updatedAt": "2026-07-19",
+  "patterns": [
+    {
+      "id": "scene_decision_evidence_cost_delta",
+      "status": "dormant",
+      "title": "场景决策链",
+      "guidance": "正文前先明确主角要验证什么、可观察什么、为何选择某个行动，以及行动将改变什么。",
+      "requiredMoves": [
+        "主角用行动验证一个不确定判断",
+        "验证结果影响当场选择",
+        "选择产生可追踪代价或风险",
+        "场景结束时至少一种叙事状态发生变化"
+      ],
+      "avoidPatterns": [
+        "用心跳冷汗等身体反应代替异常证据",
+        "主角只旁观或被动接收说明",
+        "行动结束后人物关系和风险完全复位"
+      ],
+      "sources": [
+        {
+          "sourceId": "experiment:validation-xinmo-15",
+          "url": "reports/novel-quality-ceiling-20260719/validation-xinmo-15/final-admission.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "experiment:xinmo-ch18-abc",
+          "url": "reports/novel-quality-ceiling-20260719/pilot-xinmo-ch18/verification-report.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "github:tianming-skill",
+          "url": "https://github.com/zy-zmc/tianming-skill/blob/main/SKILL.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_workflow",
+          "license": "CC-BY-NC-SA-4.0",
+          "evidenceConfidence": "medium"
+        }
+      ],
+      "admission": {
+        "sampleSize": 8,
+        "validatedWinRate": 0.875,
+        "reason": "C 相对 A 有收益，但低于场景搜索 B 且正文长度约为 raw 的 1.39 倍；对 B 无增量，保持休眠。"
+      }
+    },
+    {
+      "id": "information_ownership_and_unknowns",
+      "status": "dormant",
+      "title": "信息所有权与未知",
+      "guidance": "区分各角色知道、误判和仍不知道的信息，让新信息通过行动或冲突改变判断。",
+      "requiredMoves": [
+        "信息由可观察事件或有动机的角色释放",
+        "至少一个人物判断因新信息改变",
+        "保留尚无证据支持的未知"
+      ],
+      "avoidPatterns": [
+        "旁白替所有人物一次解释完整机制",
+        "角色无来源地知道别人的秘密",
+        "新信息出现但不影响任何选择"
+      ],
+      "sources": [
+        {
+          "sourceId": "experiment:validation-xinmo-15",
+          "url": "reports/novel-quality-ceiling-20260719/validation-xinmo-15/final-admission.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "github:chinese-novelist-skill",
+          "url": "https://github.com/PenglongHuang/chinese-novelist-skill/blob/master/SKILL.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_prompt",
+          "license": "not declared",
+          "evidenceConfidence": "medium"
+        },
+        {
+          "sourceId": "github:show-me-the-story",
+          "url": "https://github.com/Nigh/show-me-the-story/blob/main/README.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_workflow",
+          "license": "MIT",
+          "evidenceConfidence": "medium"
+        }
+      ],
+      "admission": {
+        "sampleSize": 8,
+        "validatedWinRate": 0.875,
+        "reason": "C 相对 A 有收益，但低于场景搜索 B 且正文长度约为 raw 的 1.39 倍；对 B 无增量，保持休眠。"
+      }
+    },
+    {
+      "id": "previous_ending_to_first_scene",
+      "status": "candidate",
+      "title": "前章结尾承接",
+      "guidance": "让首场景直接承接前章末仍在发生的事件、情绪或未完成选择，避免时间与压力无解释复位。",
+      "requiredMoves": [
+        "首场景回应前章末的具体悬置状态",
+        "说明发生过渡时只写必要因果",
+        "保留前章尚未结清的代价"
+      ],
+      "avoidPatterns": [
+        "新章开头无解释切换到无关日常",
+        "重复总结整段前章内容",
+        "把未解决压力当作已经消失"
+      ],
+      "sources": [
+        {
+          "sourceId": "github:show-me-the-story",
+          "url": "https://github.com/Nigh/show-me-the-story/blob/main/README.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_workflow",
+          "license": "MIT",
+          "evidenceConfidence": "medium"
+        },
+        {
+          "sourceId": "github:storymemory-studio",
+          "url": "https://github.com/Jackeyhate9/StoryMemory-Studio/blob/main/README.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_workflow",
+          "license": "MIT",
+          "evidenceConfidence": "medium"
+        }
+      ],
+      "admission": {
+        "sampleSize": 0,
+        "validatedWinRate": null,
+        "reason": "与现有 bridgeContext 方向一致，但新增表达尚未做独立 A/B，不重复激活。"
+      }
+    },
+    {
+      "id": "preserve_explanatory_gap",
+      "status": "dormant",
+      "title": "保留解释缺口",
+      "guidance": "异常证据可以推动决定，但只确认当前证据能支持的局部规则，保留可能出错的解释。",
+      "requiredMoves": [
+        "证据先于机制结论出现",
+        "人物用局部假设指导下一步行动",
+        "错误解释仍可能带来后果"
+      ],
+      "avoidPatterns": [
+        "异常出现后立即公布等级时限和完整机制",
+        "用世界观说明替代角色验证",
+        "所有人物同时接受同一解释"
+      ],
+      "sources": [
+        {
+          "sourceId": "experiment:validation-xinmo-15",
+          "url": "reports/novel-quality-ceiling-20260719/validation-xinmo-15/final-admission.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "experiment:xinmo-ch18-abc",
+          "url": "reports/novel-quality-ceiling-20260719/pilot-xinmo-ch18/result.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        }
+      ],
+      "admission": {
+        "sampleSize": 8,
+        "validatedWinRate": 0.875,
+        "reason": "C 相对 A 有收益，但低于场景搜索 B 且正文长度约为 raw 的 1.39 倍；对 B 无增量，保持休眠。"
+      }
+    },
+    {
+      "id": "dialogue_changes_relationship_or_decision",
+      "status": "candidate",
+      "title": "对白改变关系或决策",
+      "guidance": "对白承担试探、隐瞒、协商或施压，让说话方式体现关系，并改变下一步行动。",
+      "requiredMoves": [
+        "说话者有明确当场目的",
+        "另一方从语气或内容形成判断",
+        "对话结果改变行动或关系"
+      ],
+      "avoidPatterns": [
+        "所有角色用相同短问短答投递情报",
+        "对白结束后双方立场完全不变",
+        "人物直接说出本不愿公开的全部信息"
+      ],
+      "sources": [
+        {
+          "sourceId": "experiment:validation-xinmo-15",
+          "url": "reports/novel-quality-ceiling-20260719/validation-xinmo-15/final-admission.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "experiment:xinmo-ch18-abc",
+          "url": "reports/novel-quality-ceiling-20260719/pilot-xinmo-ch18/result.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "github:ai-novel-writing-app",
+          "url": "https://github.com/JamesFletty/ai-novel-writing-app/blob/main/ENHANCED_PROMPTING_GUIDE.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_prompt",
+          "license": "MIT",
+          "evidenceConfidence": "medium"
+        }
+      ],
+      "admission": {
+        "sampleSize": 1,
+        "validatedWinRate": null,
+        "reason": "单章 C 臂对白功能达到同档，但未对关系后果字段做独立消融。"
+      }
+    },
+    {
+      "id": "causal_ending_pressure",
+      "status": "dormant",
+      "title": "因果章末压力",
+      "guidance": "章末压力由本章证据和选择直接造成，并迫使人物面对下一步决定，而不是空降异常。",
+      "requiredMoves": [
+        "章末风险可追溯到本章行动",
+        "不行动也有明确代价",
+        "下一步选择对人物真实重要"
+      ],
+      "avoidPatterns": [
+        "用突然出现的黑影或声音代替因果结果",
+        "只用一句危险将至结束",
+        "章末钩子与本章主线无关"
+      ],
+      "sources": [
+        {
+          "sourceId": "experiment:validation-xinmo-15",
+          "url": "reports/novel-quality-ceiling-20260719/validation-xinmo-15/final-admission.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "experiment:xinmo-ch18-abc",
+          "url": "reports/novel-quality-ceiling-20260719/pilot-xinmo-ch18/result.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "github:chinese-novelist-skill",
+          "url": "https://github.com/PenglongHuang/chinese-novelist-skill/blob/master/SKILL.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_prompt",
+          "license": "not declared",
+          "evidenceConfidence": "medium"
+        }
+      ],
+      "admission": {
+        "sampleSize": 8,
+        "validatedWinRate": 0.875,
+        "reason": "C 相对 A 有收益，但低于场景搜索 B 且正文长度约为 raw 的 1.39 倍；对 B 无增量，保持休眠。"
+      }
+    },
+    {
+      "id": "generate_review_minimal_revision",
+      "status": "candidate",
+      "title": "生成审查与最小修订分离",
+      "guidance": "先生成完整正文，再依据具体证据做一致性审查；需要修订时只改动能解决问题的最小范围。",
+      "requiredMoves": [
+        "审查引用正文中的具体问题",
+        "修订保留未被问题影响的内容",
+        "修订后复查事实与连续性"
+      ],
+      "avoidPatterns": [
+        "用抽象低分触发整章重写",
+        "为满足风格指标改坏既定事实",
+        "无证据时强制润色"
+      ],
+      "sources": [
+        {
+          "sourceId": "github:show-me-the-story",
+          "url": "https://github.com/Nigh/show-me-the-story/blob/main/README.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_workflow",
+          "license": "MIT",
+          "evidenceConfidence": "medium"
+        },
+        {
+          "sourceId": "github:novel-writing-skill",
+          "url": "https://github.com/EchoAI-Design/novel-writing-skill/blob/main/SKILL.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_workflow",
+          "license": "not declared",
+          "evidenceConfidence": "medium"
+        }
+      ],
+      "admission": {
+        "sampleSize": 0,
+        "validatedWinRate": null,
+        "reason": "主要是已有统一主链路原则的外部交叉验证，不作为新增 prompt 默认项。"
+      }
+    },
+    {
+      "id": "bounded_search_for_high_value_chapters",
+      "status": "candidate",
+      "title": "高价值章节有限搜索",
+      "guidance": "高价值章节可先比较少量实质不同的场景解法，选择后再生成正文；无有效差异时回到普通生成。",
+      "requiredMoves": [
+        "候选解法在试探方式或代价上有实质差异",
+        "选择依据来自既定事实和开放承诺",
+        "搜索失败时保留普通生成路径"
+      ],
+      "avoidPatterns": [
+        "固定为所有章节生成多个正文候选",
+        "候选只替换措辞而不改变场景决策",
+        "搜索失败后拼接不兼容方案"
+      ],
+      "sources": [
+        {
+          "sourceId": "experiment:validation-xinmo-15-ab",
+          "url": "reports/novel-quality-ceiling-20260719/validation-xinmo-15/final-admission-ab.json",
+          "accessedAt": "2026-07-19",
+          "sourceType": "experiment_report",
+          "license": "project internal evaluation artifact",
+          "evidenceConfidence": "high"
+        },
+        {
+          "sourceId": "github:ai-novel-writing-app",
+          "url": "https://github.com/JamesFletty/ai-novel-writing-app/blob/main/ENHANCED_PROMPTING_GUIDE.md",
+          "accessedAt": "2026-07-19",
+          "sourceType": "repository_prompt",
+          "license": "MIT",
+          "evidenceConfidence": "medium"
+        }
+      ],
+      "admission": {
+        "sampleSize": 15,
+        "validatedWinRate": 0.6666666666666666,
+        "reason": "B 在 15 个验证 case 中相对 A 胜率 66.67%、八维均分 +0.558；已作为受保护候选源接入，元策略本身不注入正文。"
+      }
+    }
+  ]
+}

@@ -416,7 +416,7 @@ test("runRealProxyReview consumes a real card and performs bounded forward/rever
     assert.equal(result.artifact.reviewTransport, "network");
     assert.equal(result.artifact.reviewerModelVersion, "gpt-5.6-sol-test");
     assert.equal(requests.length, 2);
-    assert.match(requests[0].messages[0].content, /anonymous/i);
+    assert.match(requests[0].messages[0].content, /匿名/);
     assert.notEqual(requests[0].messages[1].content, requests[1].messages[1].content);
   } finally {
     globalThis.fetch = previousFetch;

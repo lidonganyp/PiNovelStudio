@@ -11,6 +11,9 @@
  * 来源：delete/V2质量放大器内核.md P1-P9（spec 已遗失：delete/ 目录 gitignored 未跟踪，SLIMDOWN 清理时丢失，不可恢复；设计原则已沉淀于 docs/top-tier-chinese-novel-system-development-plan.md）
  */
 
+import type { SceneSolutionCard } from "./scene-solution-search.js";
+import type { PortableCraftGene } from "./portable-craft-gene.js";
+
 // ============================================================================
 // P1 CompiledContext — 上下文编译器输出
 // ============================================================================
@@ -492,6 +495,8 @@ export interface V2Input {
   chapterId: string;
   chapterNumber: number;
   projectRoot: string;
+  /** Production-eligible prose writer. Undefined uses the configured Gemini default. */
+  writerModel?: "claude" | "gemini31";
   modelTestRoute?: string;
   /**
    * @deprecated 历史短路径开关，被 fullPipelinePreview 取代；入口 normalize 为 fullPipelinePreview。
@@ -503,8 +508,12 @@ export interface V2Input {
    * 与 previewOnly 短路不同——后者在 FactGuard 后直接返回 raw，跳过 editorial/judge/select。
    */
   fullPipelinePreview?: boolean;
+  /** Read-only ceiling sample isolated from production candidate expansion. */
+  qualityExperiment?: QualityExperimentControl;
+  /** @deprecated 固定场景多候选已退出生产主链路。 */
+  boundedBestOf3?: boolean;
   styleShaperRoute?: string;
-  /** Explicitly reuse a strictly verified raw_fact_guard Claude raw. */
+  /** Explicitly reuse a strictly verified raw_fact_guard raw from the selected writer model. */
   recoverBlockedRaw?: boolean;
   stopAfterV2Stage?: "rawStage2";
   onUpdate?: (event: unknown) => void;
@@ -518,6 +527,8 @@ export interface V2Input {
    * 超时，保证单候选调用不会无限等待。
    */
   candidateTimeoutMs?: number;
+  /** Total wall-clock model-call budget for fullPipelinePreview. */
+  previewTotalTimeoutMs?: number;
   /**
    * 随机种子（可选，用于 Thompson Sampling 策略过滤与 judge 匿名 A/B 随机化）。
    *
@@ -528,6 +539,17 @@ export interface V2Input {
    * 不影响模型调用本身（路由锁定由 modelTestRoute 控制）；只影响策略采样与匿名映射的随机性。
    */
   seed?: number;
+  /** SCENE-SOLUTION-SEARCH-1：评测/显式实验传入的写前方案卡。 */
+  sceneSolution?: SceneSolutionCard | null;
+  /** PORTABLE-CRAFT-GENE-1：显式实验臂使用的抽象叙事工艺，不含 reference 正文。 */
+  craftGenes?: PortableCraftGene[];
+  /** 受控评测可显式激活 candidate；生产模式忽略并只消费 active。 */
+  promptPatternIds?: string[];
+}
+
+export interface QualityExperimentControl {
+  arm: "raw" | "scene" | "oracle_scene";
+  sampleIndex: number;
 }
 
 export interface V2Output {

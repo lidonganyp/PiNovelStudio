@@ -37,6 +37,8 @@ import type {
   CompiledContext,
   WorldRuleFact,
 } from "../v2/core/types.js";
+import { resolveWriterPromptProfile } from "../v2/core/model-prompt-adapter.js";
+import type { WriterPromptProfile } from "../v2/core/model-prompt-adapter.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 类型定义
@@ -249,6 +251,8 @@ export async function runEvalLayer(
   timeoutMs?: number,
   /** DEMO-3-R2.4：已知角色名，传入 StoryPreservationGate 的 knownEntities */
   characterNames?: string[],
+  /** MODEL-PROMPT-ADAPTER-1：显式覆盖为 generic 或模型专用 profile，供消融实验。 */
+  promptProfile?: WriterPromptProfile,
 ): Promise<EvalLayerOutput> {
   const start = Date.now();
   const workspaceId = `eval-${genCase.caseId}`;
@@ -293,6 +297,7 @@ export async function runEvalLayer(
       evalContext: context,
       evalModelGenerate: wrappedModelGenerate,
       evalArbitratorModelGenerate: wrappedArbitratorModelGenerate,
+      evalPromptProfile: promptProfile ?? resolveWriterPromptProfile({ route: generateRoute }),
       // DEMO-3-R2.4：传入已知角色名，使 StoryPreservationGate 的 knownEntities 非空
       evalCharacterNames: characterNames,
       // seed 通过环境变量传递（orchestrate 不直接接受 seed 参数在 V2Input 中）

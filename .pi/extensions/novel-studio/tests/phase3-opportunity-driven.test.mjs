@@ -190,9 +190,11 @@ test("StrategyRegistry: getStrategy 按 strategyId 查询", () => {
   const s = registry.getStrategy("chapter_end_pressure_focus");
   assert.ok(s);
   assert.equal(s.opportunityType, "chapter_end_pressure");
-  assert.ok(s.focus.length > 0);
-  assert.ok(s.promptGuidance.length > 0);
-  assert.ok(s.inviolableGuardNote.length > 0);
+  assert.deepEqual(
+    Object.keys(s).sort(),
+    ["opportunityType", "strategyId"],
+    "策略只能提供审计标签，不能携带固定修法或正文指导",
+  );
 });
 
 test("StrategyRegistry: strategiesForOpportunity 返回对应类型策略", () => {
@@ -223,10 +225,6 @@ test("StrategyRegistry: 自定义策略注册后可查询", () => {
   registry.register({
     strategyId: "custom_test",
     opportunityType: "ensemble_function",
-    focus: "自定义焦点",
-    angle: "自定义角度",
-    promptGuidance: "自定义指导",
-    inviolableGuardNote: "自定义守卫",
   });
   const list = registry.strategiesForOpportunity("ensemble_function");
   assert.ok(list.length >= 2);
@@ -268,7 +266,7 @@ test("OpportunityJudge: 高质量 raw → 无机会返回 no-op", async () => {
   }
 });
 
-test("OpportunityJudge: 章末弱钩子 → chapter_end_pressure hypothesis 带 span", async () => {
+test("OpportunityJudge: 章末机械信号只写入诊断，不生成 hypothesis", async () => {
   const judge = createEditorialOpportunityJudge();
   // 结尾平淡无钩子（刻意避开 WEBNOVEL_HOOK_PATTERN 的所有命中词：
   // ？为什么 什么 谁 怎么 哪里 难道 发现 意识到 注意到 突然 决定 选择 转身 走向 原来 竟然 居然 不对 等）
@@ -287,21 +285,12 @@ test("OpportunityJudge: 章末弱钩子 → chapter_end_pressure hypothesis 带 
     constitution: null,
     characterNames: ["林川", "苏婉"],
   });
-  const endH = result.hypotheses.find((h) => h.opportunityType === "chapter_end_pressure");
-  if (endH) {
-    assert.ok(endH.evidenceSpans.length > 0, "章末压力 hypothesis 应带 span");
-    const span = endH.evidenceSpans[0];
-    assert.ok(span.start >= 0 && span.end <= raw.length && span.start < span.end, "span 越界");
-    // validateHypothesis 应通过
-    const v = validateHypothesis(endH, raw);
-    assert.ok(v.ok, `章末压力 hypothesis 应通过校验：${v.errors.join(";")}`);
-  }
-  // 章末信号应被触发
+  assert.deepEqual(result.hypotheses, []);
   const endSignal = result.scannedSignals.find((s) => s.opportunityType === "chapter_end_pressure");
   assert.ok(endSignal && endSignal.triggered, "章末压力信号应触发");
 });
 
-test("OpportunityJudge: 主角行动稀疏 → character_choice hypothesis 带 span", async () => {
+test("OpportunityJudge: 行动词密度信号只写入诊断，不生成 hypothesis", async () => {
   const judge = createEditorialOpportunityJudge();
   // 长文本但行动词极少
   const raw = [
@@ -319,15 +308,14 @@ test("OpportunityJudge: 主角行动稀疏 → character_choice hypothesis 带 s
     constitution: null,
     characterNames: ["林川", "苏婉"],
   });
-  const agencyH = result.hypotheses.find((h) => h.opportunityType === "character_choice");
-  if (agencyH) {
-    assert.ok(agencyH.evidenceSpans.length > 0);
-    const v = validateHypothesis(agencyH, raw);
-    assert.ok(v.ok, `character_choice hypothesis 应通过校验：${v.errors.join(";")}`);
-  }
+  assert.deepEqual(result.hypotheses, []);
+  assert.equal(
+    result.scannedSignals.find((s) => s.opportunityType === "character_choice")?.triggered,
+    true,
+  );
 });
 
-test("OpportunityJudge: 感知侵蚀过多 → voice_and_naturalness hypothesis 带 span", async () => {
+test("OpportunityJudge: 感知词信号只写入诊断，不生成 hypothesis", async () => {
   const judge = createEditorialOpportunityJudge();
   const raw = [
     "林川感到水下有东西。",
@@ -345,19 +333,14 @@ test("OpportunityJudge: 感知侵蚀过多 → voice_and_naturalness hypothesis 
     constitution: null,
     characterNames: ["林川", "苏婉"],
   });
-  const voiceH = result.hypotheses.find((h) => h.opportunityType === "voice_and_naturalness");
-  if (voiceH) {
-    assert.ok(voiceH.evidenceSpans.length > 0);
-    // 每个 span 必须真实存在于 raw
-    for (const s of voiceH.evidenceSpans) {
-      assert.ok(s.start >= 0 && s.end <= raw.length && s.start < s.end, "span 越界");
-    }
-    const v = validateHypothesis(voiceH, raw);
-    assert.ok(v.ok, `voice_and_naturalness hypothesis 应通过校验：${v.errors.join(";")}`);
-  }
+  assert.deepEqual(result.hypotheses, []);
+  assert.equal(
+    result.scannedSignals.find((s) => s.opportunityType === "voice_and_naturalness")?.triggered,
+    true,
+  );
 });
 
-test("OpportunityJudge: 信息倾泻 → information_dramatization hypothesis 带 span", async () => {
+test("OpportunityJudge: 段落长度信号只写入诊断，不生成 hypothesis", async () => {
   const judge = createEditorialOpportunityJudge();
   // 构造一段超长无对白无动作的说明段落
   const dump = "这片水域的历史可以追溯到百年之前，当地渔民世代相传关于水怪的传说，据说每逢月圆之夜便会有异象出现，青鱼嘴因为地形特殊水流湍急暗礁密布，曾经有许多船只在此沉没，据县志记载光绪年间曾有一次大规模的沉船事故，此后便常有目击报告，但均未被证实，科学界对此持保留态度，认为可能是水下暗流与光学折射共同作用的结果。";
@@ -374,14 +357,11 @@ test("OpportunityJudge: 信息倾泻 → information_dramatization hypothesis �
     constitution: null,
     characterNames: ["林川", "苏婉"],
   });
-  const infoH = result.hypotheses.find((h) => h.opportunityType === "information_dramatization");
-  if (infoH) {
-    assert.ok(infoH.evidenceSpans.length > 0);
-    const span = infoH.evidenceSpans[0];
-    assert.ok(span.start >= 0 && span.end <= raw.length && span.start < span.end, "span 越界");
-    const v = validateHypothesis(infoH, raw);
-    assert.ok(v.ok, `information_dramatization hypothesis 应通过校验：${v.errors.join(";")}`);
-  }
+  assert.deepEqual(result.hypotheses, []);
+  assert.ok(
+    result.scannedSignals.some((s) => s.opportunityType === "information_dramatization"),
+    "段落长度扫描结果应保留在诊断 trace 中",
+  );
 });
 
 test("OpportunityJudge: 所有返回的 hypothesis 都通过 validateHypothesis（无 span 不生成）", async () => {
@@ -402,6 +382,11 @@ test("OpportunityJudge: 所有返回的 hypothesis 都通过 validateHypothesis�
   for (const h of result.hypotheses) {
     const v = validateHypothesis(h, raw);
     assert.ok(v.ok, `hypothesis ${h.id} 应通过校验：${v.errors.join(";")}`);
+    assert.doesNotMatch(
+      h.expectedReaderGain,
+      /抛回|施加新压力|主动选择|不可逆后果|改写为|拆进|质疑\/泄密\/阻拦\/见证/,
+      "收益描述只能说明预期读者结果，不能规定模型采用哪种表达手段",
+    );
     // span 必须真实存在于 raw
     for (const s of h.evidenceSpans) {
       assert.ok(s.start >= 0 && s.end <= raw.length && s.start < s.end, `${h.id} span 越界`);
@@ -480,8 +465,6 @@ test("CandidateGenerator: 0 hypothesis → 空候选 + noOpReason", async () => 
 test("CandidateGenerator: 1 hypothesis → 1 候选，携带 hypothesisId + editorialStrategy + sourceCandidateId", async () => {
   const gen = createEditorialCandidateGenerator();
   const registry = createEditorialStrategyRegistry();
-  const judge = createEditorialOpportunityJudge();
-  // 用弱钩子 raw 触发一个 hypothesis（避开 WEBNOVEL_HOOK_PATTERN 命中词）
   const raw = [
     "林川推开舱门，冲进浑浊的水里。",
     "他抓住苏婉的手臂，把她往水面拉。",
@@ -490,15 +473,18 @@ test("CandidateGenerator: 1 hypothesis → 1 候选，携带 hypothesisId + edit
     "过了一会儿，他回到了岸上，换了干衣服，坐在床边休息。",
     "窗外的雨还在下，水面恢复了平静，他闭上眼睛，很快睡着了。",
   ].join("\n");
-  const judgeResult = await judge.judge({
-    rawText: raw,
-    intent: makeIntent(),
-    longTermState: null,
-    constitution: null,
-    characterNames: ["林川", "苏婉"],
-  });
-  const hypotheses = judgeResult.hypotheses;
-  assert.ok(hypotheses.length >= 1, "应至少识别 1 个 hypothesis");
+  const excerpt = "水面恢复了平静";
+  const start = raw.indexOf(excerpt);
+  const hypotheses = [{
+    id: "hypothesis:judge:chapter-end",
+    opportunityType: "chapter_end_pressure",
+    diagnosis: "章末因果牵引力不足",
+    evidenceSpans: [{ start, end: start + excerpt.length, excerpt }],
+    expectedReaderGain: "增强继续阅读意愿",
+    damageRisks: ["可能破坏既定章末事实"],
+    rewriteScope: "span_candidate",
+    confidence: 0.7,
+  }];
 
   const result = await gen.generate({
     rawText: raw,
@@ -749,8 +735,8 @@ test("CandidateGenerator: 候选 prompt 含 inviolableFacts 守卫（不改变�
   assert.match(capturedUser, /不可侵犯事实/);
   assert.match(capturedUser, /水下暗流不可消除/);
   assert.match(capturedUser, /林川会水/);
-  // 必须包含策略守卫说明
-  assert.match(capturedUser, /策略守卫/);
+  assert.doesNotMatch(capturedUser, /策略守卫|固定修法|必须改成/);
+  assert.match(capturedUser, /具体修订表达由你自行决定/);
 });
 
 test("CandidateGenerator: 空文本重试耗尽 → failure，不进入候选列表", async () => {
@@ -1037,7 +1023,7 @@ test("OpportunityJudge LLM 模式: span 强制 — excerpt 不在 raw 中 → �
   assert.equal(result.hypotheses[0].opportunityType, "chapter_end_pressure");
 });
 
-test("OpportunityJudge LLM 模式: LLM 抛异常 → 降级本地阈值（llmJudged=false）", async () => {
+test("OpportunityJudge LLM 模式: LLM 抛异常 → 本地信号只诊断并保留 raw", async () => {
   const judge = createEditorialOpportunityJudge();
   // 构造一个本地扫描器会触发的 raw（章末无钩子）
   const raw = [
@@ -1054,14 +1040,14 @@ test("OpportunityJudge LLM 模式: LLM 抛异常 → 降级本地阈值（llmJud
     characterNames: ["林川", "苏婉"],
     modelGenerate: makeOpportunityThrowingModel("LLM API timeout"),
   });
-  assert.equal(result.llmJudged, false, "LLM 异常应降级本地");
-  assert.ok(result.llmFallbackReason, "应有降级原因");
-  assert.match(result.llmFallbackReason, /降级/);
-  // 降级后本地扫描器仍可能识别章末弱钩子机会
+  assert.equal(result.llmJudged, false, "LLM 异常时不能伪装成文学判断成功");
+  assert.ok(result.llmFallbackReason, "应有失败原因");
+  assert.match(result.llmFallbackReason, /仅作诊断，保留 raw/);
+  assert.deepEqual(result.hypotheses, []);
   assert.ok(result.scannedSignals.length > 0, "本地扫描器应运行");
 });
 
-test("OpportunityJudge LLM 模式: LLM 返回非法 JSON → 降级本地阈值（llmJudged=false）", async () => {
+test("OpportunityJudge LLM 模式: LLM 返回非法 JSON → 本地信号只诊断并保留 raw", async () => {
   const judge = createEditorialOpportunityJudge();
   const raw = [
     "林川推开舱门，冲进浑浊的水里。",
@@ -1077,8 +1063,9 @@ test("OpportunityJudge LLM 模式: LLM 返回非法 JSON → 降级本地阈值�
     characterNames: ["林川", "苏婉"],
     modelGenerate: makeOpportunityGarbageModel(),
   });
-  assert.equal(result.llmJudged, false, "parse 失败应降级本地");
-  assert.ok(result.llmFallbackReason, "应有降级原因");
+  assert.equal(result.llmJudged, false, "parse 失败不能伪装成文学判断成功");
+  assert.ok(result.llmFallbackReason, "应有失败原因");
+  assert.deepEqual(result.hypotheses, []);
 });
 
 test("OpportunityJudge LLM 模式: LLM 判定无机会（空 opportunities + noOpReason）→ no-op（llmJudged=true）", async () => {
@@ -1111,10 +1098,11 @@ test("OpportunityJudge LLM 模式: 不传 modelGenerate → 纯本地模式（ll
     longTermState: null,
     constitution: null,
     characterNames: ["林川", "苏婉", "老周"],
-    // 不传 modelGenerate → 纯本地模式
+    // 不传 modelGenerate → 只保留本地诊断
   });
   assert.equal(result.llmJudged, false, "无 modelGenerate 应为本地模式");
   assert.equal(result.llmFallbackReason, undefined, "本地模式不应有 fallbackReason");
+  assert.deepEqual(result.hypotheses, [], "本地机械信号不能独立授权候选");
   assert.ok(result.scannedSignals.length > 0, "本地扫描器应运行");
 });
 

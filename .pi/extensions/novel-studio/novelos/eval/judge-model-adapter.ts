@@ -14,6 +14,8 @@
  */
 
 import { fetchWithTimeout } from "../../api/request-timeout.js";
+import { parseOpenAIStream } from "../../api/openai-stream.js";
+import { localizeLlmMessages } from "../../utils/llm-language-guard.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 类型定义
@@ -42,6 +44,8 @@ export interface JudgeCallOptions {
   schemaName?: string;
   temperature?: number;
   maxTokens?: number;
+  /** 显式启用 SSE，适用于网关对长耗时非流式请求容易返回 504 的场景。 */
+  stream?: boolean;
 }
 
 /** callJudgeModel 返回结果 */
@@ -279,14 +283,19 @@ export async function callJudgeModel(
   const url = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const timeoutMs = config.timeoutMs ?? 120_000;
   const startMs = Date.now();
+  const streamLongRequest = options?.stream === true || (
+    config.model === "gpt-5.6-sol"
+    && (options?.maxTokens ?? 4096) >= 8192
+  );
 
   // 构造请求体
   const requestBody: Record<string, unknown> = {
     model: config.model,
-    messages,
+    messages: localizeLlmMessages(messages),
     temperature: options?.temperature ?? 0.2,
     max_tokens: options?.maxTokens ?? 4096,
   };
+  if (streamLongRequest) requestBody.stream = true;
 
   // JSON schema 输出约束
   if (options?.responseFormat === "json_schema") {
@@ -334,7 +343,9 @@ export async function callJudgeModel(
     );
   }
 
-  const data = (await response.json()) as {
+  const data = (streamLongRequest && response.headers.get("content-type")?.includes("text/event-stream")
+    ? { model: config.model, ...await parseOpenAIStream(response, config.model) }
+    : await response.json()) as {
     model?: string;
     choices?: Array<{
       message?: { content?: string };

@@ -144,18 +144,19 @@ test("integration: 无可靠指纹时仅保留弱代理 trace，不与 Character
   assert.equal(result.stageResults.dialogueCraft.consumedByRawPrompt, false);
   assert.ok(!result.stageResults.chapterIntent.consumedFields.includes("dialogueCraft"));
   assert.ok(!capturedPrompt.includes("本章发言角色声音指纹"));
-  assert.ok(capturedPrompt.includes("本章相关角色状态提示"), "弱代理 prompt 由 CharacterVoiceContext 独占");
+  assert.ok(!capturedPrompt.includes("本章相关角色状态提示"), "角色声音弱代理只留 trace，不进入 raw prompt");
 });
 
-test("integration: 有可靠 sourceChapterRef 的指纹才进入 raw prompt", async () => {
+test("integration: 有可靠 sourceChapterRef 的指纹仍只进入 trace，不指挥 raw", async () => {
   const { result, capturedPrompt } = await runRawFailureWithDialogue({
     voiceFingerprints: [makeFingerprint("林川", "林川")],
   });
   assert.equal(result.status, "blocked");
-  assert.equal(result.stageResults.dialogueCraft.consumedByRawPrompt, true);
-  assert.ok(result.stageResults.chapterIntent.consumedFields.includes("dialogueCraft"));
-  assert.ok(capturedPrompt.includes("本章发言角色声音指纹"));
-  assert.ok(capturedPrompt.includes("chapters/ch12-accepted.md"));
+  assert.equal(result.stageResults.dialogueCraft.consumedByRawPrompt, false);
+  assert.ok(!result.stageResults.chapterIntent.consumedFields.includes("dialogueCraft"));
+  assert.ok(!capturedPrompt.includes("本章发言角色声音指纹"));
+  assert.ok(!capturedPrompt.includes("接受稿"));
+  assert.doesNotMatch(capturedPrompt, /[A-Za-z]/);
 });
 
 // ============================================================================
@@ -549,7 +550,8 @@ test("promptBlock 只含可靠指纹来源，弱代理不与 CharacterVoice 重�
   assert.ok(block, "应有 promptBlock");
   assert.ok(block.includes("林川"), "promptBlock 应含林川");
   assert.ok(!block.includes("苏婉"), "弱代理角色不应在 DialogueCraft prompt 重复注入");
-  assert.ok(block.includes("chapters/ch12-accepted.md"), "promptBlock 应含指纹来源");
+  assert.ok(block.includes("接受稿"), "promptBlock 应含中文化的指纹来源类型");
+  assert.doesNotMatch(block, /[A-Za-z]/, "promptBlock 不应把内部来源路径泄漏给模型");
   assert.ok(!block.includes("弱代理"), "弱代理说明只保留在 trace");
 });
 

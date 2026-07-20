@@ -22,7 +22,6 @@ import { createHash } from "crypto";
 import type {
   Candidate,
   CandidateKind,
-  CandidatePromptProfile,
   CompiledContext,
   EditorialPlan,
   EditorialVariantBrief,
@@ -33,7 +32,8 @@ import type {
   ModelGenerateFn,
   ModelGenerateInput,
 } from "../adapters/legacy-model-route-adapter.js";
-import { sceneContractContainsMechanicalMetric } from "./scene-contract-planner.js";
+import { auditPrompt } from "./prompt-constraint-audit.js";
+export { auditPrompt } from "./prompt-constraint-audit.js";
 
 // ============================================================================
 // Fewshot 加载器类型（P11 接入）
@@ -52,62 +52,6 @@ export type FewshotLoader = (sceneType: string) => StyleReference[];
 
 function noopFewshotLoader(): FewshotLoader {
   return () => [];
-}
-
-// ============================================================================
-// Prompt 审计正则
-// ============================================================================
-
-/** 对白比例控制指令 */
-const DIALOGUE_RATIO_PATTERN = /对白比例|对话比例|dialogue\s*ratio|比例必须.*?\d+\s*%|\d+\s*%\s*对白/i;
-
-/** 段落长度控制指令 */
-const PARAGRAPH_LENGTH_PATTERN = /每段.*?\d+\s*字|段落长度必须|每段.*?字数|段落必须.*?\d+|每段不少于\d+|每段不超过\d+/i;
-
-/** 控制型清单指令（必须按清单逐条写） */
-const CONTROL_CHECKLIST_PATTERN = /必须按清单|逐条写|按以下清单逐条|必须依次完成以下事件|必须覆盖以下事件清单/i;
-
-// ============================================================================
-// Prompt 审计函数
-// ============================================================================
-
-export function auditPrompt(systemPrompt: string, userPrompt: string): CandidatePromptProfile {
-  const fullPrompt = `${systemPrompt}\n${userPrompt}`;
-  const containsDialogueRatio = DIALOGUE_RATIO_PATTERN.test(fullPrompt);
-  const containsParagraphLengthConstraint = PARAGRAPH_LENGTH_PATTERN.test(fullPrompt);
-  const containsControlChecklist = CONTROL_CHECKLIST_PATTERN.test(fullPrompt);
-
-  // 机械指标污染（来自 SceneContract 字段）
-  const containsMechanicalMetric = sceneContractContainsMechanicalMetric(fullPrompt);
-
-  const isControl =
-    containsDialogueRatio ||
-    containsParagraphLengthConstraint ||
-    containsControlChecklist ||
-    containsMechanicalMetric;
-
-  return {
-    type: isControl ? "control" : "editorial",
-    tokensIn: estimateTokens(fullPrompt),
-    containsDialogueRatio,
-    containsParagraphLengthConstraint,
-    containsControlChecklist,
-    containsMechanicalMetric,
-    contractIds: extractContractIds(userPrompt),
-  };
-}
-
-function estimateTokens(text: string): number {
-  // 粗略估算：中文 1.5 字/token，英文 4 字符/token
-  const chineseChars = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
-  const otherChars = text.length - chineseChars;
-  return Math.ceil(chineseChars / 1.5 + otherChars / 4);
-}
-
-function extractContractIds(userPrompt: string): string[] {
-  // 从 prompt 中提取 scene:idx:type 形式的 contract id
-  const matches = userPrompt.match(/scene:\d+:[a-z]+/g) ?? [];
-  return Array.from(new Set(matches));
 }
 
 // ============================================================================

@@ -44,6 +44,7 @@ build/
 # 临时文件
 # =============================================================================
 .tmp/
+.pi/.tmp-*
 *.tmp
 *.log
 # 管线运行 marker（如 extract-done.marker，由 wait-and-report.mjs 仅写不读，运行时自动重建）
@@ -103,6 +104,7 @@ data/runtime/*
 !data/runtime/scenes-index.json
 !data/runtime/contrastive-rules-index.json
 !data/runtime/fewshot-index.json
+!data/runtime/prompt-pattern-library.json
 # P42 candidate 规则产物（candidate seed，待 replay 晋级到 validated-craft-rules.json）
 # 与 candidate-rules.json 同属"机制就绪、待样本晋级"的产物，需纳入版本控制
 !data/runtime/p42-candidate-collocation-rules.json
@@ -191,6 +193,7 @@ reports/*
 # =============================================================================
 # IDE 配置 (仅保留最小必要)
 # =============================================================================
+.claude/settings.local.json
 *.swp
 *.swo
 *~

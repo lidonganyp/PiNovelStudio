@@ -37,7 +37,11 @@ import type {
   ModelGenerateFn,
   ModelGenerateInput,
 } from "../adapters/legacy-model-route-adapter.js";
-import { buildJudgePrompt, parseJudgeVerdict } from "./judge-prompt-builder.js";
+import {
+  buildJudgePrompt,
+  parseJudgeVerdict,
+  restoreJudgeVerdictExcerpts,
+} from "./judge-prompt-builder.js";
 import {
   validateJudgeEvidence,
   type EvidenceValidationResult,
@@ -163,10 +167,15 @@ export class PairwiseLiteraryJudge {
     }
 
     // 5. 解析 verdict
-    const verdict = parseJudgeVerdict(llmText);
-    if (!verdict) {
+    const parsedVerdict = parseJudgeVerdict(llmText);
+    if (!parsedVerdict) {
       return this.degrade(mapping, "LLM 输出 parse 失败或字段缺失");
     }
+    const verdict = restoreJudgeVerdictExcerpts(
+      parsedVerdict,
+      candidateAText,
+      candidateBText,
+    );
 
     // 6. 证据校验
     const evidenceValidation = validateJudgeEvidence(

@@ -24,14 +24,7 @@
 import type { ChapterIntent } from "./chapter-intent-builder.js";
 import type { CharacterStateFact } from "./types.js";
 import type { VoiceFingerprintV2 } from "../../craft/voice-fingerprint.js";
-import {
-  parseDialogueLinesFromText,
-  checkRule1Increment,
-  checkRule2Attribution,
-  checkRule3ActionTagInfo,
-  type DialogueLine,
-  type DialogueCraftViolation,
-} from "../../craft/dialogue-craft-gate.js";
+import { localizeLlmText } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // 数据契约
@@ -197,7 +190,7 @@ const PROXY_NOTE =
 export function compileDialogueCraftContext(
   input: DialogueCraftCompileInput
 ): DialogueCraftCompileResult {
-  const { intent, voiceFingerprints, characterStates, rawText } = input;
+  const { intent, voiceFingerprints, characterStates } = input;
 
   // 1. 本章发言角色 = focusCharacterGoals.character ∪ relevantCharacters
   const focusChars = (intent.focusCharacterGoals ?? []).map((g) => g.character);
@@ -288,13 +281,9 @@ export function compileDialogueCraftContext(
   // 5. blindTestEligible
   const blindTestEligible = fingerprintCount >= BLIND_TEST_MIN_SPEAKERS;
 
-  // 6. 对白工艺诊断 advisory（仅当 rawText 提供时）
-  const dialogueCraftAdvisory = rawText
-    ? scanDialogueCraftAdvisory(rawText)
-    : [];
-
-  // 7. canTriggerEditorialOpportunity
-  const canTriggerEditorialOpportunity = dialogueCraftAdvisory.length > 0;
+  // 机械对白规则已退出生产；声音资料只保留为 trace evidence。
+  const dialogueCraftAdvisory: DialogueCraftAdvisoryItem[] = [];
+  const canTriggerEditorialOpportunity = false;
 
   // 8. 空状态处理：不得静默
   if (speakingCharacters.length === 0) {
@@ -378,81 +367,6 @@ function summarizeFingerprint(fp: VoiceFingerprintV2, name: string): string {
 }
 
 // ============================================================================
-// 辅助：对白工艺诊断 advisory + span 提取
-// ============================================================================
-
-/**
- * 从 rawText 中解析 DialogueLine[]，运行三规则，转换为带 span 的 advisory。
- */
-function scanDialogueCraftAdvisory(rawText: string): DialogueCraftAdvisoryItem[] {
-  const lines = parseDialogueLinesFromText(rawText);
-  if (lines.length === 0) return [];
-
-  const violations: DialogueCraftViolation[] = [
-    ...checkRule1Increment(lines),
-    ...checkRule2Attribution(lines),
-    ...checkRule3ActionTagInfo(lines),
-  ];
-
-  // 把每条 violation 的 lineIndex 映射到 rawText 中的 span
-  return violations.map((v) => {
-    const span = computeSpan(rawText, lines, v.lineIndex);
-    return {
-      rule: v.rule,
-      ruleName: v.ruleName,
-      severity: v.severity,
-      evidence: v.evidence,
-      lineIndex: v.lineIndex,
-      span,
-    };
-  });
-}
-
-/**
- * 根据 lineIndex 计算 violation 在 rawText 中的 span。
- * 策略：用 lines[lineIndex].rawLine 在 rawText 中查找首个出现位置；
- * 找不到时返回 lineIndex 行起始-结束（按 \n 切分定位）。
- */
-function computeSpan(
-  rawText: string,
-  lines: readonly DialogueLine[],
-  lineIndex: number
-): { start: number; end: number; excerpt?: string } {
-  if (lineIndex < 0 || lineIndex >= lines.length) {
-    return { start: 0, end: 0 };
-  }
-  const rawLine = lines[lineIndex].rawLine;
-  const idx = rawText.indexOf(rawLine);
-  if (idx >= 0) {
-    return {
-      start: idx,
-      end: idx + rawLine.length,
-      excerpt: rawLine.slice(0, 40),
-    };
-  }
-  // 退化：用 lineIndex 找第 N 行
-  const lineStarts: number[] = [];
-  let pos = 0;
-  for (let i = 0; i <= lineIndex && pos <= rawText.length; i++) {
-    lineStarts.push(pos);
-    const nextNewline = rawText.indexOf("\n", pos);
-    if (nextNewline === -1) {
-      pos = rawText.length;
-    } else {
-      pos = nextNewline + 1;
-    }
-  }
-  const start = lineStarts[lineIndex] ?? 0;
-  const nextNewline = rawText.indexOf("\n", start);
-  const end = nextNewline === -1 ? rawText.length : nextNewline;
-  return {
-    start,
-    end,
-    excerpt: rawText.slice(start, Math.min(end, start + 40)),
-  };
-}
-
-// ============================================================================
 // 辅助：空状态原因
 // ============================================================================
 
@@ -496,11 +410,11 @@ export function formatDialogueCraftPromptBlock(context: DialogueCraftContext): s
   }
 
   const lines: string[] = [];
-  lines.push("本章发言角色声音指纹（仅本章发言角色；advisory 非硬门；对白比例不作为 gate）：");
+  lines.push("本章发言角色声音指纹（仅本章发言角色；建议性诊断非硬门；对白比例不作为门禁）：");
 
   for (const sp of fingerprintCharacters) {
     const typeLabel = sp.fingerprintSourceType === "accepted_manuscript" ? "接受稿" : "样章";
-    lines.push(`- ${sp.name}【指纹·${typeLabel}：${sp.fingerprintSourceRef}】${sp.fingerprintSummary ?? ""}`);
+    lines.push(localizeLlmText(`- ${sp.name}【指纹·${typeLabel}：${sp.fingerprintSourceRef}】${sp.fingerprintSummary ?? ""}`));
   }
 
   lines.push(`盲测资格：${context.blindTestEligible ? "是" : "否"}（${fingerprintCharacters.length} 名发言者有指纹，需 ≥${BLIND_TEST_MIN_SPEAKERS} 名）`);
@@ -508,9 +422,9 @@ export function formatDialogueCraftPromptBlock(context: DialogueCraftContext): s
   if (context.dialogueCraftAdvisory.length > 0) {
     const critical = context.dialogueCraftAdvisory.filter((a) => a.severity === "critical").length;
     const warning = context.dialogueCraftAdvisory.filter((a) => a.severity === "warning").length;
-    lines.push(`对白工艺诊断：${context.dialogueCraftAdvisory.length} 处 advisory（${critical} critical, ${warning} warning）；可触发 editorial opportunity，但不直接覆盖 raw`);
+    lines.push(`对白工艺诊断：${context.dialogueCraftAdvisory.length} 处建议（${critical} 处严重，${warning} 处警告）；可触发编辑机会，但不直接覆盖原始稿`);
   } else {
-    lines.push("对白工艺诊断：无 advisory");
+    lines.push("对白工艺诊断：无建议");
   }
 
   return lines.join("\n");

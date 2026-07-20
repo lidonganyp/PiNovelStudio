@@ -60,27 +60,28 @@ describe("model routing runtime alignment", () => {
   test("chapter generation routes use the best-fit production model per stage", () => {
     const config = loadRoutingConfig();
 
-    // MODEL-ROUTING-CLAUDE46-1B: Claude Opus 4.6 全项目切换。
-    // narrator_primary / stage2_narrator / style_shaper 从 Doubao/Claude 4.8 切到 Claude 4.6。
-    // best_of_n_config.models 不再把 Doubao 声明为唯一正式正文模型。
-    assert.equal(config.model_strategy.narrator_primary, "claude-opus-4-6");
+    // GEMINI-DEFAULT-WRITER-1: Gemini 负责默认正文，Claude 继续负责风格/角色并可显式主写。
+    // best_of_n_config.models 是休眠候选目录，不代表自动双写。
+    assert.equal(config.model_strategy.narrator_primary, "gemini-3.1-pro-preview");
     assert.equal(config.model_strategy.narrator_backup, null);
     assert.equal(config.model_strategy.narrator_candidate, null);
     assert.equal(config.model_strategy.narrator_testing, "doubao-seed-2-1-pro-260628");
     assert.equal(config.model_strategy.chinese_naturalizer, "doubao-seed-2-1-pro-260628");
     assert.equal(config.model_strategy.style_shaper, "claude-opus-4-6");
     assert.deepEqual(config.best_of_n_config.models, [
+      "gemini-3.1-pro-preview",
       "claude-opus-4-6",
     ]);
 
-    assert.equal(config.stage_routing.stage2_narrator.provider, "claude");
-    assert.equal(config.stage_routing.stage2_narrator.model, "claude-opus-4-6");
+    assert.equal(config.stage_routing.stage2_narrator.provider, "gemini31");
+    assert.equal(config.stage_routing.stage2_narrator.model, "gemini-3.1-pro-preview");
     assert.equal(config.stage_routing.stage5_style_shaper.provider, "claude");
     assert.equal(config.stage_routing.stage5_style_shaper.model, "claude-opus-4-6");
     assert.equal(config.stage_routing.stage8_final_gate.provider, "claude");
     assert.equal(config.stage_routing.stage8_final_gate.model, "claude-opus-4-6");
-    assert.equal(config.agent_routing.narrator_primary.provider, "claude");
-    assert.equal(config.agent_routing.narrator_primary.model, "claude-opus-4-6");
+    assert.equal(config.agent_routing.narrator_primary.provider, "gemini31");
+    assert.equal(config.agent_routing.narrator_primary.model, "gemini-3.1-pro-preview");
+    assert.deepEqual(config.agent_routing.narrator_primary.fallback, []);
     assert.equal(config.agent_routing.narrator_backup, undefined);
     assert.equal(config.agent_routing.narrator_testing_claude.provider, "claude");
     assert.equal(config.agent_routing.narrator_testing_claude.model, "claude-opus-4-6");
@@ -172,9 +173,8 @@ describe("model routing runtime alignment", () => {
     assert.equal(config.providers.doubao.temperature.chinese_editor_judge, 0.3);
     assert.equal(config.providers.doubao.max_tokens.chinese_editor_judge, 4096);
 
-    // MODEL-ROUTING-CLAUDE46-1B: Stage 2 主写已切到 Claude Opus 4.6；Doubao 不再是正文主写。
-    // Doubao 降为受限中文校准器（1C v2_chinese_calibration span 驱动），fallback.doubao=[] 不变。
-    assert.equal(config.stage_routing.stage2_narrator.provider, "claude");
+    // GEMINI-DEFAULT-WRITER-1: Stage 2 默认主写为 Gemini；Doubao 仍仅作中文校准。
+    assert.equal(config.stage_routing.stage2_narrator.provider, "gemini31");
     assert.deepEqual(config.fallback.doubao, []);
 
     // chinese_editor_judge 不在 stage_routing（它是 agent_routing 副裁，不是阶段主路由）

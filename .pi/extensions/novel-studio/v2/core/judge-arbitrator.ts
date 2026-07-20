@@ -65,6 +65,8 @@ export interface ArbitratorInput {
   route?: string;
   /** 超时 ms */
   timeoutMs?: number;
+  /** Natural-human alignment gate. False keeps the left/raw baseline for human review. */
+  allowAutomaticLiterarySelection?: boolean;
 }
 
 export interface ArbitratorRoundRecord {
@@ -127,6 +129,7 @@ export class JudgeArbitrator {
       modelGenerate,
       arbitratorModelGenerate,
     } = input;
+    const allowAutomaticLiterarySelection = input.allowAutomaticLiterarySelection === true;
 
     // Step 4b：clear 胜出跳过复判显式化 + 可配置。默认 1=跳过（行为不变）；
     // PINOVEL_JUDGE_CLEAR_SKIP=0 时 clear 胜出也进入反向复判（A/B 评测用）。
@@ -147,7 +150,7 @@ export class JudgeArbitrator {
     const constitutionHash = constitution
       ? computeFinalTextHash(JSON.stringify(constitution))
       : "no-const";
-    const cacheKey = `${rawTextHash}:${editorialTextHash}:${intentHash}:${constitutionHash}:${input.seed ?? 0}:${input.route ?? "v2_literary_judge"}`;
+    const cacheKey = `${rawTextHash}:${editorialTextHash}:${intentHash}:${constitutionHash}:${input.seed ?? 0}:${input.route ?? "v2_literary_judge"}:${allowAutomaticLiterarySelection ? 1 : 0}`;
     const cached = this.cache.get(cacheKey);
     if (cached) return structuredClone(cached);
 
@@ -163,7 +166,20 @@ export class JudgeArbitrator {
       finalSelectedCandidateId: string | null;
       auditSummary: string;
     }): ArbitratorResult => {
-      const r = this.buildResult(params);
+      const gatedParams = !allowAutomaticLiterarySelection &&
+        params.finalSelectedCandidateId !== rawCandidate.id
+        ? {
+            ...params,
+            selection: {
+              selectedCandidateId: rawCandidate.id,
+              reason: "自然人人工对齐门未通过，AI 文学胜负仅作诊断，保留 raw",
+              needsReverseReview: false,
+            },
+            finalSelectedCandidateId: rawCandidate.id,
+            auditSummary: `${params.auditSummary}；人工对齐门未通过，候选仅供人工复核，保留 raw`,
+          }
+        : params;
+      const r = this.buildResult(gatedParams);
       this.cache.set(cacheKey, r);
       return r;
     };

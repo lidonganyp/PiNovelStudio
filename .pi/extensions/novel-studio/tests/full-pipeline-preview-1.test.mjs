@@ -79,6 +79,15 @@ function createMinimalWorkspace() {
     totalChapters: 50,
     chapterType: "standard",
     characters: [{ id: "p1", name: "李一凡", role: "protagonist" }],
+    chapterSeeds: {
+      default: {
+        choicesAndCosts: [
+          { choice: "公开使用新获得的能力", cost: "暴露自己已经卷入异常事件" },
+        ],
+        expectedIrreversibleChange: ["李一凡无法再回到毫不知情的普通生活"],
+        causalEndPressure: ["能力使用留下痕迹并引来新的追踪者"],
+      },
+    },
     createdAt: new Date().toISOString(),
   };
   writeFileSync(join(TEST_WORKSPACE, "config.json"), JSON.stringify(config, null, 2), "utf-8");

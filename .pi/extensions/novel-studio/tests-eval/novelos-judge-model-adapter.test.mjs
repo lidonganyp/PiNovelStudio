@@ -253,6 +253,62 @@ describe("NovelOS 裁判模型适配器（P1-2）", () => {
     assert.deepEqual(body.response_format.json_schema.schema, schema);
   });
 
+test("callJudgeModel 对 gpt-5.6-sol 的长裁判请求使用 SSE", async () => {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      fetchCalls.push({ url: String(url), init });
+      const payload = [
+        'data: {"model":"gpt-5.6-sol","choices":[{"delta":{"content":"{\\"winner\\":\\"A\\","}}]}',
+        'data: {"choices":[{"delta":{"content":"\\"reason\\":\\"证据更完整\\"}"},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n");
+      return new Response(payload, { headers: { "content-type": "text/event-stream" } });
+    };
+    const result = await callJudgeModel(
+      {
+        apiKey: "test-key",
+        baseUrl: "https://example.com/v1",
+        model: "gpt-5.6-sol",
+        timeoutMs: 5000,
+      },
+      [{ role: "user", content: "输出严格 JSON 裁决" }],
+      { maxTokens: 8192 },
+    );
+
+    assert.equal(result.text, '{"winner":"A","reason":"证据更完整"}');
+    const body = JSON.parse(fetchCalls[0].init.body);
+    assert.equal(body.stream, true);
+  });
+
+  test("callJudgeModel 可为 4096-token 严格裁判显式启用 SSE", async () => {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      fetchCalls.push({ url: String(url), init });
+      const payload = [
+        'data: {"model":"gpt-5.6-sol","choices":[{"delta":{"content":"{\\"winner\\":\\"tie\\"}"},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n");
+      return new Response(payload, { headers: { "content-type": "text/event-stream" } });
+    };
+    const result = await callJudgeModel(
+      {
+        apiKey: "test-key",
+        baseUrl: "https://example.com/v1",
+        model: "gpt-5.6-sol",
+        timeoutMs: 5000,
+      },
+      [{ role: "user", content: "严格裁判" }],
+      { maxTokens: 4096, stream: true },
+    );
+
+    assert.equal(result.text, '{"winner":"tie"}');
+    const body = JSON.parse(fetchCalls[0].init.body);
+    assert.equal(body.max_tokens, 4096);
+    assert.equal(body.stream, true);
+  });
+
   test("callJudgeModel JSON schema 缺 schema/schemaName 时抛错", async () => {
     const config = {
       apiKey: "test-key",

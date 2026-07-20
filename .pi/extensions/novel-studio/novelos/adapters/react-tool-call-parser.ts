@@ -21,6 +21,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { localizeLlmText } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // 类型
@@ -66,7 +67,32 @@ export interface ToolResultView {
 // ============================================================================
 
 /** 匹配 `<tool_call>...</tool_call>` 指令（容许内部空白） */
-const TOOL_CALL_PATTERN = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+const TOOL_CALL_PATTERN = /<(?:tool_call|工具调用)>\s*([\s\S]*?)\s*<\/(?:tool_call|工具调用)>/g;
+
+const CHINESE_TOOL_NAME_MAP: Record<string, string> = {
+  跨源叙事证据检索: "search_narrative_evidence",
+  章节原文片段检索: "search_chapter_span",
+  世界事实查询: "query_canon",
+  角色状态查询: "query_character_state",
+  时间线查询: "query_timeline",
+  角色知识边界查询: "query_character_knowledge_boundary",
+  承诺账本查询: "query_promise_ledger",
+  叙事模式记忆查询: "query_pattern_memory",
+  角色声音证据查询: "query_voice_evidence",
+};
+
+const CHINESE_PARAMETER_NAME_MAP: Record<string, string> = {
+  查询词: "query",
+  最大结果数: "maxResults",
+  最大章节数: "maxChapters",
+  章节号: "chapterNumber",
+  角色名: "characterName",
+  角色标识: "characterId",
+  类别: "category",
+  承诺标识: "promiseId",
+  模式类型: "patternType",
+  返回上限: "limit",
+};
 
 /**
  * 从模型文本输出解析 `<tool_call>` 指令。
@@ -137,12 +163,23 @@ function parseToolCallJson(rawJson: string, index: number): ParsedToolCallBlock 
     const obj = JSON.parse(rawJson) as unknown;
     if (obj && typeof obj === "object" && !Array.isArray(obj)) {
       const o = obj as Record<string, unknown>;
-      const name = typeof o.name === "string" ? o.name : "unknown";
+      const displayName = typeof o.name === "string"
+        ? o.name
+        : typeof o["工具"] === "string"
+          ? o["工具"]
+          : "unknown";
       const args =
         o.arguments && typeof o.arguments === "object" && !Array.isArray(o.arguments)
           ? (o.arguments as Record<string, unknown>)
+          : o["参数"] && typeof o["参数"] === "object" && !Array.isArray(o["参数"])
+            ? (o["参数"] as Record<string, unknown>)
           : {};
-      return { type: "toolCall", id, name, arguments: args };
+      return {
+        type: "toolCall",
+        id,
+        name: CHINESE_TOOL_NAME_MAP[displayName] ?? displayName,
+        arguments: translateArgumentNames(args),
+      };
     }
   } catch {
     // fall through to regex salvage
@@ -191,20 +228,45 @@ export function formatToolResultsForPrompt(toolResults: ToolResultView[]): strin
   const lines: string[] = ["已检索到的证据："];
 
   for (const result of toolResults) {
-    lines.push(`[工具 ${result.toolName} 结果]`);
+    lines.push(`[工具 ${toChineseToolName(result.toolName)} 结果]`);
     const textContent = result.content
       .filter((c) => c.type === "text" && typeof c.text === "string")
       .map((c) => c.text)
       .join("\n");
-    lines.push(textContent || "（无文本内容）");
+    lines.push(localizeLlmText(textContent || "（无文本内容）"));
 
-    const sourceRef = result.details?.sourceRef ?? "unknown";
-    const evidenceLevel = result.details?.evidenceLevel ?? "inferred";
-    lines.push(`(来源: ${sourceRef}, 等级: ${evidenceLevel})`);
+    const sourceRef = toChineseSourceRef(result.details?.sourceRef);
+    const evidenceLevel = toChineseEvidenceLevel(result.details?.evidenceLevel);
+    lines.push(`（来源：${sourceRef}，等级：${evidenceLevel}）`);
     lines.push("");
   }
 
   return lines.join("\n").trimEnd();
+}
+
+function translateArgumentNames(args: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(args).map(([key, value]) => [CHINESE_PARAMETER_NAME_MAP[key] ?? key, value]),
+  );
+}
+
+function toChineseToolName(name: string): string {
+  const entry = Object.entries(CHINESE_TOOL_NAME_MAP).find(([, internal]) => internal === name);
+  return entry?.[0] ?? "叙事证据工具";
+}
+
+function toChineseSourceRef(sourceRef: string | undefined): string {
+  if (!sourceRef) return "未知";
+  return /[A-Za-z]/.test(sourceRef) ? "已记录" : sourceRef;
+}
+
+function toChineseEvidenceLevel(level: string | undefined): string {
+  const map: Record<string, string> = {
+    confirmed: "已确认",
+    inferred: "推断",
+    uncertain: "不确定",
+  };
+  return level ? (map[level] ?? (/[A-Za-z]/.test(level) ? "已记录" : level)) : "推断";
 }
 
 // ============================================================================

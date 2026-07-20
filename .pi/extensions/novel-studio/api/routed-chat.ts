@@ -12,7 +12,9 @@ import {
   type ProviderProtocol,
   type ProviderRequestOptions,
 } from "../utils/config.js";
+import { localizeLlmMessages } from "../utils/llm-language-guard.js";
 import { fetchWithTimeout } from "./request-timeout.js";
+import { parseAnthropicResponse } from "./anthropic-stream.js";
 import { assertProviderAuthorized } from "./benchmark-cost-profile.js";
 
 export interface RoutedChatMessage {
@@ -84,6 +86,13 @@ type AnthropicMessage = {
   content: string;
 };
 
+function supportsSamplingParameters(provider: string, model: string): boolean {
+  if (provider.toLowerCase() === "claude") {
+    return false;
+  }
+  return !/^claude(?:[-_]|$)/i.test(model);
+}
+
 export class RoutedChatAPI {
   private readonly apiKey: string;
   private readonly config: RoutedChatConfig;
@@ -101,11 +110,12 @@ export class RoutedChatAPI {
       throw new Error(`API key is not configured for provider: ${this.config.provider}`);
     }
 
+    const localizedMessages = localizeLlmMessages(messages);
     if (this.config.protocol === "anthropic" || this.config.protocol === "claude") {
-      return this.chatAnthropic(messages, options);
+      return this.chatAnthropic(localizedMessages, options);
     }
 
-    return this.chatOpenAI(messages, options);
+    return this.chatOpenAI(localizedMessages, options);
   }
 
   async complete(
@@ -257,16 +267,15 @@ export class RoutedChatAPI {
       }));
 
     const model = options?.model || this.config.model;
-    // Claude Opus 4.8 等模型已弃用 temperature 参数，传参会触发 400 错误。
-    const supportsTemperature = !/opus-4/i.test(model);
     const request: Record<string, unknown> = {
       model,
       messages: anthropicMessages.length > 0
         ? anthropicMessages
         : [{ role: "user", content: "" }],
       max_tokens: options?.max_tokens ?? this.config.maxTokens,
+      stream: true,
     };
-    if (supportsTemperature) {
+    if (supportsSamplingParameters(this.config.provider, model)) {
       request.temperature = options?.temperature ?? this.config.temperature;
     }
     if (system) {
@@ -285,9 +294,11 @@ export class RoutedChatAPI {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": this.apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
+          ...(this.config.requestOptions?.auth === "bearer"
+            ? { Authorization: `Bearer ${this.apiKey}` }
+            : { "x-api-key": this.apiKey }),
         },
         body: JSON.stringify(request),
       },
@@ -301,13 +312,7 @@ export class RoutedChatAPI {
       );
     }
 
-    const data = (await response.json()) as {
-      id?: string;
-      model?: string;
-      content?: Array<{ type: string; text?: string }>;
-      stop_reason?: string;
-      usage?: Record<string, unknown>;
-    };
+    const data = await parseAnthropicResponse(response, this.config.model);
 
     return {
       id: data.id,

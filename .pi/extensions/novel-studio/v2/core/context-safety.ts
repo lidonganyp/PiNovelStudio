@@ -96,25 +96,49 @@ export function createConstraintManifest(input: {
   (input.context.longTermState?.canon ?? []).forEach((entry) =>
     add(`p0:canon:${entry.id}`, "P0", "canon", entry.fact, [entry.sourceChapter], { area: "context", field: "longTermState.canon", key: entry.id }));
 
-  input.context.characterStates.forEach((entry) =>
-    add(`p1:character:${entry.characterId}`, "P1", "character_state", `${entry.name}:${JSON.stringify(entry.state)}`, entry.sourceIds, { area: "context", field: "characterStates", key: entry.characterId }));
-  input.context.openLoops.forEach((entry) =>
-    add(`p1:loop:${entry.id}`, "P1", "open_loop", entry.description, entry.sourceIds, { area: "context", field: "openLoops", key: entry.id }));
-  (input.context.longTermState?.character ?? []).forEach((entry) =>
-    add(`p1:state-character:${entry.id}`, "P1", "long_term_character", `${entry.characterId}.${entry.field}=${entry.value}`, [entry.sourceChapter], { area: "context", field: "longTermState.character", key: entry.id }));
-  (input.context.longTermState?.promise ?? []).forEach((entry) =>
-    add(`p1:promise:${entry.id}`, "P1", "promise", `${entry.description}:${entry.status}`, [entry.sourceChapter], { area: "context", field: "longTermState.promise", key: entry.id }));
+  const relevantCharacters = new Set(input.intent.relevantCharacters ?? []);
+  const selectedPromiseIds = new Set((input.intent.selectedPromisesToAdvance ?? []).map((entry) => entry.promiseId));
+  const selectedForeshadowing = input.intent.foreshadowing ?? [];
+  const loopSelected = (id: string, description: string): boolean =>
+    selectedPromiseIds.has(id.replace(/^foreshadow:/u, "")) || selectedForeshadowing.some((entry) =>
+      entry.includes(id.replace(/^foreshadow:/u, "")) || entry.includes(description) || description.includes(entry));
 
-  add("p2:chapter-function", "P2", "chapter_intent", input.intent.chapterFunction, input.intent.sourceRefs, { area: "intent", field: "chapterFunction" });
-  const addIntentList = (field: string, values: string[]): void => {
-    values.forEach((content, index) => add(`p2:${field}:${index}`, "P2", "chapter_direction", content, input.intent.sourceRefs, { area: "intent", field, key: String(index) }));
+  input.context.characterStates.forEach((entry) => {
+    const priority: ConstraintPriority = relevantCharacters.has(entry.name) ? "P1" : "P3";
+    add(`${priority.toLowerCase()}:character:${entry.characterId}`, priority, "character_state", `${entry.name}:${JSON.stringify(entry.state)}`, entry.sourceIds, { area: "context", field: "characterStates", key: entry.characterId });
+  });
+  input.context.openLoops.forEach((entry) => {
+    const priority: ConstraintPriority = loopSelected(entry.id, entry.description) ? "P1" : "P3";
+    add(`${priority.toLowerCase()}:loop:${entry.id}`, priority, "open_loop", entry.description, entry.sourceIds, { area: "context", field: "openLoops", key: entry.id });
+  });
+  (input.context.longTermState?.character ?? []).forEach((entry) => {
+    const priority: ConstraintPriority = relevantCharacters.has(entry.characterId) ? "P1" : "P3";
+    add(`${priority.toLowerCase()}:state-character:${entry.id}`, priority, "long_term_character", `${entry.characterId}.${entry.field}=${entry.value}`, [entry.sourceChapter], { area: "context", field: "longTermState.character", key: entry.id });
+  });
+  (input.context.longTermState?.promise ?? []).forEach((entry) => {
+    const priority: ConstraintPriority = loopSelected(entry.promiseId, entry.description) ? "P1" : "P3";
+    add(`${priority.toLowerCase()}:promise:${entry.id}`, priority, "promise", `${entry.description}:${entry.status}`, [entry.sourceChapter], { area: "context", field: "longTermState.promise", key: entry.id });
+  });
+
+  add("p1:chapter-function", "P1", "chapter_intent", input.intent.chapterFunction, input.intent.sourceRefs, { area: "intent", field: "chapterFunction" });
+  const addIntentList = (field: string, values: string[], priority: ConstraintPriority = "P1"): void => {
+    values.forEach((content, index) => add(`${priority.toLowerCase()}:${field}:${index}`, priority, "chapter_direction", content, input.intent.sourceRefs, { area: "intent", field, key: String(index) }));
   };
-  addIntentList("readerExperience", input.intent.readerExperience);
-  addIntentList("currentPressure", input.intent.currentPressure);
-  addIntentList("concreteDelivery", input.intent.concreteDelivery ?? []);
-  addIntentList("resistance", input.intent.resistance ?? []);
-  addIntentList("expectedIrreversibleChange", input.intent.expectedIrreversibleChange ?? []);
-  addIntentList("causalEndPressure", input.intent.causalEndPressure ?? []);
+  addIntentList("overallPlotDirection", input.intent.overallPlotDirection ?? []);
+  addIntentList("previousState", input.intent.previousState ?? []);
+  addIntentList("characterMotivations", (input.intent.characterMotivations ?? []).map((entry) => `${entry.character}:${entry.motivation}`));
+  addIntentList("foreshadowing", input.intent.foreshadowing ?? []);
+  addIntentList("causalRelations", input.intent.causalRelations ?? []);
+  addIntentList("endingTarget", input.intent.endingTarget ?? []);
+  addIntentList("authorEventSummaries", input.intent.authorEventSummaries ?? []);
+  addIntentList("authorMustInclude", input.intent.authorMustInclude ?? []);
+  addIntentList("authorStateChanges", input.intent.authorStateChanges ?? []);
+  addIntentList("readerExperience", input.intent.readerExperience, "P2");
+  addIntentList("currentPressure", input.intent.currentPressure, "P2");
+  addIntentList("concreteDelivery", input.intent.concreteDelivery ?? [], "P2");
+  addIntentList("resistance", input.intent.resistance ?? [], "P3");
+  addIntentList("expectedIrreversibleChange", input.intent.expectedIrreversibleChange ?? [], "P3");
+  addIntentList("causalEndPressure", input.intent.causalEndPressure ?? [], "P2");
 
   input.context.facts.forEach((entry) => {
     const priority: ConstraintPriority = entry.kind === "candidate_experience" ? "P4" : "P3";
@@ -199,6 +223,15 @@ function buildWorkingInputs(intent: ChapterIntent, context: CompiledContext, ret
     intent: {
       ...intent,
       chapterFunction: keepField("chapterFunction") ? intent.chapterFunction : "",
+      overallPlotDirection: (intent.overallPlotDirection ?? []).filter((_, index) => keepField("overallPlotDirection", String(index))),
+      previousState: (intent.previousState ?? []).filter((_, index) => keepField("previousState", String(index))),
+      characterMotivations: (intent.characterMotivations ?? []).filter((_, index) => keepField("characterMotivations", String(index))),
+      foreshadowing: (intent.foreshadowing ?? []).filter((_, index) => keepField("foreshadowing", String(index))),
+      causalRelations: (intent.causalRelations ?? []).filter((_, index) => keepField("causalRelations", String(index))),
+      endingTarget: (intent.endingTarget ?? []).filter((_, index) => keepField("endingTarget", String(index))),
+      authorEventSummaries: (intent.authorEventSummaries ?? []).filter((_, index) => keepField("authorEventSummaries", String(index))),
+      authorMustInclude: (intent.authorMustInclude ?? []).filter((_, index) => keepField("authorMustInclude", String(index))),
+      authorStateChanges: (intent.authorStateChanges ?? []).filter((_, index) => keepField("authorStateChanges", String(index))),
       readerExperience: intent.readerExperience.filter((_, index) => keepField("readerExperience", String(index))),
       currentPressure: intent.currentPressure.filter((_, index) => keepField("currentPressure", String(index))),
       inviolableFacts: intent.inviolableFacts.filter((_, index) => keepField("inviolableFacts", String(index))),

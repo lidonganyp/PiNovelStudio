@@ -22,6 +22,15 @@ import type { NarrativeStateStore } from "./final-state-commit.js";
 
 export interface ChapterIntent {
   chapterFunction: string;
+  overallPlotDirection?: string[];
+  previousState?: string[];
+  characterMotivations?: Array<{ character: string; motivation: string }>;
+  foreshadowing?: string[];
+  causalRelations?: string[];
+  endingTarget?: string[];
+  authorEventSummaries?: string[];
+  authorMustInclude?: string[];
+  authorStateChanges?: string[];
   readerExperience: string[];
   currentPressure: string[];
   meaningfulChoices: string[];
@@ -101,6 +110,24 @@ export interface ChapterIntentInput {
   prevContinuationAvailable: boolean;
   /** INTENT-1：本章未结账的代价（来自 seed.currentPressure.pendingCosts），用于派生选择与代价/不可逆变化 */
   pendingCosts?: Array<{ action: string; cost: string; chapterIncurred?: number }>;
+  choicesAndCosts?: Array<{ choice: string; cost: string }>;
+  expectedIrreversibleChange?: string[];
+  causalEndPressure?: string[];
+  authorChapterContract?: {
+    available?: boolean;
+    chapterFunction?: string;
+    eventSummaries: string[];
+    mustInclude: string[];
+    stateChanges: string[];
+    foreshadowing: string[];
+    causalRelations: string[];
+    endingTarget?: string;
+    relevantCharacters: string[];
+    characterMotivations: Array<{ character: string; motivation: string }>;
+    sourceIds: string[];
+  };
+  overallPlotDirection?: string[];
+  previousState?: string[];
 }
 
 export interface ChapterIntentBuildResult {
@@ -122,12 +149,15 @@ export class ChapterIntentBuilder {
     const sourceRefs: string[] = ["chapter-seed"];
 
     // chapterFunction：优先 seed.intent.primary，否则从 constitution 推断
-    let chapterFunction = input.intentPrimary ?? "";
+    const authorContract = input.authorChapterContract;
+    let chapterFunction = authorContract?.chapterFunction ?? input.intentPrimary ?? "";
     if (!chapterFunction) {
       chapterFunction = constitution?.protagonistCoreConflict
         ? `推进核心冲突：${constitution.protagonistCoreConflict}`
         : "未指定本章功能";
       if (!input.intentPrimary) warnings.push("ChapterSeed.intent.primary 缺失，chapterFunction 降级");
+    } else if (authorContract?.chapterFunction) {
+      sourceRefs.push(...authorContract.sourceIds);
     } else {
       sourceRefs.push("chapter-seed:intent");
     }
@@ -185,10 +215,36 @@ export class ChapterIntentBuilder {
     const deceasedCharacters = input.characters.filter(
       (character) => character.role?.trim().toLowerCase() === "deceased"
     );
-    const relevantCharacters = input.characters
-      .filter((character) => character.role?.trim().toLowerCase() !== "deceased")
+    const activeCharacters = input.characters
+      .filter((character) => character.role?.trim().toLowerCase() !== "deceased");
+    const activeCharacterNames = new Set(activeCharacters.map((character) => character.name));
+    const authorRelevantCharacters = (authorContract?.relevantCharacters ?? [])
+      .filter((name) => activeCharacterNames.has(name));
+    const relevanceText = [
+      chapterFunction,
+      ...(input.overallPlotDirection ?? []),
+      ...(input.previousState ?? []),
+      ...input.currentPressureSummary,
+      ...input.openPromises.map((promise) => promise.description),
+      ...input.openArcs.flatMap((arc) => [arc.name, arc.coreQuestion ?? ""]),
+    ].join("\n");
+    const signalMatchedCharacters = activeCharacters
+      .filter((character) => relevanceText.includes(character.name))
       .map((character) => character.name);
-    if (relevantCharacters.length) sourceRefs.push("chapter-seed:characters");
+    const protagonistCharacters = activeCharacters
+      .filter((character) => /^(?:protagonist|main|主角)$/iu.test(character.role?.trim() ?? ""))
+      .map((character) => character.name);
+    const conservativeFallback = protagonistCharacters.length > 0
+      ? protagonistCharacters
+      : activeCharacters.slice(0, 1).map((character) => character.name);
+    const relevantCharacters = authorRelevantCharacters.length > 0
+      ? dedupe(authorRelevantCharacters)
+      : dedupe([...conservativeFallback, ...signalMatchedCharacters]);
+    if (authorRelevantCharacters.length > 0) {
+      sourceRefs.push(...(authorContract?.sourceIds ?? []));
+    } else if (relevantCharacters.length > 0) {
+      sourceRefs.push("chapter-seed:characters", "chapter-seed:relevance-signals");
+    }
     if (deceasedCharacters.length > 0) {
       warnings.push(
         `已从 active relevantCharacters 排除死亡角色：${deceasedCharacters.map((character) => character.name).join("、")}；历史事实仍由 immutable facts / characterStates 保留`
@@ -224,8 +280,15 @@ export class ChapterIntentBuilder {
     //    来源：seed.intent（primary/theme/targetEmotions）+ constitution.readerPromise
     //    选择性：只取本章 intent 派生的交付项，不灌入全域知识
     //    修复轮：fieldSourceRefs 动态追踪实际贡献来源，不笼统声称两源均参与。
-    const concreteDelivery: string[] = [];
+    const concreteDelivery: string[] = [
+      ...(authorContract?.eventSummaries ?? []),
+      ...(authorContract?.mustInclude ?? []),
+      ...(authorContract?.stateChanges ?? []),
+    ];
     const concreteDeliverySources: string[] = [];
+    if (concreteDelivery.length > 0) {
+      concreteDeliverySources.push(...(authorContract?.sourceIds ?? []));
+    }
     if (chapterFunction && chapterFunction !== "未指定本章功能") {
       concreteDelivery.push(`推进本章功能：${chapterFunction}`);
       // INTENT-HOLD-1 blocker 2：chapterFunction 来自 seed.intent.primary 或
@@ -294,7 +357,10 @@ export class ChapterIntentBuilder {
     //    修复轮：openArcs.coreQuestion 不能自动生成虚构代价"推进该弧线的代价（待正文落实）"。
     //    没有明确 cost 证据时不生成该条目，只记录 warning。
     const choicesAndCosts: Array<{ choice: string; cost: string }> = [];
-    if (input.pendingCosts?.length) {
+    if (input.choicesAndCosts?.length) {
+      choicesAndCosts.push(...input.choicesAndCosts);
+      fieldSourceRefs.choicesAndCosts = ["chapter-seed:intent.choicesAndCosts"];
+    } else if (input.pendingCosts?.length) {
       for (const pc of input.pendingCosts) {
         choicesAndCosts.push({ choice: pc.action, cost: pc.cost });
       }
@@ -308,8 +374,12 @@ export class ChapterIntentBuilder {
     //    修复轮：pendingCosts 无 irreversible 标志，pending cost 不自动等于"预期不可逆变化"。
     //    只有来源明确声明不可逆或现有结构能可靠证明时才生成；不追加"（不可逆）"制造新事实。
     //    当前 schema 无可靠不可逆证据 → 空 + warning，不记录 fieldSourceRefs。
-    const expectedIrreversibleChange: string[] = [];
-    warnings.push("expectedIrreversibleChange 为空：pendingCosts 无 irreversible 标志，不自动宣称为不可逆变化，不追加（不可逆）制造新事实");
+    const expectedIrreversibleChange = [...(input.expectedIrreversibleChange ?? [])];
+    if (expectedIrreversibleChange.length > 0) {
+      fieldSourceRefs.expectedIrreversibleChange = ["chapter-seed:intent.expectedIrreversibleChange"];
+    } else {
+      warnings.push("expectedIrreversibleChange 为空：未提供显式 ChapterSeed 契约，不从 pendingCosts 推断不可逆变化");
+    }
     // 空字段不记录 fieldSourceRefs
 
     // 7. selectedPromisesToAdvance 本章选中的承诺：≤3
@@ -331,9 +401,14 @@ export class ChapterIntentBuilder {
         .filter((p) => p.status !== "open" && p.status !== "advancing")
         .map((p) => p.promiseId)
     );
+    const authorForeshadowing = authorContract?.foreshadowing ?? [];
+    const isAuthorSelectedPromise = (promiseId: string, description: string): boolean =>
+      authorForeshadowing.length === 0 || authorForeshadowing.some((entry) =>
+        entry.includes(promiseId) || entry.includes(description) || description.includes(entry));
     const selectedPromisesToAdvance: Array<{ promiseId: string; description: string }> = [];
     for (const p of statePromisesMatched) {
       if (selectedPromisesToAdvance.length >= 3) break;
+      if (!isAuthorSelectedPromise(p.promiseId, p.description)) continue;
       selectedPromisesToAdvance.push({ promiseId: p.promiseId, description: p.description });
     }
     // state 缺失/无匹配 open+advancing 时退回 seed.openPromises（仍受 ≤3 上限约束），
@@ -343,6 +418,7 @@ export class ChapterIntentBuilder {
       for (const p of input.openPromises) {
         if (selectedPromisesToAdvance.length >= 3) break;
         if (stateFulfilledPromiseIds.has(p.id)) continue;
+        if (!isAuthorSelectedPromise(p.id, p.description)) continue;
         selectedPromisesToAdvance.push({ promiseId: p.id, description: p.description });
       }
     }
@@ -410,8 +486,15 @@ export class ChapterIntentBuilder {
     //    只有 seed/currentPressure 中存在明确因果压力证据时才生成。
     //    当前 ChapterIntentInput schema 无明确因果压力字段（currentPressureSummary 是通用压力，
     //    非"必须建立的章末因果"）→ 空 + warning，不把通用主题问题改写成必须建立的章末因果。
-    const causalEndPressure: string[] = [];
-    warnings.push("causalEndPressure 为空：seed/currentPressure 无明确因果压力证据，thematicQuestions/openArcs 不自动等于因果章末压力，不伪造");
+    const causalEndPressure = dedupe([
+      ...(authorContract?.endingTarget ? [authorContract.endingTarget] : []),
+      ...(input.causalEndPressure ?? []),
+    ]);
+    if (causalEndPressure.length > 0) {
+      fieldSourceRefs.causalEndPressure = ["chapter-seed:intent.causalEndPressure"];
+    } else {
+      warnings.push("causalEndPressure 为空：未提供显式 ChapterSeed 契约，不从主题或通用压力推断章末因果");
+    }
     // 空字段不记录 fieldSourceRefs
 
     // 9. factAndCharacterKnowledgeForbiddenZones 事实与人物知识禁区
@@ -449,7 +532,9 @@ export class ChapterIntentBuilder {
     // chapterFunction 的 fieldSourceRefs
     //    修复轮：seed 和 constitution 均缺失时不得声称来自 constitution。
     //    只有实际贡献的来源才记录；双缺失（"未指定本章功能"）不记录 fieldSourceRefs。
-    if (input.intentPrimary) {
+    if (authorContract?.chapterFunction) {
+      fieldSourceRefs.chapterFunction = authorContract.sourceIds;
+    } else if (input.intentPrimary) {
       fieldSourceRefs.chapterFunction = ["chapter-seed:intent"];
     } else if (constitution?.protagonistCoreConflict) {
       fieldSourceRefs.chapterFunction = ["creative-constitution:protagonistCoreConflict"];
@@ -468,6 +553,15 @@ export class ChapterIntentBuilder {
 
     const intent: ChapterIntent = {
       chapterFunction,
+      overallPlotDirection: dedupe(input.overallPlotDirection ?? []),
+      previousState: dedupe(input.previousState ?? []),
+      characterMotivations: authorContract?.characterMotivations ?? [],
+      foreshadowing: authorContract?.foreshadowing ?? [],
+      causalRelations: authorContract?.causalRelations ?? [],
+      endingTarget: authorContract?.endingTarget ? [authorContract.endingTarget] : [],
+      authorEventSummaries: authorContract?.eventSummaries ?? [],
+      authorMustInclude: authorContract?.mustInclude ?? [],
+      authorStateChanges: authorContract?.stateChanges ?? [],
       readerExperience,
       currentPressure,
       meaningfulChoices,

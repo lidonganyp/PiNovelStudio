@@ -935,10 +935,12 @@ test("P1#2 commitAndSave: 状态备份失败 -> 阻断状态提交（committed=0
     const stageResults = {};
     const outcome = commitAndSave(input, "cand-raw-001", "正式章节正文，包含测试事实关键词。", stageResults);
 
-    // 4. 正文保存成功（主产物，不受备份失败影响）
-    assert.equal(outcome.ok, true, "正文应保存成功（主产物不受备份失败影响）");
+    // 4. 状态备份失败时整次提交失败，已经写入的新章节必须回滚。
+    assert.equal(outcome.ok, false, "状态备份失败时正文和状态必须一起回滚");
     const chapterFile = join(workspacePath, "chapters", "1.md");
-    assert.ok(existsSync(chapterFile), "正式章节文件应被写入");
+    assert.equal(existsSync(chapterFile), false, "新章节必须在状态备份失败后删除");
+    assert.equal(stageResults.atomicSave?.rolledBack, true, "atomicSave 应记录成功回滚");
+    assert.equal(stageResults.atomicSave?.rollbackAction, "removed_new");
 
     // 5. 关键验收：状态备份失败 -> 阻断状态提交
     assert.ok(stageResults.stateBackup, "应有 stateBackup stage result");
@@ -956,6 +958,7 @@ test("P1#2 commitAndSave: 状态备份失败 -> 阻断状态提交（committed=0
       "backup_failed",
       "stateCommit 应标记 blocked=backup_failed",
     );
+    assert.ok(outcome.stateCommit?.error, "返回值必须暴露状态备份失败原因");
 
     // 6. narrative-state-store.json 应保持章节前状态（未被本章新增 canon 污染）
     const finalState = JSON.parse(readFileSync(stateStorePath, "utf-8"));

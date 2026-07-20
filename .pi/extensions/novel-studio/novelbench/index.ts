@@ -165,3 +165,58 @@ export type {
   ReferenceAwareJudgeInput,
   ReferenceAwareJudgeResult,
 } from "./reference-aware-judge.js";
+
+export {
+  CEILING_DIMENSION_IDS,
+  CEILING_JUDGE_SCHEMA_VERSION,
+  buildCeilingJudgeSchema,
+  parseAndValidateCeilingVerdict,
+  runCeilingJudgeWithRepair,
+} from "../novelos/eval/ceiling-judge-schema.js";
+export type {
+  CeilingJudgeVerdict,
+  CeilingJudgeRunInput,
+  CeilingJudgeRunResult,
+  CeilingVerdictParseResult,
+  CeilingDimensionVerdict,
+} from "../novelos/eval/ceiling-judge-schema.js";
+
+export {
+  buildReferenceQualityCase,
+  validateReferenceQualityCase,
+} from "../novelos/eval/ceiling-reference-cases.js";
+export type {
+  ReferenceQualityCase,
+  ReferenceQualityCaseKind,
+  ReferenceQualityAnnotation,
+} from "../novelos/eval/ceiling-reference-cases.js";
+
+export {
+  summarizeAbsoluteQuality,
+  aggregateBaselineArm,
+  compareBaselineMatrix,
+  validateContinuousChapters,
+} from "./ceiling-baseline-matrix.js";
+export type {
+  CeilingExperimentArm,
+  AbsoluteQualitySummary,
+  BaselineArmSummary,
+  BaselineMatrixResult,
+  ChapterFrontierObservation,
+  ContinuousChapterResult,
+} from "./ceiling-baseline-matrix.js";
+
+export { evaluateQualityStrategyAdmission } from "./quality-strategy-admission.js";
+export { compareWriterModels } from "./writer-model-comparison.js";
+export type {
+  ComparedWriterModel,
+  CompareWriterModelsInput,
+  WriterModelComparisonResult,
+  WriterCandidateMetrics,
+  WriterPreviewInput,
+} from "./writer-model-comparison.js";
+export type {
+  QualityStrategyStatus,
+  QualityStrategyEvidence,
+  QualityStrategyDecision,
+} from "./quality-strategy-admission.js";

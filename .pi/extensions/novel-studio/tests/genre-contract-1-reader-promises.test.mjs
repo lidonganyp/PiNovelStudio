@@ -242,7 +242,7 @@ test("GENRE-CONTRACT-1: constitution 承诺保留在 trace，但不在 genre blo
   assert.ok(!result.promptBlock.includes(promise), "constitution promise 的 prompt owner 是 WorldPresentation");
 });
 
-test("GENRE-CONTRACT-1 integration: raw prompt 消费 active 类型承诺并在失败 trace 中留证", async () => {
+test("GENRE-CONTRACT-1 integration: 类型承诺保留在 trace，不指挥 raw 的具体写法", async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "genre-contract-integration-"));
   let capturedPrompt = "";
   const activeDescription = "核心谜题有铺垫，不凭空出现";
@@ -272,11 +272,11 @@ test("GENRE-CONTRACT-1 integration: raw prompt 消费 active 类型承诺并在�
       },
     });
     assert.equal(result.status, "blocked");
-    assert.ok(capturedPrompt.includes(activeDescription), "active 类型承诺应进入 raw prompt");
+    assert.ok(!capturedPrompt.includes(activeDescription), "类型模板承诺不得进入 raw prompt");
     assert.ok(!capturedPrompt.includes(backgroundDescription), "background 类型承诺不得进入 raw prompt");
     assert.ok(result.stageResults.genreContract, "raw failure 仍应保留 genreContract trace");
-    assert.ok(result.stageResults.chapterIntent.consumedFields.includes("genreContract"));
-    assert.equal(result.stageResults.genreContract.consumedByRawPrompt, true);
+    assert.ok(!result.stageResults.chapterIntent.consumedFields.includes("genreContract"));
+    assert.equal(result.stageResults.genreContract.consumedByRawPrompt, false);
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

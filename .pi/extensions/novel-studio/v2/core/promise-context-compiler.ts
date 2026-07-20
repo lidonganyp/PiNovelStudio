@@ -21,6 +21,7 @@
 
 import type { ChapterIntent } from "./chapter-intent-builder.js";
 import type { LongTermStateSnapshot } from "./types.js";
+import { localizeLlmText } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // 数据契约
@@ -275,10 +276,26 @@ export function formatPromiseContextPromptBlock(context: PromiseContext): string
   if (context.entries.length === 0) {
     return null;
   }
+  const statusLabels: Readonly<Record<string, string>> = {
+    open: "开放",
+    advancing: "推进中",
+    fulfilled: "已兑现",
+    broken: "已破裂",
+    seed_only: "种子待确认",
+  };
+  const actionLabels: Readonly<Record<PromiseExpectedAction, string>> = {
+    advance: "推进",
+    fulfill: "兑现",
+    defer: "延后",
+    inspect: "检视",
+  };
   const lines = context.entries.map((e) => {
-    return `- ${e.promiseId}——${e.description}【状态：${e.status}｜本章方向：${e.expectedAction}】${e.relevanceReason}`;
+    const status = statusLabels[e.status] ?? "未知状态";
+    return localizeLlmText(
+      `- ${e.promiseId}——${e.description}【状态：${status}｜本章方向：${actionLabels[e.expectedAction]}】${e.relevanceReason}`,
+    );
   });
-  return `本章相关承诺状态（只含本章选中承诺，非全量 PromiseLedger）：\n${lines.join("\n")}`;
+  return `本章相关承诺状态（只含本章选中承诺，非全量承诺账本）：\n${lines.join("\n")}`;
 }
 
 // ============================================================================

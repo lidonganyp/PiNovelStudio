@@ -91,17 +91,17 @@ function mockFetchConsistentWinner(pickLeft) {
     const body = JSON.parse(init.body);
     const userPrompt = body.messages.find((m) => m.role === "user")?.content ?? "";
 
-    // 从 prompt 解析候选 A 和 B 的文本
-    const aMatch = userPrompt.match(/候选 A：\n([\s\S]*?)\n\n候选 B：/);
-    const bMatch = userPrompt.match(/候选 B：\n([\s\S]*?)\n\n请从以下/);
+    // 从中文模型协议中解析候选甲和乙的文本
+    const aMatch = userPrompt.match(/候选\s*甲：\n([\s\S]*?)\n\n候选\s*乙：/);
+    const bMatch = userPrompt.match(/候选\s*乙：\n([\s\S]*?)\n\n请从以下/);
     const candidateA = aMatch ? aMatch[1] : "";
     const candidateB = bMatch ? bMatch[1] : "";
 
     // pickLeft=true 时总是选 left 物理候选
     // left 在 prompt 中可能是 A 或 B（取决于 mapping）
     // 通过检查哪个候选包含 leftText 的特征判断
-    // 简化：第一个候选（候选A）如果包含 "LEFT_MARKER" 则 left=A
-    const leftIsA = candidateA.includes("LEFT_MARKER");
+    // 简化：第一个候选（候选甲）如果包含中文哨兵则 left=A
+    const leftIsA = candidateA.includes("左侧标记");
     const winnerLabel = pickLeft ? (leftIsA ? "A" : "B") : (leftIsA ? "B" : "A");
 
     // M1-R3：excerpt 必须 === text.slice(start, end)；动态计算各候选前缀
@@ -154,7 +154,7 @@ function makeEntries(count, opts = {}) {
       pair: `B1_vs_B${i + 2}`,
       humanWinner: opts.humanWinner ?? "tie",
       humanConfidence: "clear",
-      leftText: `LEFT_MARKER 候选 ${i + 1} 左正文`,
+      leftText: `左侧标记 候选 ${i + 1} 左正文`,
       rightText: `候选 ${i + 1} 右正文`,
       context: {
         workGoal: "测试作品",

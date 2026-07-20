@@ -9,15 +9,15 @@
     ]
   },
   "scripts": {
-    "clean": "node scripts/clean-dirs.mjs dist dist-eval dist-test",
-    "build": "node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist dist-eval dist-test && npx tsc -p tsconfig.prod.json && npx tsc -p tsconfig.eval.json && npx tsc -p tsconfig.test.json",
-    "build:prod": "node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist && npx tsc -p tsconfig.prod.json",
-    "build:eval": "node scripts/clean-dirs.mjs dist-eval && npx tsc -p tsconfig.eval.json",
-    "build:test": "node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist-test && npx tsc -p tsconfig.test.json",
-    "test": "node --import ./tests/setup-test-env.mjs --test tests/*.test.mjs tests-eval/*.test.mjs",
-    "test:fresh": "npm run build && node --import ./tests/setup-test-env.mjs --test tests/*.test.mjs",
-    "smoke": "node --import ./tests/setup-test-env.mjs --test tests/phase5-unified-default-path.test.mjs",
-    "simplicity-gate": "node scripts/simplicity-gate.mjs",
+    "clean": "node scripts/artifact-operation-lock.mjs --command \"node scripts/clean-dirs.mjs dist dist-eval dist-test\"",
+    "build": "node scripts/artifact-operation-lock.mjs --command \"node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist dist-eval dist-test && npx tsc -p tsconfig.prod.json && npx tsc -p tsconfig.eval.json && npx tsc -p tsconfig.test.json\"",
+    "build:prod": "node scripts/artifact-operation-lock.mjs --command \"node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist && npx tsc -p tsconfig.prod.json\"",
+    "build:eval": "node scripts/artifact-operation-lock.mjs --command \"node scripts/clean-dirs.mjs dist-eval && npx tsc -p tsconfig.eval.json\"",
+    "build:test": "node scripts/artifact-operation-lock.mjs --command \"node scripts/generate-build-info.mjs && node scripts/clean-dirs.mjs dist-test && npx tsc -p tsconfig.test.json\"",
+    "test": "node scripts/artifact-operation-lock.mjs --command \"node --import ./tests/setup-test-env.mjs --test --test-concurrency=1 tests/*.test.mjs tests-eval/*.test.mjs\"",
+    "test:fresh": "node scripts/artifact-operation-lock.mjs --command \"npm run build && node --import ./tests/setup-test-env.mjs --test --test-concurrency=1 tests/*.test.mjs\"",
+    "smoke": "node scripts/artifact-operation-lock.mjs --command \"node --import ./tests/setup-test-env.mjs --test tests/phase5-unified-default-path.test.mjs\"",
+    "simplicity-gate": "node scripts/artifact-operation-lock.mjs --command \"node scripts/simplicity-gate.mjs\"",
     "typecheck": "npx tsc --noEmit",
     "evolution:capture": "node scripts/evolution-cli.mjs capture",
     "evolution:candidate": "node scripts/evolution-cli.mjs candidate",
@@ -32,7 +32,8 @@
     "evolution:rollback": "node scripts/evolution-cli.mjs rollback",
     "evolution:health": "node scripts/evolution-cli.mjs health",
     "evolution:canary": "node scripts/evolution-cli.mjs canary",
-    "test:eval": "node --import ./tests/setup-test-env.mjs --test tests-eval/*.test.mjs"
+    "test:eval": "node scripts/artifact-operation-lock.mjs --command \"node --import ./tests/setup-test-env.mjs --test --test-concurrency=1 tests-eval/*.test.mjs\"",
+    "verify:real-quality": "node scripts/artifact-operation-lock.mjs --command \"node scripts/real-quality-acceptance.mjs\""
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.6",

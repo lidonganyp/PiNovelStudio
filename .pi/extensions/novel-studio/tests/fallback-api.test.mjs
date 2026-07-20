@@ -166,9 +166,10 @@ describe("Fallback API routing", () => {
     const backup = configData.providers.claude_backup;
 
     assert.ok(backup, "claude_backup provider should remain in the provider catalog");
-    assert.strictEqual(backup.protocol, "openai");
-    // P34-T09 (2026-07-04): Claude backup endpoint migrated from openapi.wildroamguides.com
-    // to aimagichub.xyz (OpenAI 协议)。wildroamguides.com 的 Anthropic 处理器对长生成请求返回 504。
+    assert.strictEqual(backup.protocol, "anthropic");
+    assert.strictEqual(backup.request_options?.auth, "bearer");
+    // 2026-07-18: aimagichub.xyz 的 Claude Code-compatible Anthropic Bearer 路径实测可用；
+    // OpenAI-compatible /chat/completions 路径在章节生成中返回 504。
     assert.strictEqual(backup.base_url, "https://aimagichub.xyz/v1");
     assert.strictEqual(backup.api_key_env, "CLAUDE_BACKUP_API_KEY");
     // MODEL-ROUTING-CLAUDE46-1B: claude_backup model 从 claude-opus-4-8 切到 claude-opus-4-6

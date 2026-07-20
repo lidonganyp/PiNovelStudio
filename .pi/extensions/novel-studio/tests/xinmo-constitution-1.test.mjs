@@ -25,6 +25,8 @@ import {
   constitutionPath,
 } from "../dist-eval/v2/core/creative-constitution.js";
 import { buildJudgePrompt } from "../dist-eval/v2/core/judge-prompt-builder.js";
+import { createEditorialCandidateGenerator } from "../dist-eval/v2/core/editorial-candidate-generator.js";
+import { createEditorialStrategyRegistry } from "../dist-eval/v2/core/editorial-strategy-registry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = join(__filename, "..");
@@ -130,6 +132,76 @@ test("XINMO-CONSTITUTION-1 · judge-prompt-builder 消费 protagonistCoreConflic
     "judge prompt 必须消费 protagonistCoreConflict");
   const matchedPromise = constitution.readerPromise.some((p) => userPrompt.includes(p));
   assert.ok(matchedPromise, "judge prompt 必须至少消费一条 readerPromise");
+});
+
+test("XINMO-CONSTITUTION-1 · editorial prompt 消费叙事内容边界但不注入审美写法", async () => {
+  const { skipped, constitution } = loadXinmoConstitution();
+  if (skipped) assert.fail("宪法文件不存在");
+
+  const rawText = "李一凡停在门前，确认同伴都已撤离，才伸手推门。门后传来一声短促的金属摩擦。";
+  let capturedPrompt = "";
+  const generator = createEditorialCandidateGenerator();
+  const result = await generator.generate({
+    rawText,
+    rawCandidateId: "candidate:raw:xinmo-constitution",
+    hypotheses: [{
+      id: "hypothesis:reader-payoff",
+      opportunityType: "reader_payoff",
+      diagnosis: "同伴撤离后的代价尚未形成明确落点",
+      evidenceSpans: [{ start: 0, end: 19, excerpt: rawText.slice(0, 19) }],
+      expectedReaderGain: "让选择与代价形成可感知的兑现",
+      damageRisks: ["不得改变同伴已经撤离的事实"],
+      confidence: 0.9,
+      source: "llm",
+    }],
+    intent: {
+      chapterFunction: "推进李一凡在保护同伴与追查真相之间的选择",
+      readerExperience: ["紧张", "期待"],
+      currentPressure: ["门后的未知威胁"],
+      meaningfulChoices: [],
+      promisesToAdvance: [],
+      possibleEndPressure: [],
+      relevantCharacters: ["李一凡"],
+      inviolableFacts: ["同伴已经撤离"],
+      sourceRefs: ["chapter-seed"],
+    },
+    context: {
+      facts: [],
+      characterStates: [],
+      openLoops: [],
+      worldRules: [],
+      styleReferences: [],
+      sourceMap: [],
+      constitution: buildSnapshot(constitution),
+      longTermState: null,
+    },
+    constitution: buildSnapshot(constitution),
+    contextHash: "xinmo-constitution-test",
+    chapterNumber: 17,
+    strategyRegistry: createEditorialStrategyRegistry(),
+    modelGenerate: async (input) => {
+      capturedPrompt = input.userPrompt;
+      return {
+        text: rawText,
+        model: "stub-editorial",
+        route: input.route,
+        durationMs: 1,
+      };
+    },
+  });
+
+  assert.equal(result.candidates.length, 1, `editorial 候选生成失败：${JSON.stringify(result.failures)}`);
+  assert.ok(capturedPrompt.includes(constitution.workIdentity), "editorial prompt 必须消费 workIdentity");
+  assert.ok(capturedPrompt.includes(constitution.protagonistCoreConflict), "editorial prompt 必须消费 protagonistCoreConflict");
+  assert.ok(constitution.readerPromise.some((item) => capturedPrompt.includes(item)), "editorial prompt 必须消费 readerPromise");
+  assert.equal(constitution.aestheticDirection.some((item) => capturedPrompt.includes(item)), false, "editorial prompt 不得注入 aestheticDirection 写法");
+  assert.ok(constitution.forbiddenDrift.some((item) => capturedPrompt.includes(item)), "editorial prompt 必须消费 forbiddenDrift");
+  assert.deepEqual(result.constitutionConsumedFields, [
+    "constitution.workIdentity",
+    "constitution.protagonistCoreConflict",
+    "constitution.readerPromise",
+    "constitution.forbiddenDrift",
+  ]);
 });
 
 test("XINMO-CONSTITUTION-1 · genre-contract-compiler 消费 genrePromises", async () => {

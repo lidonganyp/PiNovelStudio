@@ -10,6 +10,24 @@
       "category": "eval-only"
     },
     {
+      "path": "novelos/eval/judge-human-alignment.ts",
+      "lines": 1109,
+      "reason": "NovelBench eval-only human-alignment harness；不进入生产 dist/。",
+      "category": "eval-only"
+    },
+    {
+      "path": "novelos/eval/prompt-context-ablation.ts",
+      "lines": 1459,
+      "reason": "NovelBench eval-only prompt ablation harness；不进入生产 dist/。",
+      "category": "eval-only"
+    },
+    {
+      "path": "novelos/eval/reference-guided-prompt-ablation.ts",
+      "lines": 1584,
+      "reason": "NovelBench eval-only reference-guided ablation harness；不进入生产 dist/。",
+      "category": "eval-only"
+    },
+    {
       "path": "v2/core/demo-4a-prep.ts",
       "lines": 990,
       "reason": "eval-only demo prep。",
@@ -20,12 +38,6 @@
       "lines": 866,
       "reason": "eval-only preregistration。",
       "category": "eval-only"
-    },
-    {
-      "path": "v2/core/editorial-opportunity-judge.ts",
-      "lines": 983,
-      "reason": "editorial opportunity judge，含机会检测 + span 提取。待后续迭代拆分。",
-      "category": "planned-refactor"
     },
     {
       "path": "v2/core/editorial-story-preservation-gate.ts",

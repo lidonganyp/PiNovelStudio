@@ -3,17 +3,16 @@
  *
  * P22：细节锚点先行生成链路
  *
- * 检查 ChapterSeed 是否有足够"可生长种子"以进入感知锚点搜索与 DAG 生长。
+ * 检查 ChapterSeed 是否具备进入统一生成主链路所需的事实性输入。
  *
  * 阻断条件围绕：
  *  - 世界观（worldConstraint）
  *  - 角色状态（characterState）
  *  - 前章承接（previousContinuation，第 2 章及以后必需）
  *  - 当前压力（currentPressure）
- *  - 候选感知锚点（candidateAnchors）
  *
  * 错误提示不得再要求"补章纲"。应提示补：
- *  - 角色状态 / 当前压力 / 未结账细节 / 世界约束 / 候选感知锚点
+ *  - 角色状态 / 当前压力 / 前章状态 / 世界约束
  */
 
 import type {
@@ -29,7 +28,6 @@ export interface SeedReadinessConfig {
   warningThreshold?: number;
   /** 各维度的最小充足数量 */
   minCharacters?: number;
-  minCandidateAnchors?: number;
   minPendingPressureItems?: number;
 }
 
@@ -37,7 +35,6 @@ const DEFAULT_CONFIG: Required<SeedReadinessConfig> = {
   readyThreshold: 70,
   warningThreshold: 50,
   minCharacters: 1,
-  minCandidateAnchors: 2,
   minPendingPressureItems: 0, // 第 1 章允许没有压力项
 };
 
@@ -49,7 +46,6 @@ export class SeedReadinessChecker {
       readyThreshold: config?.readyThreshold ?? DEFAULT_CONFIG.readyThreshold,
       warningThreshold: config?.warningThreshold ?? DEFAULT_CONFIG.warningThreshold,
       minCharacters: config?.minCharacters ?? DEFAULT_CONFIG.minCharacters,
-      minCandidateAnchors: config?.minCandidateAnchors ?? DEFAULT_CONFIG.minCandidateAnchors,
       minPendingPressureItems: config?.minPendingPressureItems ?? DEFAULT_CONFIG.minPendingPressureItems,
     };
   }
@@ -73,9 +69,6 @@ export class SeedReadinessChecker {
 
     // 维度4：当前压力
     dimensions.push(this.checkCurrentPressure(seed));
-
-    // 维度5：候选感知锚点
-    dimensions.push(this.checkCandidateAnchors(seed));
 
     // 收集阻断原因
     for (const dim of dimensions) {
@@ -255,53 +248,13 @@ export class SeedReadinessChecker {
     };
   }
 
-  private checkCandidateAnchors(seed: ChapterSeed): SeedReadinessDimensionReport {
-    const observed: string[] = [];
-    const missing: string[] = [];
-    const suggestions: string[] = [];
-
-    // P22修复：第1章（setup 开端）没有前章上下文，候选锚点天然为空是正常的。
-    // 第1章自身创建锚点，不应因候选锚点不足而阻断生成。
-    if (seed.chapterNumber === 1) {
-      observed.push("第1章无需历史候选锚点（本章自建锚点）");
-      return {
-        dimension: "candidateAnchors",
-        sufficient: true,
-        observed,
-        missing,
-        suggestions: [],
-      };
-    }
-
-    const count = seed.candidateAnchors.length;
-    if (count >= this.config.minCandidateAnchors) {
-      observed.push(`candidateAnchors=${count}`);
-      if (count > 0) {
-        observed.push(`topAnchor=${seed.candidateAnchors[0].description.slice(0, 30)}`);
-      }
-    } else {
-      missing.push(`候选感知锚点不足（${count} < ${this.config.minCandidateAnchors}）`);
-      suggestions.push("补充候选感知锚点：检查未结账细节（unsettled-details.json）、待回收伏笔（arc-registry.json）、前章未解张力或角色状态");
-    }
-
-    const sufficient = count >= this.config.minCandidateAnchors;
-    return {
-      dimension: "candidateAnchors",
-      sufficient,
-      observed,
-      missing,
-      suggestions: sufficient ? [] : suggestions,
-    };
-  }
-
   private calculateScore(dimensions: SeedReadinessDimensionReport[]): number {
     // 各维度权重
     const weights: Record<string, number> = {
-      worldConstraint: 25,
-      characterState: 20,
-      previousContinuation: 25,
+      worldConstraint: 30,
+      characterState: 25,
+      previousContinuation: 30,
       currentPressure: 15,
-      candidateAnchors: 15,
     };
 
     let score = 0;
@@ -331,11 +284,11 @@ export function createSeedReadinessChecker(config?: SeedReadinessConfig): SeedRe
  * 格式化 SeedReadiness 阻断消息
  *
  * 注意：错误提示不得再要求"补章纲"。应提示补：
- *  - 角色状态 / 当前压力 / 未结账细节 / 世界约束 / 候选感知锚点
+ *  - 角色状态 / 当前压力 / 前章状态 / 世界约束
  */
 export function formatSeedReadinessBlockMessage(report: SeedReadinessReport): string {
   const lines: string[] = [];
-  lines.push("【阶段0生产阻断】ChapterSeed 种子不足，无法进入感知锚点搜索与 DAG 生长。");
+  lines.push("【生成前阻断】ChapterSeed 缺少不可替代的事实性输入，无法进入统一生成主链路。");
   lines.push(`综合评分：${report.score}/100（${report.status}）`);
   lines.push("");
   lines.push("阻断原因：");
@@ -343,14 +296,13 @@ export function formatSeedReadinessBlockMessage(report: SeedReadinessReport): st
     lines.push(`  - ${reason}`);
   }
   lines.push("");
-  lines.push("请补充以下种子源（不要补章纲，章纲已不再是写前蓝图）：");
+  lines.push("请补充以下事实性种子源；作者章纲可提供本章叙事契约，但不需要指定正文写法：");
 
   const suggestionMap: Record<string, string> = {
     worldConstraint: "世界约束：在 config.json 中补充 genre / subGenres / immutableFacts",
     characterState: "角色状态：在 characters/ 下创建角色档案，或在 config.json.characters 中注册角色",
     previousContinuation: "前章承接：先生成前一章，或将前章 skeleton.json 复制到 series/skeleton.json",
     currentPressure: "当前压力：补充未结账细节（unsettled-details.json）、待回收伏笔（arc-registry.json）或角色未解张力",
-    candidateAnchors: "候选感知锚点：补充未结账细节、待回收伏笔、前章未解张力或角色状态以生成锚点",
   };
 
   for (const dim of report.dimensions) {

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import {
   APIFallbackManager,
   clearUnhealthyProviders,
+  setLLMAttemptListener,
 } from "../dist/api/fallback-manager.js";
 
 const originalEnv = {
@@ -73,6 +74,7 @@ describe("APIFallbackManager totalTimeoutMs behavior", () => {
     process.env.GLM_MODEL = "glm-test";
     process.env.GPT_MODEL = "gpt-test";
     clearUnhealthyProviders();
+    setLLMAttemptListener(null);
   });
 
   afterEach(() => {
@@ -108,7 +110,7 @@ describe("APIFallbackManager totalTimeoutMs behavior", () => {
     const attempts = [];
 
     installMockContext(manager, 25);
-    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, model) => {
+    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, _providerKey, model) => {
       attempts.push(model);
       await sleep(40);
       throw new Error("mock transient provider failure");
@@ -133,7 +135,7 @@ describe("APIFallbackManager totalTimeoutMs behavior", () => {
     const attempts = [];
 
     installMockContext(manager, 250);
-    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, model) => {
+    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, _providerKey, model) => {
       attempts.push(model);
       await sleep(10);
       return {
@@ -161,12 +163,36 @@ describe("APIFallbackManager totalTimeoutMs behavior", () => {
     assert.deepEqual(attempts, ["glm-test"]);
   });
 
+  test("successful attempt trace binds requestId to a SHA-256 responseHash", async () => {
+    const manager = new APIFallbackManager();
+    const timings = [];
+    setLLMAttemptListener((entry) => timings.push(entry));
+    installMockContext(manager, 250);
+    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, _providerKey, model) => ({
+      id: "mock-response",
+      object: "chat.completion",
+      created: 0,
+      model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "traceable response" },
+        finish_reason: "stop",
+      }],
+    });
+
+    await manager.callWithFallback("architect", [{ role: "user", content: "trace me" }]);
+
+    const ok = timings.find((entry) => entry.status === "ok");
+    assert.match(ok?.requestId ?? "", /^llm-/);
+    assert.match(ok?.responseHash ?? "", /^[a-f0-9]{64}$/);
+  });
+
   test("allows fallback success when no total timeout budget is configured", async () => {
     const manager = new APIFallbackManager();
     const attempts = [];
 
     installMockContext(manager, undefined);
-    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, model) => {
+    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, _providerKey, model) => {
       attempts.push(model);
       if (model === "glm-test") {
         await sleep(40);
@@ -196,5 +222,24 @@ describe("APIFallbackManager totalTimeoutMs behavior", () => {
     assert.equal(result.usedModel, "gpt-test");
     assert.equal(result.fellBack, true);
     assert.deepEqual(attempts, ["glm-test", "gpt-test"]);
+  });
+
+  test("explicit manager retry limits override process-wide env for bounded eval calls", async () => {
+    const previousRetries = process.env.PINOVEL_MODEL_MAX_RETRIES;
+    const previousTotal = process.env.PINOVEL_MODEL_TOTAL_TIMEOUT_MS;
+    process.env.PINOVEL_MODEL_MAX_RETRIES = "3";
+    process.env.PINOVEL_MODEL_TOTAL_TIMEOUT_MS = "9999";
+    try {
+      const manager = new APIFallbackManager({ maxRetries: 0, totalTimeoutMs: 37 });
+      installMockContext(manager, 5000);
+      const resolved = manager.resolveRuntimeRetryOptions({ max_retries: 2, total_timeout_ms: 4000 });
+      assert.equal(resolved.maxRetries, 0);
+      assert.equal(resolved.totalTimeoutMs, 37);
+    } finally {
+      if (previousRetries === undefined) delete process.env.PINOVEL_MODEL_MAX_RETRIES;
+      else process.env.PINOVEL_MODEL_MAX_RETRIES = previousRetries;
+      if (previousTotal === undefined) delete process.env.PINOVEL_MODEL_TOTAL_TIMEOUT_MS;
+      else process.env.PINOVEL_MODEL_TOTAL_TIMEOUT_MS = previousTotal;
+    }
   });
 });

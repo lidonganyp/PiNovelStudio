@@ -15,13 +15,14 @@
  */
 
 import type { AgentTool } from "./pi-agent-core-adapter.js";
+import { localizeLlmText } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // 常量
 // ============================================================================
 
 /** 幂等检查标记（注入后存在于 systemPrompt 中） */
-export const REACT_CALLING_CONVENTION = "<!-- react-tool-calling-convention -->";
+export const REACT_CALLING_CONVENTION = "<!-- 工具调用约定 -->";
 
 /** 调用约定文本 */
 const CALLING_CONVENTION_TEXT = [
@@ -31,14 +32,14 @@ const CALLING_CONVENTION_TEXT = [
   "你可以通过以下工具检索历史章节、角色状态、知识边界等证据。",
   "当需要查证事实时，发出一个或多个工具调用指令。格式：",
   "",
-  '<tool_call>{"name":"工具名","arguments":{"参数名":"参数值"}}</tool_call>',
+  '<工具调用>{"工具":"工具名","参数":{"参数名":"参数值"}}</工具调用>',
   "",
   "规则：",
-  "1. 可以在一次回复中发出多个 `<tool_call>` 指令（每个单独一行）",
+  "1. 可以在一次回复中发出多个 `<工具调用>` 指令（每个单独一行）",
   "2. 指令外的文字会被保留，但工具调用阶段不要写正文",
   "3. 收到工具结果（『已检索到的证据』块）后，基于证据生成正文",
-  "4. 证据不足时可继续调用工具；证据充分时直接输出章节正文（不含任何 `<tool_call>`）",
-  "5. 只输出 `<tool_call>` 指令和正文，不要输出分析或注释",
+  "4. 证据不足时可继续调用工具；证据充分时直接输出章节正文（不含任何 `<工具调用>`）",
+  "5. 只输出 `<工具调用>` 指令和正文，不要输出分析或注释",
   "",
 ].join("\n");
 
@@ -73,9 +74,9 @@ export function injectToolSchemas(
   parts.push("## 可用工具");
   parts.push("");
   for (const tool of tools) {
-    parts.push(`### ${tool.name}`);
+    parts.push(`### ${toChineseToolName(tool.name)}`);
     if (tool.description) {
-      parts.push(tool.description);
+      parts.push(localizeLlmText(tool.description));
     }
     const paramsDesc = describeParameters(tool);
     if (paramsDesc) {
@@ -121,7 +122,7 @@ function describeParameters(tool: AgentTool): string {
   const lines: string[] = ["参数："];
 
   for (const [paramName, propSchema] of Object.entries(props)) {
-    const type = (propSchema.type as string) ?? "any";
+    const type = toChineseType((propSchema.type as string) ?? "any");
     const description = (propSchema.description as string) ?? "";
     const isRequired = requiredSet.has(paramName);
     const defaultVal = propSchema.default;
@@ -131,8 +132,54 @@ function describeParameters(tool: AgentTool): string {
       defaultVal !== undefined ? `，默认 ${JSON.stringify(defaultVal)}` : "";
     const descStr = description ? `：${description}` : "";
 
-    lines.push(`- ${paramName}（${type}，${reqStr}${defaultStr}）${descStr}`);
+    lines.push(`- ${toChineseParameterName(paramName)}（${type}，${reqStr}${defaultStr}）${localizeLlmText(descStr)}`);
   }
 
   return lines.join("\n");
+}
+
+const TOOL_NAME_MAP: Record<string, string> = {
+  search_narrative_evidence: "跨源叙事证据检索",
+  search_chapter_span: "章节原文片段检索",
+  query_canon: "世界事实查询",
+  query_character_state: "角色状态查询",
+  query_timeline: "时间线查询",
+  query_character_knowledge_boundary: "角色知识边界查询",
+  query_promise_ledger: "承诺账本查询",
+  query_pattern_memory: "叙事模式记忆查询",
+  query_voice_evidence: "角色声音证据查询",
+};
+
+const PARAMETER_NAME_MAP: Record<string, string> = {
+  query: "查询词",
+  maxResults: "最大结果数",
+  maxChapters: "最大章节数",
+  chapterNumber: "章节号",
+  characterName: "角色名",
+  characterId: "角色标识",
+  category: "类别",
+  promiseId: "承诺标识",
+  patternType: "模式类型",
+  limit: "返回上限",
+};
+
+function toChineseToolName(name: string): string {
+  return TOOL_NAME_MAP[name] ?? "叙事证据工具";
+}
+
+function toChineseParameterName(name: string): string {
+  return PARAMETER_NAME_MAP[name] ?? "参数";
+}
+
+function toChineseType(type: string): string {
+  const map: Record<string, string> = {
+    string: "字符串",
+    number: "数字",
+    integer: "整数",
+    boolean: "布尔值",
+    array: "数组",
+    object: "对象",
+    any: "任意值",
+  };
+  return map[type] ?? "任意值";
 }

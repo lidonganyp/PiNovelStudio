@@ -38,6 +38,7 @@ import {
   type ToolResultView,
 } from "./react-tool-call-parser.js";
 import { injectToolSchemas } from "./tool-schema-injector.js";
+import { localizeLlmText } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // Re-exports：NovelOS 模块统一从本 adapter 导入 pi-agent-core / pi-ai 类型
@@ -114,8 +115,8 @@ export function createProjectStreamFn(
   kind = "novelos_agentic",
 ): (model: Model<string>, context: Context, options?: { signal?: AbortSignal; timeoutMs?: number }) => AssistantMessageEventStream {
   return (_model: Model<string>, context: Context, options?: { signal?: AbortSignal; timeoutMs?: number }) => {
-    const systemPrompt = context.systemPrompt ?? "";
-    const userPrompt = buildUserPromptWithContext(context);
+    const systemPrompt = localizeLlmText(context.systemPrompt ?? "");
+    const userPrompt = localizeLlmText(buildUserPromptWithContext(context));
 
     const stream = createAssistantMessageEventStream();
     const signal = options?.signal;

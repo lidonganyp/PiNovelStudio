@@ -85,6 +85,17 @@ const EDITORIAL_TEXT_STRONG_HOOK = [
   "林川心里一紧：那东西的形状，不像鱼。老周为什么在笑？他到底看到了什么？",
 ].join("\n");
 
+const TEST_CONSTITUTION = {
+  workIdentity: "一部以主动选择、真实代价和长期人物成长为核心的都市异能成长小说。",
+  readerPromise: ["关键胜利必须来自角色选择，并留下可追踪代价。"],
+  genrePromises: ["都市日常与异能危险必须同时保持可信。"],
+  protagonistCoreConflict: "林川必须在保护同伴与追索水下真相之间持续做出不可回避的选择。",
+  thematicQuestions: ["保护他人是否必然要求牺牲自己？"],
+  aestheticDirection: ["具体动作承载情绪，不用作者总结替代人物反应。"],
+  forbiddenDrift: ["禁止无来源空降新神器、新组织计划或升级结果。"],
+  sourceIds: ["test:constitution"],
+};
+
 /** 高质量 raw：章末有钩子，不触发编辑机会 */
 const HIGH_QUALITY_RAW = [
   "林川推开舱门，冲进浑浊的水里。",
@@ -127,11 +138,29 @@ function makeCompositeStub(opts) {
       if (editorialEmpty) return { text: "", model: "stub-ed", route: input.route, durationMs: 10 };
       return { text: editorialText, model: "stub-ed", route: input.route, durationMs: 10 };
     }
+    if (input.kind === "opportunity_judge") {
+      return {
+        text: JSON.stringify({
+          opportunities: [{
+            opportunityType: "chapter_end_pressure",
+            diagnosis: "章末因果牵引力不足",
+            evidenceExcerpt: rawText.slice(0, Math.min(12, rawText.length)),
+            expectedReaderGain: "增强继续阅读意愿",
+            damageRisks: ["可能破坏既定章末事实"],
+            confidence: 0.8,
+          }],
+          noOpReason: null,
+        }),
+        model: "stub-opportunity",
+        route: input.route,
+        durationMs: 10,
+      };
+    }
     if (input.kind === "literary_judge") {
       if (judgeThrow) throw new Error("裁判异常（stub）");
-      // 解析 prompt 识别 A/B
-      const aMatch = input.userPrompt.match(/【候选 A】\n([\s\S]*?)\n（候选 A 总字符数/);
-      const bMatch = input.userPrompt.match(/【候选 B】\n([\s\S]*?)\n（候选 B 总字符数/);
+      // 解析 prompt 识别候选甲/乙
+      const aMatch = input.userPrompt.match(/【候选甲】\n+([\s\S]*?)\n+（候选甲总字符数/);
+      const bMatch = input.userPrompt.match(/【候选乙】\n+([\s\S]*?)\n+（候选乙总字符数/);
       const textA = aMatch ? aMatch[1] : "";
       const textB = bMatch ? bMatch[1] : "";
       const aHas = textA.includes(betterMarker);
@@ -183,6 +212,7 @@ function makeOrchestratorInput(overrides = {}) {
     context: makeContext(),
     constitution: null,
     characterNames: ["林川", "苏婉", "老周"],
+    allowAutomaticLiterarySelection: true,
     modelGenerate: makeCompositeStub({ rawText: RAW_TEXT_WEAK_END, editorialText: EDITORIAL_TEXT_STRONG_HOOK }),
     ...overrides,
   };
@@ -198,6 +228,7 @@ test("UnifiedOrchestrator: 成功路径 → 交付 editorial", async () => {
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
     assert.equal(result.status, "ok");
+    assert.ok(result.stageResults.craftPhenomenonReport, "成功候选路径必须保留 post-raw 工艺报告");
     assert.equal(result.selectedSource, "editorial");
     assert.equal(result.text, EDITORIAL_TEXT_STRONG_HOOK);
     assert.ok(result.candidates.length >= 2, "应有 raw + editorial 候选");
@@ -285,6 +316,7 @@ test("UnifiedOrchestrator: 高质量 raw 无编辑机会 → 交付 raw + warnin
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
     assert.equal(result.status, "ok");
+    assert.ok(result.stageResults.craftPhenomenonReport, "no-op/raw 路径也必须保留 post-raw 工艺报告");
     // 高质量 raw 可能无编辑机会或有机会但裁判判 raw 胜
     // 关键：如果无 hypothesis，应交付 raw + warning
     if (result.hypotheses.length === 0) {
@@ -510,7 +542,10 @@ test("UnifiedOrchestrator: 最终正文原子保存到章节文件", async () =>
 });
 
 test("UnifiedOrchestrator: stageResults 记录各阶段产物（trace 审计）", async () => {
-  const input = makeOrchestratorInput();
+  const input = makeOrchestratorInput({
+    constitution: TEST_CONSTITUTION,
+    context: makeContext({ constitution: TEST_CONSTITUTION }),
+  });
   try {
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
@@ -521,12 +556,34 @@ test("UnifiedOrchestrator: stageResults 记录各阶段产物（trace 审计）"
     assert.ok(result.stageResults.judgeArbitration, "应有 judgeArbitration 阶段产物");
     assert.ok(result.stageResults.finalSelection, "应有 finalSelection 阶段产物");
     assert.ok(result.stageResults.atomicSave, "应有 atomicSave 阶段产物");
+    assert.equal(result.stageResults.rawPromptConstraintAudit.type, "editorial");
+    assert.deepEqual(result.stageResults.methodologyPolicy.violations, []);
+    assert.deepEqual(result.stageResults.constitutionConsumption, {
+      raw: [
+        "constitution.workIdentity",
+        "constitution.readerPromise",
+        "constitution.genrePromises",
+        "constitution.protagonistCoreConflict",
+        "constitution.thematicQuestions",
+        "constitution.forbiddenDrift",
+      ],
+      editorial: [
+        "constitution.workIdentity",
+        "constitution.protagonistCoreConflict",
+        "constitution.readerPromise",
+        "constitution.forbiddenDrift",
+      ],
+      judge: [
+        "constitution.protagonistCoreConflict",
+        "constitution.readerPromise",
+      ],
+    });
   } finally {
     rmSync(input.projectRoot, { recursive: true, force: true });
   }
 });
 
-test("UnifiedOrchestrator: 带状态提交的 stagedStateUpdate 正确 commit", async () => {
+test("UnifiedOrchestrator: stagedStateUpdate 与最终候选不匹配时整次交付失败", async () => {
   const { dir } = makeTempProject();
   const input = {
     workspaceId: "test-ws-state",
@@ -557,10 +614,10 @@ test("UnifiedOrchestrator: 带状态提交的 stagedStateUpdate 正确 commit", 
   try {
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
-    assert.equal(result.status, "ok");
-    // stagedStateUpdate 的 finalCandidateId 与实际不匹配时，commit 会抛错
-    // 但编排器应 catch 并记录到 stageResults，不阻断交付
-    assert.ok(result.stageResults.stateCommit || result.stageResults.finalSelection);
+    assert.equal(result.status, "blocked");
+    assert.equal(result.failureEnvelope.stage, "atomic_save");
+    assert.ok(result.stageResults.stateCommit?.error);
+    assert.equal(existsSync(join(dir, "workspaces", "test-ws-state", "chapters", "ch-state.md")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -707,6 +764,103 @@ test("P1-6: 所有 editorial 候选均参与裁判（allArbitrations 记录）",
   }
 });
 
+test("P1-6: 两个 editorial 都胜过 raw 时必须直接决赛", async () => {
+  const previousMax = process.env.PINOVEL_MAX_HYPOTHESES;
+  process.env.PINOVEL_MAX_HYPOTHESES = "2";
+  const editorialTexts = [
+    `${RAW_TEXT_WEAK_END}\n第一编辑稿保留了线索。`,
+    `${RAW_TEXT_WEAK_END}\n第二编辑稿揭示了终选线索。`,
+  ];
+  let editorialIndex = 0;
+  let directEditorialComparisons = 0;
+
+  const modelGenerate = async (input) => {
+    if (input.kind === "raw_chapter") {
+      return { text: RAW_TEXT_WEAK_END, model: "stub-raw", route: input.route, durationMs: 1 };
+    }
+    if (input.kind === "opportunity_judge") {
+      return {
+        text: JSON.stringify({
+          opportunities: [
+            {
+              opportunityType: "chapter_end_pressure",
+              diagnosis: "ending needs pressure",
+              evidenceExcerpt: RAW_TEXT_WEAK_END.slice(-30),
+              expectedReaderGain: "stronger ending pressure",
+              damageRisks: ["avoid changing facts"],
+              confidence: 0.9,
+            },
+            {
+              opportunityType: "character_choice",
+              diagnosis: "choice needs consequence",
+              evidenceExcerpt: RAW_TEXT_WEAK_END.slice(0, 30),
+              expectedReaderGain: "clearer choice and cost",
+              damageRisks: ["avoid changing facts"],
+              confidence: 0.85,
+            },
+          ],
+          noOpReason: null,
+        }),
+        model: "stub-opportunity",
+        route: input.route,
+        durationMs: 1,
+      };
+    }
+    if (input.kind === "editorial_amplified") {
+      const text = editorialTexts[Math.min(editorialIndex, editorialTexts.length - 1)];
+      editorialIndex += 1;
+      return { text, model: "stub-editorial", route: input.route, durationMs: 1 };
+    }
+    if (input.kind === "literary_judge") {
+      const aMatch = input.userPrompt.match(/【候选甲】\n+([\s\S]*?)\n+（候选甲总字符数/);
+      const bMatch = input.userPrompt.match(/【候选乙】\n+([\s\S]*?)\n+（候选乙总字符数/);
+      const textA = aMatch?.[1] ?? "";
+      const textB = bMatch?.[1] ?? "";
+      const score = (text) => text.includes("终选线索") ? 2 : text.includes("第一编辑稿") ? 1 : 0;
+      if (score(textA) > 0 && score(textB) > 0) directEditorialComparisons += 1;
+      const winner = score(textA) >= score(textB) ? "A" : "B";
+      const worseText = winner === "A" ? textB : textA;
+      const worseLabel = winner === "A" ? "B" : "A";
+      const excerpt = worseText.slice(0, Math.min(8, worseText.length));
+      const span = { start: 0, end: excerpt.length, excerpt };
+      return {
+        text: JSON.stringify({
+          winner,
+          confidence: "clear",
+          decisiveReasons: [{
+            dimension: "causal pressure",
+            betterCandidate: winner,
+            evidenceA: worseLabel === "A" ? [span] : [],
+            evidenceB: worseLabel === "B" ? [span] : [],
+            explanation: `${winner} has stronger causal pressure`,
+          }],
+          factualRisks: [],
+          regressionRisks: [],
+          constitutionAlignment: "aligned",
+        }),
+        model: "stub-judge",
+        route: input.route,
+        durationMs: 1,
+      };
+    }
+    return { text: "", model: "stub", route: input.route, durationMs: 1 };
+  };
+
+  const input = makeOrchestratorInput({ modelGenerate });
+  try {
+    const result = await createUnifiedOrchestrator().orchestrate(input);
+    assert.equal(result.status, "ok");
+    assert.equal(result.candidates.filter((c) => c.kind === "editorial_amplified").length, 2);
+    assert.ok(directEditorialComparisons >= 1, "editorial winners must be compared head to head");
+    assert.ok(result.stageResults.judgeArbitration.editorialFinal);
+    assert.equal(result.text, editorialTexts[1]);
+  } finally {
+    if (previousMax === undefined) delete process.env.PINOVEL_MAX_HYPOTHESES;
+    else process.env.PINOVEL_MAX_HYPOTHESES = previousMax;
+    rmSync(input.projectRoot, { recursive: true, force: true });
+  }
+});
+
 // ============================================================================
 // 11. P0-4: 正文保存失败 → hard block（事务一致性）
 // ============================================================================
@@ -743,6 +897,13 @@ test("P0-4: 正文原子保存失败 → hard block（不假装成功）", async
     );
     // 状态不应被提交（无污染）
     assert.equal(result.stateCommit, null, "正文保存失败时状态不应提交");
+    assert.ok(result.stageResults.chapterQualityEvidence, "structural evidence must run before save");
+    assert.ok(result.stageResults.informationReleaseEvidence, "information evidence must run before save");
+    assert.ok(result.stageResults.endingCraftEvidence, "ending evidence must run before save");
+    assert.equal(result.stageResults.chapterQualityEvidence.structuralEvidenceMeta.skipped, false);
+    assert.equal(result.stageResults.informationReleaseEvidence.meta.skipped, false);
+    assert.equal(result.stageResults.endingCraftEvidence.meta.skipped, false);
+    assert.ok(result.stageResults.chapterQualityEvidence.structuralEvidenceMeta.scannedTextLength > 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -940,5 +1101,30 @@ test("Step 1d 修复: arbitrate 内部多轮超 HARD 被拦截（不穿透）", 
   } finally {
     if (savedHard === undefined) delete process.env.PINOVEL_MODEL_CALL_HARD;
     else process.env.PINOVEL_MODEL_CALL_HARD = savedHard;
+  }
+});
+
+test("fullPipelinePreview total budget caps each request and stops later model stages", async () => {
+  const calls = [];
+  const input = makeOrchestratorInput({
+    fullPipelinePreview: true,
+    previewTotalTimeoutMs: 25,
+    modelGenerate: async (modelInput) => {
+      calls.push({ kind: modelInput.kind, timeoutMs: modelInput.timeoutMs });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      if (modelInput.kind === "raw_chapter") {
+        return { text: RAW_TEXT_WEAK_END, model: "stub-raw", route: modelInput.route, durationMs: 30 };
+      }
+      return { text: "{}", model: "stub", route: modelInput.route, durationMs: 30 };
+    },
+  });
+  try {
+    const result = await createUnifiedOrchestrator().orchestrate(input);
+    assert.equal(result.status, "ok");
+    assert.equal(calls.length, 1, "budget exhaustion must stop opportunity/editorial/judge calls");
+    assert.ok(calls[0].timeoutMs > 0 && calls[0].timeoutMs <= 25);
+    assert.equal(result.stageResults.previewBudget?.capped, true);
+  } finally {
+    rmSync(input.projectRoot, { recursive: true, force: true });
   }
 });

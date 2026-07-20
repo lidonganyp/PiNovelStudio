@@ -318,8 +318,8 @@ export class NarrativeAgentLoop {
       "种子上下文：",
       input.seedContext,
       "",
-      "请先使用 search_narrative_evidence 检索结构化事实证据（canon/角色状态/原文 span），",
-      "再按需用 search_chapter_span 查证具体原文。证据充分时直接输出正文，不再发出工具调用指令。",
+      "请先使用跨源叙事证据检索工具查找结构化事实证据（世界事实、角色状态、原文片段），",
+      "再按需使用章节原文片段检索工具查证具体原文。证据充分时直接输出正文，不再发出工具调用指令。",
     );
     const userPrompt = promptParts.join("\n");
 

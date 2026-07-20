@@ -1,32 +1,15 @@
 /**
- * EditorialCandidateGenerator — 机会驱动候选生成器（Phase 3，计划 §Phase 3）
+ * EditorialCandidateGenerator — 从 0-2 个有正文证据的编辑假设生成候选。
  *
- * 从 EditorialOpportunityJudge 产出的 0-2 个 EditorialHypothesis 生成候选正文。
- *
- * 设计原则（计划 §Phase 3 + §4.4）：
- * - 每个候选只携带一个主要 hypothesis，避免目标互相稀释
- * - 候选 prompt 注入 hypothesis 的 diagnosis、evidence span excerpt、
- *   expectedReaderGain、damageRisks，以及策略 focus/angle
- * - 候选 prompt 必须注入 inviolableFacts 守卫，确保候选不改变不可侵犯事实
- * - 无 hypothesis → 返回空候选 + noOpReason（日常链路不会无条件生成多候选）
- * - prompt 必须通过 auditPrompt（editorial 型，无机械指标词）
- * - 空文本有界重试，模型失败标记 auditFailure，不进入候选列表
- *
- * 与旧 CandidateGenerator 的区别：
- * - 旧生成器按固定 6 类 kind 生成，editorial_amplified 按 4-5 个固定 variantStrategies 展开
- * - 新生成器只在有机会时生成 0-2 个候选，每个绑定一个 hypothesis + strategyId
- * - 候选 sourceCandidateId 指向 raw 候选 id，形成 raw → editorial(strategyId) 链路
- *
- * 类型映射（计划 §Phase 3 "固定类型改为 raw 与 editorial(strategyId)"）：
- * - raw 候选：kind 不变（由编排器生成），作为基线
- * - editorial 候选：kind="editorial_amplified"，editorialStrategy=strategyId，
- *   hypothesisId=hypothesis.id，sourceCandidateId=raw 候选 id
+ * 每个候选只绑定一个假设和策略，保留 raw 作为来源基线；提示词必须通过
+ * 编辑型审计并携带不可破坏事实。无假设时 no-op，空文本只做有界重试。
  */
 
 import type {
   Candidate,
   CandidatePromptProfile,
   CompiledContext,
+  ConstitutionSnapshot,
   TextSpan,
 } from "./types.js";
 import type { ChapterIntent } from "./chapter-intent-builder.js";
@@ -39,30 +22,36 @@ import type {
   ModelGenerateFn,
   ModelGenerateInput,
 } from "../adapters/legacy-model-route-adapter.js";
-import { auditPrompt } from "./candidate-generator.js";
+import { auditPrompt } from "./prompt-constraint-audit.js";
 // QUALITY-11：证据感知编辑机会 advisory context（可选注入 candidate prompt）
 import type { EditorialOpportunityAdvisory } from "./editorial-opportunity-advisory.js";
 // MODEL-ROUTING-CLAUDE46-1C：校准候选完整性 + 中文母语语感 before/after 复检
 import { scanFinalTextCompleteness } from "./final-text-completeness-guard.js";
-import { createLanguageRiskLibrary } from "./language-risk-library.js";
-import {
-  evaluateChineseNativeRewriteAllowance,
-  type ChineseNativeEvidence,
-} from "./regression-checks.js";
+import type { WriterPromptProfile } from "./model-prompt-adapter.js";
 
-// ============================================================================
 // 常量
-// ============================================================================
 
-/** editorial 候选生成路由（与旧 editorial_amplified 一致，走 v2_amplified） */
+/** Explicit Claude/non-Gemini editorial route. */
 const EDITORIAL_CANDIDATE_ROUTE = "v2_amplified";
+
+/** Default Gemini editorial route, isolated from Claude fallback. */
+const GEMINI_EDITORIAL_CANDIDATE_ROUTE = "v2_amplified_gemini31";
+
+/** Keep ordinary editorial prose on the chapter's explicitly selected writer family. */
+export function resolveEditorialCandidateRoute(
+  writerPromptProfile?: WriterPromptProfile,
+): string {
+  return writerPromptProfile === "gemini_writer_v1" || writerPromptProfile === "gemini_writer_v2"
+    ? GEMINI_EDITORIAL_CANDIDATE_ROUTE
+    : EDITORIAL_CANDIDATE_ROUTE;
+}
 
 /**
  * MODEL-ROUTING-CLAUDE46-1C：Doubao span 驱动中文校准路由。
  *
  * 仅当 hypothesis.opportunityType === "voice_and_naturalness" 且至少有一个有效
- * 证据 span 时启用。Doubao 在此路由下做 span 级局部中文自然度校准（感知侵蚀词
- * 改写为具体动作/感官细节），不做整章重写。无 span 的 voice_and_naturalness
+ * 证据 span 时启用。Doubao 在此路由下只处理有证据的局部中文自然度问题，
+ * 具体改法由模型决定，不做整章重写。无 span 的 voice_and_naturalness
  * hypothesis 不触发任何候选生成（含 Doubao 与 Claude）。
  */
 const CALIBRATION_CANDIDATE_ROUTE = "v2_chinese_calibration";
@@ -82,15 +71,9 @@ const DEFAULT_TIMEOUT_MS = 600000;
 /** 空文本有界重试上限（总尝试 = 重试上限 + 1） */
 const MAX_EMPTY_RETRIES = 2;
 
-const EDITORIAL_SYSTEM_PROMPT = `你是顶尖网文作者。请基于待编辑原文做增量编辑，保留原有场景、关键事件与人物关系，禁止重建不同故事。
+const EDITORIAL_SYSTEM_PROMPT = `你是中文长篇小说编辑。请只针对给定 raw span、诊断、预期读者增益和损伤风险生成一个编辑候选。
 
-写作原则：
-- 少约束生成，多约束选择；少强迫改文，多比较胜负；少管句子，多管目标。
-- 写读者体验，不写指标。
-- 让角色主动选择，让风险真实递增。
-- 中文自然，不用翻译腔。
-- 编辑只服务于明确假设，不得另起场景、替换关键事件或重组人物关系。
-- 不可破坏的事实绝不改动，只可在其约束下强化呈现。`;
+保留原有故事、关键事件、人物关系、事实与知识边界。如何实现预期增益由你自行决定；不要把诊断或字段改写成正文说明。输出完整候选正文。`;
 
 /**
  * MODEL-ROUTING-CLAUDE46-1C：Doubao 中文校准专用 system prompt。
@@ -99,18 +82,16 @@ const EDITORIAL_SYSTEM_PROMPT = `你是顶尖网文作者。请基于待编辑�
  * 证据 span 外的任何文本。Doubao 在此约束下只做感知侵蚀词/AI 腔的局部自然化，
  * 不重构场景、事件或人物关系。
  */
-const CALIBRATION_SYSTEM_PROMPT = `你是顶尖中文网文校准师。请基于待校准原文做 span 级中文自然度校准。
+const CALIBRATION_SYSTEM_PROMPT = `你是中文长篇小说编辑。请基于待校准原文做 span 级自然度校准。
 
 校准原则：
 - 只修改证据 span 及其最小邻接上下文，不得整章重写。
 - 不得修改证据 span 外的任何文本（场景、事件、人物关系、未标注段落一律保留原样）。
-- 把感知侵蚀词、翻译腔、AI 腔改写为具体动作与感官细节，回到母语自然。
+- 只修正诊断指出的自然度问题，具体改法由你自行决定。
 - 不可破坏的事实绝不改动。
 - 输出必须是完整正文（含未修改部分），差异只能出现在证据 span 邻接区域内。`;
 
-// ============================================================================
 // 输入/输出类型
-// ============================================================================
 
 export interface EditorialCandidateGenerateInput {
   /** raw 正文（hypothesis 的 evidence span 引用此文本） */
@@ -125,11 +106,15 @@ export interface EditorialCandidateGenerateInput {
   intent: ChapterIntent;
   /** CompiledContext（事实/风格参考，只读） */
   context: CompiledContext;
+  /** 作品宪法快照（只读；用于约束编辑方向，禁止机械句式配额） */
+  constitution?: ConstitutionSnapshot | null;
   /** 上下文 hash */
   contextHash: string;
   chapterNumber: number;
   /** 模型调用函数 */
   modelGenerate: ModelGenerateFn;
+  /** Writer family selected for this chapter; ordinary editing stays on that family. */
+  writerPromptProfile?: WriterPromptProfile;
   /** 编辑策略注册表 */
   strategyRegistry: EditorialStrategyRegistry;
   /** 超时 ms */
@@ -162,11 +147,11 @@ export interface EditorialCandidateGenerateResult {
   failures: EditorialCandidateFailure[];
   /** 0 hypothesis 时的 no-op 原因 */
   noOpReason?: string;
+  /** 实际进入 editorial prompt 的 Constitution 字段名 */
+  constitutionConsumedFields: string[];
 }
 
-// ============================================================================
 // EditorialCandidateGenerator 主类
-// ============================================================================
 
 export class EditorialCandidateGenerator {
   async generate(
@@ -180,6 +165,7 @@ export class EditorialCandidateGenerator {
         candidates: [],
         failures: [],
         noOpReason: "无 EditorialHypothesis，不生成 editorial 候选（no-op）",
+        constitutionConsumedFields: [],
       };
     }
 
@@ -244,7 +230,11 @@ export class EditorialCandidateGenerator {
       }
     }
 
-    return { candidates, failures };
+    return {
+      candidates,
+      failures,
+      constitutionConsumedFields: getEditorialConstitutionConsumedFields(input.constitution ?? null),
+    };
   }
 
   // --------------------------------------------------------------------------
@@ -262,8 +252,8 @@ export class EditorialCandidateGenerator {
     // MODEL-ROUTING-CLAUDE46-1C：按 hypothesis 类型选路由。
     // - voice_and_naturalness + 有效 span → v2_chinese_calibration (Doubao span 校准)
     // - voice_and_naturalness + 无 span → 不生成候选（无 span 不校准，也不回退 Claude）
-    // - 其他 opportunityType → v2_amplified (Claude 4.6)
-    const routeInfo = this.pickRouteForHypothesis(hypothesis);
+    // - 其他 opportunityType → 当前 writer family 的 isolated editorial route
+    const routeInfo = this.pickRouteForHypothesis(hypothesis, input.writerPromptProfile);
     if (routeInfo.skipReason) {
       return {
         failure: {
@@ -396,12 +386,15 @@ export class EditorialCandidateGenerator {
    *
    * - voice_and_naturalness + 有效 span → v2_chinese_calibration (Doubao span 校准)
    * - voice_and_naturalness + 无 span → skip（无 span 不校准，也不回退 Claude）
-   * - 其他 opportunityType → v2_amplified (Claude 4.6)
+   * - 其他 opportunityType → 当前 writer family 的 isolated editorial route
    *
    * 无 span 的 voice_and_naturalness hypothesis 没有可校准的局部目标，
    * 不应触发任何模型调用（含 Doubao 与 Claude）。
    */
-  private pickRouteForHypothesis(h: EditorialHypothesis): {
+  private pickRouteForHypothesis(
+    h: EditorialHypothesis,
+    writerPromptProfile?: WriterPromptProfile,
+  ): {
     route: string;
     isCalibration: boolean;
     skipReason?: string;
@@ -418,7 +411,10 @@ export class EditorialCandidateGenerator {
       }
       return { route: CALIBRATION_CANDIDATE_ROUTE, isCalibration: true };
     }
-    return { route: EDITORIAL_CANDIDATE_ROUTE, isCalibration: false };
+    return {
+      route: resolveEditorialCandidateRoute(writerPromptProfile),
+      isCalibration: false,
+    };
   }
 
   /**
@@ -505,34 +501,7 @@ export class EditorialCandidateGenerator {
       };
     }
 
-    // 2. 中文母语语感 before/after
-    const library = createLanguageRiskLibrary();
-    const characterNames: string[] = [];
-    const beforeScan = library.scan(rawText, characterNames);
-    const afterScan = library.scan(candidateText, characterNames);
-
-    const levelToRisk = (lvl: "green" | "yellow" | "red"): "low" | "medium" | "high" =>
-      lvl === "green" ? "low" : lvl === "yellow" ? "medium" : "high";
-
-    // 计数：感知侵蚀 + 自然感类风险命中数（校准的直接目标）
-    const countRelevant = (entries: { category: string }[]): number =>
-      entries.filter((e) => e.category === "perception_erosion" || e.category === "naturalness").length;
-
-    const evidence: ChineseNativeEvidence = {
-      beforeRiskLevel: levelToRisk(beforeScan.level),
-      afterRiskLevel: levelToRisk(afterScan.level),
-      beforeCount: countRelevant(beforeScan.entries),
-      afterCount: countRelevant(afterScan.entries),
-    };
-
-    const allowance = evaluateChineseNativeRewriteAllowance(evidence);
-    if (!allowance.allowed) {
-      return {
-        ok: false,
-        reason: `中文母语语感退化：${allowance.reason}（before=${evidence.beforeRiskLevel}/${evidence.beforeCount}, after=${evidence.afterRiskLevel}/${evidence.afterCount}）`,
-      };
-    }
-
+    void rawText;
     return { ok: true };
   }
 
@@ -561,30 +530,21 @@ export class EditorialCandidateGenerator {
     }
 
     // 上下文（精简：只渲染角色状态与关键事实锚点，避免目标稀释）
-    userParts.push(this.buildContextBlock(input.context));
+    userParts.push(this.buildContextBlock(input.context, input.intent.relevantCharacters));
 
-    // QUALITY-11：raw 阶段 craft evidence advisory（诊断上下文，非命令，非评分）。
-    // 注入位置：上下文之后、核心假设之前，让模型先看到 raw 的 craft risk 摘要再处理 hypothesis。
-    // **不改变候选生成逻辑**：advisory 只是额外上下文；hypothesis 仍由 EditorialOpportunityJudge
-    // 独立判定，候选是否生成仍由 opportunity 机制决定。
-    if (input.craftAdvisory?.promptBlock) {
-      userParts.push(input.craftAdvisory.promptBlock);
+    const constitutionBlock = buildEditorialConstitutionBlock(input.constitution ?? null);
+    if (constitutionBlock) {
+      userParts.push(constitutionBlock);
     }
 
     // 核心编辑假设（唯一主要目标）
     userParts.push(this.buildHypothesisBlock(hypothesis, input.rawText));
 
-    // 策略焦点与切入角度
-    userParts.push(`【编辑策略】${strategy.strategyId}`);
-    userParts.push(`焦点：${strategy.focus}`);
-    userParts.push(`切入角度：${strategy.angle}`);
-    userParts.push(strategy.promptGuidance);
-
     // 不可侵犯事实守卫（候选不得改变）
     userParts.push(this.buildInviolableGuardBlock(input.intent, strategy));
 
     // 字数预算（编辑型，非段落长度约束）
-    userParts.push(`字数预算：按上下文暗示的章节体量自然展开。`);
+    userParts.push("保持正文完整；具体修订表达由你自行决定。");
 
     return {
       systemPrompt: EDITORIAL_SYSTEM_PROMPT,
@@ -620,7 +580,12 @@ export class EditorialCandidateGenerator {
     userParts.push(`【待校准原文（完整）】\n${input.rawText}`);
 
     // 上下文（精简）
-    userParts.push(this.buildContextBlock(input.context));
+    userParts.push(this.buildContextBlock(input.context, input.intent.relevantCharacters));
+
+    const constitutionBlock = buildEditorialConstitutionBlock(input.constitution ?? null);
+    if (constitutionBlock) {
+      userParts.push(constitutionBlock);
+    }
 
     // 证据 span 列表（显式位置 + excerpt）
     const spanLines = hypothesis.evidenceSpans
@@ -633,19 +598,8 @@ export class EditorialCandidateGenerator {
       `【证据 span（仅可修改这些 span 及其最小邻接上下文）】\n${spanLines.join("\n")}`
     );
 
-    // QUALITY-11：craft evidence advisory（诊断上下文）
-    if (input.craftAdvisory?.promptBlock) {
-      userParts.push(input.craftAdvisory.promptBlock);
-    }
-
     // 核心编辑假设
     userParts.push(this.buildHypothesisBlock(hypothesis, input.rawText));
-
-    // 策略焦点与切入角度
-    userParts.push(`【编辑策略】${strategy.strategyId}`);
-    userParts.push(`焦点：${strategy.focus}`);
-    userParts.push(`切入角度：${strategy.angle}`);
-    userParts.push(strategy.promptGuidance);
 
     // span 级局部编辑硬约束（关键：区别于整章重写）
     userParts.push(
@@ -668,12 +622,13 @@ export class EditorialCandidateGenerator {
    * 渲染精简上下文块：角色状态 + 关键事实锚点。
    * 刻意不渲染场景契约全量与开放回路全量，避免与 hypothesis 目标互相稀释。
    */
-  private buildContextBlock(context: CompiledContext): string {
+  private buildContextBlock(context: CompiledContext, relevantCharacters: string[]): string {
     const lines: string[] = [];
+    const relevant = new Set(relevantCharacters);
 
     if (context.characterStates.length > 0) {
       lines.push("【角色状态】");
-      for (const c of context.characterStates.slice(0, 6)) {
+      for (const c of context.characterStates.filter((entry) => relevant.has(entry.name)).slice(0, 6)) {
         const state = c.state;
         const parts: string[] = [];
         if (state.role) parts.push(`定位=${state.role}`);
@@ -702,6 +657,7 @@ export class EditorialCandidateGenerator {
   private buildHypothesisBlock(hypothesis: EditorialHypothesis, rawText: string): string {
     const lines: string[] = ["【本候选的核心编辑假设（唯一主要目标）】"];
     lines.push(`编辑机会类型：${hypothesis.opportunityType}`);
+    if (hypothesis.craftDomain) lines.push(`方法论工艺域：${hypothesis.craftDomain}`);
     lines.push(`诊断：${hypothesis.diagnosis}`);
 
     // evidence span excerpt（从 raw 取真实文本片段）
@@ -721,12 +677,12 @@ export class EditorialCandidateGenerator {
   }
 
   /**
-   * 渲染不可侵犯事实守卫：ChapterIntent.inviolableFacts + 策略守卫说明。
+   * 渲染不可侵犯事实守卫：ChapterIntent.inviolableFacts 与人物知识边界。
    * 候选不得改变这些事实。
    */
   private buildInviolableGuardBlock(
     intent: ChapterIntent,
-    strategy: EditorialStrategyDef
+    _strategy: EditorialStrategyDef
   ): string {
     const lines: string[] = ["【不可侵犯事实（候选绝不得改变）】"];
     if (intent.inviolableFacts.length > 0) {
@@ -736,9 +692,43 @@ export class EditorialCandidateGenerator {
     } else {
       lines.push("- （本章无显式不可侵犯事实，按已建立的世界观与角色基线约束）");
     }
-    lines.push(`策略守卫：${strategy.inviolableGuardNote}`);
+    for (const boundary of intent.factAndCharacterKnowledgeForbiddenZones ?? []) {
+      if (!intent.inviolableFacts.includes(boundary)) lines.push(`- ${boundary}`);
+    }
     return lines.join("\n");
   }
+}
+
+// ============================================================================
+// 作品宪法消费
+// ============================================================================
+
+export function getEditorialConstitutionConsumedFields(
+  constitution: ConstitutionSnapshot | null
+): string[] {
+  if (!constitution) return [];
+  const fields: string[] = [];
+  if (constitution.workIdentity?.trim()) fields.push("constitution.workIdentity");
+  if (constitution.protagonistCoreConflict?.trim()) fields.push("constitution.protagonistCoreConflict");
+  if (constitution.readerPromise?.length > 0) fields.push("constitution.readerPromise");
+  if (constitution.forbiddenDrift?.length > 0) fields.push("constitution.forbiddenDrift");
+  return fields;
+}
+
+function buildEditorialConstitutionBlock(constitution: ConstitutionSnapshot | null): string | null {
+  if (!constitution) return null;
+  const lines: string[] = ["【作品宪法（编辑必须对齐）】"];
+  if (constitution.workIdentity?.trim()) lines.push(`作品身份：${constitution.workIdentity}`);
+  if (constitution.protagonistCoreConflict?.trim()) {
+    lines.push(`主角核心冲突：${constitution.protagonistCoreConflict}`);
+  }
+  if (constitution.readerPromise?.length > 0) {
+    lines.push(`读者承诺：${constitution.readerPromise.slice(0, 3).join("；")}`);
+  }
+  if (constitution.forbiddenDrift?.length > 0) {
+    lines.push(`禁止漂移：${constitution.forbiddenDrift.slice(0, 5).join("；")}`);
+  }
+  return lines.length > 1 ? lines.join("\n") : null;
 }
 
 // ============================================================================

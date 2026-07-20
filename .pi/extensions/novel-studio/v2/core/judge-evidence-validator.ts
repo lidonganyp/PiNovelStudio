@@ -107,6 +107,34 @@ export function validateJudgeEvidence(
     }
   }
 
+  // 5. 读者体验判决一致性。存在该子判决时，总胜者不得被结构性理由反向覆盖。
+  if (verdict.readerExperience) {
+    const reader = verdict.readerExperience;
+    const votes = [
+      reader.nativeChinese,
+      reader.characterCredibility,
+      reader.goalObstacleChoiceResult,
+      reader.emotionalProgression,
+      reader.informationRelease,
+      reader.sceneImmersion,
+      reader.causalEndPressure,
+      reader.worldContinuity,
+    ];
+    const aVotes = votes.filter((vote) => vote === "A").length;
+    const bVotes = votes.filter((vote) => vote === "B").length;
+    const majority = aVotes >= 5 ? "A" : bVotes >= 5 ? "B" : "tie";
+    if (majority !== "tie" && reader.preferredCandidate !== majority) {
+      errors.push(
+        `readerExperience 首选=${reader.preferredCandidate} 与八维读者体验多数=${majority} 不一致`,
+      );
+    }
+    if (verdict.winner !== "tie" && reader.preferredCandidate !== verdict.winner) {
+      errors.push(
+        `winner=${verdict.winner} 与读者第一选择=${reader.preferredCandidate} 不一致；结构理由不得覆盖读者体验`,
+      );
+    }
+  }
+
   return {
     ok: errors.length === 0,
     errors,

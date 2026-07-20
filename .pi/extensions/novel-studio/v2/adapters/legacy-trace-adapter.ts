@@ -31,7 +31,7 @@ import type {
   SceneContract,
   CompiledContext,
 } from "../core/types.js";
-import { classifyCandidateSource } from "../core/final-selector.js";
+import { classifyCandidateSource } from "../core/candidate-source.js";
 import type { ModelCallEntry } from "../core/unified-orchestrator.js";
 
 // ============================================================================

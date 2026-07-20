@@ -59,6 +59,15 @@ function createMinimalWorkspace() {
     characters: [
       { id: "protagonist-1", name: "叶尘", role: "protagonist" },
     ],
+    chapterSeeds: {
+      default: {
+        choicesAndCosts: [
+          { choice: "公开接受传承", cost: "暴露自己已不再是普通少年" },
+        ],
+        expectedIrreversibleChange: ["叶尘接受传承后无法再维持原有身份"],
+        causalEndPressure: ["传承被激活后引来追踪者"],
+      },
+    },
     createdAt: new Date().toISOString(),
   };
   writeFileSync(join(PHASE5_WORKSPACE, "config.json"), JSON.stringify(config, null, 2), "utf-8");
@@ -146,6 +155,30 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
       details.v2NotImplemented ?? result.v2NotImplemented,
       undefined,
       "统一主链路不应返回 v2NotImplemented（无 legacy 回退）",
+    );
+
+    // GEMINI-DEFAULT-WRITER-1：未传 writerModel 时，公开入口必须实际锁定 Gemini，
+    // 不能只在 model-routing.json 中声明默认值而继续调用 Claude 语义路由。
+    const rawModelCall = (stageResults.modelCalls ?? []).find(
+      (call) => call.kind === "raw_chapter" || call.route === "v2_rawstage2",
+    );
+    assert.ok(rawModelCall, "默认路径必须记录 raw 模型调用遥测");
+    assert.equal(rawModelCall.requestedRoute, "v2_rawstage2_gemini31");
+    assert.equal(rawModelCall.expectedProvider, "gemini31");
+    assert.equal(rawModelCall.expectedModel, "gemini-3.1-pro-preview");
+    assert.equal(rawModelCall.promptProfile, "gemini_writer_v2");
+
+    // 固定场景候选源已退出生产；trace 必须明确记录退休状态。
+    assert.ok(
+      stageResults.positiveGainCandidates,
+      "公开生产入口必须记录固定场景候选源已退休",
+    );
+    assert.equal(stageResults.positiveGainCandidates.status, "retired_from_production");
+    assert.equal(stageResults.positiveGainCandidates.failureReason, "global_scene_candidate_admission_retired");
+    assert.equal(
+      (details.candidates ?? []).some((candidate) => candidate.kind === "style_aware"),
+      false,
+      "非增量提示模式 C 必须保持 dormant，不得由公开入口生成",
     );
   });
 

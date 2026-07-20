@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, writeFileSync, statSync } from "fs";
 import { join } from "path";
 import type { Candidate } from "../core/types.js";
 import { loadModelRoutingSync } from "../../utils/config.js";
+import { localizeLlmMessages } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // ModelGenerateFn — 模型调用统一接口
@@ -37,6 +38,8 @@ export interface ModelGenerateInput {
   userPrompt: string;
   /** 候选 kind，用于 stub 区分返回内容 */
   kind: string;
+  /** Optional bounded output budget for structured auxiliary calls. */
+  maxTokens?: number;
   /** 超时 ms */
   timeoutMs?: number;
   /**
@@ -53,6 +56,8 @@ export interface ModelGenerateInput {
    * 未锁定时省略（undefined）；wrapModelFn catch 回退用 genInput.route。
    */
   requestedRoute?: string;
+  /** MODEL-PROMPT-ADAPTER-1：本次调用使用的提示词表达层，供 trace/消融切片。 */
+  promptProfile?: string;
 }
 
 export interface ModelGenerateOutput {
@@ -352,49 +357,40 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
     const start = Date.now();
     // 动态 import legacy fallback-manager，避免 V2 typecheck 依赖 legacy 内部类型
     const fallbackMod: any = await import("../../api/fallback-manager.js");
-    const manager = fallbackMod.createAPIFallbackManager();
-    const messages = [
+    const candidateTimeoutMs = input.timeoutMs ?? 600000;
+    const manager = fallbackMod.createAPIFallbackManager({ totalTimeoutMs: candidateTimeoutMs });
+    const messages = localizeLlmMessages([
       { role: "system", content: input.systemPrompt },
       { role: "user", content: input.userPrompt },
-    ];
-    // Issue #6: callWithFallback 的 ChatCallOptions 不接受 timeoutMs（被静默丢弃），
-    // 真实 chain 总超时来自 PINOVEL_MODEL_TOTAL_TIMEOUT_MS 环境变量（由 V2 编排器设置）。
-    // 这里额外用 Promise.race 加一层防御性 bounded 超时，保证单候选调用不会无限等待：
-    // 即使 env 未生效或 manager 内部预算被耗尽，也必须在 candidateTimeoutMs 内返回或抛错。
-    const candidateTimeoutMs = input.timeoutMs ?? 600000;
-    const maxTokens = input.kind === "raw_chapter" || input.kind === "editorial_amplified"
-      ? resolveGenerationMaxTokens()
-      : undefined;
-    const callPromise = manager.callWithFallback(
+    ]);
+    // Use the same candidate budget for the chain and the in-flight HTTP request.
+    // fetchWithTimeout aborts the request, so timeout does not leave a background retry alive.
+    const maxTokens = input.maxTokens ?? (
+      input.kind === "raw_chapter" || input.kind === "editorial_amplified"
+        ? resolveGenerationMaxTokens()
+        : undefined
+    );
+    const result = await manager.callWithFallback(
       input.route,
       messages,
-      maxTokens === undefined ? {} : { max_tokens: maxTokens },
+      {
+        ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
+        timeoutMs: candidateTimeoutMs,
+        ...(input.route === "v2_literary_judge" ? { stream: true } : {}),
+      },
     );
-    let timer: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        reject(new Error(`V2 candidate generation timeout: exceeded ${candidateTimeoutMs}ms (route=${input.route})`));
-      }, candidateTimeoutMs);
-    });
-    try {
-      const result = await Promise.race([callPromise, timeoutPromise]);
-      const text = extractTextFromFallbackResult(result);
-      const finishReason = extractFinishReasonFromFallbackResult(result);
-      return {
-        text,
-        model: result.usedModel ?? "unknown",
-        route: input.route,
-        // REAL-QUALITY-1-PREFLIGHT：透传 fallback-manager 的 usedProvider 作为真实 provider 证据。
-        // usedProvider 在 FallbackResult 接口已存在（api/fallback-manager.ts:51），
-        // 此前 createLegacyModelGenerateFn 只读 usedModel，未读 usedProvider，导致 modelCalls 缺 provider 证据。
-        provider: result.usedProvider ?? undefined,
-        ...(finishReason !== undefined ? { finishReason } : {}),
-        ...(maxTokens !== undefined ? { maxTokens } : {}),
-        durationMs: Date.now() - start,
-      };
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    const text = extractTextFromFallbackResult(result);
+    const finishReason = extractFinishReasonFromFallbackResult(result);
+    return {
+      text,
+      model: result.usedModel ?? "unknown",
+      route: input.route,
+      // REAL-QUALITY-1-PREFLIGHT：透传 fallback-manager 的 usedProvider 作为真实 provider 证据。
+      provider: result.usedProvider ?? undefined,
+      ...(finishReason !== undefined ? { finishReason } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      durationMs: Date.now() - start,
+    };
   };
 }
 

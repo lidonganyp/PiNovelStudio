@@ -10,6 +10,7 @@ import type {
   Candidate,
   CompiledContext,
   ConstitutionSnapshot,
+  QualityExperimentControl,
 } from "./types.js";
 import type { ChapterIntent } from "./chapter-intent-builder.js";
 import type { ModelGenerateFn } from "../adapters/legacy-model-route-adapter.js";
@@ -22,6 +23,10 @@ import type { StrategyOutcomeRecorder } from "../learning/strategy-outcome-recor
 import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-candidate-source.js";
 import type { ContextSafetyResult } from "./context-safety.js";
 import type { TrustedControlPlane } from "./control-plane.js";
+import type { SceneSolutionCard } from "./scene-solution-search.js";
+import type { PortableCraftGene } from "./portable-craft-gene.js";
+import type { PromptPatternResolution } from "./prompt-pattern-library.js";
+import type { WriterPromptProfile } from "./model-prompt-adapter.js";
 // P0-3 审批闭环接通（2026-07-17）：代理审批阶段类型
 // 计划 §6.3：FinalFactRecheck → ChapterProxyApproval → saveProxyApprovedDraft
 // → UserRevisionOrAcceptance → FinalFactRecheck(user) → FinalStateCommit → AtomicChapterSave
@@ -87,6 +92,8 @@ export interface ModelCallEntry {
   actualModel?: string;
   failurePhase?: "model.generate" | "model.judge";
   errorClass?: string;
+  /** MODEL-PROMPT-ADAPTER-1：模型专用提示词 profile，供按模型版本隔离评测。 */
+  promptProfile?: WriterPromptProfile;
   /** raw prompt 实际消费的身份/章卡字段，供共源审计。 */
   consumedFields?: string[];
 }
@@ -118,9 +125,29 @@ export interface UnifiedOrchestratorInput {
    * 用于：预览候选生成与裁判结果，不污染工作区状态。
    */
   fullPipelinePreview?: boolean;
+  /** Isolated read-only quality-ceiling sample; never used for normal delivery. */
+  qualityExperiment?: QualityExperimentControl;
+  /** Optional wall-clock budget for all model calls in one read-only preview. */
+  previewTotalTimeoutMs?: number;
   projectRoot: string;
   /** 章节意图（ChapterIntentBuilder 输出） */
   intent: ChapterIntent;
+  /** SCENE-SOLUTION-SEARCH-1：显式选择的写前方案卡；未提供时保持普通 raw。 */
+  sceneSolution?: SceneSolutionCard | null;
+  /** PORTABLE-CRAFT-GENE-1：显式实验臂使用的抽象叙事工艺。 */
+  craftGenes?: PortableCraftGene[];
+  /** PROMPT-PATTERN-ADMISSION-1：入口解析后的有准入状态提示模式。 */
+  promptPatternResolution?: PromptPatternResolution;
+  /** @deprecated 固定场景候选已退出生产主链路。 */
+  positiveGainPromptPatternResolution?: PromptPatternResolution;
+  /** @deprecated 生产主链路忽略此字段。 */
+  positiveGainProductionEnabled?: boolean;
+  /** CEILING-BEST-OF-3-1：1=raw+1 场景候选；2=raw+2 不同场景候选。 */
+  positiveGainCandidateLimit?: 1 | 2;
+  /** False while model-based literary preference is not aligned with natural-human gold. */
+  allowAutomaticLiterarySelection?: boolean;
+  /** 正文模型提示词表达层；生产入口按实际生成 provider 解析，eval 可显式覆盖。 */
+  rawPromptProfile?: WriterPromptProfile;
   /** 编译后的上下文（ContextCompiler 输出） */
   context: CompiledContext;
   /** 作品宪法快照（可空） */

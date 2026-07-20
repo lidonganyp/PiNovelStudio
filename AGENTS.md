@@ -9,7 +9,7 @@ PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [
 1. **单一生成主链路**：系统最终只保留 `novel_generate_chapter` 一个公开入口与一套运行时编排。不再存在 `legacy | quality_amplifier_v2` 两种生成模式，不再保留章节白名单。
 2. **raw 是内部基线与安全回退**：raw 不是另一条旧链路，而是新主链路内部的原生基线。编辑/裁判失败或候选无明确胜出时交付 raw，不交付低于 raw 的文本。
 3. **机会驱动候选**：每章先生成 raw，仅当存在可引用正文 span 证明的编辑机会时才生成 0-2 个 editorial candidate；禁止固定多候选。
-4. **LLM pairwise judge 主导文学胜负**：匿名 A/B、span 约束、可反向复判；机械 comparator 降为事实检查、风险证据与退化 veto，不再用机械总分决定 winner。
+4. **自然人对齐优先的文学选择**：匿名 A/B、span 约束和反向复判继续提供事实、结构、风险与候选证据；机器 judge 通过自然人对齐闸门后才可主导自动文学选择。当前 GPT-5.6-sol 与 Gemini reader judge 均未对齐用户金标，自动选择关闭，不得覆盖 Gemini raw。
 5. **作品级 CreativeConstitution + 四类长期叙事状态**：CanonState / CharacterState / PromiseLedger / PatternMemory；状态只在最终正文选定后提交。
 6. **按模型版本隔离策略信誉**：contextual bandit 在线调整编辑策略；旧模型经验不限制新模型能力。
 
@@ -32,10 +32,10 @@ PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [
 
 > 仍生效的铁律：`novel_generate_chapter` 是章节生成唯一公开入口；AI 不得直接撰写章节正文；正文必须经统一编排产出。这三条在单主链路目标下继续有效。
 
-### 当前项目记忆（2026-07-17）
+### 当前项目记忆（2026-07-20）
 
 - 跨会话快照见 [docs/project-memory.md](docs/project-memory.md)。它记录当前代码基线、已完成清理、脏工作树保护、模型路由状态与授权边界。
-- 当前路由基线为 `config/model-routing.json` v4.19.0：`1A/1B/1C/1D COMPLETE_L0`（1A 异源 judge 已全量切到 gpt-5.6-sol；1C GREEN `e6f2b66` + 流水线修复 `b529c65`，Doubao span 驱动中文校准 + completeness + 中文母语语感 before/after 已落地，11/11 测试通过）；`1E` 真实 canary 为 `REQUIRES_AUTH`。
+- 当前路由基线为 `config/model-routing.json` v4.29.0：Gemini 3.1 Pro Preview 是默认 raw/editorial 主写；普通 raw 是生产基线。第 18-20 章一次序列偏好只保留为历史样本，不再外推为全局场景策略。固定场景解法与 `boundedBestOf3` 已退出生产。GPT-5.6-sol 与隔离 Gemini reader judge 均未通过当前自然人金标，机器文学判断只作 advisory evidence，不能决定文学胜负。
 - 7.75GB `corpus/` 已从仓库删除，生产路径对原始语料零依赖。离线数据重建必须显式使用外部语料，不得继续把“仓库内置 100+ 部全文”写成当前事实。
 - `cd15cd2` 删除 4 个 craft 文件后 `030420f`（P0 阻断项修复）已恢复并纳入版本控制，`npm run build` / `build:prod` 通过，clean checkout 完整。
 - 当前工作树包含用户正在进行的代理审批代码、staged 测试修改、未跟踪 RED 测试与模型验证输出；未经明确指示不得恢复、删除、暂存或覆盖。现有 stash 也不得擅自 `pop/drop`。
@@ -120,7 +120,9 @@ PiNovelStudio 是基于 PI (AI Coding Agent) 的顶尖网文级小说章节生�
 
 **文件**: `craft/fewshot-selector.ts`（`agents/narrator.ts` 已随 legacy 退役删除）
 
-## P22 质量进化闭环（2026-06-07）
+## P22 质量进化闭环（legacy，已随 Stage0-8 退役）
+
+> 本节只记录旧 Stage0-8 行为，不是当前生产要求。其中事件级写作契约、StyleShaper、AntiAI 密度硬门、固定修订层级和自动回环均已退出统一主链路；当前只保留事实硬门、诊断证据、逐章候选比较和最终状态事务。
 
 ### 运行时目标
 
@@ -130,17 +132,10 @@ PiNovelStudio 是基于 PI (AI Coding Agent) 的顶尖网文级小说章节生�
 - **外部证据**: replay benchmark 对 reference/candidate 做可回放对比，聚合候选规则的样本数、胜率和 delta。
 - **运行时准入**: 只有达到 `sampleSize >= 3`、`validatedWinRate >= 0.55` 的规则进入 `data/runtime/validated-craft-rules.json` 并默认参与 Stage 2 事件级写作契约。
 
-### 已接入流程
+### 历史状态
 
-- Stage 2 逐事件生成前构建 `EventWritingContract`，由 `SegmentCraftJudge` 对关键内容覆盖、分段工艺、事件评分做硬门禁，并写入 `workspaces/{workspaceId}/traces/{chapterId}-quality-trace.json`。
-- Stage 2 的 `EventProgressionGate` 只硬守 progression 主干：`protagonist_active`、`state_delta`、`causal_chain` 及必要的信息/状态 delta。`abnormalEntryEvidence` 属于恐怖/危机类事件的类型专项义务；未满足时只能记录为 `typeSpecificObligations.abnormalEntryEvidence=UNVERIFIED` 并返回 `WARNING_PASS`，不得触发 Stage 2 rewrite/degrade/block。
-- Gate 输出 schema 必须先强制校验；缺少必填 evidence/span/metric 字段时是 `PARSE_ERROR`，重试 Gate 结果而不是重写正文。重试耗尽后上报 `CONTRACT_ERROR` 并阻断当前事件，不允许静默 DEGRADE。
-- Stage 5/8 的修订补丁必须经过 `PatchQualityComparator`；退化改写不覆盖原文，补丁取舍写入 trace。
-- Stage 8 的最终门禁必须保留 `stageResults.stage8` 证据；AntiAI 密度阈值为 `< 2%`，StyleShaper 低于阶段阈值且无法产生实质修订时必须阻断，不能 warning pass。
-- Stage 8 新增 `SceneContinuityGate` 本地硬门禁；它只针对真实 replay 暴露的明确短板补位，不重构主流程、不套外壳：线上 ID/论坛角色未经入场铺垫实体化、医院/住处等空间簇无过门跳转必须阻断，并写入 trace `gates`。
-- replay 学习链路由 `scripts/replay-benchmark/`、`scripts/learning/` 与 `data/runtime/*rules.json` 承载；runtime 规则可以为空，表示机制就绪但尚无经真实样本晋级的作者学习规则。
-- 模型 API 请求必须走 bounded timeout；默认 `PINOVEL_MODEL_REQUEST_TIMEOUT_MS=300000`，所有真实 replay 卡在模型调用时必须返回可诊断超时错误，不能无限等待。
-- 《神秘复苏》第1章 replay 已通过 `novel_generate_chapter` 统一编排成功跑通，但当前 `ch1-current-metrics.json` 仍为负收益；只能作为短板定位与候选规则来源，不得当作质量正收益样本。
+- 本节原有 `EventWritingContract`、Stage 2/5/8 门禁、StyleShaper、AntiAI 2% 阈值、SceneContinuityGate 和 PatchQualityComparator 描述均已随 Stage0-8 物理退役，不得恢复为生产规则。
+- replay 与历史 runtime rules 只保留为离线证据来源；任何经验必须按模型版本隔离，并经逐章 raw 对照与自然人复核后才可能获得新的生产授权。
 
 ### 验收边界
 
@@ -194,14 +189,12 @@ brainholes/patterns/ # 脑洞模式 Markdown
 
 ## 关键约束
 
-1. **DAG 不可变**: DAG 一旦构建并通过验证，后续 Agent 只能添加增强信息，不能修改核心事件
-2. **风格一致性**: 所有生成文本必须通过 StyleShaper 匹配检查，偏差 > 30% 需要重写
-3. **反 AI 检测**: 最终文本必须通过 AntiAIDetector 检查，AI 特征词密度 < 2%
-4. **情绪节拍**: 章节情绪曲线必须符合 EmotionMetronome 预设模式
-5. **脑洞注入**: 每章至少注入 1 个脑洞模式变体
-6. **P13知识检索**: 按事件粒度检索（type/narrativeBeat/conflictLevel/emotionalArc），避免单一标签主导
-7. **P13大纲对齐**: outlineIntent 指导 Narrator 生成方向，确保章节服务于本章主题
-8. **P22细节锚点先行**: 写前输入是 ChapterSeed/感知锚点；章纲是写后骨架总结，不是写前蓝图。SeedReadinessGate 替代 OutlineReadinessGate
+1. **作者内容契约优先**：写前必须传入整体剧情方向、章节功能、前文状态、人物动机、伏笔与承诺、因果关系、不可违背事实和章末目标。
+2. **正文表达归模型**：开头、感官、词汇、句式、修辞、对白、段落节奏和具体场景表达不得由系统机械指定。
+3. **事实硬门、文学软诊断**：空文、截断、事实/实体/时间线/世界观硬冲突可阻断；风格、AI 腔、节拍、对白比例和结构扫描只作 diagnostic/candidate evidence。
+4. **raw 基线**：任何编辑必须形成 candidate 并与本章 raw 比较；没有本章明确胜出不得覆盖 raw。
+5. **人工文学权威**：机器 judge 未通过自然人对齐前只作 advisory evidence，不得自动决定文学胜负。
+6. **状态事务**：长期状态只在最终正文经事实复检并由有效权威确认后提交。
 
 ## 生成流程
 
@@ -235,43 +228,20 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
 | 任务类型 | 推荐模型 | 原因 |
 |---------|---------|------|
 | 规划/分析 | PI 默认模型 | 结构化推理 |
-| 文学创作(Stage 2 主力 / raw 正文) | Claude Opus 4.6 | MODEL-ROUTING-CLAUDE46-1B：`narrator_primary` / `stage2_narrator` / `v2_rawstage2` / `v2_amplified` 全部切换到 Claude Opus 4.6；raw 失败由 `v2_rawstage2.fallback=[]` hard block，不静默切换其他正文模型 |
+| 文学创作(Stage 2 主力 / raw 正文) | Gemini 3.1 Pro Preview | GEMINI-DEFAULT-WRITER-1：未传 `writerModel` 时使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 与 `gemini_writer_v2`；`fallback=[]`，失败 hard block，不静默切换其他正文模型 |
+| 显式备选正文模型 | Claude Opus 4.6 | `writerModel=claude` 时使用 `v2_rawstage2` / `v2_amplified` 与 `claude_writer_v1`；`fallback=[]`，不作为 Gemini 的自动备援 |
 | 中文校准候选(受限) | Doubao Seed 2.1 Pro | MODEL-ROUTING-CLAUDE46-1C：Doubao 降为受限中文校准器，仅 `v2_chinese_calibration` 在有 raw span 证据时调用；不能直接覆盖 raw，必须经 FactGuard / pairwise judge / SelectionPolicy |
-| 文学裁判(opportunity judge + pairwise + reverse review) | gpt-5.6-sol（异源 judge） | MODEL-ROUTING-CLAUDE46-1A/1E-fix：`v2_opportunity_judge` / `v2_literary_judge` 走 GPT 异源 judge，模型从 gpt-5.5 全量切到 gpt-5.6-sol（与 `novel_quality_judge` 一致，通过 `NOVELOS_JUDGE_*` env 解析端点）；Claude 不得同时担任同一候选对的生成者与文学裁判；冲突或失败保留 raw |
-| 质量审查 | local / quad-gates | Critic 四门判定已改为本地运行 |
-| 结构检查 | GPT 5.5 | 指令跟随精确，模式检测最规范 |
-| 角色塑造 | Claude Opus 4.6 | MODEL-ROUTING-CLAUDE46-1B：`character_agent` 切换到 Claude Opus 4.6；角色心理深度、矛盾感与动机审查更稳 |
-| 风格塑形(Stage 5/8) | Claude Opus 4.6 | MODEL-ROUTING-CLAUDE46-1B：`style_shaper` / `stage5_style_shaper` / `stage8_final_gate` 切换到 Claude Opus 4.6 |
-| 世界观/骨架/脑洞轻量生成 | GPT 5.5 | v4.5.0 起 DeepSeek 退出默认质量链路；Stage 1.6/3/4.5/脑洞注入已迁移到 GPT 5.5 |
+| 文学裁判(opportunity judge + pairwise + reverse review) | gpt-5.6-sol（异源 judge） | `v2_opportunity_judge` / `v2_literary_judge` 通过 `NOVELOS_JUDGE_*` 解析端点；当前只提供事实、结构、span 与风险证据。GPT 与隔离 Gemini reader judge 均未通过自然人金标，人工对齐通过前自动文学选择关闭，不能替换 Gemini raw |
+| 本地质量扫描 | local diagnostics | 只提供 span、事实、结构与风险证据；不得按风格、AI 腔、对白或段落指标阻断/改写/选 winner |
 | 开发验证(GLM) | GLM 5.2 | MODEL-ROUTING-CLAUDE46-1D：GLM 仅作开发验证，只允许显式 `modelTestRoute=glm` / NovelBench lab route；不得进入生产默认或 fallback。`narrator_testing_glm` / `style_shaper_testing_glm` / `chinese_naturalizer_glm` 显式 `fallback=[]` + lab_testing 标注 |
 
-> **路由真相源**：`config/model-routing.json` v4.19.0 (MODEL-ROUTING-CLAUDE46-1B+1D+1E-fix) 为路由唯一真相源，本表与之同步；不一致时以 `model-routing.json` 为准。AGENTS.md 路由表为人类可读摘要，不作为运行时路由依据。历史 v4.9.0 Doubao 主写决策保留在 `_migration_notes` 中作参考，不再作为当前态。
-
-### Stage 8→Stage 2 对白回环路由（P42 续·P1+P4）
-
-当 Stage 8 诊断 `stage8_dialogue_ratio.stage2RewriteRecommended=true` 时，触发全章节重跑回环，按 `config.stage2LoopbackEscalation`（默认 `ernie_then_gpt`）升级路由：
-
-| 顺序 | modelTestRoute | 映射路由 | 角色 |
-|------|----------------|----------|------|
-| 1 | `ernie` | `narrator_testing_ernie` | ERNIE 5.1 优先（中文模型优先） |
-| 2（末位兜底） | `gpt` | `narrator_testing_gpt` | GPT 5.5 末位兜底（bounded 例外） |
-
-- **生产主路由 `narrator_primary`=Doubao 不变**；回环仅走测试通道，不改变生产路由。
-- `stage2LoopbackMaxAttempts` 截断序列长度（默认 2 = ERNIE+GPT；1 = 仅 ERNIE）。
-- `stage2LoopbackEscalation="disabled"` 或 `stage2LoopbackMaxAttempts=0` 可关闭回环。
-- 回环通过后 `stage8_dialogue_ratio` 用新测量值覆盖 + 替换 `finalText`；未通过保留原稿 + 写 `recoverableEnvelope` 到 trace + 保留原 `[review]` blocker。
-- 防无限循环：`stage8_loopback` 硬标记，`shouldFireLoopback` 二次判定直接 false。
-- micro-section `loopback_dialogue_events` scope：仅回环重跑中的对白承载事件触发微小节，普通生成路径零行为变化。
-- **质量状态归一化（P42 续·P0）**：回环通过后必须 `_uqe.voidSignals("8-dialogue-ratio", ...)` 作废原 3 条 review 信号（`dialogue_ratio`/`functional_dialogue_deficit`/`short_command_excess`），并基于新测量值重写 review 信号（仅当回环后仍有缺口时）。否则 `aggregateDeliveryStatus` 仍会因旧 review 信号落入 `completed_with_review` → `draft_needs_review`，回环"通过"却无法正式交付。voided 信号保留在 envelope 作审计痕迹，且 `extractQualityBlockers` / `buildCategorizedQualityReport` 均跳过 voided 信号，避免报告层仍显示已作废的旧 review。
-- **状态产物同步（P42 续·P0 Round 2）**：回环通过后 `finalText` 已替换为新稿，但外层 `narratorResult.pendingStateCommit` 与 `stageResults.stage3/stage4` 仍基于旧稿。必须用 `LoopbackOutcome.acceptedNarratorResult` 覆盖外层 `narratorResult` + `stageResults.stage2`，并在新 `finalText` 上重跑 Stage 3（`handleSkeletonConsistency`）+ Stage 4（`handleDetailLedger deferWrite:true`），覆盖 `stageResults.stage3/stage4`。否则最终提交的 `skeleton.json` / `unsettled-details.json` / `narrative-state.json` / 角色更新仍来自旧正文，跨章状态会漂。Stage 3/4 重跑失败只写 warning signal，不阻断交付（正文已通过回环验收；状态产物缺失可由人工补，污染主线状态不可逆）。
-- **新正文本地复检（P42 续·P1）**：回环替换 `finalText` 后必须本地复检段落节奏（`analyzeChapterParagraphRhythm`）+ AntiAI 密度（`handleAntiAIDetector({enableLLM:false})`），更新 `stage8_paragraph_rhythm_final` / `stage8Results.antiAI`，并作废原段落节奏 review 信号。新正文若引入 AI 腔（`effectiveDensity>=0.02`）或节奏超限，必须写新 critical/review 信号 → `draft_needs_review`。
-- bounded trade-off：悬念密度基于 DAG（回环不改 DAG，无需复检）；StyleShaper/SceneContinuityGate 为 LLM-based，narrator 内部已跑 anti-ai，本地复检不重跑（成本与 bounded 原则权衡）。回环 newText 重验 Stage 3/4（P0 Round 2 状态产物同步）+ 本地复检段落节奏/AntiAI；不重跑 Stage 5/6.5/7 的 LLM-based 门禁与 SceneContinuityGate。
+> **路由真相源**：`config/model-routing.json` v4.29.0 为路由唯一真相源，本表与之同步；不一致时以 `model-routing.json` 为准。AGENTS.md 路由表为人类可读摘要，不作为运行时路由依据。历史场景准入与模型主写决策只保留在 `_migration_notes` 中作参考，不再作为当前态。
 
 ## 生产规则
 
 ### 世界观强制注入
 - 生成章节前，必须从 `workspaces/{id}/config.json` 加载世界观（genre, subGenres, 角色列表）
-- 世界观信息通过 `worldContext` 参数注入 Narrator system prompt
+- 世界观信息由统一 `Preflight → ContextCompiler → ChapterContract` 注入正文模型
 - **世界观缺失 = 生产阻断**，必须让用户补全后再生成
 
 ### 类型路由策略
@@ -318,10 +288,13 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
    - ❌ 禁止直接调用 `novel_critic` 替代质量审查
    - ❌ 禁止在未通过 `novel_generate_chapter` 的情况下输出"第X章"内容
 
-4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.19.0）：
-   - `v2_rawstage2` / `v2_amplified` → Claude Opus 4.6，route-level `fallback=[]`；raw 失败 hard block，不静默切换其他正文模型
-   - `v2_chinese_calibration` → Doubao Seed 2.1 Pro；仅允许有 raw span 证据的 `voice_and_naturalness` hypothesis 触发中文校准候选，`MODEL-ROUTING-CLAUDE46-1C` 已 `COMPLETE_L0`（span 级局部编辑 + span 边界检查 + completeness + 中文母语语感 before/after）
-   - `v2_opportunity_judge` / `v2_literary_judge` → gpt-5.6-sol 异源 judge（通过 `NOVELOS_JUDGE_*` env 解析端点）；Claude 不得自审同一候选对
+4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.29.0）：
+   - `v2_rawstage2_gemini31` / `v2_amplified_gemini31` → Gemini 3.1 Pro Preview；默认 `writerModel`，使用 `gemini_writer_v2`，失败 hard block，不静默切换 Claude 或其他正文模型
+   - 默认 Gemini 生产路径 → 自由生成普通 raw；固定写前场景解法不再进入生产。只有有 raw span 证据的 editorial hypothesis 才能生成 0-2 个 candidate，且必须逐章与 raw 比较
+   - `v2_rawstage2` / `v2_amplified` → Claude Opus 4.6；仅由显式 `writerModel=claude` 选择，使用 `claude_writer_v1`，route-level `fallback=[]`，不作为 Gemini 的自动备援
+   - `boundedBestOf3` → 历史评测兼容字段；固定场景多候选已退出生产，旧证据不限制当前或未来模型能力
+   - `v2_chinese_calibration` → Doubao Seed 2.1 Pro；仅允许有 raw span 证据的 `voice_and_naturalness` hypothesis 触发中文校准候选。span 边界与完整性是硬门；自然度优劣进入逐章比较，不由机械风险扫描提前淘汰
+   - `v2_opportunity_judge` / `v2_literary_judge` → gpt-5.6-sol 异源 judge（通过 `NOVELOS_JUDGE_*` env 解析端点）；当前为 advisory-only，不得决定文学胜负；历史自然人样本不得跨章直接决定候选
    - `style_shaper` / `stage5_style_shaper` / `stage8_final_gate` / `character_agent` → Claude Opus 4.6
    - `novel_critic` → local / quad-gates；其他结构化检查按配置路由到 GPT 5.5
    - GLM 5.2 仅允许显式开发/NovelBench testing route，生产默认和 fallback 禁止使用；Qwen、ERNIE 当前 disabled

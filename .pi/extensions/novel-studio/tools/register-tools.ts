@@ -150,11 +150,25 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           reviewDecision: { type: "string", description: "【恢复用】审阅决定：confirm 或 reject" },
           reviewFeedback: { type: "string", description: "【恢复用】审阅反馈/修改意见" },
           // REAL-QUALITY-1-PREFLIGHT：单次路由锁定 + 可复现种子
-          modelTestRoute: { type: "string", enum: ["glm"], description: "【REAL-QUALITY-1-PREFLIGHT】锁定单次生成路由为 GLM5.2（nb4_generate_glm + nb4_judge_glm），fallback=[] 禁回退；用于单章烟测路由闭环验证。未传时走默认生产路由。" },
+          writerModel: { type: "string", enum: ["claude", "gemini31"], description: "正文主写模型：Gemini 3.1 Pro（默认）或 Claude Opus 4.6（显式备选）。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。" },
+          modelTestRoute: { type: "string", enum: ["glm", "gemini31", "claude48"], description: "显式模型对比路由：glm 锁定 GLM5.2；gemini31 锁定 Gemini 3.1 Pro；claude48 锁定 Claude Opus 4.8。正文实验路由均 fallback=[]，未传时走默认生产路由。" },
           seed: { type: "number", description: "【REAL-QUALITY-1-PREFLIGHT】随机种子（judge 匿名化 + Thompson Sampling 策略筛选可复现）；传入使 editorial 候选生成可复现（seed=1 时 sample≈0.6271≥0.5，策略被选中→生成 editorial 候选）。" },
-          recoverBlockedRaw: { type: "boolean", description: "Explicitly reuse a strictly verified raw_fact_guard Claude 4.6 raw; disabled by default." },
+          candidateTimeoutMs: { type: "number", description: "单次正文候选模型调用的有界超时（毫秒）；未传时使用统一主链路默认值。" },
+          previewTotalTimeoutMs: { type: "number", description: "完整只读预览全部模型调用的总时间预算（毫秒）；仅 fullPipelinePreview 生效。" },
+          sceneSolution: { type: "object", description: "仅受控评测兼容字段；生产 raw 不消费场景解法卡。" },
+          recoverBlockedRaw: { type: "boolean", description: "显式复用经 hash/完整性校验的 raw_fact_guard 冻结 raw；必须同时显式指定相同 writerModel，默认关闭。" },
           previewOnly: { type: "boolean", description: "【已弃用】旧预览短路径开关（FactGuard 后直接返回 raw）。被 fullPipelinePreview 取代，入口处归一化为完整链路预览。" },
           fullPipelinePreview: { type: "boolean", description: "【FULL-PIPELINE-PREVIEW-1】完整链路只读预览：执行完整 raw→FactGuard→editorial→judge→select 链路，但跳过所有副作用（不写章节、不提交状态、不写 trace/策略库/证据文件、不执行代理审批、不记录 Phase 6 学习 outcome）。用于在不污染工作区状态下预览候选与裁判结果。" },
+          boundedBestOf3: { type: "boolean", description: "仅历史评测兼容字段；固定场景多候选已退出生产主链路。" },
+          qualityExperiment: {
+            type: "object",
+            description: "Read-only quality ceiling sample isolated from production candidate expansion.",
+            properties: {
+              arm: { type: "string", enum: ["raw", "scene", "oracle_scene"] },
+              sampleIndex: { type: "number", minimum: 1, maximum: 3 },
+            },
+            required: ["arm", "sampleIndex"],
+          },
         },
         required: ["workspaceId", "chapterId", "chapterNumber"],
       },
@@ -170,11 +184,17 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         reviewDecision?: "confirm" | "reject";
         reviewFeedback?: string;
         // REAL-QUALITY-1-PREFLIGHT：单次路由锁定 + 可复现种子
-        modelTestRoute?: "glm" | "doubao" | "gpt56";
+        writerModel?: "claude" | "gemini31";
+        modelTestRoute?: "glm" | "doubao" | "gpt56" | "gemini31" | "claude48";
         seed?: number;
+        candidateTimeoutMs?: number;
+        previewTotalTimeoutMs?: number;
+        sceneSolution?: Record<string, unknown>;
         recoverBlockedRaw?: boolean;
         previewOnly?: boolean;
         fullPipelinePreview?: boolean;
+        boundedBestOf3?: boolean;
+        qualityExperiment?: { arm: "raw" | "scene" | "oracle_scene"; sampleIndex: number };
       }) {
         // =========================================================================
         // P24-续六 Fix6: model_timeout 章节级重试（调度层包裹）
@@ -183,7 +203,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         // recoverable=true + severity=recoverable 时，重试一次（带 _modelTimeoutRetryAttempt 标记，
         // 供 index.ts 顶层 catch 区分首次失败与重试耗尽）。非 model_timeout 失败不重试。
         // =========================================================================
-        const _mtMaxRetries = 1;
+        const _mtMaxRetries = input.fullPipelinePreview || input.previewOnly ? 0 : 1;
         let _mtAttempt = 0;
         let _mtResult: any;
         while (_mtAttempt <= _mtMaxRetries) {
@@ -210,7 +230,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
     // 预检失败不得进入模型生成；缺 series/outline.md 不得阻断。
     {
       name: "novel_preflight_workspace",
-      description: "【治理方案Phase2】生成前预检 - 检查 config/角色档案/前章skeleton/ChapterSeed可生长性/manifest/模型timeout/字数预算。预检失败不得进入模型生成。缺 outline.md 不阻断。",
+      description: "生成前预检：检查 config、角色档案、前章状态、作者章节契约解析、模型 timeout 与字数预算。感知锚点和正文写法不作为阻断条件。",
       inputSchema: {
         type: "object",
         properties: {
@@ -236,12 +256,12 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
     // =========================================================================
     {
       name: "novel_plan_story_outline",
-      description: "从用户创意生成 series/outline.md 高层背景参考文件（总纲/主题/不可违背事实）。\n\n⚠️ P22 重要说明：此工具只生成高层背景参考文件，不生成章节正文，也不生成任何章纲（显式章纲已废止）。outline.md 仅作为高层背景/主题/不可违背事实参考，不作为章节生成前置条件。章节生成唯一入口是 novel_generate_chapter，写前输入为 ChapterSeed + 感知锚点。\n\n模式：\n- idea_to_outline: idea -> series/outline.md（仅高层背景参考）",
+      description: "从用户创意生成 series/outline.md 整体剧情方向。作者维护的 ch{N}-outline-explicit.md 可作为章节功能、事件内容、状态变化、伏笔、因果和章末目标的权威写前输入；本工具不生成正文。章节生成唯一入口是 novel_generate_chapter。\n\n模式：\n- idea_to_outline: idea -> series/outline.md",
       inputSchema: {
         type: "object",
         properties: {
           workspaceId: { type: "string", description: "小说 workspace ID" },
-          mode: { type: "string", description: "idea_to_outline（生成总纲/背景参考）。旧模式 outline_to_chapter_outlines / full_pipeline 已下线，不再生成显式章纲。", enum: ["idea_to_outline"] },
+          mode: { type: "string", description: "idea_to_outline（生成整体剧情方向）。旧批量拆章模式已下线。", enum: ["idea_to_outline"] },
           idea: { type: "string", description: "用户创意，idea_to_outline 必填" },
           fullOutlineText: { type: "string", description: "完整总纲文本；不提供时读取 series/outline.md" },
           startChapter: { type: "number", description: "[已下线] 不再生成显式章纲" },

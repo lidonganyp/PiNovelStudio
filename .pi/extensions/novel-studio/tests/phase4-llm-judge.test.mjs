@@ -106,8 +106,8 @@ const EDITORIAL_TEXT = "林川推开门，走了进去。房间里很暗。他�
  * 解析 userPrompt 提取候选 A/B 文本。
  */
 function extractCandidates(userPrompt) {
-  const aMatch = userPrompt.match(/【候选 A】\n([\s\S]*?)\n（候选 A 总字符数/);
-  const bMatch = userPrompt.match(/【候选 B】\n([\s\S]*?)\n（候选 B 总字符数/);
+  const aMatch = userPrompt.match(/【候选甲】\n+([\s\S]*?)\n+（候选甲总字符数/);
+  const bMatch = userPrompt.match(/【候选乙】\n+([\s\S]*?)\n+（候选乙总字符数/);
   return {
     textA: aMatch ? aMatch[1] : "",
     textB: bMatch ? bMatch[1] : "",
@@ -260,7 +260,7 @@ function makeVerdictJson(winnerLabel, confidence, textA, textB) {
 // 1. JudgePromptBuilder
 // ============================================================================
 
-test("PromptBuilder: buildJudgePrompt 生成匿名 A/B prompt", () => {
+test("PromptBuilder: buildJudgePrompt 生成匿名甲乙提示词", () => {
   const mapping = buildAnonymousMapping("raw-1", "ed-1", 42);
   const { systemPrompt, userPrompt } = buildJudgePrompt({
     candidateAText: RAW_TEXT,
@@ -270,13 +270,76 @@ test("PromptBuilder: buildJudgePrompt 生成匿名 A/B prompt", () => {
     constitution: CONSTITUTION,
   });
   assert.ok(systemPrompt.includes("文学裁判"));
-  assert.ok(userPrompt.includes("【候选 A】"));
-  assert.ok(userPrompt.includes("【候选 B】"));
+  assert.ok(systemPrompt.includes("读者体验判决"));
+  assert.ok(systemPrompt.includes("中文原生语感"));
+  assert.ok(systemPrompt.includes("人物声音与行为可信度"));
+  assert.ok(systemPrompt.includes("目标-阻力-选择-结果"));
+  assert.ok(systemPrompt.includes("世界观和连续性"));
+  assert.ok(userPrompt.includes("【候选甲】"));
+  assert.ok(userPrompt.includes("【候选乙】"));
   assert.ok(userPrompt.includes(RAW_TEXT));
   assert.ok(userPrompt.includes(EDITORIAL_TEXT));
   // 不暴露 raw/amplified 身份
   assert.ok(!userPrompt.includes("raw"));
   assert.ok(!userPrompt.includes("amplified"));
+});
+
+test("PromptBuilder: parseJudgeVerdict 解析读者体验子判决", () => {
+  const parsed = parseJudgeVerdict(JSON.stringify({
+    winner: "B",
+    confidence: "clear",
+    readerExperience: {
+      preferredCandidate: "B",
+      nativeChinese: "B",
+      characterCredibility: "B",
+      goalObstacleChoiceResult: "B",
+      emotionalProgression: "B",
+      informationRelease: "B",
+      sceneImmersion: "B",
+      causalEndPressure: "B",
+      worldContinuity: "B",
+      rationale: "乙更像自然成立的中文小说场景",
+    },
+    decisiveReasons: [{
+      dimension: "场景沉浸感",
+      betterCandidate: "B",
+      evidenceA: [{ start: 0, end: 2, excerpt: RAW_TEXT.slice(0, 2) }],
+      evidenceB: [],
+      explanation: "甲的说明感更重",
+    }],
+    factualRisks: [],
+    regressionRisks: [],
+    constitutionAlignment: "均对齐",
+  }));
+  assert.deepEqual(parsed?.readerExperience, {
+    preferredCandidate: "B",
+    nativeChinese: "B",
+    characterCredibility: "B",
+    goalObstacleChoiceResult: "B",
+    emotionalProgression: "B",
+    informationRelease: "B",
+    sceneImmersion: "B",
+    causalEndPressure: "B",
+    worldContinuity: "B",
+    rationale: "乙更像自然成立的中文小说场景",
+  });
+});
+
+test("PromptBuilder: 中文小说读者体验是主判层，结构完整度不得自动压过语感与沉浸", () => {
+  const mapping = buildAnonymousMapping("left", "right", 42);
+  const { systemPrompt } = buildJudgePrompt({
+    candidateAText: RAW_TEXT,
+    candidateBText: EDITORIAL_TEXT,
+    mapping,
+    intent: makeIntent(),
+    constitution: CONSTITUTION,
+  });
+
+  assert.match(systemPrompt, /中文原生语感.*小说语感.*场景沉浸/s);
+  assert.match(systemPrompt, /主判层/);
+  assert.match(systemPrompt, /验证步骤更多.*不是.*优势/s);
+  assert.match(systemPrompt, /结构.*完整.*不能.*压过.*读者体验/s);
+  assert.match(systemPrompt, /解释得更清楚.*不等于.*写得更好/s);
 });
 
 test("PromptBuilder: parseJudgeVerdict 解析合法 JSON", () => {
@@ -288,7 +351,7 @@ test("PromptBuilder: parseJudgeVerdict 解析合法 JSON", () => {
         dimension: "钩子",
         betterCandidate: "A",
         evidenceA: [],
-        evidenceB: [{ start: 0, end: 5, excerpt: "平淡结尾" }],
+        evidenceB: [{ start: 0, end: 5, excerpt: EDITORIAL_TEXT.slice(0, 5) }],
         explanation: "A 钩子更强",
       },
     ],
@@ -356,7 +419,7 @@ test("EvidenceValidator: 合法 verdict（worse 一方带 span）通过", () => 
         dimension: "钩子",
         betterCandidate: "A",
         evidenceA: [],
-        evidenceB: [{ start: 0, end: 5, excerpt: "平淡结尾" }],
+        evidenceB: [{ start: 0, end: 5, excerpt: EDITORIAL_TEXT.slice(0, 5) }],
         explanation: "A 更强",
       },
     ],
@@ -412,6 +475,32 @@ test("EvidenceValidator: winner 与 decisiveReasons 不一致 → 失败", () =>
   assert.ok(r.inconsistentWinnerReasons.includes(0));
 });
 
+test("EvidenceValidator: 结构性总胜者不得覆盖读者第一选择", () => {
+  const verdict = {
+    winner: "A",
+    confidence: "clear",
+    readerExperience: {
+      preferredCandidate: "B",
+      nativeChinese: "B",
+      characterCredibility: "B",
+      goalObstacleChoiceResult: "B",
+      emotionalProgression: "B",
+      informationRelease: "B",
+      sceneImmersion: "B",
+      causalEndPressure: "B",
+      worldContinuity: "B",
+      rationale: "B 的中文语流和场景成立感更强",
+    },
+    decisiveReasons: [makeReason("A", EDITORIAL_TEXT, "结构完整度")],
+    factualRisks: [],
+    regressionRisks: [],
+    constitutionAlignment: "均对齐",
+  };
+  const validation = validateJudgeEvidence(verdict, RAW_TEXT, EDITORIAL_TEXT);
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors.join("\n"), /读者第一选择|结构理由不得覆盖/);
+});
+
 test("EvidenceValidator: span 越界 → 失败", () => {
   const verdict = {
     winner: "A",
@@ -442,7 +531,7 @@ test("EvidenceValidator: hasSufficientEvidenceForAmplified 门槛", () => {
         dimension: "钩子",
         betterCandidate: "A",
         evidenceA: [],
-        evidenceB: [{ start: 0, end: 5, excerpt: "问题" }],
+        evidenceB: [{ start: 0, end: 5, excerpt: EDITORIAL_TEXT.slice(0, 5) }],
         explanation: "A 更强",
       },
     ],
@@ -486,7 +575,10 @@ test("PairwiseJudge: amplified clear 胜出 → 选择 amplified，无需反向�
   // editorial 含"？",应胜出
   assert.equal(result.winnerCandidateId, "ed-1");
   // clear 胜出 + 证据有效 → 无需反向复判
-  assert.ok(!result.selection.needsReverseReview);
+  assert.ok(
+    !result.selection.needsReverseReview,
+    `证据应通过：${result.evidenceValidation.errors.join("; ")}`,
+  );
   assert.equal(result.selection.selectedCandidateId, "ed-1");
 });
 
@@ -610,6 +702,7 @@ test("PairwiseJudge: mapping 覆盖生效（反向复判基础）", async () => 
     rawCandidate: raw, editorialCandidate: ed,
     intent: makeIntent(), constitution: CONSTITUTION,
     modelGenerate: stub, seed: 42,
+    allowAutomaticLiterarySelection: true,
   });
   // 用 swapOrder 得到反向 mapping,传入 mapping 覆盖
   const swapped = swapOrder(r1.mapping);
@@ -678,12 +771,46 @@ test("Arbitrator: 首轮 clear 胜出 → 不反向复判，直接交付 amplifi
     rawCandidate: raw, editorialCandidate: ed,
     intent: makeIntent(), constitution: CONSTITUTION,
     modelGenerate: stub, seed: 42,
+    allowAutomaticLiterarySelection: true,
   });
   assert.ok(!result.reverseReviewed);
   assert.ok(!result.arbitrationTriggered);
   assert.ok(!result.conflicted);
   assert.equal(result.finalSelectedCandidateId, "ed-1");
   assert.ok(result.auditSummary.includes("跳过反向复判"), `auditSummary 应含跳过反向复判：${result.auditSummary}`);
+});
+
+test("HUMAN-JUDGE-ALIGNMENT-GATE-2: 未对齐的主观 judge 不得自动覆盖 raw", async () => {
+  const raw = makeCandidate("raw-human-gate", RAW_TEXT, "raw");
+  const editorial = makeCandidate("ed-human-gate", EDITORIAL_TEXT);
+  const result = await createJudgeArbitrator().arbitrate({
+    rawCandidate: raw,
+    editorialCandidate: editorial,
+    intent: makeIntent(),
+    constitution: CONSTITUTION,
+    modelGenerate: makeContentAwareStub("没有署名", "clear"),
+    seed: 42,
+    allowAutomaticLiterarySelection: false,
+  });
+  assert.equal(result.finalSelectedCandidateId, raw.id);
+  assert.equal(result.selection.selectedCandidateId, raw.id);
+  assert.match(result.auditSummary, /人工对齐门未通过|候选仅供人工复核/);
+});
+
+test("HUMAN-JUDGE-ALIGNMENT-GATE-2: 缺省值必须 fail-closed 保留 raw", async () => {
+  const raw = makeCandidate("raw-default-gate", RAW_TEXT, "raw");
+  const editorial = makeCandidate("ed-default-gate", EDITORIAL_TEXT);
+  const result = await createJudgeArbitrator().arbitrate({
+    rawCandidate: raw,
+    editorialCandidate: editorial,
+    intent: makeIntent(),
+    constitution: CONSTITUTION,
+    modelGenerate: makeContentAwareStub("没有署名", "clear"),
+    seed: 42,
+  });
+  assert.equal(result.finalSelectedCandidateId, raw.id);
+  assert.equal(result.selection.selectedCandidateId, raw.id);
+  assert.match(result.auditSummary, /人工对齐门未通过|候选仅供人工复核/);
 });
 
 test("Step 4b: PINOVEL_JUDGE_CLEAR_SKIP=0 时 clear 胜出仍触发反向复判", async () => {
@@ -723,6 +850,7 @@ test("JUDGE-CALIBRATION-1: editorial 明显加长时的 clear 胜出强制反向
     rawCandidate: raw, editorialCandidate: ed,
     intent: makeIntent(), constitution: CONSTITUTION,
     modelGenerate: stub, seed: 42,
+    allowAutomaticLiterarySelection: true,
   });
   assert.ok(result.reverseReviewed, "editorial 明显加长时的 clear 胜出应强制反向复判（JUDGE-CALIBRATION-1 护栏）");
   assert.ok(result.rounds.length >= 2, "应有 first + reverse 轮");
@@ -740,6 +868,7 @@ test("JUDGE-CALIBRATION-1: editorial 未明显加长时 clear 胜出仍跳过复
     rawCandidate: raw, editorialCandidate: ed,
     intent: makeIntent(), constitution: CONSTITUTION,
     modelGenerate: stub, seed: 42,
+    allowAutomaticLiterarySelection: true,
   });
   assert.ok(!result.reverseReviewed, "未明显加长时 clear 胜出应跳过复判（行为不变）");
   assert.equal(result.finalSelectedCandidateId, "ed-cal2");
@@ -769,6 +898,7 @@ test("Arbitrator: needsReverseReview + 两轮一致 amplified → 交付 amplifi
     rawCandidate: raw, editorialCandidate: ed,
     intent: makeIntent(), constitution: CONSTITUTION,
     modelGenerate: stub, seed: 42,
+    allowAutomaticLiterarySelection: true,
   });
   assert.ok(result.reverseReviewed);
   assert.ok(!result.conflicted);
@@ -828,6 +958,7 @@ test("Arbitrator: needsReverseReview + 两轮冲突 + 仲裁器一致 → 采纳
     rawCandidate: raw, editorialCandidate: ed,
     intent: makeIntent(), constitution: CONSTITUTION,
     modelGenerate: mainStub, arbitratorModelGenerate: arbStub, seed: 42,
+    allowAutomaticLiterarySelection: true,
   });
   assert.ok(result.conflicted);
   assert.ok(result.arbitrationTriggered);

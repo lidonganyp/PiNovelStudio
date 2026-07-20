@@ -326,6 +326,10 @@ export interface LLMTimingEntry {
   route?: string;
   /** 失败原因（status≠ok 时填） */
   reason?: string;
+  /** Stable identifier for one provider attempt. */
+  requestId?: string;
+  /** SHA-256 of exact assistant text for successful attempts. */
+  responseHash?: string;
 }
 
 /** P43 新增：单阶段耗时记录 */

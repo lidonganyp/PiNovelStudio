@@ -46,6 +46,7 @@ import type {
   RecommendedSource,
   AnonymousMapping,
 } from "./chapter-proxy-approval-types.js";
+import { localizeLlmMessages, localizeLlmText } from "../../utils/llm-language-guard.js";
 import {
   CHAPTER_PROXY_APPROVAL_REVIEWER_MODEL,
 } from "./chapter-proxy-approval-types.js";
@@ -278,16 +279,16 @@ export interface RealGpt56SolChapterProxyApprovalCallerOptions {
  * 系统提示词：让 gpt5.6-sol 输出结构化 JSON 审批结论。
  * 提示词强调匿名 A/B 复判、forward/reverse 顺序无关、必须返回 verdict 与 recommendedLabel。
  */
-const GPT56_SOL_SYSTEM_PROMPT = `你是章节代理审批 reviewer（validated_human_proxy）。
-你将收到一对匿名候选 A/B（candidateA、candidateB、各自的 spans 与 factGuard/stateConsistency 对照数据）。
-你的任务是匿名 A/B 复判：在不暴露候选身份的前提下，基于文学质量、FactGuard、状态一致性等结构化数据，
-输出 JSON：{"verdict":"PROXY_APPROVED|HOLD_FOR_REGENERATION","recommendedLabel":"A"|"B","rationale":"...","winningSpans":[],"losingSpans":[]}。
+const GPT56_SOL_SYSTEM_PROMPT = `你是章节代理审批复核员。
+你将收到一对匿名候选甲乙、各自正文片段与事实守卫、状态一致性对照数据。
+你的任务是匿名复判：在不暴露候选身份的前提下，基于文学质量、事实守卫和状态一致性，
+输出结构化数据：{"结论":"代理批准或暂缓再生","推荐标签":"甲或乙","理由":"具体理由","胜出片段":[],"落败片段":[]}。
 
 规则：
-- verdict=PROXY_APPROVED 仅当某一候选明确胜出；任何 slight/uncertain/unknown 情况一律 HOLD_FOR_REGENERATION。
-- recommendedLabel 必须为 "A" 或 "B"，不得为候选身份或候选文本。
-- 你不知道 forward/reverse 顺序；不得通过标签稳定推断候选身份。
-- 输出必须是合法 JSON，不得附加 markdown 代码块或自然语言解释。`;
+- 仅当某一候选明确胜出时使用“代理批准”；任何轻微胜出、不确定或未知情况一律使用“暂缓再生”。
+- 推荐标签必须为“甲”或“乙”，不得为候选身份或候选文本。
+- 你不知道正向或反向顺序；不得通过标签稳定推断候选身份。
+- 输出必须是合法结构化数据，不得附加代码块或自然语言解释。`;
 
 /**
  * 创建真实 gpt5.6-sol 章节代理审批 caller（切片3 新增）。
@@ -352,10 +353,10 @@ export function createRealGpt56SolChapterProxyApprovalCaller(
       }
 
       // 1. forward 调用
-      const forwardMessages = [
+      const forwardMessages = localizeLlmMessages([
         { role: "system", content: GPT56_SOL_SYSTEM_PROMPT },
-        { role: "user", content: JSON.stringify(packet.forward) },
-      ];
+        { role: "user", content: localizeLlmText(JSON.stringify(packet.forward)) },
+      ]);
       const forwardResp = await callChatCompletions(forwardMessages, {
         timeoutMs: opts.budget.timeoutMs,
         responseFormat: "json_object",
@@ -363,10 +364,10 @@ export function createRealGpt56SolChapterProxyApprovalCaller(
       const forwardOutput = parseGpt56SolVerdictOutput(forwardResp.text);
 
       // 2. reverse 调用
-      const reverseMessages = [
+      const reverseMessages = localizeLlmMessages([
         { role: "system", content: GPT56_SOL_SYSTEM_PROMPT },
-        { role: "user", content: JSON.stringify(packet.reverse) },
-      ];
+        { role: "user", content: localizeLlmText(JSON.stringify(packet.reverse)) },
+      ]);
       const reverseResp = await callChatCompletions(reverseMessages, {
         timeoutMs: opts.budget.timeoutMs,
         responseFormat: "json_object",
@@ -482,7 +483,7 @@ export async function callOpenAIChatCompletions(
   const url = `${apiBaseUrl.replace(/\/+$/, "")}/chat/completions`;
   const body: Record<string, unknown> = {
     model: modelId,
-    messages,
+    messages: localizeLlmMessages(messages),
     temperature: 0,
   };
   if (options?.responseFormat === "json_object") {
@@ -560,8 +561,18 @@ function parseGpt56SolVerdictOutput(text: string): Gpt56SolVerdictOutput {
     throw new Error("gpt5.6-sol 输出必须为 JSON 对象");
   }
   const obj = parsed as Record<string, unknown>;
-  const verdict = obj.verdict;
-  const recommendedLabel = obj.recommendedLabel;
+  const rawVerdict = obj.verdict ?? obj["结论"];
+  const verdict = rawVerdict === "代理批准"
+    ? "PROXY_APPROVED"
+    : rawVerdict === "暂缓再生"
+      ? "HOLD_FOR_REGENERATION"
+      : rawVerdict;
+  const rawRecommendedLabel = obj.recommendedLabel ?? obj["推荐标签"];
+  const recommendedLabel = rawRecommendedLabel === "甲"
+    ? "A"
+    : rawRecommendedLabel === "乙"
+      ? "B"
+      : rawRecommendedLabel;
   if (verdict === undefined || verdict === null) {
     throw new Error("gpt5.6-sol 输出缺少 verdict 字段");
   }
@@ -573,9 +584,13 @@ function parseGpt56SolVerdictOutput(text: string): Gpt56SolVerdictOutput {
   return {
     verdict: verdict as RawChapterVerdict,
     recommendedLabel,
-    rationale: typeof obj.rationale === "string" ? obj.rationale : undefined,
-    winningSpans: Array.isArray(obj.winningSpans) ? (obj.winningSpans as string[]) : undefined,
-    losingSpans: Array.isArray(obj.losingSpans) ? (obj.losingSpans as string[]) : undefined,
+    rationale: typeof (obj.rationale ?? obj["理由"]) === "string" ? String(obj.rationale ?? obj["理由"]) : undefined,
+    winningSpans: Array.isArray(obj.winningSpans ?? obj["胜出片段"])
+      ? ((obj.winningSpans ?? obj["胜出片段"]) as string[])
+      : undefined,
+    losingSpans: Array.isArray(obj.losingSpans ?? obj["落败片段"])
+      ? ((obj.losingSpans ?? obj["落败片段"]) as string[])
+      : undefined,
   };
 }
 
@@ -646,7 +661,7 @@ export function createOpenAIChatCompletionsFn(options: {
   ): Promise<Gpt56SolCallResult> => {
     const requestBody: Record<string, unknown> = {
       model: modelId,
-      messages,
+      messages: localizeLlmMessages(messages),
       temperature: 0,
     };
     if (callOpts?.responseFormat === "json_object") {

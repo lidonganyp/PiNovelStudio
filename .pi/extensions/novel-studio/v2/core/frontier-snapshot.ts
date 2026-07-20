@@ -95,6 +95,7 @@ export interface FrontierSnapshotResult {
 /** 不可变基础文件（直接复制） */
 const IMMUTABLE_FILES = [
   "config.json",
+  "creative-constitution.json",
   "CORE-WRITING-PRINCIPLES.md",
   "WORLDBUILDING-CANON.md",
   "USER-REVISION-LEARNINGS.md",
@@ -147,6 +148,7 @@ export async function createFrontierSnapshot(
   const outputDir =
     input.outputDir ??
     join(input.projectRoot, "workspaces", `${input.workspaceId}-snapshot-ch${input.throughChapter}`);
+  const targetWorkspaceId = basename(outputDir);
 
   // 准备输出目录（清空已有内容会破坏幂等性；改为允许覆盖相同文件）
   mkdirSync(outputDir, { recursive: true });
@@ -160,7 +162,19 @@ export async function createFrontierSnapshot(
     if (existsSync(src)) {
       const dst = join(outputDir, relPath);
       mkdirSync(dirname(dst), { recursive: true });
-      copyFileSync(src, dst);
+      if (relPath === "config.json") {
+        const config = JSON.parse(readFileSync(src, "utf8")) as Record<string, unknown>;
+        writeFileSync(dst, JSON.stringify({
+          ...config,
+          workspaceId: targetWorkspaceId,
+          chapterProgress: {
+            completed: input.throughChapter,
+            current: input.throughChapter + 1,
+          },
+        }, null, 2), "utf8");
+      } else {
+        copyFileSync(src, dst);
+      }
       fileHashes.push(hashFile(dst, relPath));
     }
   }
@@ -228,6 +242,51 @@ export async function createFrontierSnapshot(
         continue;
       }
 
+      if (name === "skeleton.json") {
+        const src = join(seriesDir, name);
+        const parsed = JSON.parse(readFileSync(src, "utf8")) as {
+          chapterSkeletons?: Record<string, unknown>;
+          lastUpdated?: unknown;
+        };
+        const chapterSkeletons = Object.fromEntries(
+          Object.entries(parsed.chapterSkeletons ?? {}).filter(([key]) => {
+            const chapterNumber = parseChapterKey(key);
+            return chapterNumber !== null && chapterNumber <= input.throughChapter;
+          }),
+        );
+        const dst = join(dstSeriesDir, name);
+        writeFileSync(dst, JSON.stringify({
+          chapterSkeletons,
+          ...(typeof parsed.lastUpdated === "string" ? { lastUpdated: parsed.lastUpdated } : {}),
+        }, null, 2), "utf8");
+        fileHashes.push(hashFile(dst, `series/${name}`));
+        continue;
+      }
+
+      if (name === "narrative-state.json") {
+        const src = join(seriesDir, name);
+        const parsed = JSON.parse(readFileSync(src, "utf8")) as {
+          currentChapter?: unknown;
+          chapterProgress?: { completed?: unknown };
+        };
+        const currentChapter = typeof parsed.currentChapter === "number"
+          ? parsed.currentChapter
+          : typeof parsed.chapterProgress?.completed === "number"
+            ? parsed.chapterProgress.completed
+            : null;
+        if (currentChapter !== null && currentChapter <= input.throughChapter) {
+          const dst = join(dstSeriesDir, name);
+          copyFileSync(src, dst);
+          fileHashes.push(hashFile(dst, `series/${name}`));
+        } else {
+          excludedContent.push({
+            path: `series/${name}`,
+            reason: "narrative_state_after_or_without_frontier",
+          });
+        }
+        continue;
+      }
+
       // ch{N}-outline-explicit.md：post-write 章纲；仅保留 N <= frontier
       const explicitMatch = name.match(/^ch(\d+)-outline-explicit\.md$/);
       if (explicitMatch) {
@@ -290,16 +349,26 @@ export async function createFrontierSnapshot(
     // 不应生成新的 updatedAt；否则连续两次快照 hash 不一致，破坏幂等性）
     const prunedStore: NarrativeStateStore = {
       ...prunedResult.store,
+      workspaceId: targetWorkspaceId,
       compactionReport: undefined,
       updatedAt: originalUpdatedAt,
     };
-    writeFileSync(snapStatePath, JSON.stringify(prunedStore, null, 2), "utf8");
-    fileHashes.push(hashFile(snapStatePath, "narrative-state-store.json"));
 
     stateStats = {
       ...prunedResult.stats,
       blocked: false,
     };
+    const acceptedStateCount = stateStats.canon + stateStats.character + stateStats.promise
+      + stateStats.pattern + stateStats.expectation;
+    if (acceptedStateCount > 0) {
+      writeFileSync(snapStatePath, JSON.stringify(prunedStore, null, 2), "utf8");
+      fileHashes.push(hashFile(snapStatePath, "narrative-state-store.json"));
+    } else {
+      excludedContent.push({
+        path: "narrative-state-store.json",
+        reason: "no_accepted_entries_at_frontier",
+      });
+    }
   }
 
   // 6. 记录 session 产物目录的排除（即使源不存在也记录意图）
@@ -426,6 +495,11 @@ function pruneStateStoreByChapter(
 function parseChapterNumber(value: string | undefined | null): number | null {
   if (!value) return null;
   const match = value.match(/^ch(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function parseChapterKey(value: string): number | null {
+  const match = value.match(/^(?:ch|chapter-)?(\d+)$/i);
   return match ? Number(match[1]) : null;
 }
 

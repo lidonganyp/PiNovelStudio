@@ -28,6 +28,7 @@ import {
 } from "../../v2/core/judge-types.js";
 import type { AnonymousMapping } from "../../v2/core/judge-types.js";
 import type { TextSpan } from "../../v2/core/types.js";
+import { restoreLlmExcerpt } from "../../utils/llm-language-guard.js";
 import {
   callJudgeModel,
   maskEndpoint,
@@ -238,10 +239,32 @@ export async function judgeOnce(
     "positionSensitive"
   >;
 
-  return {
+  return restorePairwiseVerdictExcerpts({
     ...parsed,
     positionSensitive: false, // 单次评审无顺序敏感概念，由 judgePairwise 计算
+  }, candidateA, candidateB);
+}
+
+function restorePairwiseVerdictExcerpts(
+  verdict: PairwiseJudgeVerdict,
+  candidateA: string,
+  candidateB: string,
+): PairwiseJudgeVerdict {
+  return {
+    ...verdict,
+    dimensions: verdict.dimensions.map((dimension) => ({
+      ...dimension,
+      evidenceA: restorePairwiseSpans(dimension.evidenceA, candidateA),
+      evidenceB: restorePairwiseSpans(dimension.evidenceB, candidateB),
+    })),
   };
+}
+
+function restorePairwiseSpans(spans: TextSpan[], sourceText: string): TextSpan[] {
+  return spans.map((span) => {
+    const original = restoreLlmExcerpt(sourceText, span.start, span.end, span.excerpt ?? "");
+    return original === null ? span : { ...span, excerpt: original };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +501,10 @@ export function validateJudgeVerdict(
         continue;
       }
       // M1-R3：excerpt 一致性校验（excerpt === text.slice(start, end)）
-      if (typeof s.excerpt !== "string" || s.excerpt !== loserText.slice(s.start, s.end)) {
+      if (
+        typeof s.excerpt !== "string" ||
+        restoreLlmExcerpt(loserText, s.start, s.end, s.excerpt) === null
+      ) {
         invalidDimensions.push(dim.name);
         errors.push(
           `维度 "${dim.name}" 的 evidence${loserLabel}[${i}] excerpt 与 text.slice(start,end) 不符`,
@@ -514,7 +540,10 @@ export function validateJudgeVerdict(
           );
           continue;
         }
-        if (typeof s.excerpt !== "string" || s.excerpt !== winnerText.slice(s.start, s.end)) {
+        if (
+          typeof s.excerpt !== "string" ||
+          restoreLlmExcerpt(winnerText, s.start, s.end, s.excerpt) === null
+        ) {
           invalidDimensions.push(dim.name);
           errors.push(
             `维度 "${dim.name}" 的 evidence${dim.winner}[${i}] excerpt 与 text.slice(start,end) 不符`,

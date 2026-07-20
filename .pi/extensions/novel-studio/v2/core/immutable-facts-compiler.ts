@@ -105,6 +105,8 @@ export interface ImmutableFactsInput {
     urgency?: number;
     sourceIds?: string[];
   }>;
+  /** 已由 ContextCompiler 从 canonical 本地文件加载的授权文本；只用于术语授权，不升级为硬事实。 */
+  authorizedHighImpactSources?: Array<{ text: string; sourceRef: string }>;
 }
 
 export interface CompiledImmutableFacts {
@@ -146,14 +148,16 @@ const HIGH_IMPACT_DICTIONARY: Record<HighImpactCategory, string[]> = {
 /**
  * 升级结果检测的境界/层级后缀模式。
  *
- * 匹配规则：1-4 个汉字 + 境/阶/级/重/层 等境界后缀。
+ * 候选匹配：1-4 个汉字 + 境/阶/级/重/层 等后缀；最终必须同时命中明确升级语境。
  * 例如：筑基境、金丹境、化神境、元婴境、练气期、筑基期等。
  *
- * 注意：此模式可能匹配"心境"/"阶层"等通用词。在生产中应配合上下文动词
- * （突破/晋升/到达/跨过/越过/提升）做进一步过滤；当前为最小实现，
- * 满足 IMMUTABLE-FACTS-COMPILER-1 测试用例要求。
+ * 仅凭后缀会误报"心境"、"阶层"、"重重"等普通词，因此扫描阶段必须再通过
+ * UPGRADE_CONTEXT_PATTERN 的语境过滤。
  */
 const REALM_SUFFIX_PATTERN = /[\u4e00-\u9fff]{1,4}(?:境|阶|级|重|层|期)/g;
+
+/** 明确表示修为/层级已经变化的语境；刻意不包含普通的"跨越/进入"。 */
+const UPGRADE_CONTEXT_PATTERN = /(?:突破|晋升|进阶|升(?:至|到|入)|跃升|提升(?:至|到)?|修炼(?:至|到)|达到|到达|踏入|迈入|成为)/;
 
 // ============================================================================
 // 1. compileImmutableFacts — 从 6 个来源编译本章硬事实
@@ -350,16 +354,30 @@ function extractAuthorizedHighImpactTerms(
     }
   }
 
+  for (const source of input.authorizedHighImpactSources ?? []) {
+    for (const category of staticCategories) {
+      for (const term of HIGH_IMPACT_DICTIONARY[category]) {
+        if (!source.text.includes(term)) continue;
+        const key = `${category}:${term}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        terms.push({ term, category, sourceRef: source.sourceRef });
+      }
+    }
+  }
+
   // 动态 upgrade_result：本体层级已授权 + 当前角色境界已授权
   for (const level of input.ontologyLevels ?? []) {
-    const key = `upgrade_result:${level}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      terms.push({
-        term: level,
-        category: "upgrade_result",
-        sourceRef: "ontology-level",
-      });
+    for (const levelTerm of extractOntologyLevelTerms(level)) {
+      const key = `upgrade_result:${levelTerm}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        terms.push({
+          term: levelTerm,
+          category: "upgrade_result",
+          sourceRef: "ontology-level",
+        });
+      }
     }
   }
   for (const cs of input.characterStates ?? []) {
@@ -378,6 +396,16 @@ function extractAuthorizedHighImpactTerms(
   }
 
   return terms;
+}
+
+function extractOntologyLevelTerms(level: string): string[] {
+  const bracketContents = Array.from(level.matchAll(/[（(]([^）)]+)[）)]/g), (match) => match[1]);
+  const sources = bracketContents.length > 0 ? bracketContents : [level];
+  return Array.from(new Set(
+    sources.flatMap((source) => source.split(/[\/、,，→>\s]+/))
+      .map((term) => term.trim())
+      .filter((term) => term.length > 0 && term.length <= 12),
+  ));
 }
 
 // ============================================================================
@@ -441,7 +469,7 @@ export function checkUnauthorizedHighImpactSettings(
   while ((match = REALM_SUFFIX_PATTERN.exec(text)) !== null) {
     const term = match[0];
     const isAuthorized = isTermAuthorized(term, "upgrade_result", authorizedTerms);
-    if (!isAuthorized) {
+    if (!isAuthorized && hasUpgradeResultContext(text, match.index, match.index + term.length)) {
       diagnostics.push({
         category: "upgrade_result",
         term,
@@ -456,6 +484,17 @@ export function checkUnauthorizedHighImpactSettings(
   }
 
   return diagnostics;
+}
+
+function hasUpgradeResultContext(text: string, start: number, end: number): boolean {
+  const contextStart = Math.max(0, start - 16);
+  const contextEnd = Math.min(text.length, end + 4);
+  const prefix = text.slice(contextStart, start);
+  const clauseBoundary = Math.max(
+    ...["。", "！", "？", "；", "：", "，", ".", "!", "?", ";", ":", ",", "\n"]
+      .map((separator) => prefix.lastIndexOf(separator)),
+  );
+  return UPGRADE_CONTEXT_PATTERN.test(text.slice(contextStart + clauseBoundary + 1, contextEnd));
 }
 
 // ============================================================================

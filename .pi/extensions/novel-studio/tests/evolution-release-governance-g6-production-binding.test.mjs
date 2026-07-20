@@ -597,7 +597,7 @@ test("captureDefaultEnvironmentFingerprint: 实际 model-routing 内容变化必
   }
 });
 
-test("captureDefaultEnvironmentFingerprint: 使用当前 Claude 主写生产元数据", () => {
+test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元数据", () => {
   const projectRoot = makeTempRoot();
   try {
     const configDir = join(projectRoot, "config");
@@ -624,7 +624,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Claude 主写生产元�
       budgetMaxCalls: 10,
       timeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS ?? 300000),
       fallbackPolicy: "hard_block",
-      generationModel: "claude-opus-4-6",
+      generationModel: "gemini-3.1-pro-preview",
       judgeModel: "gpt5.6-sol",
       proxyApprovalModel: "gpt5.6-sol",
       envSwitchNames: [
@@ -639,6 +639,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Claude 主写生产元�
         "DEEPSEEK_API_KEY",
         "QWEN_API_KEY",
         "CLAUDE_API_KEY",
+        "GEMINI_API_KEY",
         "GPT_API_KEY",
         "ARK_API_KEY",
         "ERNIE_API_KEY",
@@ -648,7 +649,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Claude 主写生产元�
     assert.equal(
       captureDefaultEnvironmentFingerprint(projectRoot),
       computeFingerprintHash(expectedFingerprint),
-      "默认生产指纹必须绑定实际路由文件与 Claude Opus 4.6 主写元数据",
+      "默认生产指纹必须绑定实际路由文件与 Gemini 3.1 Pro 主写元数据",
     );
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -658,7 +659,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Claude 主写生产元�
 test("evolution CLI: capture 与生产门禁使用同一当前路由真相源", () => {
   const cliSource = readFileSync(join(EXT_ROOT, "scripts", "evolution-cli.mjs"), "utf-8");
   assert.match(cliSource, /modelRoutingPath:\s*["']config\/model-routing\.json["']/);
-  assert.match(cliSource, /generationModel:\s*["']claude-opus-4-6["']/);
+  assert.match(cliSource, /generationModel:\s*["']gemini-3\.1-pro-preview["']/);
   assert.doesNotMatch(
     cliSource,
     /modelRoutingPath:\s*["']\.pi\/extensions\/novel-studio\/config\/model-routing\.json["']/,

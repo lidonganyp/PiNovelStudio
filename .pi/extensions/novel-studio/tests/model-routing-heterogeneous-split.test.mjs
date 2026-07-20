@@ -61,6 +61,15 @@ function createMinimalWorkspace() {
     characters: [
       { id: "protagonist-1", name: "叶尘", role: "protagonist" },
     ],
+    chapterSeeds: {
+      default: {
+        choicesAndCosts: [
+          { choice: "公开接受传承", cost: "暴露自己已不再是普通少年" },
+        ],
+        expectedIrreversibleChange: ["叶尘接受传承后无法再维持原有身份"],
+        causalEndPressure: ["传承被激活后引来追踪者"],
+      },
+    },
     createdAt: new Date().toISOString(),
   };
   writeFileSync(join(PHASE5_WORKSPACE, "config.json"), JSON.stringify(config, null, 2), "utf-8");
@@ -97,7 +106,7 @@ function extractModelCalls(result) {
 // 1. 默认生产路径：generation 与 judge 异源分轨
 // ============================================================================
 
-describe("MODEL-ROUTING-CLAUDE46-1A：默认生产 generation/judge 异源分轨", () => {
+describe("GEMINI-DEFAULT-WRITER-1：默认生产 generation/judge 异源分轨", () => {
   before(() => {
     createMinimalWorkspace();
   });
@@ -179,13 +188,13 @@ describe("MODEL-ROUTING-CLAUDE46-1A：默认生产 generation/judge 异源分轨
         `generation provider (${[...generationProviders].join(",")}) 与 judge provider (${[...judgeProviders].join(",")}) 应异源（不同 provider），实际相同`,
       );
 
-      // 更强断言：generation 应为 claude/anthropic，judge 应为 gpt/openai（异源 judge）
-      const genIsClaude = [...generationProviders].some((p) =>
-        /claude|anthropic/i.test(p));
+      // 更强断言：默认 generation 应为 Gemini，judge 应为 gpt/openai（异源 judge）
+      const genIsGemini = [...generationProviders].some((p) =>
+        /gemini31|gemini/i.test(p));
       const judgeIsGpt = [...judgeProviders].some((p) =>
         /gpt|openai/i.test(p));
-      assert.ok(genIsClaude,
-        `generation provider 应为 claude/anthropic，实际: ${[...generationProviders].join(",")}`);
+      assert.ok(genIsGemini,
+        `generation provider 应为 gemini31，实际: ${[...generationProviders].join(",")}`);
       assert.ok(judgeIsGpt,
         `judge provider 应为 gpt/openai（异源 judge），实际: ${[...judgeProviders].join(",")}`);
 

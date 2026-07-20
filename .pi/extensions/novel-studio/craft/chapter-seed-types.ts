@@ -1,12 +1,11 @@
 /**
  * PiNovelStudio — ChapterSeed 类型定义
  *
- * P22：细节锚点先行生成链路
+ * 统一主链路：作者权威叙事契约优先
  *
- * 写前输入统一为 ChapterSeed 种子包 + 感知锚点。
- * 旧章纲（series/outline.md / ch{X}-outline-explicit.md）只可作为
- * 高层背景/主题/不可违背事实参考，不再作为生成前置条件，也不能被
- * 编译为事件蓝图。
+ * ChapterSeed 负责把作者给出的整体方向、章节功能、事件内容、人物动机、
+ * 伏笔、因果、状态变化和章末目标原样交给统一主链路。感知锚点仅保留为
+ * 历史诊断数据，不是事实、生成前置条件或正文执行指令。
  *
  * ChapterSeed 由 ChapterSeedBuilder 从以下种子源构造：
  *  - config.json（世界观、类型、角色列表、字数预算）
@@ -143,6 +142,25 @@ export const HighLevelDirectionSchema = Type.Object({
 });
 export type HighLevelDirection = Static<typeof HighLevelDirectionSchema>;
 
+/** 作者显式声明的章节叙事契约，不含感官、句式、对白或段落执行方式。 */
+export const AuthorChapterContractSchema = Type.Object({
+  available: Type.Boolean(),
+  chapterFunction: Type.Optional(Type.String()),
+  eventSummaries: Type.Array(Type.String(), { default: [] }),
+  mustInclude: Type.Array(Type.String(), { default: [] }),
+  stateChanges: Type.Array(Type.String(), { default: [] }),
+  foreshadowing: Type.Array(Type.String(), { default: [] }),
+  causalRelations: Type.Array(Type.String(), { default: [] }),
+  endingTarget: Type.Optional(Type.String()),
+  relevantCharacters: Type.Array(Type.String(), { default: [] }),
+  characterMotivations: Type.Array(Type.Object({
+    character: Type.String(),
+    motivation: Type.String(),
+  }), { default: [] }),
+  sourceIds: Type.Array(Type.String(), { default: [] }),
+});
+export type AuthorChapterContract = Static<typeof AuthorChapterContractSchema>;
+
 /** 章节意图（替代旧 outlineIntent 的写前来源） */
 export const ChapterIntentSchema = Type.Object({
   primary: Type.String({ description: "主要意图：foreshadow/character/reversal/romance/setting/combat" }),
@@ -150,6 +168,13 @@ export const ChapterIntentSchema = Type.Object({
   keywords: Type.Array(Type.String()),
   chapterTheme: Type.String(),
   targetEmotions: Type.Array(Type.String()),
+  /** Explicit chapter contract facts. They must come from user/workspace seed data. */
+  choicesAndCosts: Type.Optional(Type.Array(Type.Object({
+    choice: Type.String(),
+    cost: Type.String(),
+  }))),
+  expectedIrreversibleChange: Type.Optional(Type.Array(Type.String())),
+  causalEndPressure: Type.Optional(Type.Array(Type.String())),
   /**
    * P22新增：标记 outlineIntent 的来源
    * - "chapterSeed"：来自 ChapterSeed（新链路）
@@ -201,6 +226,8 @@ export const ChapterSeedSchema = Type.Object({
   ),
   /** 高层方向（可选，仅背景参考） */
   highLevelDirection: HighLevelDirectionSchema,
+  /** 作者权威章节契约；只描述叙事内容，不描述正文执行方式。 */
+  authorChapterContract: AuthorChapterContractSchema,
   /** 章节意图（替代旧 outlineIntent 的写前来源） */
   intent: ChapterIntentSchema,
   /** 字数预算 */

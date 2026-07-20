@@ -13,13 +13,13 @@
  * 要求：
  * 1. 所有值必须有 sourceRef，不能从主题词推测
  * 2. 质量评测模式下，关键字段为空应阻断评测并提示补充种子
- * 3. 普通生成可降级，但必须明确标为 under-specified
+ * 3. 普通生成缺少交付关键字段时也必须 fail closed，不能把提示词缺口交给正文模型猜测
  *
  * 本测试验证：
  * - ChapterIntent 新增 underSpecifiedFields 字段，列出为空的关键字段名
  * - 非空字段不被列入 underSpecifiedFields
  * - fieldSourceRefs 仍然追踪实际贡献来源（空字段不记录）
- * - 普通生成模式 + under-specified → 不阻断，返回 status="ok" + isUnderSpecified=true
+ * - 普通生成模式 + 交付关键字段 under-specified → status="blocked" + failureEnvelope
  * - evalMode（B3/B4）+ under-specified 关键字段 → status="blocked" + failureEnvelope
  *   提示"补充种子源 focusCharacterGoals/choicesAndCosts/..."
  */
@@ -171,11 +171,31 @@ test("INTENT-COMPLETENESS-1 · 非空 choicesAndCosts 不被列入 underSpecifie
   );
 });
 
+test("INTENT-COMPLETENESS-1 · 显式 ChapterContract 字段原样进入 Intent 并保留 sourceRef", () => {
+  const builder = new ChapterIntentBuilder();
+  const input = buildMinimalInput({
+    choicesAndCosts: [{ choice: "进入封锁区", cost: "失去公开身份" }],
+    expectedIrreversibleChange: ["叶尘的公开身份被记录在案"],
+    causalEndPressure: ["身份记录触发追捕令"],
+  });
+  const { intent } = builder.build(input, MINIMAL_CONSTITUTION, null);
+
+  assert.deepEqual(intent.choicesAndCosts, input.choicesAndCosts);
+  assert.deepEqual(intent.expectedIrreversibleChange, input.expectedIrreversibleChange);
+  assert.deepEqual(intent.causalEndPressure, input.causalEndPressure);
+  assert.deepEqual(intent.fieldSourceRefs?.choicesAndCosts, ["chapter-seed:intent.choicesAndCosts"]);
+  assert.deepEqual(
+    intent.fieldSourceRefs?.expectedIrreversibleChange,
+    ["chapter-seed:intent.expectedIrreversibleChange"],
+  );
+  assert.deepEqual(intent.fieldSourceRefs?.causalEndPressure, ["chapter-seed:intent.causalEndPressure"]);
+});
+
 // ============================================================================
-// 3. 普通生成模式 + under-specified → 不阻断，明确标记
+// 3. 旧模板字段缺失只记录诊断，不阻断生成
 // ============================================================================
 
-test("INTENT-COMPLETENESS-1 · 普通生成 + under-specified 不阻断，返回 isUnderSpecified=true", async () => {
+test("INTENT-COMPLETENESS-1 · 普通生成不因旧模板字段缺失而阻断", async () => {
   // 普通生成：不传 evalMode
   // 使用 V2_FORCE_STUB=1 + 完整 runUnifiedPipeline 跑一遍
   process.env.V2_FORCE_STUB = "1";
@@ -189,28 +209,17 @@ test("INTENT-COMPLETENESS-1 · 普通生成 + under-specified 不阻断，返回
     projectRoot: process.cwd(),
   });
 
-  // 普通生成不应阻断
-  assert.ok(
-    result.status === "ok",
-    `普通生成应 status="ok"，实际: ${result.status}`,
-  );
-  // under-specified 标记必须透传到 V2Output
-  assert.ok(
-    typeof result.isUnderSpecified === "boolean",
-    `V2Output 必须含 isUnderSpecified 字段，实际: ${typeof result.isUnderSpecified}`,
-  );
-  // 关键字段为空时应为 true
-  assert.ok(
-    result.isUnderSpecified === true,
-    `关键字段为空时 isUnderSpecified 应为 true，实际: ${result.isUnderSpecified}`,
-  );
+  assert.equal(result.status, "ok");
+  assert.equal(result.failureEnvelope ?? null, null);
+  assert.equal(result.stageResults.intentCompleteness.advisoryOnly, true);
+  assert.equal(result.stageResults.intentCompleteness.blocking, false);
 });
 
 // ============================================================================
-// 4. evalMode（B3/B4）+ under-specified 关键字段 → 阻断
+// 4. 消融评测也不把固定叙事槽位当成硬门
 // ============================================================================
 
-test("INTENT-COMPLETENESS-1 · evalMode=B4 + under-specified 关键字段 → status=blocked", async () => {
+test("INTENT-COMPLETENESS-1 · evalMode 不因 under-specified 旧模板字段阻断", async () => {
   process.env.V2_FORCE_STUB = "1";
 
   // 直接调用 UnifiedOrchestrator.orchestrate()，传入含 underSpecifiedFields 的 intent
@@ -269,33 +278,16 @@ test("INTENT-COMPLETENESS-1 · evalMode=B4 + under-specified 关键字段 → st
       text: "stub raw text",
       finishReason: "stop",
     }),
-    evalMode: "B4", // 质量评测模式
+    evalMode: "B0",
   });
 
-  // evalMode + under-specified 关键字段 → 阻断
-  assert.ok(
-    result.status === "blocked",
-    `evalMode + under-specified 应 status="blocked"，实际: ${result.status}`,
-  );
-  // failureEnvelope 必须含 under_specified 标识
-  const envelope = result.failureEnvelope;
-  assert.ok(
-    envelope && typeof envelope === "object",
-    `必须返回 failureEnvelope，实际: ${JSON.stringify(envelope)}`,
-  );
-  const envelopeStr = JSON.stringify(envelope);
-  assert.ok(
-    envelopeStr.includes("under_specified") || envelopeStr.includes("underSpecified"),
-    `failureEnvelope 必须含 under_specified/underSpecified 标识，实际: ${envelopeStr}`,
-  );
-  // 失败原因应提示补充种子源或列出空字段
-  assert.ok(
-    /补充种子|focusCharacterGoals|choicesAndCosts|expectedIrreversibleChange|selectedPromisesToAdvance|causalEndPressure/.test(envelopeStr),
-    `failureEnvelope 应提示补充种子或列出空字段，实际: ${envelopeStr}`,
-  );
+  assert.equal(result.status, "ok");
+  assert.equal(result.failureEnvelope, null);
+  assert.equal(result.stageResults.intentCompleteness.advisoryOnly, true);
+  assert.equal(result.stageResults.intentCompleteness.blocking, false);
 });
 
-test("INTENT-COMPLETENESS-1 · 普通模式 + under-specified → 不阻断（orchestrator 直接调用）", async () => {
+test("INTENT-COMPLETENESS-1 · 生产 orchestrator 将旧模板缺项保持为 advisory", async () => {
   process.env.V2_FORCE_STUB = "1";
 
   // 注意：从 dist/ 导入（unified-orchestrator 在生产闭包中，未纳入 dist-test barrel）
@@ -348,9 +340,8 @@ test("INTENT-COMPLETENESS-1 · 普通模式 + under-specified → 不阻断（or
     // 不传 evalMode → 普通生成模式
   });
 
-  // 普通模式 + under-specified → 不阻断
-  assert.ok(
-    result.status === "ok",
-    `普通模式 + under-specified 应 status="ok"，实际: ${result.status}`,
-  );
+  assert.equal(result.status, "ok");
+  assert.equal(result.failureEnvelope, null);
+  assert.equal(result.stageResults.intentCompleteness.advisoryOnly, true);
+  assert.equal(result.stageResults.intentCompleteness.blocking, false);
 });

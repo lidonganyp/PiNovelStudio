@@ -110,9 +110,27 @@ function makeCompositeStub(opts) {
     if (input.kind === "editorial_amplified") {
       return { text: editorialText, model: "stub-ed-model", route: input.route, durationMs: 10 };
     }
+    if (input.kind === "opportunity_judge") {
+      return {
+        text: JSON.stringify({
+          opportunities: [{
+            opportunityType: "chapter_end_pressure",
+            diagnosis: "章末因果牵引力不足",
+            evidenceExcerpt: rawText.slice(0, Math.min(12, rawText.length)),
+            expectedReaderGain: "增强继续阅读意愿",
+            damageRisks: ["可能破坏既定章末事实"],
+            confidence: 0.8,
+          }],
+          noOpReason: null,
+        }),
+        model: "stub-opportunity",
+        route: input.route,
+        durationMs: 10,
+      };
+    }
     if (input.kind === "literary_judge") {
-      const aMatch = input.userPrompt.match(/【候选 A】\n([\s\S]*?)\n（候选 A 总字符数/);
-      const bMatch = input.userPrompt.match(/【候选 B】\n([\s\S]*?)\n（候选 B 总字符数/);
+      const aMatch = input.userPrompt.match(/【候选甲】\n+([\s\S]*?)\n+（候选甲总字符数/);
+      const bMatch = input.userPrompt.match(/【候选乙】\n+([\s\S]*?)\n+（候选乙总字符数/);
       const textA = aMatch ? aMatch[1] : "";
       const textB = bMatch ? bMatch[1] : "";
       const aHas = textA.includes(betterMarker);
@@ -171,6 +189,7 @@ test("P1-7: editorial 胜出时记录 win evidence 到策略信誉库", async ()
       context: makeContext(),
       constitution: null,
       characterNames: ["林川", "苏婉", "老周"],
+      allowAutomaticLiterarySelection: true,
       modelGenerate: makeCompositeStub({
         rawText: RAW_TEXT_WEAK_END,
         editorialText: EDITORIAL_TEXT_STRONG_HOOK,
@@ -239,6 +258,7 @@ test("P1-7: raw 胜出时记录 loss evidence 到策略信誉库", async () => {
       context: makeContext(),
       constitution: null,
       characterNames: ["林川", "苏婉", "老周"],
+      allowAutomaticLiterarySelection: true,
       modelGenerate: makeCompositeStub({
         rawText: rawWithHook,
         editorialText: editorialAlsoHook,
@@ -288,6 +308,7 @@ test("P1-7: 不传入学习组件时编排器行为不变", async () => {
       context: makeContext(),
       constitution: null,
       characterNames: ["林川", "苏婉", "老周"],
+      allowAutomaticLiterarySelection: true,
       modelGenerate: makeCompositeStub({
         rawText: RAW_TEXT_WEAK_END,
         editorialText: EDITORIAL_TEXT_STRONG_HOOK,
@@ -322,6 +343,7 @@ test("STRATEGY-ADMISSION-1A: 未准入策略走静态 registry，不被低 Thomp
       context: makeContext(),
       constitution: null,
       characterNames: ["林川", "苏婉", "老周"],
+      allowAutomaticLiterarySelection: true,
       modelGenerate: makeCompositeStub({
         rawText: RAW_TEXT_WEAK_END,
         editorialText: EDITORIAL_TEXT_STRONG_HOOK,
@@ -365,6 +387,7 @@ test("P1-7: modelVersion 从 raw 实际模型名派生（隔离策略信誉）",
       context: makeContext(),
       constitution: null,
       characterNames: ["林川", "苏婉", "老周"],
+      allowAutomaticLiterarySelection: true,
       modelGenerate: makeCompositeStub({
         rawText: RAW_TEXT_WEAK_END,
         editorialText: EDITORIAL_TEXT_STRONG_HOOK,
@@ -409,6 +432,7 @@ test("P1-7: 持久化策略信誉库后重新加载保留学习结果", async ()
       context: makeContext(),
       constitution: null,
       characterNames: ["林川", "苏婉", "老周"],
+      allowAutomaticLiterarySelection: true,
       modelGenerate: makeCompositeStub({
         rawText: RAW_TEXT_WEAK_END,
         editorialText: EDITORIAL_TEXT_STRONG_HOOK,
@@ -472,6 +496,7 @@ test("P1-7: 策略去重 — 同 strategyId 只记录一条 evidence", async () 
       context: makeContext(),
       constitution: null,
       characterNames: ["林川", "苏婉", "老周"],
+      allowAutomaticLiterarySelection: true,
       modelGenerate: makeCompositeStub({
         rawText: RAW_TEXT_WEAK_END,
         editorialText: EDITORIAL_TEXT_STRONG_HOOK,

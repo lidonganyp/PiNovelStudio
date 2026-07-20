@@ -12,9 +12,9 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { ContextCompiler } from "../dist/v2/core/context-compiler.js";
-import { CraftJudgmentLibrary } from "../dist/v2/core/craft-judgment-library.js";
-import { SceneContractPlanner } from "../dist/v2/core/scene-contract-planner.js";
-import { CandidateGenerator, auditPrompt } from "../dist/v2/core/candidate-generator.js";
+import { CraftJudgmentLibrary } from "../dist-test/v2/core/craft-judgment-library.js";
+import { SceneContractPlanner } from "../dist-test/v2/core/scene-contract-planner.js";
+import { CandidateGenerator, auditPrompt } from "../dist-test/v2/core/candidate-generator.js";
 import {
   createStubModelGenerateFn,
   saveCandidate,

@@ -140,12 +140,13 @@ const DEFAULT_SECRET_ENV_NAMES = [
   "DEEPSEEK_API_KEY",
   "QWEN_API_KEY",
   "CLAUDE_API_KEY",
+  "GEMINI_API_KEY",
   "GPT_API_KEY",
   "ARK_API_KEY",
   "ERNIE_API_KEY",
 ];
 
-const DEFAULT_GENERATION_MODEL = "claude-opus-4-6";
+const DEFAULT_GENERATION_MODEL = "gemini-3.1-pro-preview";
 const DEFAULT_JUDGE_MODEL = "gpt5.6-sol";
 const DEFAULT_PROXY_APPROVAL_MODEL = "gpt5.6-sol";
 

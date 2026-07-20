@@ -330,12 +330,10 @@ describe("MODEL-ROUTING-CLAUDE46-1C: Doubao span 驱动中文校准候选", () =
   });
 
   // ==========================================================================
-  // MODEL-ROUTING-CLAUDE46-1C 派工卡 §5 item 4：校准候选流水线
-  //   candidate completeness → evaluateChineseNativeRewriteAllowance → 语言风险 before/after
-  // 以下测试验证流水线后两道（completeness + 语言风险 before/after），
-  // span 边界检查由前一组测试覆盖。
+  // 校准候选硬门只覆盖完整性与 span 边界。自然度优劣交给逐章比较，
+  // 不由语言风险词表在 pairwise 之前机械淘汰。
   // ==========================================================================
-  describe("校准候选流水线：completeness + 语言风险 before/after", () => {
+  describe("校准候选流水线：completeness + span boundary", () => {
     test("Doubao 输出被截断（缺句末标点 + 残片）→ 候选被 completeness 拒绝", async () => {
       // 在 span 内引入显式截断标记：把"感到一阵寒意"替换为"[内容截断]"
       // 两者均为 6 字符，差异区间恰好等于 span [7,13]，落在 allowStart=-8/allowEnd=28 内
@@ -406,7 +404,7 @@ describe("MODEL-ROUTING-CLAUDE46-1C: Doubao span 驱动中文校准候选", () =
       );
     });
 
-    test("Doubao 校准后翻译腔/感知侵蚀命中数增加 → 候选被语言风险 before/after 拒绝", async () => {
+    test("Doubao 校准后的词表风险变化不在逐章比较前机械拒绝候选", async () => {
       // 构造一个"看似在 span 内修改，但实际引入了更多感知侵蚀词"的输出。
       // 原 raw 的 span 是"感到一阵寒意"。Doubao 把它改成"感到一阵寒意，意识到危险"——
       // span 边界内的修改，但引入了新的"意识到"感知侵蚀词，使感知侵蚀命中数从 N 增至 N+1。
@@ -432,17 +430,8 @@ describe("MODEL-ROUTING-CLAUDE46-1C: Doubao span 驱动中文校准候选", () =
         strategyRegistry: createEditorialStrategyRegistry(),
       });
 
-      assert.equal(
-        result.candidates.length,
-        0,
-        "Doubao 校准后感知侵蚀命中数增加时候选必须被语言风险 before/after 拒绝",
-      );
-      assert.ok(result.failures.length > 0, "应有 failure 记录");
-      assert.match(
-        result.failures[0].reason,
-        /中文母语语感|语言风险|退化|命中数增加|countIncreased|riskWorsened/i,
-        `failure reason 应说明语言风险退化，实际：${result.failures[0].reason}`,
-      );
+      assert.equal(result.candidates.length, 1);
+      assert.equal(result.failures.length, 0);
     });
 
     test("Doubao 校准减少感知侵蚀命中数 → 候选通过流水线（语言风险不退化）", async () => {

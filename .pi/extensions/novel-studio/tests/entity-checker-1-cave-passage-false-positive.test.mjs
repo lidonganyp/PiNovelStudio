@@ -134,3 +134,13 @@ test("EC1 回归: '王五说' ×3 仍应触发 entity_checker（最简单言说�
     `诊断证据应含"王五"。实际证据：${evidence}`,
   );
 });
+
+test("EC1 回归: '她没说' ×3 不应把否定短语识别为角色", () => {
+  const text = "她没说要走。她没说自己害怕。她没说那封信是谁写的。";
+  const diags = runEntityCheck(text, []);
+  assert.equal(
+    diags.length,
+    0,
+    `'她没说' 不应被误报为角色幻觉（"她没"不是角色名）。实际诊断：${JSON.stringify(diags)}`,
+  );
+});

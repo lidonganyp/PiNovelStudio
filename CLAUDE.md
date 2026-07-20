@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PiNovelStudio is an AI-driven **Chinese webnovel chapter generation system** built as a PI (AI Coding Agent) extension. The PI agent orchestrates; a "Writer's Room" multi-agent architecture executes; 100+ top webnovels are mined as a quality moat. The product goal: under the same model + same context + similar token budget, the system must deliver prose measurably better than the model's raw free generation.
+PiNovelStudio is an AI-driven **Chinese long-form novel chapter generation system** built as a PI (AI Coding Agent) extension. PI orchestrates a single unified generation pipeline. The repository keeps distilled runtime/evaluation assets, but the 7.75GB raw `corpus/` was removed on 2026-07-17; production chapter generation has no dependency on raw corpus files.
 
 The extension lives at `.pi/extensions/novel-studio/` (an npm workspace). All TypeScript source is there. `workspaces/{id}/` holds per-novel data, `scripts/` holds Python data-pipeline + Node eval/replay tooling.
 
@@ -26,12 +26,12 @@ npm run smoke          # runs only tests/phase5-unified-default-path.test.mjs
 npm run typecheck      # tsc --noEmit
 
 # Run a single test (must build first — tests import compiled JS from dist*/):
-node --import ./tests/setup-test-env.mjs --test tests/candidate-comparator.test.mjs
+node --import ./tests/setup-test-env.mjs --test tests/phase5-unified-default-path.test.mjs
 ```
 
-**Tests import from `dist/`, `dist-eval/`, and `dist-test/` (compiled JS), not from `.ts` source.** After editing any TypeScript, run `npm run build` (or `npm run test:fresh`) before tests will pick up changes. There are ~386 test files using Node's built-in `node:test` runner.
+**Tests import from `dist/`, `dist-eval/`, and `dist-test/` (compiled JS), not from `.ts` source.** After editing any TypeScript, run `npm run build` (or `npm run test:fresh`) before tests will pick up changes. As of 2026-07-17 the source tree contains 98 runtime test files and 33 eval test files; cleanup is ongoing, so do not treat these counts as a permanent contract.
 
-Python data pipeline (from repo root): `python scripts/run-pipeline.py --all`, or individual steps (`extract-style.py`, `extract-scenes.py`, `mine-techniques.py`, `build-fewshots.py`, `contrastive-distill.py`).
+Python data-pipeline scripts remain available, but the raw corpus is external. Do not run them as if `corpus/` were bundled; provide an authorized external input path and avoid re-importing private corpus data into Git.
 
 ## Architecture: Production / Eval / Test Isolation (the critical thing to understand)
 
@@ -55,17 +55,30 @@ Preflight → ContextCompiler → ChapterIntentBuilder → Raw candidate
 ```
 
 Core design rules (from `docs/top-tier-chinese-novel-system-development-plan.md` §2, the architecture truth source):
+- **Authoritative content, free expression:** pass overall plot direction, chapter function, prior state, character motivations, foreshadowing/promises, causality, inviolable facts, and ending target. Do not prescribe openings, senses, diction, syntax, rhetoric, dialogue, paragraph rhythm, or concrete scene expression.
 - **Opportunity-driven, not fixed multi-candidate:** generate raw first; only spawn 0-2 editorial candidates when a provable, span-cited edit opportunity exists. Never fixed 4-5 variants.
-- **LLM pairwise judge decides literary winner.** The mechanical `CandidateComparator` is demoted to fact-check / risk evidence / regression veto — never decides winner by score totals.
+- **Human-aligned selection decides literary winner.** Current model judges are advisory because they have not passed the natural-human alignment gate. Mechanical comparators and heuristic story extraction never decide winner.
 - **raw is the internal baseline and safe fallback.** If no editorial candidate clearly wins, deliver raw. Never deliver text worse than raw. No silent legacy fallback.
+- **Style fingerprints, voice fingerprints, few-shot examples, prompt patterns, and craft scans are trace/selection/experiment evidence.** They are not raw prose instructions.
 - **Long-term narrative state (4 kinds: CanonState / CharacterState / PromiseLedger / PatternMemory) is only committed after the final text is selected** — staged during candidate generation, committed post-selection.
 - **Per-model strategy reputation:** a contextual bandit (Thompson Sampling) adjusts editorial-strategy call probability; old-model experience does not constrain new-model capability. See `v2/learning/`.
 
 ## Truth Sources (when docs disagree, these win)
 
 1. `docs/top-tier-chinese-novel-system-development-plan.md` (v1.1) — authoritative architecture & migration baseline. Supersedes the older `quality_amplifier_v2` and Stage0-8 designs.
-2. `config/model-routing.json` — **sole** source of truth for model routing. The routing table in `AGENTS.md` is a human-readable summary; on conflict, the JSON wins.
-3. `AGENTS.md` — PI project instructions; much of it is now labeled legacy/migration-reference. Read the "目标架构：统一主链路" section at the top for current authoritative constraints.
+2. `docs/project-memory.md` — current cross-session snapshot, cleanup state, protected dirty-worktree notes, and known blockers.
+3. `docs/remaining-development-dispatch-plan-20260715.md` — current task state and authorization queue.
+4. `config/model-routing.json` — **sole** source of truth for model routing. The routing table in `AGENTS.md` is a human-readable summary; on conflict, the JSON wins.
+5. `AGENTS.md` — PI project instructions; much of it is now labeled legacy/migration-reference. Read the "目标架构：统一主链路" section at the top for current authoritative constraints.
+
+## Current Snapshot (2026-07-17)
+
+- Baseline: `cd15cd2`; routing config: v4.18.0.
+- `MODEL-ROUTING-CLAUDE46-1A/1B/1D` are `COMPLETE_L0`: explicit fail-closed routes, Claude 4.6 generation, heterogeneous GPT judge, and GLM production isolation.
+- P0 repository-closure task: `cd15cd2` deleted four craft modules while retained consumers still import them. The current worktree restores the files as untracked and `npm run build` passes, but a clean checkout of HEAD is incomplete. Either keep/version the modules or finish consumer decoupling before calling cleanup complete.
+- `MODEL-ROUTING-CLAUDE46-1C` is next after build recovery. Its RED suite currently reports 7 tests / 2 pass / 5 fail; do not document Doubao span calibration as implemented until that suite is green and integrated.
+- `MODEL-ROUTING-CLAUDE46-1E`, real `gpt5.6-sol` proxy approval, long-form ch3-ch6, and Recovery-6 require explicit user authorization and budgets.
+- The worktree contains user-owned staged proxy-approval changes, untracked 1C RED work/model-check output, and multiple stashes. Preserve them; do not restore/delete/stage/pop/drop without explicit instruction.
 
 ## The 6 Public Tools (`tools/register-tools.ts`)
 

@@ -12,6 +12,7 @@
  */
 
 import type { TextSpan } from "./types.js";
+import { restoreLlmExcerpt } from "../../utils/llm-language-guard.js";
 
 // ============================================================================
 // 裁判输出类型
@@ -19,6 +20,20 @@ import type { TextSpan } from "./types.js";
 
 export type JudgeWinner = "A" | "B" | "tie";
 export type JudgeConfidence = "clear" | "slight" | "uncertain";
+export type ReaderExperiencePreference = "A" | "B" | "tie";
+
+export interface ReaderExperienceVerdict {
+  preferredCandidate: ReaderExperiencePreference;
+  nativeChinese: ReaderExperiencePreference;
+  characterCredibility: ReaderExperiencePreference;
+  goalObstacleChoiceResult: ReaderExperiencePreference;
+  emotionalProgression: ReaderExperiencePreference;
+  informationRelease: ReaderExperiencePreference;
+  sceneImmersion: ReaderExperiencePreference;
+  causalEndPressure: ReaderExperiencePreference;
+  worldContinuity: ReaderExperiencePreference;
+  rationale: string;
+}
 
 export interface DecisiveReason {
   dimension: string;
@@ -31,6 +46,7 @@ export interface DecisiveReason {
 export interface JudgeVerdict {
   winner: JudgeWinner;
   confidence: JudgeConfidence;
+  readerExperience?: ReaderExperienceVerdict;
   decisiveReasons: DecisiveReason[];
   factualRisks: string[];
   regressionRisks: string[];
@@ -151,6 +167,8 @@ export function validateVerdictEvidence(
   const errors: string[] = [];
   for (let i = 0; i < verdict.decisiveReasons.length; i++) {
     const r = verdict.decisiveReasons[i];
+    validateSpanList(r.evidenceA, candidateAText, `decisiveReasons[${i}].evidenceA`, errors);
+    validateSpanList(r.evidenceB, candidateBText, `decisiveReasons[${i}].evidenceB`, errors);
     if (r.betterCandidate === "neither") continue;
     const worseLabel = r.betterCandidate === "A" ? "B" : "A";
     const worseSpans = worseLabel === "A" ? r.evidenceA : r.evidenceB;
@@ -158,23 +176,33 @@ export function validateVerdictEvidence(
       errors.push(
         `decisiveReasons[${i}] 判定 ${worseLabel} 更差，但未引用 ${worseLabel} 的问题 span`
       );
-    } else {
-      const worseText = worseLabel === "A" ? candidateAText : candidateBText;
-      for (let j = 0; j < worseSpans.length; j++) {
-        const s = worseSpans[j];
-        if (typeof s.start !== "number" || typeof s.end !== "number") {
-          errors.push(`decisiveReasons[${i}].evidence${worseLabel}[${j}] start/end 非 number`);
-          continue;
-        }
-        if (s.start < 0 || s.end > worseText.length || s.start >= s.end) {
-          errors.push(
-            `decisiveReasons[${i}].evidence${worseLabel}[${j}] 越界或倒置（start=${s.start}, end=${s.end}, len=${worseText.length}）`
-          );
-        }
-      }
     }
   }
   return { ok: errors.length === 0, errors };
+}
+
+function validateSpanList(
+  spans: TextSpan[],
+  sourceText: string,
+  path: string,
+  errors: string[],
+): void {
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i];
+    if (typeof span.start !== "number" || typeof span.end !== "number") {
+      errors.push(`${path}[${i}] start/end 非 number`);
+      continue;
+    }
+    if (span.start < 0 || span.end > sourceText.length || span.start >= span.end) {
+      errors.push(
+        `${path}[${i}] 越界或倒置（start=${span.start}, end=${span.end}, len=${sourceText.length}）`,
+      );
+      continue;
+    }
+    if (restoreLlmExcerpt(sourceText, span.start, span.end, span.excerpt ?? "") === null) {
+      errors.push(`${path}[${i}] excerpt 与正文切片或其中文化视图不符`);
+    }
+  }
 }
 
 // ============================================================================

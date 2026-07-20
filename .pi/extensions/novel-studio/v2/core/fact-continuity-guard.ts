@@ -226,6 +226,8 @@ const RECALL_VERBS = [
   "默念", "背诵", "念叨", "嘀咕", "重复", "记得", "听到", "低声",
   // PROD-TRIGGER-1 新增（ch3 真实引文回忆语境）
   "想到", "翻开", "读到", "展开", "翻到",
+  // 视觉回读：角色查看一组证据后再次聚焦既有屏幕/弹窗/标牌原文
+  "看着", "看向", "扫了一眼", "扫视", "重新看", "低头看",
 ];
 
 function splitLinesWithOffsets(text: string): LineInfo[] {
@@ -296,6 +298,24 @@ function hasRecallVerbNearby(text: string, offset: number, windowSize = 40): boo
   const end = Math.min(text.length, offset + windowSize);
   const window = text.slice(start, end);
   return RECALL_VERBS.some((v) => window.includes(v));
+}
+
+function hasRecallContextForQuotedSpan(text: string, quoteStart: number): boolean {
+  const beforeQuote = text.slice(0, quoteStart);
+  const paragraphs = beforeQuote.split(/\n\s*\n/);
+  const currentPrefix = paragraphs.at(-1)?.trim() ?? "";
+  if (RECALL_VERBS.some((verb) => currentPrefix.includes(verb))) {
+    return true;
+  }
+  if (currentPrefix.replace(/[\s*_—:：-]/g, "") !== "") {
+    return false;
+  }
+  for (let index = paragraphs.length - 2; index >= 0; index -= 1) {
+    const paragraph = paragraphs[index].trim();
+    if (!paragraph) continue;
+    return RECALL_VERBS.some((verb) => paragraph.includes(verb));
+  }
+  return false;
 }
 
 /** recall 位置是否在引号包裹内（中文引号 "" '' 或 ASCII " '） */
@@ -672,7 +692,7 @@ function tryStrategyB(
   const recallStart = second.start;
 
   // recall 必须有重读动词附近（Strategy B 的严格性要求）
-  const hasVerb = hasRecallVerbNearby(text, recallStart);
+  const hasVerb = hasRecallContextForQuotedSpan(text, second.range.startOffset);
   if (!hasVerb) {
     return { exempted: false };
   }
@@ -863,6 +883,12 @@ function isRuleLabel(name: string): boolean {
   return RULE_LABEL_PATTERN.test(name);
 }
 
+const PRONOUN_NEGATION_ENTITY_PATTERN = /^(?:我|你|他|她|它|谁|我们|你们|他们|她们|它们)(?:没|不|未|别)$/;
+
+function isPronounNegationPhrase(name: string): boolean {
+  return PRONOUN_NEGATION_ENTITY_PATTERN.test(name);
+}
+
 function checkEntityHallucination(
   text: string,
   knownNames: string[]
@@ -910,6 +936,9 @@ function checkEntityHallucination(
   for (const [name, info] of nameInfo) {
     if (ENTITY_COMMON_NOUN_ALLOWLIST.has(name)) continue;
     if (known.has(name)) continue;
+    // "她没说/他不问"中的代词+否定词不是角色名。正则会把末尾的
+    // 言说动词拆出后，将前缀误识别为 2-4 字实体，必须在计数前排除。
+    if (isPronounNegationPhrase(name)) continue;
     // FACT-GUARD-ENTITY-CHECKER-RULE-TEXT-1: 规则标签（如"规则二""第三条"）不是角色名
     if (isRuleLabel(name)) continue;
     if (info.count < 3) continue;

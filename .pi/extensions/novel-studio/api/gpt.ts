@@ -6,6 +6,7 @@
 
 import { getAgentModelConfig, getApiKey, getProviderDefaultConfig } from "../utils/config.js";
 import { fetchWithTimeout } from "./request-timeout.js";
+import { localizeLlmMessages } from "../utils/llm-language-guard.js";
 
 export interface GPTMessage {
   role: "system" | "user" | "assistant";
@@ -80,7 +81,7 @@ export class GPTAPI {
 
     const request: GPTRequest = {
       model: options?.model || this.model,
-      messages,
+      messages: localizeLlmMessages(messages),
       temperature: options?.temperature ?? this.defaultTemperature,
       max_tokens: options?.max_tokens ?? this.defaultMaxTokens,
       top_p: 0.95,

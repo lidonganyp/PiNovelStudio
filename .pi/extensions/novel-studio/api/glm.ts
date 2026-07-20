@@ -11,6 +11,7 @@ import {
   getProviderDefaultConfig,
   type ProviderRequestOptions,
 } from "../utils/config.js";
+import { localizeLlmMessages } from "../utils/llm-language-guard.js";
 import { fetchWithTimeout } from "./request-timeout.js";
 
 export interface GLMMessage {
@@ -89,7 +90,7 @@ export class GLMAPI {
 
     const request: GLMRequest = {
       model: options?.model || this.model,
-      messages,
+      messages: localizeLlmMessages(messages),
       temperature: options?.temperature ?? this.defaultTemperature,
       max_tokens: options?.max_tokens ?? this.defaultMaxTokens,
     };

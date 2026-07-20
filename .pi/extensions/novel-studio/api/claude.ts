@@ -5,6 +5,7 @@
  */
 
 import { getAgentModelConfig, getApiKey, getProviderDefaultConfig } from "../utils/config.js";
+import { localizeLlmMessages, localizeLlmText } from "../utils/llm-language-guard.js";
 import { fetchWithTimeout } from "./request-timeout.js";
 
 export interface ClaudeMessage {
@@ -71,10 +72,10 @@ export class ClaudeAPI {
 
     const request: ClaudeRequest = {
       model: options?.model || this.model,
-      messages,
+      messages: localizeLlmMessages(messages),
       temperature: options?.temperature ?? this.defaultTemperature,
       max_tokens: options?.max_tokens ?? this.defaultMaxTokens,
-      system: options?.system,
+      system: options?.system ? localizeLlmText(options.system) : undefined,
     };
 
     const response = await fetchWithTimeout(

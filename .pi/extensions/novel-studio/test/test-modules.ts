@@ -249,5 +249,16 @@ import "../v2/core/immutable-facts-compiler.js";
 // 后续切片由 ContextCompiler / buildRawPrompt / buildEditorialPrompt 接入生产闭包。
 import "../v2/core/preference-rule-retriever.js";
 
+// HUMAN-RUBRIC-1 / USER-REVISION-DELTA-1：人工评价契约与用户最终修订证据。
+import "../v2/core/human-rubric.js";
+import "../v2/core/user-revision-delta.js";
+import "../v2/core/real-quality-acceptance.js";
+import "../v2/core/scene-solution-search.js";
+import "../v2/core/prompt-pattern-library.js";
+import "../v2/core/positive-gain-candidate-generator.js";
+import "../v2/core/candidate-generator.js";
+import "../v2/core/scene-contract-planner.js";
+import "../craft/anti-ai-auto-patch.js";
+
 // Marker export to prevent tree-shaking from removing side-effect imports
 export const TEST_MODULES_LOADED = true;

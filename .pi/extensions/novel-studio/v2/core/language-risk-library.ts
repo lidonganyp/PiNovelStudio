@@ -7,7 +7,7 @@
  * - 所有检测结果必须带 span（TextSpan，可追溯到正文位置）
  * - 软风险不得 hard block：语言风险最高 review
  * - 不复制简化词表替代真实实现：通过 LanguageRiskAdapter 调用 legacy 真实资产
- * - 提供 V2 原生的感知/行动稀释检测（从 regression-checks.ts 提取，带 span）
+ * - 提供 V2 原生的感知/行动稀释检测（带 span，源自 narrative-signal-extractor.ts）
  *
  * 资产来源：
  * - resource_negative_is_shortcut + 误报过滤 → legacy AntiAIDetector（经 adapter）
@@ -28,7 +28,7 @@ import {
   PERCEPTION_LANGUAGE_PATTERN,
   extractAgencyActions,
   extractPerceptionMarkers,
-} from "./regression-checks.js";
+} from "./narrative-signal-extractor.js";
 
 // ============================================================================
 // 类型定义

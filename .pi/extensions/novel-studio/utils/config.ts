@@ -48,6 +48,7 @@ export interface AgentRoutingEntry {
 export type ProviderProtocol = "openai" | "anthropic" | "claude" | "chat";
 
 export interface ProviderRequestOptions {
+  auth?: "bearer" | "x-api-key";
   thinking?: {
     type: "enabled" | "disabled";
     reasoning_effort?: "high" | "mid" | "low";
@@ -640,6 +641,10 @@ const configMap: Record<
     apiKeyEnv: "ERNIE_API_KEY",
     baseUrlEnv: "ERNIE_BASE_URL",
   },
+  gemini31: {
+    apiKeyEnv: "GEMINI_API_KEY",
+    baseUrlEnv: "GOOGLE_GEMINI_BASE_URL",
+  },
 };
 
 const modelOverrideEnvMap: Record<string, string[]> = {
@@ -650,6 +655,7 @@ const modelOverrideEnvMap: Record<string, string[]> = {
   claude: ["CLAUDE_MODEL"],
   gpt: ["GPT_MODEL"],
   ernie: ["ERNIE_MODEL"],
+  gemini31: ["GEMINI_MODEL"],
 };
 
 export { getExtensionPath };

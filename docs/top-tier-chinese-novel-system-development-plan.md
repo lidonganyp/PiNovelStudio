@@ -47,6 +47,22 @@ LLM 负责：
 
 代码不负责用词频、段落比例、固定阈值或机械总分决定文学优劣。
 
+### 2.1.1 作者内容契约与表达自由
+
+正文模型必须获得：整体剧情方向、章节功能、前文真实状态、人物动机、待推进伏笔与承诺、因果关系、不可违背事实和章末目标。
+
+正文模型自行决定：如何开头、使用什么感官、词汇、句式、修辞、对白、段落节奏和具体场景表达。感知锚点、风格指纹、声音指纹、Few-shot、prompt pattern、情绪节拍和结构扫描不得作为 raw 的正文执行指令；它们只可用于 trace、诊断、实验或候选比较证据。
+
+运行时由 `v2/core/methodology-policy.ts` 对方法论条目标注 `authority / role / enforcement`。作者内容和已接受事实可以进入 `generation_context / hard_boundary`；场景解法与工艺策略只能进入 `candidate_only`；文学扫描只能进入 `review_only`；感官、句式、对白比例和段落模板等正文执行启发式从 raw 排除。每章 trace 必须记录 `stageResults.methodologyPolicy` 与 `stageResults.rawPromptConstraintAudit`，出现权限越界或机械正文控制时在模型调用前 fail closed。
+
+`CreativeConstitution` 进入 raw 的字段限于作品身份、读者承诺、类型承诺、主角核心冲突、长期主题问题和禁止偏离。`aestheticDirection` 与自动学习的表达偏好不直接进入 raw，避免把作品审美退化成固定写法。
+
+一次跨章序列偏好不得外推为所有章节的生产规则。每个候选都必须基于本章 raw 的可引用机会产生，并在本章独立比较；缺少自然人对齐的文学选择权威时保留 raw。
+
+raw 通过事实守卫后，`CraftPhenomenonReport` 才可使用方法论工艺知识。报告按章节相关性覆盖对话、节奏与高潮、连载预期、类型契约、配角、世界观揭示、群像、收尾、五维推进和跨章健康十个领域；结论只允许 `observed / uncertain / not_applicable`，`observed / uncertain` 必须引用 raw 中逐字存在的 span。报告不得进入 raw prompt、不得给文学总分、不得直接改文或选择 winner。
+
+`EditorialOpportunityJudge` 在同一次 post-raw 结构化判断中生成工艺报告和至多两个编辑机会。JSON 解析失败时最多追加一次 schema-only 修复调用，不允许因 schema 错误重写正文。普通 editorial candidate 跟随本章显式 writer family：默认 Gemini 使用 `v2_amplified_gemini31`，显式 Claude 使用 `v2_amplified`；中文自然度的受限 span 校准继续使用独立校准路由。
+
 ### 2.2 单一主链路
 
 系统最终只保留 `novel_generate_chapter` 一个公开入口和一套运行时编排。不再存在 `legacy | quality_amplifier_v2` 两种生成模式，也不再保留章节白名单。
@@ -103,9 +119,11 @@ novel_generate_chapter
   -> RawCandidateGenerator
   -> FactAndContinuityGuard
   -> EditorialOpportunityJudge
+       -> CraftPhenomenonReport(10 domains, span-backed, advisory-only)
+       -> schema-only repair(max 1, no prose rewrite)
        -> no_op: raw
        -> 1-2 EditorialHypotheses
-  -> EditorialCandidateGenerator
+  -> EditorialCandidateGenerator(current writer family; Gemini default)
   -> FactAndContinuityGuard(all candidates)
   -> LanguageRiskAnalyzer(all candidates)
   -> PairwiseLiteraryJudge
@@ -133,7 +151,7 @@ novel_generate_chapter
 
 - `NovelTaskPacket`：任务目标、范围、模型锁、允许资源、验收、恢复和汇报契约。
 - `CapabilityPolicy`：生成、判断、状态读写、章节保存、模型调用和 artifact 导出的运行时授权。
-- `ConstraintManifest`：P0 硬事实/知识边界、P1 连续状态、P2 章卡、P3 创作参考、P4 advisory 的统一真相源。
+- `ConstraintManifest`：P0 硬事实/知识边界、P1 作者章节契约与本章相关连续状态、P2 读者体验方向、P3 未选中的全局状态/创作参考、P4 advisory 的统一真相源。
 - `ContextLifecycleManager`：模型窗口、输出预留、token 估算、JIT 检索、语义去重、优先级淘汰、压缩回源、overflow recompile。
 - `EvidenceStore/Checkpoint`：原始证据外置保存，工作上下文只保留高信号摘要与稳定引用。
 
@@ -189,6 +207,15 @@ interface CreativeConstitution {
 ```ts
 interface ChapterIntent {
   chapterFunction: string;
+  overallPlotDirection: string[];
+  previousState: string[];
+  characterMotivations: Array<{ character: string; motivation: string }>;
+  foreshadowing: string[];
+  causalRelations: string[];
+  endingTarget: string[];
+  authorEventSummaries: string[];
+  authorMustInclude: string[];
+  authorStateChanges: string[];
   readerExperience: string[];
   currentPressure: string[];
   meaningfulChoices: string[];
@@ -199,6 +226,8 @@ interface ChapterIntent {
   sourceRefs: string[];
 }
 ```
+
+`ChapterIntent` 只描述作者要求发生什么和不得违背什么，不描述正文如何写。相关角色按本章作者契约筛选，不得把作品内全部存活角色默认视为本章参与者。
 
 ### 4.4 EditorialHypothesis
 
@@ -652,6 +681,7 @@ LLM judge 的回归允许单独运行，不放入每次 `npm test` 的确定性�
 - ChapterIntent 与 sourceRefs；
 - raw candidate；
 - EditorialHypotheses；
+- CraftPhenomenonReport、schema repair 次数与被拒绝的无效 span；
 - 所有 candidate；
 - fact/risk evidence；
 - 匿名映射；
@@ -705,7 +735,7 @@ Phase 2 与 Phase 1 可部分并行；Phase 4 可在 Phase 3 输出 schema 稳�
 - `novel_generate_chapter` 只有一条生产生成路径；
 - raw 永久存在且可安全交付；
 - 只有带具体证据的编辑机会才生成候选；
-- 文学胜负由匿名、span 约束的 LLM pairwise judge 主导；
+- 文学候选由匿名、span 约束的 LLM pairwise judge 提供证据；只有通过自然人对齐闸门后才允许自动决定胜负，未通过时保留 raw 并进入人工复核；
 - 事实硬伤由确定性代码守护；
 - legacy 正收益资产已有明确新 owner；
 - Stage0-8 不再加工正文；

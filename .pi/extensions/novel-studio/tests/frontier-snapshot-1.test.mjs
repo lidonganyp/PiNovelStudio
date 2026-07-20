@@ -62,6 +62,21 @@ function makeSyntheticWorkspace(root, workspaceId, options = {}) {
     "# 写作原则\n本章必须承接前章悬置状态。\n",
     "utf8"
   );
+  writeFileSync(
+    join(wsDir, "creative-constitution.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      workIdentity: "合成测试小说",
+      readerPromise: ["连续章节中的选择必须产生后果"],
+      genrePromises: ["悬念来自既定事实和人物行动"],
+      protagonistCoreConflict: "凌必须在不完整信息中承担选择代价",
+      thematicQuestions: ["选择是否能够改变既定代价"],
+      aestheticDirection: ["具体", "克制"],
+      forbiddenDrift: ["不得覆盖前章已接受事实"],
+      narrativePreferences: [],
+    }, null, 2),
+    "utf8",
+  );
 
   // chapters：1..20 章
   const chapterCount = options.chapterCount ?? 20;
@@ -94,6 +109,34 @@ function makeSyntheticWorkspace(root, workspaceId, options = {}) {
 
   // series/outline.md（不可变高层背景）
   writeFileSync(join(wsDir, "series", "outline.md"), "# 大纲\n高层背景。\n", "utf8");
+  writeFileSync(join(wsDir, "series", "skeleton.json"), JSON.stringify({
+    chapterSkeletons: {
+      "16": {
+        chapterId: "16",
+        facts: ["凌确认门后的声音不属于同伴"],
+        stateChanges: [{ subject: "凌", before: "怀疑", after: "确认异常", isReversible: false }],
+        activeDilemmas: ["门后的东西为何知道他的名字？"],
+      },
+      "17": {
+        chapterId: "17",
+        facts: ["未来章节事实不应进入 throughChapter=16 的快照"],
+        stateChanges: [],
+        activeDilemmas: [],
+      },
+    },
+    globalFacts: ["合成世界事实"],
+    lastUpdated: "2026-01-01T00:00:00Z",
+  }, null, 2), "utf8");
+  writeFileSync(join(wsDir, "series", "narrative-state.json"), JSON.stringify({
+    currentChapter: 16,
+    chapterProgress: { completed: 16, current: 17 },
+    readerExpectation: { unresolvedCount: 1, chaptersSinceLastPeak: 1 },
+    relationshipTemperature: {},
+    horrorFatigue: { recentTechniques: [], consecutiveSameTechnique: 0 },
+    worldRuleExposure: {},
+    protagonistCostLedger: { pendingCosts: [] },
+    stateChanges: [],
+  }, null, 2), "utf8");
 
   // narrative-state-store.json：ch1/ch5/ch10/ch16/ch18/ch19 各放若干条
   const state = {
@@ -240,6 +283,11 @@ test("FRONTIER-SNAPSHOT-1: ch17 比较快照中不存在 ch17+ 派生状态/章�
     const snapStatePath = join(result.outputDir, "narrative-state-store.json");
     assert.ok(existsSync(snapStatePath), "快照应含 narrative-state-store.json");
     const snapState = JSON.parse(readFileSync(snapStatePath, "utf8"));
+    assert.equal(
+      snapState.workspaceId,
+      "synthetic-frontier-1-snapshot-ch16",
+      "state store workspaceId 应改写为隔离快照 workspaceId",
+    );
     const allEntries = [
       ...(snapState.canon ?? []),
       ...(snapState.character ?? []),
@@ -257,6 +305,24 @@ test("FRONTIER-SNAPSHOT-1: ch17 比较快照中不存在 ch17+ 派生状态/章�
       );
     }
 
+    const snapConfig = JSON.parse(readFileSync(join(result.outputDir, "config.json"), "utf8"));
+    assert.equal(
+      snapConfig.workspaceId,
+      "synthetic-frontier-1-snapshot-ch16",
+      "config.workspaceId 应改写为隔离快照 workspaceId",
+    );
+    assert.ok(
+      existsSync(join(result.outputDir, "creative-constitution.json")),
+      "快照必须保留作品级 CreativeConstitution",
+    );
+    const snapSkeleton = JSON.parse(readFileSync(join(result.outputDir, "series", "skeleton.json"), "utf8"));
+    assert.ok(snapSkeleton.chapterSkeletons["16"], "应保留 frontier 章节 skeleton");
+    assert.equal(snapSkeleton.chapterSkeletons["17"], undefined, "不得保留 frontier 之后的 skeleton");
+    assert.ok(
+      existsSync(join(result.outputDir, "series", "narrative-state.json")),
+      "安全的 frontier narrative-state 应进入快照",
+    );
+
     // 4. stateStats 应记录被排除的未来条目
     assert.ok(
       result.manifest.stateStats.excludedFutureEntries >= 4,
@@ -270,6 +336,34 @@ test("FRONTIER-SNAPSHOT-1: ch17 比较快照中不存在 ch17+ 派生状态/章�
       sourceHashesBefore,
       "快照生成不得修改源工作区"
     );
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("FRONTIER-SNAPSHOT-2: 过滤后为空的 state store 被省略并回退到安全 skeleton", async () => {
+  const tmpRoot = resolve(PROJECT_ROOT, ".tmp", `frontier-snapshot-test-${Date.now()}-empty-store`);
+  try {
+    const wsId = "synthetic-frontier-empty-store";
+    const wsDir = makeSyntheticWorkspace(tmpRoot, wsId, { chapterCount: 20 });
+    const statePath = join(wsDir, "narrative-state-store.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    for (const key of ["canon", "character", "promise", "pattern", "expectation"]) {
+      state[key] = (state[key] ?? []).filter((entry) => Number(String(entry.sourceChapter).match(/\d+/)?.[0]) > 16);
+    }
+    writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+
+    const result = await createFrontierSnapshot({
+      workspaceId: wsId,
+      throughChapter: 16,
+      projectRoot: tmpRoot,
+    });
+
+    assert.equal(result.blocked, false);
+    assert.equal(existsSync(join(result.outputDir, "narrative-state-store.json")), false);
+    assert.ok(existsSync(join(result.outputDir, "series", "skeleton.json")));
+    assert.ok(result.manifest.excludedContent.some((entry) =>
+      entry.path === "narrative-state-store.json" && entry.reason === "no_accepted_entries_at_frontier"));
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }

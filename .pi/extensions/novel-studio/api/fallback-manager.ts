@@ -17,10 +17,14 @@ import {
   type ProviderProtocol,
   type ProviderRequestOptions,
 } from "../utils/config.js";
+import { localizeLlmMessages, localizeLlmText } from "../utils/llm-language-guard.js";
 import type { ClaudeMessage } from "./claude.js";
 import type { GLMMessage, GLMResponse } from "./glm.js";
 import type { GPTMessage } from "./gpt.js";
 import { fetchWithTimeout } from "./request-timeout.js";
+import { parseAnthropicResponse } from "./anthropic-stream.js";
+import { parseOpenAIStream } from "./openai-stream.js";
+import { createHash, randomUUID } from "node:crypto";
 import {
   assertProviderAuthorized,
   filterFallbackChainByProfile,
@@ -85,7 +89,17 @@ type ChatCallOptions = {
   temperature?: number;
   max_tokens?: number;
   thinking?: ProviderRequestOptions["thinking"];
+  timeoutMs?: number;
+  stream?: boolean;
 };
+
+function supportsSamplingParameters(providerKey: string, model: string): boolean {
+  const normalizedProvider = providerKey.toLowerCase();
+  if (normalizedProvider === "claude" || normalizedProvider === "claude_backup") {
+    return false;
+  }
+  return !/^claude(?:[-_]|$)/i.test(model);
+}
 
 const DEFAULT_RETRY_OPTIONS: RetryOptions = {
   maxRetries: 3,
@@ -136,6 +150,7 @@ const V2_ROUTE_PROVIDER_ALLOWLIST: Record<string, Set<string>> = {
   v2_opportunity_judge: new Set(["gpt"]),
   v2_literary_judge: new Set(["gpt"]),
 };
+
 
 const PERMANENT_ERROR_PATTERNS: RegExp[] = [
   /User has been banned/i,
@@ -318,6 +333,18 @@ export interface LLMTimingEntry {
   actualProvider?: string;
   /** NB-4.0: trace 标准化字段 — 实际调用的 model（= model 的语义别名） */
   actualModel?: string;
+  /** Stable identifier binding start/failure/success telemetry for one provider attempt. */
+  requestId?: string;
+  /** SHA-256 of the exact assistant text returned by a successful attempt. */
+  responseHash?: string;
+}
+
+function createAttemptRequestId(): string {
+  return `llm-${randomUUID()}`;
+}
+
+function hashResponseText(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 type LLMTimingListener = (entry: LLMTimingEntry) => void;
@@ -392,23 +419,17 @@ export class APIFallbackManager {
     const { routing, primaryProvider, fallbackChain, providers, retryOptions } =
       await this.loadFallbackContext(agentName);
     this.retryOptions = retryOptions;
+    this.logs = [];
 
     // P34-T09: 矩阵评测模式。若 PINOVEL_DISABLE_FALLBACK=1，只尝试 primaryProvider，
     // 不走 fallback chain。这样每个模型的真实质量可见，不会因 fallback 到其他 provider 而失真。
-    // 仅用于 A/B 矩阵评测，生产环境不设置此 env。
     // NB-4.0: package_screening profile 也强制禁用 fallback（套餐模型失败即失败，不回退）。
     const disableFallback = process.env.PINOVEL_DISABLE_FALLBACK === "1"
       || shouldDisableFallbackForProfile();
     const baseChain = disableFallback ? [primaryProvider] : fallbackChain;
-    // P43 Task 2：Stage 2 正文白名单守卫。主路由 agent 的 fallback chain 只允许 doubao/ernie。
-    // narrator_testing_* 不受限（含 loopback 末位兜底 narrator_testing_gpt）。
-    // disableFallback（矩阵评测）模式下不过滤，尊重显式单 provider 测试意图。
     const whitelistFiltered = (!disableFallback && isMainRouteAgent(agentName))
       ? baseChain.filter((p) => MAIN_ROUTE_ALLOWED_PROVIDERS.has(p))
       : baseChain;
-    // NB-4.0: BenchmarkCostProfile 路由隔离 — 过滤掉未授权 provider。
-    // package_screening 只留 glm/doubao；production_validation 只留 gpt/claude。
-    // 未设置 profile 时返回原 chain（向后兼容）。
     const effectiveChain = filterFallbackChainByProfile(whitelistFiltered, agentName)
       .filter((providerKey) => !isProviderDisabled(providerKey));
 
@@ -420,20 +441,18 @@ export class APIFallbackManager {
     let fellBack = false;
 
     for (const providerKey of effectiveChain) {
-      // 检查总超时
       if (totalTimeoutMs && (Date.now() - chainStartTime) >= totalTimeoutMs) {
         console.warn(`[FallbackTimeout] agent=${agentName} elapsedMs=${Date.now() - chainStartTime} totalTimeoutMs=${totalTimeoutMs}`);
         throw new Error(`Fallback chain timeout: exceeded ${totalTimeoutMs}ms total budget`);
       }
 
-      // NB-4.0: 防御性二次检查（chain 已被 filterFallbackChainByProfile 过滤，
-      // 但此处再断言一次，确保无遗漏）。
       assertProviderAuthorized(providerKey, agentName);
 
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const apiKey = getApiKey(providerKey);
+      const routeEntry = typeof routing === "object" ? routing : undefined;
+      const apiKey = routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey);
       if (!apiKey) continue;
 
       if (isProviderUnhealthy(providerKey) || isChapterTimeoutUnhealthy(providerKey)) {
@@ -453,8 +472,13 @@ export class APIFallbackManager {
       }
 
       const modelToUse = this.resolveProviderModel(providerKey, provider, routing);
-      const baseUrl = this.resolveProviderBaseUrl(providerKey, provider.base_url);
+      const baseUrl = normalizeProviderBaseUrl(providerKey, routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url));
       const protocol = provider.protocol || this.inferProtocol(providerKey);
+      const resolvedCallOptions: ChatCallOptions = {
+        ...callOptions,
+        temperature: callOptions?.temperature ?? provider.temperature?.[agentName],
+        max_tokens: callOptions?.max_tokens ?? provider.max_tokens?.[agentName],
+      };
 
       let providerPermanentlyFailed = false;
       for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt++) {
@@ -468,6 +492,7 @@ export class APIFallbackManager {
           `[LLMAttemptStart] agent=${agentName} provider=${providerKey} model=${modelToUse} attempt=${attempt + 1}/${this.retryOptions.maxRetries + 1} protocol=${protocol}\n`
         );
         const startMs = Date.now();
+        const requestId = createAttemptRequestId();
         try {
           let response: GLMResponse;
           if (protocol === "anthropic" || protocol === "claude") {
@@ -492,9 +517,11 @@ export class APIFallbackManager {
               modelToUse,
               anthropicMessages,
               {
-                temperature: callOptions?.temperature,
-                max_tokens: callOptions?.max_tokens,
+                temperature: resolvedCallOptions.temperature,
+                max_tokens: resolvedCallOptions.max_tokens,
                 system: combinedSystem,
+                auth: provider.request_options?.auth,
+                timeoutMs: resolvedCallOptions.timeoutMs,
               }
             );
             // 适配 Claude 响应到 GLMResponse 结构
@@ -519,9 +546,10 @@ export class APIFallbackManager {
             response = await this.makeOpenAIChatCall(
               baseUrl,
               apiKey,
+              providerKey,
               modelToUse,
               messages,
-              callOptions,
+              resolvedCallOptions,
               provider.request_options
             );
           }
@@ -539,6 +567,8 @@ export class APIFallbackManager {
             attempt: attempt + 1,
             elapsedMs: _okElapsedMs,
             status: "ok",
+            requestId,
+            responseHash: hashResponseText(response.choices[0]?.message?.content ?? ""),
           });
 
           return {
@@ -558,7 +588,8 @@ export class APIFallbackManager {
             primaryProvider,
             providerKey,
             modelToUse,
-            startMs
+            startMs,
+            requestId,
           );
           retryCount = outcome.retryCount;
           fellBack = providerKey !== primaryProvider;
@@ -586,6 +617,7 @@ export class APIFallbackManager {
     const { routing, primaryProvider, fallbackChain, providers, retryOptions } =
       await this.loadFallbackContext(agentName);
     this.retryOptions = retryOptions;
+    this.logs = [];
 
     // P0: 总超时预算
     const chainStartTime = Date.now();
@@ -594,7 +626,6 @@ export class APIFallbackManager {
     let retryCount = 0;
     let fellBack = false;
 
-    // NB-4.0: BenchmarkCostProfile 路由隔离 + P43 Task 2 白名单守卫。
     const _disableFallback = process.env.PINOVEL_DISABLE_FALLBACK === "1"
       || shouldDisableFallbackForProfile();
     const _baseChain = _disableFallback ? [primaryProvider] : fallbackChain;
@@ -605,19 +636,18 @@ export class APIFallbackManager {
       .filter((providerKey) => !isProviderDisabled(providerKey));
 
     for (const providerKey of _effectiveChain) {
-      // 检查总超时
       if (totalTimeoutMs && (Date.now() - chainStartTime) >= totalTimeoutMs) {
         console.warn(`[FallbackTimeout] agent=${agentName} elapsedMs=${Date.now() - chainStartTime} totalTimeoutMs=${totalTimeoutMs}`);
         throw new Error(`Fallback chain timeout: exceeded ${totalTimeoutMs}ms total budget`);
       }
 
-      // NB-4.0: 防御性二次检查。
       assertProviderAuthorized(providerKey, agentName);
 
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const apiKey = getApiKey(providerKey);
+      const routeEntry = typeof routing === "object" ? routing : undefined;
+      const apiKey = routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey);
       if (!apiKey) continue;
 
       if (isProviderUnhealthy(providerKey) || isChapterTimeoutUnhealthy(providerKey)) {
@@ -637,8 +667,10 @@ export class APIFallbackManager {
       }
 
       const modelToUse = this.resolveProviderModel(providerKey, provider, routing);
-      const baseUrl = this.resolveProviderBaseUrl(providerKey, provider.base_url);
+      const baseUrl = normalizeProviderBaseUrl(providerKey, routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url));
       const protocol = provider.protocol || this.inferProtocol(providerKey);
+      const resolvedTemperature = options?.temperature ?? provider.temperature?.[agentName];
+      const resolvedMaxTokens = options?.max_tokens ?? provider.max_tokens?.[agentName];
 
       let providerPermanentlyFailed = false;
       for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt++) {
@@ -652,6 +684,7 @@ export class APIFallbackManager {
           `[LLMAttemptStart] agent=${agentName} provider=${providerKey} model=${modelToUse} attempt=${attempt + 1}/${this.retryOptions.maxRetries + 1} protocol=${protocol}\n`
         );
         const startMs = Date.now();
+        const requestId = createAttemptRequestId();
         try {
           let response: ClaudeFallbackResult["response"];
 
@@ -683,9 +716,10 @@ export class APIFallbackManager {
               modelToUse,
               anthropicMessages,
               {
-                temperature: options?.temperature,
-                max_tokens: options?.max_tokens,
+                temperature: resolvedTemperature,
+                max_tokens: resolvedMaxTokens,
                 system: combinedSystem,
+                auth: provider.request_options?.auth,
               }
             );
           } else {
@@ -695,11 +729,12 @@ export class APIFallbackManager {
             const result = await this.makeGPTAPICall(
               baseUrl,
               apiKey,
+              providerKey,
               modelToUse,
               systemMsg,
               {
-                temperature: options?.temperature,
-                max_tokens: options?.max_tokens,
+                temperature: resolvedTemperature,
+                max_tokens: resolvedMaxTokens,
                 thinking: provider.request_options?.thinking,
               }
             );
@@ -723,6 +758,10 @@ export class APIFallbackManager {
             attempt: attempt + 1,
             elapsedMs: _okElapsedMs,
             status: "ok",
+            requestId,
+            responseHash: hashResponseText(
+              response.content.map((block) => block.text ?? "").join(""),
+            ),
           });
           return {
             response,
@@ -741,7 +780,8 @@ export class APIFallbackManager {
             primaryProvider,
             providerKey,
             modelToUse,
-            startMs
+            startMs,
+            requestId,
           );
           retryCount = outcome.retryCount;
           fellBack = providerKey !== primaryProvider;
@@ -769,6 +809,7 @@ export class APIFallbackManager {
     const { routing, primaryProvider, fallbackChain, providers, retryOptions } =
       await this.loadFallbackContext(agentName);
     this.retryOptions = retryOptions;
+    this.logs = [];
 
     // P0: 总超时预算
     const chainStartTime = Date.now();
@@ -777,7 +818,6 @@ export class APIFallbackManager {
     let retryCount = 0;
     let fellBack = false;
 
-    // NB-4.0: BenchmarkCostProfile 路由隔离 + P43 Task 2 白名单守卫。
     const _disableFallback = process.env.PINOVEL_DISABLE_FALLBACK === "1"
       || shouldDisableFallbackForProfile();
     const _baseChain = _disableFallback ? [primaryProvider] : fallbackChain;
@@ -788,19 +828,18 @@ export class APIFallbackManager {
       .filter((providerKey) => !isProviderDisabled(providerKey));
 
     for (const providerKey of _effectiveChain) {
-      // 检查总超时
       if (totalTimeoutMs && (Date.now() - chainStartTime) >= totalTimeoutMs) {
         console.warn(`[FallbackTimeout] agent=${agentName} elapsedMs=${Date.now() - chainStartTime} totalTimeoutMs=${totalTimeoutMs}`);
         throw new Error(`Fallback chain timeout: exceeded ${totalTimeoutMs}ms total budget`);
       }
 
-      // NB-4.0: 防御性二次检查。
       assertProviderAuthorized(providerKey, agentName);
 
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const apiKey = getApiKey(providerKey);
+      const routeEntry = typeof routing === "object" ? routing : undefined;
+      const apiKey = routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey);
       if (!apiKey) continue;
 
       if (isProviderUnhealthy(providerKey) || isChapterTimeoutUnhealthy(providerKey)) {
@@ -820,8 +859,10 @@ export class APIFallbackManager {
       }
 
       const modelToUse = this.resolveProviderModel(providerKey, provider, routing);
-      const baseUrl = this.resolveProviderBaseUrl(providerKey, provider.base_url);
+      const baseUrl = normalizeProviderBaseUrl(providerKey, routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url));
       const protocol = provider.protocol || this.inferProtocol(providerKey);
+      const resolvedTemperature = options?.temperature ?? provider.temperature?.[agentName];
+      const resolvedMaxTokens = options?.max_tokens ?? provider.max_tokens?.[agentName];
 
       let providerPermanentlyFailed = false;
       for (let attempt = 0; attempt <= this.retryOptions.maxRetries; attempt++) {
@@ -835,6 +876,7 @@ export class APIFallbackManager {
           `[LLMAttemptStart] agent=${agentName} provider=${providerKey} model=${modelToUse} attempt=${attempt + 1}/${this.retryOptions.maxRetries + 1} protocol=${protocol}\n`
         );
         const startMs = Date.now();
+        const requestId = createAttemptRequestId();
         try {
           let response: GPTFallbackResult["response"];
 
@@ -842,10 +884,13 @@ export class APIFallbackManager {
             response = await this.makeGPTAPICall(
               baseUrl,
               apiKey,
+              providerKey,
               modelToUse,
               messages,
               {
                 ...options,
+                temperature: resolvedTemperature,
+                max_tokens: resolvedMaxTokens,
                 responseFormat: options?.responseFormat ?? { type: "json_object" },
                 thinking: provider.request_options?.thinking,
               }
@@ -870,9 +915,10 @@ export class APIFallbackManager {
               modelToUse,
               nonSystemMessages,
               {
-                temperature: options?.temperature,
-                max_tokens: options?.max_tokens,
+                temperature: resolvedTemperature,
+                max_tokens: resolvedMaxTokens,
                 system: systemPrompt,
+                auth: provider.request_options?.auth,
               }
             );
             response = {
@@ -895,6 +941,8 @@ export class APIFallbackManager {
             attempt: attempt + 1,
             elapsedMs: _okElapsedMs,
             status: "ok",
+            requestId,
+            responseHash: hashResponseText(response.content),
           });
           return {
             response,
@@ -913,7 +961,8 @@ export class APIFallbackManager {
             primaryProvider,
             providerKey,
             modelToUse,
-            startMs
+            startMs,
+            requestId,
           );
           retryCount = outcome.retryCount;
           fellBack = providerKey !== primaryProvider;
@@ -952,7 +1001,6 @@ export class APIFallbackManager {
       routeLevelFallback,
       agentName,
     );
-
     return {
       routing,
       primaryProvider,
@@ -995,8 +1043,8 @@ export class APIFallbackManager {
     return {
       ...DEFAULT_RETRY_OPTIONS,
       ...configOptions,
-      ...this.retryOverrides,
       ...envOptions,
+      ...this.retryOverrides,
     };
   }
 
@@ -1092,24 +1140,13 @@ export class APIFallbackManager {
       throw new Error(`Unable to resolve model for provider ${providerKey}`);
     }
 
+    const routeModelEnv = typeof routing === "object" ? routing.model_env : undefined;
+    if (routeModelEnv && process.env[routeModelEnv]) return process.env[routeModelEnv] as string;
     return getModelOverride(providerKey, resolvedModel) || resolvedModel;
   }
 
   /**
    * MODEL-ROUTING-CLAUDE46-1A: build fallback chain with route-level override.
-   *
-   * 派工卡 §3 Required Change #2：fallback-manager 必须优先消费 route-level `fallback`；
-   * 只有路由未声明该字段时才能继承 provider-level fallback。
-   *
-   * 派工卡 §3 Required Change #4：为生产正文路由增加 provider allowlist
-   * （V2_ROUTE_PROVIDER_ALLOWLIST）。即使 config 误配置 fallback 含未授权 provider，
-   * 本守卫也会过滤掉。
-   *
-   * 参数：
-   * - primaryProvider: 路由解析出的主 provider
-   * - fallbackConfig: provider-level fallback 映射（fallback.claude=[gpt] 等）
-   * - routeLevelFallback: 路由对象显式声明的 fallback 字段；undefined=继承 provider-level
-   * - agentName: 路由名，用于查 V2_ROUTE_PROVIDER_ALLOWLIST
    */
   private buildFallbackChain(
     primaryProvider: string,
@@ -1120,28 +1157,17 @@ export class APIFallbackManager {
     const disabledProviders = getDisabledProviders();
     const chain: string[] = [primaryProvider];
 
-    // MODEL-ROUTING-CLAUDE46-1A: route-level fallback 优先于 provider-level。
-    // routeLevelFallback === undefined → 未声明，继承 provider-level（legacy 行为）
-    // routeLevelFallback === [] → 显式空，hard block（不追加任何 fallback）
-    // routeLevelFallback === ["gpt"] → 只用声明的 fallback，不继承 provider-level
     if (routeLevelFallback !== undefined) {
       for (const fallback of routeLevelFallback) {
-        if (!chain.includes(fallback)) {
-          chain.push(fallback);
-        }
+        if (!chain.includes(fallback)) chain.push(fallback);
       }
     } else {
       const fallbacks = fallbackConfig[primaryProvider] || [];
       for (const fallback of fallbacks) {
-        if (!chain.includes(fallback)) {
-          chain.push(fallback);
-        }
+        if (!chain.includes(fallback)) chain.push(fallback);
       }
     }
 
-    // MODEL-ROUTING-CLAUDE46-1A: 应用 v2 路由 provider allowlist。
-    // 派工卡 §3 Required Change #4：即使 config 误配置 fallback 含未授权 provider，
-    // 本守卫也会过滤掉。allowlist 不在 map 中的路由不受影响（向后兼容）。
     const allowlist = agentName ? V2_ROUTE_PROVIDER_ALLOWLIST[agentName] : undefined;
     const filteredByAllowlist = allowlist
       ? chain.filter((providerKey) => allowlist.has(providerKey))
@@ -1156,11 +1182,22 @@ export class APIFallbackManager {
   private async makeOpenAIChatCall(
     baseUrl: string,
     apiKey: string,
+    providerKey: string,
     model: string,
     messages: GLMMessage[],
     options?: ChatCallOptions,
     requestOptions?: ProviderRequestOptions
   ): Promise<GLMResponse> {
+    const streamResponse = options?.stream === true
+      || (providerKey === "gpt" && model === "gpt-5.6-sol" && Boolean(options?.max_tokens && options.max_tokens >= 8192));
+    const request = this.buildOpenAIRequest(
+      providerKey,
+      model,
+      localizeLlmMessages(messages),
+      options,
+      requestOptions,
+    );
+    if (streamResponse) request.stream = true;
     const response = await fetchWithTimeout(
       joinUrl(baseUrl, "chat/completions"),
       {
@@ -1169,9 +1206,9 @@ export class APIFallbackManager {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(this.buildOpenAIRequest(model, messages, options, requestOptions)),
+        body: JSON.stringify(request),
       },
-      { label: `OpenAI-compatible:${model}` }
+      { label: `OpenAI-compatible:${model}`, timeoutMs: options?.timeoutMs }
     );
 
     if (!response.ok) {
@@ -1179,6 +1216,9 @@ export class APIFallbackManager {
       throw new Error(`API call failed (${response.status}): ${errorBody.substring(0, 200)}`);
     }
 
+    if (streamResponse && response.headers.get("content-type")?.includes("text/event-stream")) {
+      return await parseOpenAIStream(response, model) as GLMResponse;
+    }
     const data = await response.json();
     if ((data as { error?: { message?: string; code?: string } }).error) {
       const error = (data as { error: { message?: string; code?: string } }).error;
@@ -1205,6 +1245,8 @@ export class APIFallbackManager {
       temperature?: number;
       max_tokens?: number;
       system?: string;
+      auth?: ProviderRequestOptions["auth"];
+      timeoutMs?: number;
     }
   ): Promise<{ content: Array<{ type: string; text?: string }>; stop_reason: string }> {
     // Claude Opus 4.8 等模型已弃用 temperature 参数，传参会触发 400 错误。
@@ -1212,14 +1254,15 @@ export class APIFallbackManager {
     const supportsTemperature = !/opus-4/i.test(model);
     const requestBody: Record<string, unknown> = {
       model,
-      messages,
+      messages: localizeLlmMessages(messages),
       max_tokens: options?.max_tokens ?? 4096,
+      stream: true,
     };
     if (supportsTemperature) {
       requestBody.temperature = options?.temperature ?? 0;
     }
     if (options?.system) {
-      requestBody.system = options.system;
+      requestBody.system = localizeLlmText(options.system);
     }
     // Claude Opus 4.8 默认启用 extended thinking，会返回 thinking/tool_use blocks 而非 text。
     // 显式禁用 thinking 确保返回纯 text content。
@@ -1230,13 +1273,15 @@ export class APIFallbackManager {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
+          ...(options?.auth === "bearer"
+            ? { Authorization: `Bearer ${apiKey}` }
+            : { "x-api-key": apiKey }),
         },
         body: JSON.stringify(requestBody),
       },
-      { label: `Anthropic-compatible:${model}` }
+      { label: `Anthropic-compatible:${model}`, timeoutMs: options?.timeoutMs }
     );
 
     if (!response.ok) {
@@ -1244,7 +1289,7 @@ export class APIFallbackManager {
       throw new Error(`Claude API error: ${errorText || response.statusText}`);
     }
 
-    return (await response.json()) as {
+    return await parseAnthropicResponse(response, model) as {
       content: Array<{ type: string; text?: string }>;
       stop_reason: string;
     };
@@ -1253,6 +1298,7 @@ export class APIFallbackManager {
   private async makeGPTAPICall(
     baseUrl: string,
     apiKey: string,
+    providerKey: string,
     model: string,
     messages: GPTMessage[] | ClaudeMessage[],
     options?: {
@@ -1264,11 +1310,14 @@ export class APIFallbackManager {
   ): Promise<{ content: string; finish_reason: string }> {
     const request: Record<string, unknown> = {
       model,
-      messages,
-      temperature: options?.temperature ?? 0,
+      messages: localizeLlmMessages(messages),
       max_tokens: options?.max_tokens ?? 2048,
-      top_p: 0.95,
     };
+
+    if (supportsSamplingParameters(providerKey, model)) {
+      request.temperature = options?.temperature ?? 0;
+      request.top_p = 0.95;
+    }
 
     if (options?.responseFormat) {
       request.response_format = options.responseFormat;
@@ -1312,6 +1361,7 @@ export class APIFallbackManager {
   }
 
   private buildOpenAIRequest(
+    providerKey: string,
     model: string,
     messages: GLMMessage[],
     options?: ChatCallOptions,
@@ -1320,9 +1370,12 @@ export class APIFallbackManager {
     const request: Record<string, unknown> = {
       model,
       messages,
-      temperature: options?.temperature ?? 0.7,
       max_tokens: options?.max_tokens ?? 4096,
     };
+
+    if (supportsSamplingParameters(providerKey, model)) {
+      request.temperature = options?.temperature ?? 0.7;
+    }
 
     const thinking = options?.thinking ?? requestOptions?.thinking;
     if (thinking) {
@@ -1340,7 +1393,8 @@ export class APIFallbackManager {
     primaryProvider: string,
     fallbackProvider: string,
     modelToUse: string,
-    startMs: number
+    startMs: number,
+    requestId: string,
   ): Promise<{ retryCount: number; isPermanent: boolean }> {
     const nextRetryCount = retryCount + 1;
     const errorMessage = getErrorMessage(error);
@@ -1362,6 +1416,7 @@ export class APIFallbackManager {
       elapsedMs: _failElapsedMs,
       status: _emitStatus,
       reason: errorMessage.substring(0, 200),
+      requestId,
     });
 
     this.logs.push({
@@ -1459,6 +1514,22 @@ export function createAPIFallbackManager(
   options?: Partial<RetryOptions>
 ): APIFallbackManager {
   return new APIFallbackManager(options);
+}
+
+/** Normalize only Gemini OpenAI-compatible root URLs; preserve explicit API paths. */
+export function normalizeProviderBaseUrl(providerKey: string, baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  if (providerKey !== "gemini31") return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname === "" || parsed.pathname === "/") {
+      parsed.pathname = "/v1";
+      return parsed.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    // Keep invalid/custom values unchanged so the request layer returns its normal diagnostic.
+  }
+  return trimmed;
 }
 
 function joinUrl(baseUrl: string, path: string): string {

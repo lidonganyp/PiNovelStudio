@@ -46,6 +46,8 @@ export async function handleGenerateChapter(input: {
   previousChapterSummary?: string;
   styleProfile?: string;
   recoverBlockedRaw?: boolean;
+  /** Production writer selection. Undefined uses Gemini; neither writer is a silent fallback. */
+  writerModel?: "claude" | "gemini31";
   /**
    * @deprecated 被 fullPipelinePreview 取代（旧短路径在 FactGuard 后直接返回 raw）。
    * 入口 normalize 为 fullPipelinePreview，等价于完整链路只读预览。
@@ -56,6 +58,16 @@ export async function handleGenerateChapter(input: {
    * 执行完整 raw→editorial→judge→select 链路，但跳过所有副作用（不写章节、不提交状态、不写 trace）。
    */
   fullPipelinePreview?: boolean;
+  /** 高价值章节显式启用 raw + 2 个不同场景解法候选。 */
+  boundedBestOf3?: boolean;
+  /** Eval-only isolated pass@k sample. Requires fullPipelinePreview. */
+  qualityExperiment?: import("../v2/core/types.js").QualityExperimentControl;
+  /** Per-candidate bounded model timeout in milliseconds. */
+  candidateTimeoutMs?: number;
+  /** Wall-clock budget for all model calls in one read-only preview. */
+  previewTotalTimeoutMs?: number;
+  /** Optional validated pre-prose scene solution card. */
+  sceneSolution?: import("../v2/core/scene-solution-search.js").SceneSolutionCard | null;
   // P11新增：人工审阅点恢复支持
   reviewToken?: string;
   reviewDecision?: "confirm" | "reject";
@@ -70,18 +82,18 @@ export async function handleGenerateChapter(input: {
    * - "deepseek"  → narrator_testing_deepseek（deepseek-v4-flash）
    * - "qwen"      → narrator_testing_qwen（qwen3.7-plus）
    * - "claude"    → narrator_testing_claude（显式 baseline）
-   * - undefined   → 走默认 Doubao 主路由。
+   * - undefined   → 走默认 Gemini 3.1 Pro 主路由。
    *
    * 仅影响本次生成，不污染全局配置。P26/P28 所有门禁照常执行。
    */
-  modelTestRoute?: "doubao" | "glm" | "gpt" | "deepseek" | "claude";
+  modelTestRoute?: "doubao" | "glm" | "gpt" | "deepseek" | "claude" | "gemini31" | "claude48";
   /**
    * P30 新增：StyleShaper 路由（保守默认 "claude"）。
    *
    * - "claude"（默认）→ Stage 5/8 StyleShaper 走 style_shaper 主路由（Claude）。
    * - "doubao"/"ernie"/"glm"/"gpt"/"deepseek"/"qwen" → 走 style_shaper_testing_<model> 测试路由。
    *
-   * 建议先保守：Stage 2 用 Doubao、Stage 5 仍用 Claude，避免 Doubao StyleShaper 二次污染。
+   * 默认职责：Stage 2 用 Gemini，Stage 5/8 仍用 Claude。
   /**
    * P31 新增（P39 扩展为 6 模型）：Stage 2.7 中文自然化 patch 开关。
    *
@@ -89,9 +101,9 @@ export async function handleGenerateChapter(input: {
    *              插入条件阶段 ChineseNaturalizer：只做受约束中文自然化 patch，
    *              不重写剧情；patch 必须通过 StructuralLockComparator +
    *              PatchQualityComparator 双重验收，被拒绝时保留 Claude 原段。
-   * - undefined → 不启用 Stage 2.7（生产默认，保持 Claude 单模型链路）。
+   * - undefined → 不启用 Stage 2.7（生产默认，保持 Gemini 原生正文链路）。
    *
-   * 仅影响本次生成，不污染全局配置；不改 .env、不改生产主路由（默认 Doubao）。
+   * 仅影响本次生成，不污染全局配置；不改 .env、不改生产主路由（默认 Gemini）。
   /**
    * P31 guard: fusion replay only. When true, Stage 2 must use Claude and
    * must fail with "Claude unavailable" if narrator_primary falls back.
@@ -106,6 +118,7 @@ export async function handleGenerateChapter(input: {
 }) {
   const {
     workspaceId, chapterId, chapterNumber,
+    writerModel,
     modelTestRoute,
     seed,
   } = input;
@@ -127,10 +140,16 @@ export async function handleGenerateChapter(input: {
       chapterId,
       chapterNumber,
       projectRoot: _unifiedProjectRoot,
+      writerModel,
       modelTestRoute,
       recoverBlockedRaw: input.recoverBlockedRaw,
       previewOnly: input.previewOnly,
       fullPipelinePreview: input.fullPipelinePreview,
+      boundedBestOf3: input.boundedBestOf3,
+      qualityExperiment: input.qualityExperiment,
+      candidateTimeoutMs: input.candidateTimeoutMs,
+      previewTotalTimeoutMs: input.previewTotalTimeoutMs,
+      sceneSolution: input.sceneSolution,
       // REAL-QUALITY-1-PREFLIGHT：seed 透传到统一编排器（judge 匿名化 + Thompson 可复现）
       seed,
       onUpdate: (input as any).__onUpdate,

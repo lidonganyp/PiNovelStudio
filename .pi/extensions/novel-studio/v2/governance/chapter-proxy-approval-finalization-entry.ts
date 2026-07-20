@@ -40,6 +40,11 @@ import { commitAndSave } from "../core/orchestrator-commit-save.js";
 import type { UnifiedOrchestratorInput } from "../core/orchestrator-types.js";
 import type { StagedStateUpdate } from "../core/final-state-commit.js";
 import {
+  captureUserRevisionDelta,
+  saveUserRevisionDelta,
+  type RevisionSpanAnnotation,
+} from "../core/user-revision-delta.js";
+import {
   computeChapterCostSnapshotFromTrace,
   writeChapterCostSnapshot,
 } from "./release-health-aggregator.js";
@@ -81,6 +86,8 @@ export interface FinalizationEntryOptions {
    * 验证 runFinalization 会调用 restorePendingSentinel 恢复 pending。
    */
   commitAndSaveFn?: typeof commitAndSave;
+  /** 用户对修改 span 的可选原因/维度标注；未提供时保存为 unclassified。 */
+  revisionAnnotations?: RevisionSpanAnnotation[];
 }
 
 /** 定稿入口结果 */
@@ -109,6 +116,10 @@ export interface FinalizationEntryResult {
    * - undefined：未触发恢复（commitAndSave 成功 / 未调用 commitAndSave）
    */
   pendingRestored?: boolean;
+  /** accept_with_edits 完整提交后保存的用户修订差异证据。 */
+  revisionDeltaPath?: string;
+  /** 正文已提交但修订差异证据保存失败时的诊断，不回滚正文。 */
+  revisionDeltaError?: string;
 }
 
 // ============================================================================
@@ -121,9 +132,12 @@ export interface FinalizationEntryResult {
  * 这是 prod-binding 缺失的关键接线：accept_with_edits 不再依赖调用方手动注入
  * rerunFactGuard，而是直接使用统一编排器的 checkCandidateFactGuard（真实 FinalFactRecheck）。
  */
-function createRealFactGuardRerunFn(input: UnifiedOrchestratorInput): FactGuardRerunFn {
+function createRealFactGuardRerunFn(
+  input: UnifiedOrchestratorInput,
+  baselineText?: string,
+): FactGuardRerunFn {
   return (text: string) => {
-    const result = checkCandidateFactGuard(text, input);
+    const result = checkCandidateFactGuard(text, input, baselineText);
     return { ok: result.ok, errors: result.errors };
   };
 }
@@ -277,7 +291,7 @@ export function runFinalization(options: FinalizationEntryOptions): Finalization
       chapterId,
       approvalId,
       editedText,
-      rerunFactGuard: createRealFactGuardRerunFn(orchestratorInput),
+      rerunFactGuard: createRealFactGuardRerunFn(orchestratorInput, pendingDraftFinalText),
     });
 
     if (finalization.canCommit) {
@@ -351,7 +365,38 @@ export function runFinalization(options: FinalizationEntryOptions): Finalization
     writeCostSnapshotAfterCommit(options);
   }
 
-  return { finalization, commit, feedbackRecorded, pendingRestored };
+  let revisionDeltaPath: string | undefined;
+  let revisionDeltaError: string | undefined;
+  if (
+    action === "accept_with_edits" &&
+    editedText !== undefined &&
+    pendingDraftFinalText !== undefined &&
+    commit?.ok === true &&
+    !commit.stateCommit?.error
+  ) {
+    try {
+      const artifact = captureUserRevisionDelta({
+        workspaceId: orchestratorInput.workspaceId,
+        chapterId,
+        selectedCandidateId: pendingDraftCandidateId ?? "proxy-approved",
+        systemSelectedText: pendingDraftFinalText,
+        userFinalText: editedText,
+        annotations: options.revisionAnnotations,
+      });
+      revisionDeltaPath = saveUserRevisionDelta(workspacePath, artifact);
+    } catch (error: unknown) {
+      revisionDeltaError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return {
+    finalization,
+    commit,
+    feedbackRecorded,
+    pendingRestored,
+    revisionDeltaPath,
+    revisionDeltaError,
+  };
 }
 
 /**

@@ -397,9 +397,27 @@ function makeEditorialPathStub(opts) {
     if (input.kind === "editorial_amplified") {
       return { text: editorialText, model: "stub-ed", route: input.route, durationMs: 10 };
     }
+    if (input.kind === "opportunity_judge") {
+      return {
+        text: JSON.stringify({
+          opportunities: [{
+            opportunityType: "chapter_end_pressure",
+            diagnosis: "章末因果牵引力不足",
+            evidenceExcerpt: "坐在床边休息",
+            expectedReaderGain: "增强继续阅读意愿",
+            damageRisks: ["可能破坏既定章末事实"],
+            confidence: 0.8,
+          }],
+          noOpReason: null,
+        }),
+        model: "stub-opportunity",
+        route: input.route,
+        durationMs: 10,
+      };
+    }
     if (input.kind === "literary_judge") {
-      const aMatch = input.userPrompt.match(/【候选 A】\n([\s\S]*?)\n（候选 A 总字符数/);
-      const bMatch = input.userPrompt.match(/【候选 B】\n([\s\S]*?)\n（候选 B 总字符数/);
+      const aMatch = input.userPrompt.match(/【候选甲】\n+([\s\S]*?)\n+（候选甲总字符数/);
+      const bMatch = input.userPrompt.match(/【候选乙】\n+([\s\S]*?)\n+（候选乙总字符数/);
       const textA = aMatch ? aMatch[1] : "";
       const textB = bMatch ? bMatch[1] : "";
       const aHas = textA.includes(betterMarker);
@@ -462,6 +480,7 @@ function makeEditorialPathInput(projectRoot, chapterId) {
     },
     constitution: null,
     characterNames: ["李一凡"],
+    allowAutomaticLiterarySelection: true,
     modelGenerate: makeEditorialPathStub({
       rawText: EDITORIAL_PATH_RAW_VALID,
       editorialText: EDITORIAL_PATH_EDITORIAL_TRUNCATED,

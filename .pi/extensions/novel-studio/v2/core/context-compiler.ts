@@ -168,14 +168,6 @@ function deriveFacts(seed: ChapterSeed): ContextFact[] {
       kind: "fact",
     });
   }
-  (seed.candidateAnchors ?? []).forEach((a, i) => {
-    facts.push({
-      id: `fact:anchor:${a.id ?? i}`,
-      content: `${a.channel ?? "cognitive"} 锚点：${a.description}（权重 ${a.weight}，来源 ${a.source ?? "?"}）`,
-      sourceIds: ["skeleton.json", "arc-registry.json"],
-      kind: "fact",
-    });
-  });
   const hd = seed.highLevelDirection;
   if (hd.available) {
     if (hd.backgroundNotes?.length) {
@@ -273,9 +265,13 @@ function deriveLongTermState(
     store.promise.length === 0 &&
     store.pattern.length === 0;
   if (isEmpty) return null;
-  const explicitCharacters = (seed.explicitEventCharacters ?? []).flatMap((entry) => entry.characters);
+  const explicitCharacters = seed.authorChapterContract?.relevantCharacters?.length
+    ? seed.authorChapterContract.relevantCharacters
+    : (seed.explicitEventCharacters ?? []).flatMap((entry) => entry.characters);
   const evidenceText = [
-    ...(seed.candidateAnchors ?? []).map((entry) => entry.description),
+    ...(seed.authorChapterContract?.eventSummaries ?? []),
+    ...(seed.authorChapterContract?.mustInclude ?? []),
+    ...(seed.authorChapterContract?.foreshadowing ?? []),
     ...(seed.currentPressure?.pendingForeshadowing ?? []).map((entry) => entry.description),
     ...(seed.currentPressure?.openArcs ?? []).flatMap((entry) => [entry.name, entry.coreQuestion ?? ""]),
     ...(seed.previousChapterContinuation?.introducedCharacters ?? []),
@@ -375,6 +371,11 @@ function buildSourceMap(seed: ChapterSeed, stylePath?: string, rulesPath?: strin
   if (hd?.available) {
     entries.push({ sourceId: "series/outline.md", sourceType: "foreshadow", path: "series/outline.md" });
   }
+  for (const sourceId of seed.authorChapterContract?.sourceIds ?? []) {
+    if (!entries.some((entry) => entry.sourceId === sourceId)) {
+      entries.push({ sourceId, sourceType: "foreshadow", path: sourceId });
+    }
+  }
   for (const sourceId of seed.previousChapterContinuation?.sourceIds ?? []) {
     if (!entries.some((entry) => entry.sourceId === sourceId)) {
       entries.push({
@@ -451,7 +452,7 @@ function checkMissingCriticalFacts(seed: ChapterSeed, chapterNumber: number): Di
       evidence: `第 ${chapterNumber} 章但 previousChapterContinuation.available=false，前章承接缺失`,
     });
   }
-  if (!seed.intent?.primary) {
+  if (!seed.authorChapterContract?.chapterFunction && !seed.intent?.primary) {
     diags.push({
       id: "diag:missing_intent",
       source: "context_compiler",

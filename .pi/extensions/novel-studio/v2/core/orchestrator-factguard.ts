@@ -7,6 +7,9 @@
  * 3 个 scanRaw*，已转直接调用）。
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { UnifiedOrchestratorInput } from "./orchestrator-types.js";
 import type { Candidate } from "./types.js";
 import {
@@ -66,12 +69,14 @@ import type { Diagnostic } from "./types.js";
  * 只阻断事实硬伤（格式损坏/大段重复/实体幻觉/连续性断裂/世界冲突），不阻断软风险。
  *
  * IMMUTABLE-FACTS-COMPILER-1：在 FactContinuityGuard.check 之后接入
- * "高影响新设定来源授权检查"。当前为 review 级别（只诊断不阻断），
- * 满足任务规格"FactGuard 不只检查与已知事实冲突，还要检查高影响新设定是否存在来源授权"。
- * 后续如需升级为 hard block（阻止模型凭空新增秘法/封印/组织计划/神器/升级结果），
- * 把 unauthorizedDiagnostics 转 Diagnostic 后追加到 report.hardBlocks 并设 hasHardBlock=true。
+ * "高影响新设定来源授权检查"。未授权的秘法、封印、组织计划、神器和升级结果
+ * 属于事实污染，必须 hard block，不能只留作人工 review。
  */
-export function checkCandidateFactGuard(text: string, input: UnifiedOrchestratorInput): { ok: boolean; errors: string[]; report: FactContinuityReport; constraintManifestHash?: string } {
+export function checkCandidateFactGuard(
+  text: string,
+  input: UnifiedOrchestratorInput,
+  baselineText?: string,
+): { ok: boolean; errors: string[]; report: FactContinuityReport; constraintManifestHash?: string } {
   const guard = createFactContinuityGuard();
   // CANON-IDENTITY-1: 从 characterStates 编译身份契约，传给 FactGuard
   const identityInputs = (input.context.characterStates ?? []).length > 0
@@ -95,9 +100,9 @@ export function checkCandidateFactGuard(text: string, input: UnifiedOrchestrator
   };
   const report = guard.check(guardInput);
 
-  // ── IMMUTABLE-FACTS-COMPILER-1：高影响新设定来源授权检查（review 级别接入） ──
+  // ── IMMUTABLE-FACTS-COMPILER-1：高影响新设定来源授权检查 ──
   // 从 6 来源编译本章硬事实，扫描正文未授权高影响新设定（秘法/封印/组织计划/神器/升级结果）。
-  // 当前为 review 级别（只诊断不阻断），追加到 report.allDiagnostics 供 trace 审计。
+  // 命中后同时进入 allDiagnostics 和 hardBlocks，阻止污染正文进入 judge/selection。
   // 接入异常不阻断生成（缺失可补，正文污染不可逆）。
   try {
     const immutableInput: ImmutableFactsInput = {
@@ -112,12 +117,27 @@ export function checkCandidateFactGuard(text: string, input: UnifiedOrchestrator
         description: p.description,
       })),
       openLoops: input.context.openLoops,
+      authorizedHighImpactSources: [
+        ...(input.context.facts ?? [])
+          .filter((fact) => (fact.sourceIds ?? []).some((sourceId) =>
+            /^(?:series\/outline\.md|series\/skeleton\.json|skeleton\.json|chapters\/|narrative-state-store\.json|world-canon|constitution)/.test(sourceId)))
+          .map((fact) => ({
+            text: fact.content,
+            sourceRef: fact.sourceIds?.[0] ?? fact.id,
+          })),
+        ...loadCanonicalHighImpactSources(input),
+      ],
     };
     const compiled = compileImmutableFacts(immutableInput);
-    const unauthorizedDiagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+    const detectedDiagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+    const unauthorizedDiagnostics = baselineText === undefined
+      ? detectedDiagnostics
+      : filterDiagnosticsAlreadyPresentInBaseline(detectedDiagnostics, baselineText);
     if (unauthorizedDiagnostics.length > 0) {
       const diags = unauthorizedDiagnostics.map((d, idx) => toUnauthorizedHighImpactDiagnostic(d, idx));
       report.allDiagnostics.push(...diags);
+      report.hardBlocks.push(...diags);
+      report.hasHardBlock = true;
     }
   } catch {
     // 接入失败不阻断生成（软诊断，缺失可补）
@@ -127,10 +147,74 @@ export function checkCandidateFactGuard(text: string, input: UnifiedOrchestrator
   return { ok: !report.hasHardBlock, errors, report, constraintManifestHash: report.constraintManifestHash };
 }
 
+function loadCanonicalHighImpactSources(
+  input: UnifiedOrchestratorInput,
+): Array<{ text: string; sourceRef: string }> {
+  if (!input.projectRoot || !input.workspaceId) return [];
+  const workspacePath = join(input.projectRoot, "workspaces", input.workspaceId);
+  const sources: Array<{ text: string; sourceRef: string }> = [];
+  for (const relativePath of ["series/outline.md", "WORLDBUILDING-CANON.md"]) {
+    const path = join(workspacePath, relativePath);
+    if (existsSync(path)) {
+      sources.push({ text: readFileSync(path, "utf8"), sourceRef: relativePath });
+    }
+  }
+
+  const skeletonPath = join(workspacePath, "series", "skeleton.json");
+  if (existsSync(skeletonPath)) {
+    const parsed = JSON.parse(readFileSync(skeletonPath, "utf8")) as {
+      chapterSkeletons?: Record<string, unknown>;
+    };
+    const acceptedSkeletons = Object.fromEntries(
+      Object.entries(parsed.chapterSkeletons ?? {}).filter(([key]) => {
+        const match = key.match(/^(?:ch|chapter-)?(\d+)$/i);
+        return match !== null && Number(match[1]) < input.chapterNumber;
+      }),
+    );
+    sources.push({
+      text: JSON.stringify(acceptedSkeletons),
+      sourceRef: "series/skeleton.json",
+    });
+  }
+  return sources;
+}
+
+function filterDiagnosticsAlreadyPresentInBaseline(
+  diagnostics: UnauthorizedHighImpactDiagnostic[],
+  baselineText: string,
+): UnauthorizedHighImpactDiagnostic[] {
+  const seenByTerm = new Map<string, number>();
+  const baselineCounts = new Map<string, number>();
+  return diagnostics.filter((diagnostic) => {
+    const key = `${diagnostic.category}:${diagnostic.term}`;
+    const seen = (seenByTerm.get(key) ?? 0) + 1;
+    seenByTerm.set(key, seen);
+    let baselineCount = baselineCounts.get(key);
+    if (baselineCount === undefined) {
+      baselineCount = countLiteralOccurrences(baselineText, diagnostic.term);
+      baselineCounts.set(key, baselineCount);
+    }
+    return seen > baselineCount;
+  });
+}
+
+function countLiteralOccurrences(text: string, term: string): number {
+  if (!term) return 0;
+  let count = 0;
+  let offset = 0;
+  while (offset < text.length) {
+    const index = text.indexOf(term, offset);
+    if (index < 0) break;
+    count += 1;
+    offset = index + term.length;
+  }
+  return count;
+}
+
 /**
- * 把 UnauthorizedHighImpactDiagnostic 转为 FactGuard Diagnostic（review 级别）。
+ * 把 UnauthorizedHighImpactDiagnostic 转为 FactGuard hard Diagnostic。
  *
- * severity="review"：只诊断不阻断，写入 trace 供人工复核。
+ * severity="hard"：未授权高影响新设定会污染后续章节状态，必须立即拒绝。
  * domain="continuity"：高影响新设定属于连续性领域（凭空新增设定破坏世界连续性）。
  * source="unauthorized_high_impact_setting"：标识本检查来源。
  */
@@ -141,7 +225,7 @@ function toUnauthorizedHighImpactDiagnostic(
   return {
     id: `diag:unauthorized_high_impact_setting:${idx}`,
     source: "unauthorized_high_impact_setting",
-    severity: "review",
+    severity: "hard",
     domain: "continuity",
     span: d.span,
     evidence: `未授权高影响新设定 "${d.term}"（category=${d.category}）：${d.reason}`,

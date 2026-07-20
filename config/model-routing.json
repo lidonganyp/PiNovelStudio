@@ -1,9 +1,18 @@
 {
   "_comment": "PiNovelStudio AI Model Routing",
-  "_version": "4.19.0",
-  "_updated": "2026-07-17",
+  "_version": "4.29.0",
+  "_updated": "2026-07-21",
   "disabled_providers": ["qwen", "ernie"],
   "_migration_notes": [
+    "v4.29.0 (AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1): Retires the global GEMINI-SCENE-PRIMARY-1 extrapolation. The chapter writer receives author-owned plot direction, chapter function, prior state, character motivations, foreshadowing/promises, causality, inviolable facts, and ending target; sensory choices, diction, syntax, rhetoric, dialogue, paragraph rhythm, and concrete scene expression remain model-owned. Fixed scene-solution search and boundedBestOf3 are removed from production. A chapter candidate may replace raw only after chapter-specific comparison and a human-aligned selection authority; current machine literary judges remain advisory, so production preserves raw when no human-authoritative choice is available.",
+    "v4.28.0 (GEMINI-SCENE-PRIMARY-1): The natural-human blind review of the continuous chapter 18-20 sequences clearly selected sequence B, privately mapped to shared ChapterSeed + pre-writing scene-solution search + Gemini raw. The default single-candidate Gemini production path now treats the first scene-search draft as the human-admitted primary after FactGuard, story-preservation, completeness, and final fact recheck. Ordinary Gemini raw remains the untouched baseline and fallback. GPT-5.6-sol literary output remains advisory and cannot decide the winner. Explicit Claude, modelTestRoute, qualityExperiment, and boundedBestOf3 paths are excluded from this admission.",
+    "v4.27.0 (GEMINI-HUMAN-ALIGNED-ADMISSION-1): Gemini 3.1 Pro Preview remains the production default through the gemini_writer_v2 route family. The saved natural-human gold selected Gemini for native Chinese feel, novel voice, and scene immersion, while both GPT-5.6-sol and the isolated Gemini reader judge selected Claude; neither AI judge is aligned. Literary judging is therefore advisory only and cannot automatically replace Gemini raw until the natural-human alignment gate passes. Gemini same-model bounded best-of-3 produced four attempts and two controlled three-candidate cases; raw won both, the second candidate won zero, and final-gate vetoes were zero, so boundedBestOf3 remains disabled by default and explicit_opt_in_unadmitted.",
+    "v4.25.0 (GEMINI-QUALITY-AMPLIFIER-V2-1): The user explicitly selected Gemini 3.1 Pro Preview as the production default after direct natural-person comparison found materially stronger native Chinese feel, novel voice, and scene immersion than Claude Opus 4.6. novel_generate_chapter resolves an omitted writerModel to the isolated v2_rawstage2_gemini31 / v2_amplified_gemini31 routes with gemini_writer_v2. The v2 prompt protects native Chinese flow, character presence, scene immersion, subtext, and causal pressure while keeping structural inputs implicit. Claude remains available only through explicit writerModel=claude. Both writer route families keep fallback=[]; there is no automatic dual writing or silent cross-model fallback. GPT-5.6-sol remains the heterogeneous candidate judge, but machine model rankings are diagnostic only until natural-human alignment passes and cannot override the explicit human default selection.",
+    "v4.24.0 (HUMAN-JUDGE-ALIGNMENT-GATE-1): The Claude/Gemini machine-judge matrix is diagnostic evidence only, not a quality ranking. A natural-person review of the saved suspense pair selected Gemini clearly for native Chinese feel, novel voice, and scene immersion, while GPT-5.6-sol selected Claude in both forward and reverse rounds; the disagreement persisted after adding reader-experience-first judge guidance. Model-comparison reports now require a passing natural-human alignment gate (at least 3 entries, userChoiceAgreement>=0.70, reverseConsistency>=0.70, no systematic reverse bias) before recommendedDefault can be non-null. Claude remains the current operational default only; the 10:3 machine count no longer proves Claude is the better Chinese-fiction writer. Gemini remains explicitly selectable and no automatic dual writing or fallback is introduced.",
+    "v4.23.0 (CEILING-BEST-OF-3-TRUTH-1): The unified public chapter path now supports explicit boundedBestOf3=true for one Claude raw baseline plus at most two distinct same-model scene-solution candidates. This is separate from dormant Claude+Gemini automatic dual writing: best_of_n_config.enabled remains false, runtime_status remains not_wired, and automatic_dual_writer remains false. Across eight completed search-depth attempts in six sanitized reports, only two met the controlled three-candidate condition; raw won both, the second scene candidate won zero, and final-gate vetoes were zero. The other six attempts were excluded because no cited opportunity existed, fewer than three candidates were produced, or a provider call failed. Same-model best-of-3 therefore remains explicit_opt_in_unadmitted. Admission requires at least three controlled comparisons, at least two second-candidate wins, and zero final-gate vetoes. Latest controlled evidence: claude-best-of3-suspense-retry-20260720 sha256 406bafc6055d162e5459e2e953dc90b0100e7b55bf08b8b88dc5b7d6c8a50e05.",
+    "v4.22.0 (PRODUCTION-FINAL-WRITER-TRUTH-1): Production-final challenger evaluation now compares the complete public novel_generate_chapter preview for Claude and Gemini, including opportunity detection, 0-2 editorial candidates, internal selection, final FactGuard/completeness, and anonymous reverse judging. Three post-fix cross-scene controlled runs completed with zero Gemini literary wins, one Gemini recovery-only win caused by a Claude raw FactGuard veto, and two inconclusive results. Gemini therefore remains explicit-only and is not admitted to automatic dual writing, fallback, or an editorial candidate slot. v2_literary_judge now uses SSE; three consecutive real runs completed, but high tail latency remains a reliability constraint. Evidence: literary-judge-streaming-long-budget-20260720 sha256 0db9288a28aebb8b83af023d2877bd71c59ddc7f4b69b5b81ec521fb0efc8562; streaming-cross-scene-suspense-20260720 sha256 40beedf75144a8ce3f513b975da540c6aaa03d1d24f386efa0bf3615f2d3ba81; streaming-cross-scene-action-20260720 sha256 23a31aad4b343841db95aa138b18c4eb8fc6d32623466a0390c3118830b91371.",
+    "v4.21.0 (WRITER-ADMISSION-TRUTH-1): The completed 18-comparison Claude Opus 4.6 vs Gemini 3.1 Pro matrix keeps Claude as default (Claude 10 wins, Gemini 3, 5 inconclusive/failed; 13 decisive; Gemini decisive win rate 0.230769 < 0.55). Gemini remains an explicit writerModel option. Automatic dual-writer generation is not wired and best_of_n_config.enabled=false; listing both models is a dormant candidate catalog, not runtime behavior. Evidence: reports/model-comparison/gemini31-vs-claude46/gemini31-vs-claude46-quality-max-20260719/comparison-report.json, sha256 20aae82bd1b04b509c214af4f4e43f5a430584ad5a8035abf5338bd8f436b329.",
+    "v4.20.0 (GEMINI-COPRIMARY-1): Gemini 3.1 Pro joins Claude Opus 4.6 as an explicitly selectable production writer. Separate raw/editorial routes use fallback=[] and GOOGLE_GEMINI_BASE_URL/GEMINI_API_KEY/GEMINI_MODEL. GPT-5.6-sol remains the heterogeneous judge. Claude remains the default until at least 3 controlled samples reach validatedWinRate>=0.55; no automatic multi-candidate generation or silent model fallback is introduced.",
     "v4.19.0 (MODEL-ROUTING-CLAUDE46-1E-fix): V2 异源 judge 路由模型从 gpt-5.5 全量切到 gpt-5.6-sol，与 novel_quality_judge 一致走第三方兼容端点。v2_opportunity_judge / v2_literary_judge 新增 base_url_env=NOVELOS_JUDGE_BASE_URL / api_key_env=NOVELOS_JUDGE_API_KEY / model_env=NOVELOS_JUDGE_MODEL；model 字段从 gpt-5.5 改为 gpt-5.6-sol。provider=gpt 与 fallback=[] 不变，仍受生产 provider allowlist + fail-closed 约束。gpt-5.6-sol 非官方 OpenAI model ID，必须通过 NOVELOS_JUDGE_* env 解析端点/密钥/模型，不进生产 fallback 链。本版本只是路由模型契约实现，不声称质量正收益；真实 canary 仍需 1E 授权。",
     "v4.18.0 (MODEL-ROUTING-CLAUDE46-1B+1D): Claude Opus 4.6 全项目切换 + GLM 生产隔离。raw 正文与普通 editorial candidate 主写从 Doubao 切到 Claude Opus 4.6（narrator_primary / stage2_narrator / v2_rawstage2 / v2_amplified / v2_direct_claude / narrator_testing_claude / style_shaper / stage5_style_shaper / stage8_final_gate / character_agent / providers.claude(/.claude_backup) / model_analysis.claude(/.claude_backup) 全部统一切换到 claude-opus-4-6；best_of_n_config.models 不再把 Doubao 声明为唯一正式正文模型，改为 [claude-opus-4-6]）。Doubao 不再是正文主写：降为受限中文校准器（仅 1C 的 v2_chinese_calibration 路由在有 raw span 证据时调用），narrator_testing / chinese_naturalizer / chinese_editor_judge / style_shaper_testing 等 Doubao 测试/校准路由保留，但 model_analysis.doubao.role 改为历史说明，assigned_nodes 移除 stage2_narrator 与 narrator_primary。fallback.doubao=[] 不变（Doubao 不再进入任何生产 fallback 链）；fallback.claude=[gpt] 不变（Claude 4.6 失败回退 GPT 结构化节点，但 raw 正文失败由 v2_rawstage2.fallback=[] hard block，不静默切换其他正文模型）。GLM 生产隔离：narrator_testing_glm / style_shaper_testing_glm / chinese_naturalizer_glm 显式 fallback=[]，不再继承 provider 级 fallback；与既有 nb4_*_glm / nb5_judge_glm / reference_analyzer_glm 一起标注 lab/testing。scripts/invoke-generate-chapter.mjs 默认 modelTestRoute=glm 但日志明确 development route lock。未做：1C span 驱动校准、1E 真实 canary（需另行授权）。本版本只是静态路由契约实现，不声称质量正收益。",
     "v4.17.0 (provider 停用策略): Qwen 与 ERNIE 无可用余额，加入 disabled_providers 并由配置解析与 fallback manager 双重 hard block；Doubao 保留为 Stage 2 主写直至余额耗尽，fallback.doubao=[]，失败即停止；开发章节调用脚本默认 modelTestRoute=glm。历史 provider 元数据仅用于旧 trace/replay 解析，不代表可调用。",
@@ -34,8 +43,6 @@
         "style-preserving revision"
       ],
       "assigned_nodes": [
-        "stage2_narrator",
-        "narrator_primary",
         "stage5_style_shaper",
         "stage8_final_gate",
         "narrator_testing_claude",
@@ -45,6 +52,22 @@
         "v2_rawstage2",
         "v2_amplified"
       ]
+    },
+    "gemini31": {
+      "model": "gemini-3.1-pro-preview",
+      "strengths": [
+        "long-context synthesis",
+        "scene continuity",
+        "character voice separation",
+        "causal long-form prose"
+      ],
+      "assigned_nodes": [
+        "stage2_narrator",
+        "narrator_primary",
+        "v2_rawstage2_gemini31",
+        "v2_amplified_gemini31"
+      ],
+      "role": "Default production raw/editorial writer selected by explicit natural-person review. It never participates in automatic fallback or automatic dual writing. Machine-judge comparison counts remain diagnostic while the natural-human alignment gate is uncalibrated; Claude remains an explicit alternative, not a silent fallback."
     },
     "gpt": {
       "model": "gpt-5.5",
@@ -154,15 +177,100 @@
     }
   },
   "model_strategy": {
-    "narrator_primary": "claude-opus-4-6",
-    "narrator_reason": "MODEL-ROUTING-CLAUDE46-1B: raw 正文与普通 editorial candidate 主写统一切到 Claude Opus 4.6。Claude 4.6 是 raw 正文唯一正式主写；失败时由 v2_rawstage2.fallback=[] hard block，不静默切换其他正文模型（Doubao/GLM/GPT）。Doubao 降为受限中文校准器（仅 1C v2_chinese_calibration 在有 raw span 证据时调用）。历史 v4.9.0 Doubao 主写决策保留在 _migration_notes 作参考，不再作为当前态陈述。",
+    "narrator_primary": "gemini-3.1-pro-preview",
+    "explicit_writer_models": [
+      "gemini-3.1-pro-preview",
+      "claude-opus-4-6"
+    ],
+    "writer_admission": {
+      "default_writer": "gemini31",
+      "explicit_writer_options": ["gemini31", "claude"],
+      "machine_evidence_status": "diagnostic_only_until_human_alignment_passes",
+    "human_override": {
+        "status": "active",
+        "source": "user_direct_human_review",
+        "evidence_path": "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
+        "winner": "gemini31",
+        "decisive_dimensions": ["中文原生语感", "小说语感", "场景沉浸感"],
+        "machine_judge_alignment": "failed",
+      "policy": "human_preference_overrides_machine_default"
+    },
+    "scene_solution_admission": {
+      "status": "retired_from_production",
+      "strategy_id": "scene-solution-search-b",
+      "evidence_path": "reports/model-comparison/gemini-continuous-ceiling/gemini-limit-continuous-20260720/human-review/human-review-template.json",
+      "reviewed_chapters": [18, 19, 20],
+      "treatment": "shared ChapterSeed + pre-writing scene solution + Gemini raw",
+      "winner": "scene_solution",
+      "policy": "historical_evidence_only_no_global_extrapolation",
+      "machine_judge_role": "advisory",
+      "raw_fallback_on": ["always_without_chapter_specific_human_authority"],
+      "excluded_paths": [
+        "explicit_claude",
+        "model_test_routes",
+        "quality_experiments",
+        "boundedBestOf3"
+      ]
+    },
+      "automatic_dual_writer": {
+        "enabled": false,
+        "runtime_status": "not_wired"
+      },
+      "latest_controlled_comparison": {
+        "run_id": "gemini31-vs-claude46-quality-max-20260719",
+        "report_path": "reports/model-comparison/gemini31-vs-claude46/gemini31-vs-claude46-quality-max-20260719/comparison-report.json",
+        "report_sha256": "20aae82bd1b04b509c214af4f4e43f5a430584ad5a8035abf5338bd8f436b329",
+        "lifecycle": "complete",
+        "expected_comparisons": 18,
+        "completed_comparisons": 18,
+        "controlled_comparisons": 17,
+        "decisive_comparisons": 13,
+        "claude_wins": 10,
+        "gemini_wins": 3,
+        "inconclusive_or_failed": 5,
+        "gemini_decisive_win_rate": 0.23076923076923078,
+        "default_switch_threshold": 0.55,
+        "threshold_met": false,
+        "decision": "machine_ranking_invalidated_by_human_alignment_failure",
+        "valid_for_default_selection": false
+      },
+      "latest_production_final_challenger": {
+        "evaluated_at": "2026-07-20",
+        "controlled_comparisons": 3,
+        "claude_literary_wins": 0,
+        "gemini_literary_wins": 0,
+        "gemini_recovery_wins": 1,
+        "inconclusive": 2,
+        "gemini_challenger_admitted": false,
+        "decision": "diagnostic_only_after_human_override",
+        "valid_for_default_selection": false,
+        "report_paths": [
+          "reports/model-comparison/gemini-production-final-challenger/literary-judge-streaming-long-budget-20260720/comparison-report.json",
+          "reports/model-comparison/gemini-production-final-challenger/streaming-cross-scene-suspense-20260720/comparison-report.json",
+          "reports/model-comparison/gemini-production-final-challenger/streaming-cross-scene-action-20260720/comparison-report.json"
+        ]
+      }
+    },
+    "narrator_reason": "GEMINI-QUALITY-AMPLIFIER-V2-1: 用户直接对比后明确选择 Gemini 3.1 Pro Preview 为 raw 正文与普通 editorial candidate 默认主写，理由是中文感、小说语感和场景沉浸明显更强。默认调用使用 v2_rawstage2_gemini31 / v2_amplified_gemini31 与 gemini_writer_v2；fallback=[]，失败 hard block，不静默切换 Claude 或其他正文模型。Claude Opus 4.6 保留为显式 writerModel=claude 备选。",
     "narrator_backup": null,
-    "narrator_backup_reason": "Claude 4.6 是唯一正式正文主写；raw 失败由 v2_rawstage2.fallback=[] hard block，不静默切换其他正文模型。Doubao 不再担任正文备援，仅作受限中文校准器。",
+    "narrator_backup_reason": "Gemini 3.1 Pro 是默认正文主写，但没有自动备援；raw 失败由 v2_rawstage2_gemini31.fallback=[] hard block。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
     "narrator_candidate": null,
     "narrator_testing": "doubao-seed-2-1-pro-260628",
     "chinese_naturalizer": "doubao-seed-2-1-pro-260628",
     "style_shaper": "claude-opus-4-6",
     "style_shaper_reason": "MODEL-ROUTING-CLAUDE46-1B: StyleShaper 与 Stage 8 final gate 统一切到 Claude Opus 4.6。",
+    "literary_judge_admission": {
+      "natural_human_alignment": "failed",
+      "gpt56_aligned_with_human_gold": false,
+      "gemini31_reader_aligned_with_human_gold": false,
+      "automatic_literary_selection_enabled": false,
+      "runtime_mode": "advisory_candidates_human_review",
+      "evidence_paths": [
+        "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
+        "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority-gemini31-reader.json"
+      ],
+      "policy": "AI judges may report facts, structure, spans, and risks but cannot automatically replace Gemini raw until natural-human alignment passes"
+    },
     "stage2_loopback_policy": "disabled",
     "stage2_loopback_policy_reason": "ERNIE 已停用；对白回环不再调用 ERNIE，避免无余额 provider 被触发。",
     "stage2_loopback_gpt": "gpt-5.5",
@@ -269,8 +377,11 @@
       "base_url": "https://aimagichub.xyz/v1",
       "api_key_env": "CLAUDE_API_KEY",
       "model": "claude-opus-4-6",
-      "protocol": "openai",
-      "_protocol_note": "P34-T09: switched from anthropic to openai. wildroamguides.com 的 Anthropic 处理器 (/v1/messages) 对长生成请求返回 504 Gateway time-out；OpenAI 处理器 (/v1/chat/completions) 正常。2026-07-04 切换到 aimagichub.xyz 新端点（OpenAI 协议）。生产主路由仍走此 OpenAI 协议。",
+      "protocol": "anthropic",
+      "request_options": {
+        "auth": "bearer"
+      },
+      "_protocol_note": "2026-07-18 实测 aimagichub.xyz：Claude Code 兼容的 POST /v1/messages + Authorization Bearer 可正常返回；OpenAI 兼容 /v1/chat/completions 在章节生成中约 249 秒后返回 504。生产 Claude 路由切回 Anthropic 协议并显式使用 bearer 鉴权。",
       "temperature": {
         "critic": 0,
         "critic_review": 0,
@@ -282,7 +393,11 @@
         "narrator_backup": 0.72,
         "style_shaper": 0.45,
         "stage8_final_gate": 0.25,
-        "v2_direct_claude": 0.72
+        "v2_direct_claude": 0.72,
+        "v2_rawstage2": 0.72,
+        "v2_amplified": 0.72,
+        "nb4_generate_claude48": 0.72,
+        "nb4_generate_fable5": 0.72
       },
       "max_tokens": {
         "critic": 4096,
@@ -295,7 +410,43 @@
         "narrator_backup": 8192,
         "style_shaper": 8000,
         "stage8_final_gate": 4096,
-        "v2_direct_claude": 8192
+        "v2_direct_claude": 8192,
+        "v2_rawstage2": 8192,
+        "v2_amplified": 8192,
+        "nb4_generate_claude48": 16384,
+        "nb4_generate_fable5": 8192
+      }
+    },
+    "grok45": {
+      "name": "Grok 4.5 comparison",
+      "base_url": "https://aimagichub.xyz/v1",
+      "api_key_env": "GROK45_API_KEY",
+      "model": "grok-4.5",
+      "protocol": "openai",
+      "temperature": {
+        "nb4_generate_grok45": 0.72
+      },
+      "max_tokens": {
+        "nb4_generate_grok45": 16384
+      }
+    },
+    "gemini31": {
+      "name": "Gemini 3.1 Pro writer",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "api_key_env": "GEMINI_API_KEY",
+      "model": "gemini-3.1-pro-preview",
+      "protocol": "openai",
+      "temperature": {
+        "nb4_generate_gemini31": 0.72,
+        "v2_rawstage2_gemini31": 0.72,
+        "v2_amplified_gemini31": 0.6,
+        "v2_reader_experience_judge_gemini31": 0.2
+      },
+      "max_tokens": {
+        "nb4_generate_gemini31": 16384,
+        "v2_rawstage2_gemini31": 16384,
+        "v2_amplified_gemini31": 16384,
+        "v2_reader_experience_judge_gemini31": 4096
       }
     },
     "claude_backup": {
@@ -303,7 +454,10 @@
       "base_url": "https://aimagichub.xyz/v1",
       "api_key_env": "CLAUDE_BACKUP_API_KEY",
       "model": "claude-opus-4-6",
-      "protocol": "openai",
+      "protocol": "anthropic",
+      "request_options": {
+        "auth": "bearer"
+      },
       "temperature": {
         "critic": 0,
         "critic_review": 0,
@@ -359,7 +513,8 @@
         "stage2_repair_gpt": 0.4,
         "v2_direct_gpt": 0.72,
         "v2_editorial_planner": 0.3,
-        "reference_analyzer": 0.2
+        "reference_analyzer": 0.2,
+        "nb4_generate_gpt56": 0.72
       },
       "max_tokens": {
         "architect": 4096,
@@ -387,7 +542,8 @@
         "stage2_repair_gpt": 4096,
         "v2_direct_gpt": 8192,
         "v2_editorial_planner": 4096,
-        "reference_analyzer": 16384
+        "reference_analyzer": 16384,
+        "nb4_generate_gpt56": 8192
       }
     },
     "gpt_backup": {
@@ -521,9 +677,9 @@
       "note": "v4.5.0: 迁移自 DeepSeek。世界观呈现规划属于结构化推理任务；GPT 5.5 在同类结构化节点已有稳定记录，统一质量链路。"
     },
     "stage2_narrator": {
-      "provider": "claude",
-      "model": "claude-opus-4-6",
-      "note": "MODEL-ROUTING-CLAUDE46-1B: Stage 2 production primary switched to Claude Opus 4.6. raw 正文唯一正式主写；失败时由 v2_rawstage2.fallback=[] hard block，不静默切换 Doubao/GLM/GPT。Doubao 降为受限中文校准器（仅 1C v2_chinese_calibration 在有 raw span 证据时调用）。历史 v4.9.0 Doubao 主写决策保留在 _migration_notes，不再作为当前态。"
+      "provider": "gemini31",
+      "model": "gemini-3.1-pro-preview",
+      "note": "GEMINI-DEFAULT-WRITER-1: Stage 2 production default is Gemini 3.1 Pro Preview via the isolated Gemini raw/editorial routes and gemini_writer_v1. fallback=[] hard blocks failures; Claude remains explicit-only and is never a silent prose fallback."
     },
     "stage3_skeleton": {
       "provider": "gpt",
@@ -608,9 +764,10 @@
       "note": "v4.5.0: 迁移自 DeepSeek。Stage 1.6 世界观呈现规划，统一质量链路。"
     },
     "narrator_primary": {
-      "provider": "claude",
-      "model": "claude-opus-4-6",
-      "note": "MODEL-ROUTING-CLAUDE46-1B: Stage 2 production prose primary switched to Claude Opus 4.6. raw 正文唯一正式主写；失败时由 v2_rawstage2.fallback=[] hard block。Doubao 降为受限中文校准器（1C v2_chinese_calibration span 驱动）。历史 v4.9.0 Doubao 主写决策保留在 _migration_notes，不再作为当前态。"
+      "provider": "gemini31",
+      "model": "gemini-3.1-pro-preview",
+      "fallback": [],
+      "note": "GEMINI-DEFAULT-WRITER-1: Production prose default selected by explicit human comparison. Uses Gemini-specific routes and prompt profile; fallback=[] prevents silent replacement by Claude, GPT, Doubao, or GLM."
     },
     "narrator_testing": {
       "provider": "doubao",
@@ -832,13 +989,41 @@
       "provider": "claude",
       "model": "claude-opus-4-6",
       "fallback": [],
-      "note": "MODEL-ROUTING-CLAUDE46-1A: V2 raw 候选路由（统一主链路 raw 正文生成）。Claude Opus 4.6 是 raw 正文唯一正式主写；fallback=[] 保证失败时 hard block，不静默切换其他正文模型（Doubao/GLM/GPT）。provider allowlist: 只允许 claude。1B 起全项目 Claude 路由统一切换到 claude-opus-4-6；本路由在 1A 已显式声明 provider/model/fallback。"
+      "note": "GEMINI-DEFAULT-WRITER-1: Explicit writerModel=claude raw route. Claude Opus 4.6 remains available as a deliberate alternative; fallback=[] hard blocks failures and never silently changes prose provider."
     },
     "v2_amplified": {
       "provider": "claude",
       "model": "claude-opus-4-6",
       "fallback": [],
-      "note": "MODEL-ROUTING-CLAUDE46-1A: V2 amplified 候选路由（普通 editorial candidate 生成）。与 v2_rawstage2 同 provider/model；fallback=[] 保证普通编辑候选失败 hard block，不静默切换其他正文模型。provider allowlist: 只允许 claude。中文校准候选走 v2_chinese_calibration（Doubao span 驱动），与本路由隔离。"
+      "note": "GEMINI-DEFAULT-WRITER-1: Explicit writerModel=claude editorial route. It stays isolated from the Gemini default and from Doubao calibration; fallback=[] prevents silent provider changes."
+    },
+    "v2_rawstage2_gemini31": {
+      "provider": "gemini31",
+      "model": "gemini-3.1-pro-preview",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "model_env": "GEMINI_MODEL",
+      "fallback": [],
+      "note": "GEMINI-DEFAULT-WRITER-1: Default production raw writer route. No silent switch to Claude or another prose model."
+    },
+    "v2_amplified_gemini31": {
+      "provider": "gemini31",
+      "model": "gemini-3.1-pro-preview",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "model_env": "GEMINI_MODEL",
+      "fallback": [],
+      "note": "GEMINI-DEFAULT-WRITER-1: Default production editorial writer route. Candidate creation remains opportunity-driven and GPT-judged."
+    },
+    "v2_reader_experience_judge_gemini31": {
+      "provider": "gemini31",
+      "model": "gemini-3.1-pro-preview",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "model_env": "GEMINI_MODEL",
+      "fallback": [],
+      "evaluation_only": true,
+      "note": "GEMINI-READER-JUDGE-1: Anonymous reader-experience calibration route; never generates or replaces chapter prose."
     },
     "v2_chinese_calibration": {
       "provider": "doubao",
@@ -862,7 +1047,7 @@
       "api_key_env": "NOVELOS_JUDGE_API_KEY",
       "model_env": "NOVELOS_JUDGE_MODEL",
       "fallback": [],
-      "note": "MODEL-ROUTING-CLAUDE46-1A/1E-fix: V2 pairwise 文学裁判路由（pairwise judge + reverse review）。异源 judge：Claude 不得同时担任同一候选对的生成者与文学裁判。匿名 A/B + 反向复判 + span 证据；冲突或失败保留 raw。MODEL-ROUTING-CLAUDE46-1E-fix: 模型从 gpt-5.5 切到 gpt-5.6-sol（与 novel_quality_judge 一致的第三方兼容端点，model/base_url/api_key 全部从 NOVELOS_JUDGE_* env 读取，不进生产 fallback 链；gpt-5.6-sol 非官方 OpenAI model ID）。fallback=[] 保证失败时不回退 Claude/Doubao/GLM。provider allowlist: 只允许 gpt。"
+      "note": "V2 pairwise literary judge route (pairwise judge + reverse review). Anonymous A/B, eight-dimension direct comparison, reverse review, and span evidence remain available for facts, structure, and risk diagnosis. Literary output is advisory only and cannot decide the winner until natural-human alignment passes. No historical scene-solution preference controls production selection. The route uses gpt-5.6-sol through NOVELOS_JUDGE_* and fallback=[]; provider allowlist permits only gpt."
     },
     "v2_editorial_planner": {
       "provider": "gpt",
@@ -925,6 +1110,55 @@
       "fallback": [],
       "note": "NB-4: Generation Matrix B0-B3 Doubao 生成路由。五层能力叠加对比中 B0/B1/B2/B3 共用的 Doubao 生成路由。fallback=[] 保证失败时不回退到 ERNIE/GPT/Claude（项目约束）。temperature=0.72 与 narrator_primary 对齐；max_tokens=8192 容纳章节正文。⚠️ 真正生效值见 providers.doubao.temperature.nb4_generate_doubao=0.72 / providers.doubao.max_tokens.nb4_generate_doubao=8192。lab-only。"
     },
+    "nb4_generate_gpt56": {
+      "provider": "gpt",
+      "model": "gpt-5.6-sol",
+      "base_url_env": "NOVELOS_JUDGE_BASE_URL",
+      "api_key_env": "NOVELOS_JUDGE_API_KEY",
+      "model_env": "NOVELOS_JUDGE_MODEL",
+      "fallback": [],
+      "note": "隔离模型对比专用 GPT-5.6-sol 章节生成路由，不进入生产默认链路。"
+    },
+    "nb4_generate_claude48": {
+      "provider": "claude",
+      "model": "claude-opus-4-8",
+      "base_url_env": "CLAUDE48_BASE_URL",
+      "api_key_env": "CLAUDE48_API_KEY",
+      "model_env": "CLAUDE48_MODEL",
+      "fallback": [],
+      "lab_testing": true,
+      "note": "Isolated chapter comparison route for Claude Opus 4.8."
+    },
+    "nb4_generate_fable5": {
+      "provider": "claude",
+      "model": "claude-fable-5",
+      "base_url_env": "FABLE5_BASE_URL",
+      "api_key_env": "FABLE5_API_KEY",
+      "model_env": "FABLE5_MODEL",
+      "fallback": [],
+      "lab_testing": true,
+      "note": "Isolated chapter comparison route for Claude Fable 5."
+    },
+    "nb4_generate_grok45": {
+      "provider": "grok45",
+      "model": "grok-4.5",
+      "base_url_env": "GROK45_BASE_URL",
+      "api_key_env": "GROK45_API_KEY",
+      "model_env": "GROK45_MODEL",
+      "fallback": [],
+      "lab_testing": true,
+      "note": "Isolated chapter comparison route for Grok 4.5."
+    },
+    "nb4_generate_gemini31": {
+      "provider": "gemini31",
+      "model": "gemini-3.1-pro-preview",
+      "base_url_env": "GEMINI31_BASE_URL",
+      "api_key_env": "GEMINI31_API_KEY",
+      "model_env": "GEMINI31_MODEL",
+      "fallback": [],
+      "lab_testing": true,
+      "note": "Isolated chapter comparison route for Gemini 3.1 Pro."
+    },
     "nb4_judge_doubao": {
       "provider": "doubao",
       "model": "doubao-seed-2-1-pro-260628",
@@ -951,8 +1185,76 @@
     }
   },
   "best_of_n_config": {
-    "enabled": true,
+    "enabled": false,
+    "runtime_status": "not_wired",
+    "automatic_dual_writer": false,
+    "same_model_scene_search": {
+      "runtime_status": "retired_from_production",
+      "public_flag": "boundedBestOf3",
+      "enabled_by_default": false,
+      "writer_model": "gemini-3.1-pro-preview",
+      "candidate_layout": {
+        "baseline": "raw",
+        "max_scene_candidates": 2,
+        "requires_distinct_modes": true
+      },
+      "latest_controlled_comparison": {
+        "evidence_model": "claude-opus-4-6",
+        "applies_to_current_default_writer": false,
+        "run_id": "claude-best-of3-suspense-retry-20260720",
+        "report_path": "reports/model-comparison/claude-bounded-best-of3/claude-best-of3-suspense-retry-20260720/comparison-report.json",
+        "report_sha256": "406bafc6055d162e5459e2e953dc90b0100e7b55bf08b8b88dc5b7d6c8a50e05",
+        "controlled_comparisons": 1,
+        "second_candidate_wins": 0,
+        "final_gate_vetoes": 0,
+        "repeated_incremental_gain": false,
+        "decision": "historical_evidence_only"
+      },
+      "aggregate_evidence": {
+        "evidence_model": "claude-opus-4-6",
+        "applies_to_current_default_writer": false,
+        "attempted_comparisons": 8,
+        "controlled_comparisons": 2,
+        "second_candidate_wins": 0,
+        "final_gate_vetoes": 0,
+        "repeated_incremental_gain": false,
+        "decision": "historical_evidence_only",
+        "report_paths": [
+          "reports/model-comparison/claude-bounded-best-of3/claude-best-of3-action-20260720/comparison-report.json",
+          "reports/model-comparison/claude-bounded-best-of3/claude-best-of3-action-retry-20260720/comparison-report.json",
+          "reports/model-comparison/claude-bounded-best-of3/claude-best-of3-relationship-20260720/comparison-report.json",
+          "reports/model-comparison/claude-bounded-best-of3/claude-best-of3-suspense-20260720/comparison-report.json",
+          "reports/model-comparison/claude-bounded-best-of3/claude-best-of3-suspense-retry-20260720/comparison-report.json",
+          "reports/model-comparison/claude-bounded-best-of3/claude-best-of3-suspense-two-seeds-20260720/comparison-report.json"
+        ]
+      },
+      "current_default_writer_evidence": {
+        "evidence_model": "gemini-3.1-pro-preview",
+        "applies_to_current_default_writer": true,
+        "attempted_comparisons": 4,
+        "controlled_comparisons": 2,
+        "raw_wins": 2,
+        "second_candidate_wins": 0,
+        "final_gate_vetoes": 0,
+        "repeated_incremental_gain": false,
+        "decision": "historical_evidence_only",
+        "report_paths": [
+          "reports/model-comparison/gemini-bounded-best-of3/gemini-bestof3-suspense-v2-20260720/comparison-report.json",
+          "reports/model-comparison/gemini-bounded-best-of3/gemini-bestof3-cross-scene-v2-20260720/comparison-report.json"
+        ],
+        "report_sha256": [
+          "2ddf654305238e35f274a95b5cbe3501b98b50cd32b6ab42ba6b59e652854b64",
+          "ad1cf1a69804bcc9b8cda5366423dc912fd0cff28ff2cc335ec596cf2379b13d"
+        ]
+      },
+      "admission_gate": {
+        "minimum_controlled_comparisons": 3,
+        "minimum_second_candidate_wins": 2,
+        "maximum_final_gate_vetoes": 0
+      }
+    },
     "models": [
+      "gemini-3.1-pro-preview",
       "claude-opus-4-6"
     ],
     "n_candidates": {
@@ -962,7 +1264,8 @@
     },
     "judge": {
       "provider": "gpt",
-      "model": "gpt-5.5"
+      "model": "gpt-5.6-sol",
+      "fallback": []
     }
   },
   "fallback": {
@@ -975,11 +1278,11 @@
     "deepseek": [
       "gpt"
     ],
-    "doubao": [
-    ],
+    "doubao": [],
     "glm": [],
     "qwen": [],
-    "ernie": []
+    "ernie": [],
+    "gemini31": []
   },
   "retry": {
     "max_retries": 3,

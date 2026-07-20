@@ -24,8 +24,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { compileImmutableFacts, checkUnauthorizedHighImpactSettings } from "../dist-test/v2/core/immutable-facts-compiler.js";
+import { checkCandidateFactGuard } from "../dist/v2/core/orchestrator-factguard.js";
 
 // ── 测试用最小输入 ──────────────────────────────────────────────────────
 
@@ -202,6 +206,32 @@ test("IMMUTABLE-FACTS-COMPILER-1 · 检测未授权的'升级结果'新设定", 
   );
 });
 
+test("IMMUTABLE-FACTS-COMPILER-1 · 普通重叠词/心境/阶层不得误报为升级结果", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "大蛇重重砸进泥水。林轩的心境逐渐平稳，也没有跨越任何社会阶层。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  const upgrades = diagnostics.filter((d) => d.category === "upgrade_result");
+  assert.deepEqual(upgrades, [], `普通词语不得触发境界跃迁诊断：${JSON.stringify(upgrades)}`);
+});
+
+test("IMMUTABLE-FACTS-COMPILER-1 · 前一分句的突破不得污染高阶妖兽描述", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const descriptiveText = "这种波段绝不是一个正常突破的觉醒者该有的，更像是某种高阶妖兽死前的反扑。";
+  const descriptiveDiagnostics = checkUnauthorizedHighImpactSettings(descriptiveText, compiled);
+  assert.deepEqual(
+    descriptiveDiagnostics.filter((diagnostic) => diagnostic.category === "upgrade_result"),
+    [],
+    `高阶妖兽是实体等级描述，不是角色境界跃迁：${JSON.stringify(descriptiveDiagnostics)}`,
+  );
+
+  const actualUpgradeText = "林轩猛然突破到高阶，气息随之暴涨。";
+  const actualUpgradeDiagnostics = checkUnauthorizedHighImpactSettings(actualUpgradeText, compiled);
+  assert.ok(
+    actualUpgradeDiagnostics.some((diagnostic) => diagnostic.category === "upgrade_result"),
+    `明确突破到高阶仍应被检测：${JSON.stringify(actualUpgradeDiagnostics)}`,
+  );
+});
+
 // ============================================================================
 // 4. 已授权术语不被误报
 // ============================================================================
@@ -216,6 +246,65 @@ test("IMMUTABLE-FACTS-COMPILER-1 · 已授权的'秘法'不被误报", () => {
     !hasSecretTechnique,
     `已授权"秘法"不应被误报，实际诊断: ${JSON.stringify(diagnostics)}`,
   );
+});
+
+test("IMMUTABLE-FACTS-COMPILER-1 · canonical outline 中既有的驯兽心法授权普通心法提及", () => {
+  const compiled = compileImmutableFacts({
+    ...buildMinimalInput(),
+    authorizedHighImpactSources: [{
+      text: "墨老第12章已传授驯兽心法：从压制转向感受融入。",
+      sourceRef: "series/outline.md",
+    }],
+  });
+  const diagnostics = checkUnauthorizedHighImpactSettings(
+    "李一凡依照墨老传授的心法引导妖核能量。",
+    compiled,
+  );
+  assert.equal(
+    diagnostics.some((diagnostic) => diagnostic.category === "secret_technique"),
+    false,
+    `canonical outline 已授权心法，不应误报：${JSON.stringify(diagnostics)}`,
+  );
+});
+
+test("IMMUTABLE-FACTS-COMPILER-1 · 生产 FactGuard 从 workspace canonical outline 加载授权", () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-factguard-canonical-"));
+  const workspaceId = "canonical-outline-workspace";
+  const workspacePath = join(projectRoot, "workspaces", workspaceId);
+  mkdirSync(join(workspacePath, "series"), { recursive: true });
+  writeFileSync(
+    join(workspacePath, "series", "outline.md"),
+    "墨老在第12章已经传授驯兽心法，从压制转向感受融入。",
+    "utf8",
+  );
+  const result = checkCandidateFactGuard(
+    "李一凡依照墨老传授的心法引导妖核能量。",
+    {
+      projectRoot,
+      workspaceId,
+      chapterNumber: 18,
+      characterNames: ["李一凡", "墨老"],
+      ontologyLevels: [],
+      constitution: null,
+      intent: { inviolableFacts: [], selectedPromisesToAdvance: [] },
+      contextSafety: undefined,
+      context: {
+        facts: [],
+        characterStates: [],
+        openLoops: [],
+        worldRules: [],
+        styleReferences: [],
+        sourceMap: [],
+        constitution: null,
+        longTermState: null,
+        bridgeContext: null,
+      },
+    },
+  );
+  const unauthorized = result.report.allDiagnostics.filter(
+    (diagnostic) => diagnostic.source === "unauthorized_high_impact_setting",
+  );
+  assert.deepEqual(unauthorized, []);
 });
 
 test("IMMUTABLE-FACTS-COMPILER-1 · 已授权的'组织计划'不被误报", () => {
@@ -239,6 +328,25 @@ test("IMMUTABLE-FACTS-COMPILER-1 · 已授权的'筑基境'本体层级不被误
   assert.ok(
     !hasUpgrade,
     `已授权"筑基境"不应被误报为升级结果，实际诊断: ${JSON.stringify(diagnostics)}`,
+  );
+});
+
+test("IMMUTABLE-FACTS-COMPILER-1 · 复合本体层级授权内部单级名称但不授权未知境界", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput({
+    ontologyLevels: ["炼体（锻骨/淬腑/易筋/洗髓/金身）"],
+  }));
+  const authorized = checkUnauthorizedHighImpactSettings("他刚突破淬腑境，气血尚未平复。", compiled);
+  assert.equal(
+    authorized.some((diagnostic) => diagnostic.category === "upgrade_result"),
+    false,
+    `复合本体中的淬腑应被授权：${JSON.stringify(authorized)}`,
+  );
+
+  const unknown = checkUnauthorizedHighImpactSettings("他一夜突破化神境，气息覆盖全城。", compiled);
+  assert.equal(
+    unknown.some((diagnostic) => diagnostic.category === "upgrade_result"),
+    true,
+    `复合本体不得授权不存在的化神境：${JSON.stringify(unknown)}`,
   );
 });
 

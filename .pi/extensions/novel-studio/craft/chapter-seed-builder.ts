@@ -1,7 +1,7 @@
 /**
  * PiNovelStudio — ChapterSeedBuilder
  *
- * P22：细节锚点先行生成链路
+ * 统一主链路：作者权威叙事契约优先
  *
  * 从多个种子源构造本章 ChapterSeed：
  *  - config.json（世界观、类型、角色列表、字数预算）
@@ -10,10 +10,10 @@
  *  - narrative-state.json
  *  - detail ledger / unsettled-details.json
  *  - foreshadowing / closure tracker（arc-registry.json）
- *  - 可选 series/outline.md 高层方向（仅作为背景参考）
+ *  - series/outline.md 整体剧情方向
+ *  - 可选 ch{N}-outline-explicit.md 作者章节契约
  *
- * 注意：series/outline.md 若存在，只能作为高层背景/主题/不可违背事实参考；
- * 不能再被编译为事件蓝图，也不能作为生成前置条件。
+ * 感知锚点只保留为历史诊断数据，不作为事实、阻断条件或正文写法指令。
  */
 
 import { join } from "path";
@@ -29,6 +29,7 @@ import type {
   CandidateAnchor,
   HighLevelDirection,
   ChapterIntent,
+  AuthorChapterContract,
 } from "./chapter-seed-types.js";
 import {
   createDefaultNarrativeState,
@@ -222,9 +223,17 @@ function loadClosureTrackerData(workspacePath: string) {
   };
 }
 
-/**
- * 加载可选的 series/outline.md 高层方向（仅背景参考）
- */
+function extractMarkdownField(text: string, labels: string[]): string | undefined {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const pattern = new RegExp(`^\\s*[-*]?\\s*(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*[：:]\\s*(.+)$`, "mu");
+    const match = text.match(pattern);
+    if (match?.[1]?.trim()) return match[1].trim();
+  }
+  return undefined;
+}
+
+/** Load work-level direction and the current chapter's explicit direction without prose recipes. */
 function loadHighLevelDirection(workspacePath: string, chapterNumber: number): HighLevelDirection {
   const outlinePath = join(workspacePath, "series", "outline.md");
   if (!existsSync(outlinePath)) {
@@ -237,7 +246,6 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
 
   try {
     const text = readFileSync(outlinePath, "utf-8");
-    // 仅提取高层背景/主题/不可违背事实，不提取事件蓝图
     const backgroundNotes: string[] = [];
     const immutableFacts: string[] = [];
 
@@ -248,7 +256,9 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
     const isSystemMetadata = (text: string): boolean =>
       SYSTEM_METADATA_KEYWORDS.some(kw => text.includes(kw));
 
-    // 提取顶层标题段落作为背景笔记
+    // Keep complete plot-bearing sections. ContextSafety performs source-aware
+    // budgeting later; this loader must not silently cut every section to 200
+    // characters or discard the current chapter's direction.
     const lines = text.split(/\r?\n/);
     let currentSection: string | null = null;
     let buffer: string[] = [];
@@ -256,8 +266,10 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
     const flushBuffer = () => {
       if (currentSection && buffer.length > 0) {
         const joined = buffer.join(" ").trim();
-        if (joined && !isSystemMetadata(joined) && !isSystemMetadata(currentSection)) {
-          backgroundNotes.push(`[${currentSection}] ${joined.slice(0, 200)}`);
+        const plotBearing = /总纲|核心|主线|故事弧|剧情|阶段|全书|主题|人物|世界观/u.test(currentSection)
+          || new RegExp(`第\\s*${chapterNumber}\\s*章`, "u").test(currentSection);
+        if (plotBearing && joined && !isSystemMetadata(joined) && !isSystemMetadata(currentSection)) {
+          backgroundNotes.push(`[${currentSection}] ${joined}`);
         }
       }
       buffer = [];
@@ -279,20 +291,31 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
     }
     flushBuffer();
 
-    // 提取不可违背事实（如"必须"、"不可"、"禁止"等约束语句）
+    // Extract explicit factual prohibitions. Prose/style instructions are not
+    // facts and are filtered by expression terminology.
     const constraintPattern = /(?:必须|不可|不能|禁止|务必)[^\n。，；！？]{4,80}/g;
     let match: RegExpExecArray | null;
     while ((match = constraintPattern.exec(text)) !== null) {
-      if (immutableFacts.length < 10) {
-        immutableFacts.push(match[0]);
+      if (/句式|段落|对白|感官|修辞|字数|节奏|开头|描写|语言|短句|长句/u.test(match[0])) continue;
+      immutableFacts.push(match[0]);
+    }
+
+    const explicitPath = join(workspacePath, "series", `ch${chapterNumber}-outline-explicit.md`);
+    let chapterThemeHint: string | undefined;
+    if (existsSync(explicitPath)) {
+      try {
+        const explicitText = readFileSync(explicitPath, "utf-8");
+        chapterThemeHint = extractMarkdownField(explicitText, ["本章功能", "章节功能"]);
+      } catch {
+        chapterThemeHint = undefined;
       }
     }
 
     return {
       available: true,
-      backgroundNotes: backgroundNotes.slice(0, 20),
-      chapterThemeHint: undefined, // 不从 outline 提取章节主题提示，避免变相依赖章纲
-      immutableFacts,
+      backgroundNotes,
+      chapterThemeHint,
+      immutableFacts: Array.from(new Set(immutableFacts)),
     };
   } catch {
     return {
@@ -437,6 +460,14 @@ function buildPreviousChapterContinuation(
       ? prevChapterSkeleton.stateChanges
       : [];
 
+    const hasUsableSkeletonContent = facts.some((fact) => String(fact).trim())
+      || activeDilemmas.some((dilemma) => String(dilemma).trim())
+      || stateChanges.some((change) => change && typeof change === "object");
+    if (!hasUsableSkeletonContent) {
+      const textFallback = loadPreviousChapterTextContinuation(workspacePath, chapterNumber);
+      if (textFallback) return textFallback;
+    }
+
     // 最后一条 fact 作为前章最后事件摘要
     const lastFact = facts.length > 0 ? String(facts[facts.length - 1]) : undefined;
     const lastEventSummary = lastFact ?? prevChapterSkeleton.title ?? undefined;
@@ -481,7 +512,9 @@ function buildPreviousChapterContinuation(
       available: true,
       lastEventSummary,
       endingEmotion,
-      openHooks: [], // 新格式无 openHooks 字段，由 activeDilemmas 替代
+      openHooks: Array.isArray(prevChapterSkeleton.openHooks)
+        ? prevChapterSkeleton.openHooks.map((hook: unknown) => String(hook))
+        : activeDilemmas.map((dilemma) => String(dilemma)),
       introducedCharacters,
       unresolvedTensions,
       sourceIds: ["series/skeleton.json"],
@@ -624,67 +657,6 @@ function buildCandidateAnchors(
         source: "characterState",
       });
     }
-  }
-
-  return anchors;
-}
-
-/**
- * 加载 series/ch{N}-outline-explicit.md 中每个事件块下的"感知锚点：a、b、c"行，
- * 逐事件构建一个 candidateAnchor（description 为去前缀后的整行内容）。
- *
- * 这些锚点是章纲作者为每个事件显式指定的具体感知细节，质量远高于
- * searchStep1~4 的硬编码 fallback，应作为 candidateAnchors 的首要来源。
- *
- * 注意：仅解析感知锚点行，不解析事件蓝图，不违反 P22 "章纲不作为事件蓝图" 约束。
- */
-function loadExplicitOutlineSensoryAnchors(
-  workspacePath: string,
-  chapterNumber: number
-): CandidateAnchor[] {
-  const outlinePath = join(workspacePath, "series", `ch${chapterNumber}-outline-explicit.md`);
-  if (!existsSync(outlinePath)) {
-    return [];
-  }
-
-  let text: string;
-  try {
-    text = readFileSync(outlinePath, "utf-8");
-  } catch {
-    return [];
-  }
-
-  const anchors: CandidateAnchor[] = [];
-  let idx = 1;
-
-  // P26: 委托统一 parser（支持 ##/###/#### 事件 1/事件1/事件 E1/事件E1 四种变体）
-  const parsed = parseExplicitOutline(text);
-  const scanBlocks: Array<{ eventIndex: number; section: string }> = [];
-
-  // 若无事件头，则在全文中扫描感知锚点行（兼容简化的章纲格式）
-  if (parsed.events.length === 0) {
-    scanBlocks.push({ eventIndex: 1, section: text });
-  } else {
-    for (const ev of parsed.events) {
-      scanBlocks.push({ eventIndex: ev.index, section: ev.section });
-    }
-  }
-
-  // 每个事件块内提取 "- **感知锚点**：xxx、yyy、zzz" 或 "感知锚点：xxx、yyy、zzz" 行
-  const anchorLinePattern = /感知锚点\*{0,2}\s*[：:]\s*(.+)$/m;
-  for (const block of scanBlocks) {
-    const match = block.section.match(anchorLinePattern);
-    if (!match) continue;
-    const rawDescription = match[1].trim();
-    if (!rawDescription) continue;
-
-    anchors.push({
-      id: `EA${idx++}`,
-      description: rawDescription,
-      channel: "visual",
-      weight: 0.85,
-      source: "explicitOutline",
-    });
   }
 
   return anchors;
@@ -837,6 +809,126 @@ function buildWorldConstraintSummary(config: any, workspacePath: string): WorldC
   };
 }
 
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
+}
+
+function loadAuthorChapterContract(workspacePath: string, chapterNumber: number): AuthorChapterContract {
+  const sourceId = `series/ch${chapterNumber}-outline-explicit.md`;
+  const outlinePath = join(workspacePath, sourceId);
+  if (!existsSync(outlinePath)) {
+    return {
+      available: false,
+      eventSummaries: [],
+      mustInclude: [],
+      stateChanges: [],
+      foreshadowing: [],
+      causalRelations: [],
+      relevantCharacters: [],
+      characterMotivations: [],
+      sourceIds: [],
+    };
+  }
+
+  try {
+    const text = readFileSync(outlinePath, "utf-8");
+    const parsed = parseExplicitOutline(text);
+    if (parsed.parseError) {
+      return {
+        available: false,
+        eventSummaries: [],
+        mustInclude: [],
+        stateChanges: [],
+        foreshadowing: [],
+        causalRelations: [],
+        relevantCharacters: [],
+        characterMotivations: [],
+        sourceIds: [sourceId],
+      };
+    }
+
+    const relevantCharacters = uniqueStrings(parsed.events.flatMap((event) => event.characters));
+    const motivationEntries: AuthorChapterContract["characterMotivations"] = [];
+    for (const event of parsed.events) {
+      for (const motivation of event.characterMotivations ?? []) {
+        const character = event.characters.find((name) => motivation.startsWith(name))
+          ?? (event.characters.length === 1 ? event.characters[0] : undefined);
+        if (!character) continue;
+        motivationEntries.push({ character, motivation });
+      }
+    }
+
+    const reversedEvents = [...parsed.events].reverse();
+    const endingTarget = extractMarkdownField(text, ["章末目标", "章末落点"])
+      ?? reversedEvents.find((event) => event.endingTarget)?.endingTarget
+      ?? reversedEvents.find((event) => event.stateDeltas?.length)?.stateDeltas?.at(-1)
+      ?? reversedEvents.find((event) => event.summary)?.summary;
+    return {
+      available: parsed.events.length > 0,
+      chapterFunction: extractMarkdownField(text, ["本章功能", "章节功能"]),
+      eventSummaries: uniqueStrings(parsed.events.map((event) => event.summary)),
+      mustInclude: uniqueStrings(parsed.events.flatMap((event) => event.mandatoryElements)),
+      stateChanges: uniqueStrings(parsed.events.flatMap((event) => [
+        ...(event.stateDeltas ?? []),
+        ...(event.relationshipDeltas ?? []),
+      ])),
+      foreshadowing: uniqueStrings(parsed.events.map((event) => event.foreshadowing)),
+      causalRelations: uniqueStrings(parsed.events.flatMap((event) => event.causalRelations ?? [])),
+      endingTarget,
+      relevantCharacters,
+      characterMotivations: motivationEntries.filter((entry, index, all) =>
+        all.findIndex((candidate) => candidate.character === entry.character && candidate.motivation === entry.motivation) === index),
+      sourceIds: [sourceId],
+    };
+  } catch {
+    return {
+      available: false,
+      eventSummaries: [],
+      mustInclude: [],
+      stateChanges: [],
+      foreshadowing: [],
+      causalRelations: [],
+      relevantCharacters: [],
+      characterMotivations: [],
+      sourceIds: [sourceId],
+    };
+  }
+}
+
+/** Load active author-maintained hooks without interpreting hook type as prose instructions. */
+function loadHookLedgerForeshadows(workspacePath: string): Array<{
+  id: string;
+  description: string;
+  level?: string;
+}> {
+  const ledgerPath = join(workspacePath, "chapter-hooks-ledger.md");
+  if (!existsSync(ledgerPath)) return [];
+  let text = "";
+  try {
+    text = readFileSync(ledgerPath, "utf-8");
+  } catch {
+    return [];
+  }
+
+  const entries: Array<{ id: string; description: string; level?: string }> = [];
+  const seen = new Set<string>();
+  for (const line of text.split(/\r?\n/u)) {
+    if (!line.trim().startsWith("|")) continue;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 2 || cells.every((cell) => /^[-:]+$/u.test(cell))) continue;
+    const statusCell = cells.find((cell) => /\b(?:opened|in_progress|climaxed)\b/iu.test(cell));
+    if (!statusCell || /\bresolved\b/iu.test(statusCell)) continue;
+    const id = cells[0].replace(/\*\*/gu, "").trim();
+    const description = cells[1].replace(/\*\*/gu, "").trim();
+    if (!id || !description || /^(?:编号|序号|章节)$/u.test(id)) continue;
+    const key = `${id}:${description}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push({ id, description, level: "author-ledger" });
+  }
+  return entries;
+}
+
 /**
  * ChapterSeedBuilder 主入口
  */
@@ -874,20 +966,22 @@ export function buildChapterSeed(options: ChapterSeedBuilderOptions): ChapterSee
   const characters = buildCharacterStateSummaries(config, profiles, narrativeState);
   const previousContinuation = buildPreviousChapterContinuation(chapterNumber, previousSkeleton, workspacePath);
   const currentPressure = buildCurrentPressure(narrativeState, closureData);
-  // 显式章纲感知锚点优先于原生 fallback 锚点（previousSkeleton/pendingForeshadowing 等），
-  // 因为它们是章纲作者为每个事件显式指定的具体感知细节，质量更高。
-  const explicitAnchors = loadExplicitOutlineSensoryAnchors(workspacePath, chapterNumber);
+  const ledgerForeshadows = loadHookLedgerForeshadows(workspacePath);
+  currentPressure.pendingForeshadowing = [
+    ...currentPressure.pendingForeshadowing,
+    ...ledgerForeshadows,
+  ].filter((entry, index, all) => all.findIndex((candidate) => candidate.id === entry.id) === index);
+  // Compatibility-only diagnostic anchors may still be derived from prior state.
+  // Author/config prose recipes are deliberately excluded from the production seed.
   const nativeAnchors = buildCandidateAnchors(previousContinuation, currentPressure, unsettledDetails, characters);
-  const candidateAnchors = [...explicitAnchors, ...nativeAnchors];
-  if (explicitAnchors.length > 0) {
-    warnings.push(`series/ch${chapterNumber}-outline-explicit.md 提供 ${explicitAnchors.length} 个显式感知锚点，已作为 candidateAnchors 首要来源。`);
-  }
+  const candidateAnchors = nativeAnchors;
   // [FIX D 2026-06-25] 加载章纲每事件显式声明的参与角色，
   // 替代 extractEventCharactersFromSeed 的"按事件索引切片全章角色"fallback。
   const explicitEventCharacters = loadExplicitOutlineEventCharacters(workspacePath, chapterNumber);
   if (explicitEventCharacters.length > 0) {
     warnings.push(`series/ch${chapterNumber}-outline-explicit.md 提供 ${explicitEventCharacters.length} 个事件的显式参与角色，已作为 eventCharacters 权威来源。`);
   }
+  const authorChapterContract = loadAuthorChapterContract(workspacePath, chapterNumber);
   const intent = inferChapterIntent(chapterFunction, currentPressure, previousContinuation, highLevelDirection);
 
   // 字数预算
@@ -911,6 +1005,7 @@ export function buildChapterSeed(options: ChapterSeedBuilderOptions): ChapterSee
     candidateAnchors,
     explicitEventCharacters,
     highLevelDirection,
+    authorChapterContract,
     intent,
     wordCountTarget,
     builtAt: new Date().toISOString(),

@@ -7,12 +7,12 @@
  *
  * 事务顺序（计划 §3 FinalStateCommit + AGENTS.md 状态维护事务边界）：
  * 1. 先原子保存正文（失败 = hard block，不污染状态）
- * 2. 后提交状态（失败 = warning，正文已交付，状态可人工补）
+ * 2. 后提交状态（失败 = hard block，并回滚刚保存的正文）
  *
  * 本模块为纯函数集合，不持有实例状态，不调用 UnifiedOrchestrator 的其他方法。
  */
 
-import { writeFileSync, mkdirSync, renameSync, existsSync, readFileSync } from "fs";
+import { writeFileSync, mkdirSync, renameSync, existsSync, readFileSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import type { UnifiedOrchestratorInput } from "./orchestrator-types.js";
 import {
@@ -35,10 +35,10 @@ import { hasPendingProxyDraft } from "../governance/chapter-proxy-approval-draft
  *
  * 事务顺序（计划 §3 FinalStateCommit + AGENTS.md 状态维护事务边界）：
  * 1. 先原子保存正文（失败 = hard block，不污染状态）
- * 2. 后提交状态（失败 = warning，正文已交付，状态可人工补）
+ * 2. 后提交状态（失败 = hard block，并回滚刚保存的正文）
  *
  * 不再吞掉正文保存失败：正文是主产物，保存失败必须阻断。
- * 状态提交失败不假装成功：记录 error，但不回滚已保存的正文。
+ * 状态提交失败不假装成功：记录 error，回滚已保存的正文并返回 ok=false。
  */
 export function commitAndSave(
   input: UnifiedOrchestratorInput,
@@ -70,7 +70,12 @@ export function commitAndSave(
 
   // ── 1. 原子保存正文（主产物，失败 = hard block） ──────────────────
   const filePath = chapterFilePath(input);
+  let previousChapterText: string | null = null;
+  const chapterExisted = existsSync(filePath);
   try {
+    if (chapterExisted) {
+      previousChapterText = readFileSync(filePath, "utf-8");
+    }
     atomicSave(filePath, finalText);
     stageResults.atomicSave = { filePath, bytes: finalText.length };
   } catch (e: unknown) {
@@ -80,12 +85,50 @@ export function commitAndSave(
     return { ok: false, error: msg, stateCommit: null };
   }
 
-  // ── 2. 状态提交（正文已保存，状态失败 = warning） ─────────────────
+  // ── 2. 状态提交（正文已保存，状态失败 = hard block + 正文回滚） ───
   // A2（计划 §4.2）：状态只根据最终正文提交。stagedStateUpdate 是从 ChapterSeed
   // 派生的"seed 意图"（sourceRef=seed:*），此处用 finalText 重锚定：
   //   - promise 描述关键词在 finalText 命中 -> sourceRef 指向真实 span，confidence 提升
   //   - 未命中 -> 降级为 open，不声称 advancing
   //   - 提交器用 finalText 校验 span 越界，越界 entry 被拒绝
+  const rollbackChapter = (stateError: string): {
+    ok: false;
+    error: string;
+    stateCommit: { committed: number; rejected: number; error: string };
+  } => {
+    try {
+      if (chapterExisted && previousChapterText !== null) {
+        atomicSave(filePath, previousChapterText);
+      } else if (existsSync(filePath)) {
+        unlinkSync(filePath);
+      }
+      stageResults.atomicSave = {
+        ...(stageResults.atomicSave as Record<string, unknown>),
+        rolledBack: true,
+        rollbackAction: chapterExisted ? "restored_previous" : "removed_new",
+      };
+    } catch (rollbackError: unknown) {
+      const rollbackMessage = rollbackError instanceof Error
+        ? rollbackError.message
+        : String(rollbackError);
+      stageResults.atomicSave = {
+        ...(stageResults.atomicSave as Record<string, unknown>),
+        rolledBack: false,
+        rollbackError: rollbackMessage,
+      };
+      return {
+        ok: false,
+        error: `state commit failed: ${stateError}; chapter rollback failed: ${rollbackMessage}`,
+        stateCommit: { committed: 0, rejected: 0, error: stateError },
+      };
+    }
+    return {
+      ok: false,
+      error: `state commit failed: ${stateError}`,
+      stateCommit: { committed: 0, rejected: 0, error: stateError },
+    };
+  };
+
   let committed = 0;
   let rejected = 0;
   if (input.stagedStateUpdate) {
@@ -98,7 +141,7 @@ export function commitAndSave(
     // 若备份失败仍提交状态，rollbackCommittedChapter 会删除正文却无法恢复叙事状态
     // （无 pre-commit 备份），破坏"正文与状态一起回退"保证。
     // 因此：prior state store 存在但备份失败 -> 跳过状态提交（committed=0），
-    //       state store 保持章节前状态，正文已交付，调用方可重试或人工补状态。
+    //       state store 保持章节前状态，并回滚刚保存的正文。
     // 无 prior state store（skipped）不视为备份失败（无内容需备份/恢复）。
     let backupOk = true;
     let backupErrorMsg: string | null = null;
@@ -132,8 +175,7 @@ export function commitAndSave(
     }
 
     if (!backupOk) {
-      // 备份失败：跳过状态提交，state store 保持章节前状态。
-      // 正文已保存（主产物交付），但状态不提交，避免破坏"正文与状态一起回退"闭环。
+      // 备份失败：跳过状态提交，state store 保持章节前状态，并回滚正文。
       stageResults.stateCommit = {
         blocked: "backup_failed",
         committed: 0,
@@ -141,6 +183,7 @@ export function commitAndSave(
         error: backupErrorMsg ?? "pre-commit state backup failed",
         chapterId: input.chapterId,
       };
+      return rollbackChapter(backupErrorMsg ?? "pre-commit state backup failed");
     } else {
       try {
         const reanchored = reanchorStagedStateToFinalText(
@@ -178,18 +221,17 @@ export function commitAndSave(
         };
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        // 状态提交失败：正文已保存，记录 error 但不阻断交付
+        // 状态提交失败：记录 error，回滚正文并阻断交付。
         stageResults.stateCommit = { error: msg, committed: 0, rejected: 0 };
+        return rollbackChapter(msg);
       }
     }
   } else {
     stageResults.stateCommit = { skipped: "无 stagedStateUpdate" };
   }
 
-  // P1 修复：stateCommit 异常时 error 必须在返回值中暴露，不能被 ok:true 吞掉。
-  // 调用方据此记录 warning feedback 或触发人工补救，不再误记成功。
-  const stateCommitError = (stageResults.stateCommit as { error?: string } | undefined)?.error ?? null;
-  return { ok: true, stateCommit: { committed, rejected, error: stateCommitError } };
+  // 成功路径不会吞掉 stateCommit 异常；异常已在上方回滚并以 ok=false 返回。
+  return { ok: true, stateCommit: { committed, rejected, error: null } };
 }
 
 /**
