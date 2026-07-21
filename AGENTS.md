@@ -294,7 +294,7 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
    - `v2_rawstage2` / `v2_amplified` → Claude Opus 4.6；仅由显式 `writerModel=claude` 选择，使用 `claude_writer_v1`，route-level `fallback=[]`，不作为 Gemini 的自动备援
    - `boundedBestOf3` → 历史评测兼容字段；固定场景多候选已退出生产，旧证据不限制当前或未来模型能力
    - `v2_chinese_calibration` → Doubao Seed 2.1 Pro；仅允许有 raw span 证据的 `voice_and_naturalness` hypothesis 触发中文校准候选。span 边界与完整性是硬门；自然度优劣进入逐章比较，不由机械风险扫描提前淘汰
-   - `v2_opportunity_judge` / `v2_literary_judge` → gpt-5.6-sol 异源 judge（通过 `NOVELOS_JUDGE_*` env 解析端点）；有效、明确且证据通过校验的逐章 verdict 决定质量赢家。历史自然人样本不得跨章直接决定候选；judge 不可用或结论不确定时保留 raw，但 trace 必须记录 `judge_unavailable` / `comparison_inconclusive`，不得伪装成 raw 质量胜出
+   - `v2_opportunity_judge` / `v2_literary_judge` → gpt-5.6-sol 异源 judge（通过 `NOVELOS_JUDGE_*` env 解析端点）；有效、明确且证据通过校验的逐章 verdict 决定质量赢家。历史自然人样本不得跨章直接决定候选；opportunity judge 不可用时在 `editorialOpportunity.llmFallbackReason` 留痕，pairwise 不可用或结论不确定时记录 `judge_unavailable` / `comparison_inconclusive`，均保留 raw 且不得伪装成 raw 质量胜出
    - `style_shaper` / `stage5_style_shaper` / `stage8_final_gate` / `character_agent` → Claude Opus 4.6
    - `novel_critic` → local / quad-gates；其他结构化检查按配置路由到 GPT 5.5
    - GLM 5.2 仅允许显式开发/NovelBench testing route，生产默认和 fallback 禁止使用；Qwen、ERNIE 当前 disabled

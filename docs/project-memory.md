@@ -84,7 +84,7 @@ git diff --check
 
 测试读取编译后的 `dist/`、`dist-eval/`、`dist-test/`，修改 TypeScript 后必须先构建。
 
-2026-07-21 最新验证证据：`npm run build`、`npm run typecheck`、`npm run simplicity-gate` 通过；核心方法论状态/编排聚焦套件 `51/51`，preview 与生产模型隔离回归 `19/19`；上一轮完整 `npm test` 为 `2751 total / 2743 pass / 0 fail / 8 skip`。本轮质量赢家策略、路由契约、统一编排与 504 流式回归为 `93/93`；选择核心覆盖率为 line `90.29%`、branch `83.33%`、functions `100%`。普通 editorial candidate 跟随当前 writer family，默认 Gemini 使用 `v2_amplified_gemini31`。raw 通过 FactGuard 后才加载只读 `MethodologyDiagnosticState`；该状态不进入 raw prompt，排除目标章之后的状态与世界揭示内容，跨章现象和机会必须同时引用 raw span 与快照内合法 `sourceRef`。固定场景规划器、旧多候选生成器、段落节奏硬门与全局场景准入接口已从生产闭包或代码表面物理移除。本地词频/长度扫描只写 diagnostic trace，不能独立授权候选。机会 judge 失败时保留 raw 并记录 `judge_unavailable`；有效明确的逐章 pairwise 结果默认选择质量赢家；置信度候选门槛导出已删除。
+2026-07-21 最新验证证据：本轮 `npm run build` 通过；质量赢家策略、路由契约、统一编排与 504 流式回归为 `93/93`；选择核心覆盖率为 line `90.29%`、branch `83.33%`、functions `100%`。全仓 `npm test` 仍被缺失的 `workspaces/xinmo/chapters/chapter-17.md` fixture 阻断（工作区实际只有 `17.md`）；`npm run simplicity-gate` 被既有 `v2/core/editorial-candidate-generator.ts` 846 行触发的 800 行门槛阻断，均与本轮选择策略无关。上一轮完整绿色证据为 `2751 total / 2743 pass / 0 fail / 8 skip`。普通 editorial candidate 跟随当前 writer family，默认 Gemini 使用 `v2_amplified_gemini31`。raw 通过 FactGuard 后才加载只读 `MethodologyDiagnosticState`；该状态不进入 raw prompt，排除目标章之后的状态与世界揭示内容，跨章现象和机会必须同时引用 raw span 与快照内合法 `sourceRef`。固定场景规划器、旧多候选生成器、段落节奏硬门与全局场景准入接口已从生产闭包或代码表面物理移除。本地词频/长度扫描只写 diagnostic trace，不能独立授权候选。机会 judge 失败时保留 raw，并通过 `editorialOpportunity.llmFallbackReason` 与模型调用证据留痕；有效明确的逐章 pairwise 结果默认选择质量赢家，pairwise 不可用/不确定则记录对应 `selectionStatus`；置信度候选门槛导出已删除。
 
 ### 2026-07-17 测试失败修正
 
