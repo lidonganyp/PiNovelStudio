@@ -39,8 +39,8 @@ import {
   CLOSURE_TYPE_METADATA,
   FORBIDDEN_ABANDON_TYPES,
 } from "../data/arc-registry.js";
-import { join } from "path";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { join, dirname } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 
 // ============================================================================
 // 完备性扫描维度（D1-D6）
@@ -160,18 +160,26 @@ export class ClosureTracker {
   }
 
   /**
-   * 保存到文件
+   * 保存到文件（P1-6 修复：原子写入 tmp→rename，跨平台目录解析）
+   *
+   * 之前的实现直接 writeFileSync，不是原子写入（失败会留下半写的损坏文件），
+   * 且用 lastIndexOf("\\") 提取目录是 Windows 专用，在 Linux/macOS 会失败。
+   * 现在改为：写 .tmp 临时文件 → rename 到目标路径（原子操作），
+   * 目录解析使用 path.dirname（跨平台）。
    */
   saveToFile(filePath: string): void {
     this.registry.lastUpdated = new Date().toISOString();
     this.registry.config.currentChapter = this.registry.config.currentChapter || 1;
 
-    const dirPath = filePath.substring(0, filePath.lastIndexOf("\\"));
+    const dirPath = dirname(filePath);
     if (dirPath && !existsSync(dirPath)) {
       mkdirSync(dirPath, { recursive: true });
     }
 
-    writeFileSync(filePath, JSON.stringify(this.registry, null, 2), "utf-8");
+    // P1-6: 原子写入（tmp → rename），失败不会破坏现有文件
+    const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(tmpPath, JSON.stringify(this.registry, null, 2), "utf-8");
+    renameSync(tmpPath, filePath);
     this.filePath = filePath;
   }
 

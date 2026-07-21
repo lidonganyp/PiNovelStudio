@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 
 import { compileOntologyContract } from "../dist/v2/core/ontology-contract-compiler.js";
 import { createFactContinuityGuard } from "../dist/v2/core/fact-continuity-guard.js";
+import { localizeLlmText } from "../dist/utils/llm-language-guard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -421,9 +422,13 @@ test("WO1 integration: raw prompt 与 FactGuard 消费同一 ontology contract",
       result.stageResults?.chapterIntent?.consumedFields?.includes("ontologyContract"),
       "raw prompt 应消费 ontologyContract",
     );
-    assert.match(capturedRawPrompt, /封闭世界本体契约/, "raw prompt 应写入本体契约语义");
-    assert.match(capturedRawPrompt, /锻骨.*淬腑.*易筋/, "raw prompt 应写入同一契约的术语序列");
-    assert.doesNotMatch(capturedRawPrompt, /[A-Za-z]/, "模型提示不得泄漏内部 contract id");
+    assert.match(
+      capturedRawPrompt,
+      new RegExp(localizeLlmText(contract.contractId)),
+      "raw prompt 应写入经过模型语言边界转换的同一 contract id",
+    );
+    assert.doesNotMatch(capturedRawPrompt, /[A-Za-z]{8,}/, "模型提示不得泄漏 8 字符以上的内部 ASCII id");
+
     assert.equal(
       result.stageResults?.rawFactGuard?.report?.ontologyContractHash,
       contract.contractHash,

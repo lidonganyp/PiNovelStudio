@@ -3,10 +3,13 @@
  *
  * This loader never writes, normalizes, or repairs workspace files. Its output
  * is advisory evidence only and must not be injected into the raw writer prompt.
+ *
+ * P1-5（2026-07-21）：新增 advisorySignals 字段，消费 3 个新源（reader-feedback /
+ * return-chapter-provenance / chapter-progression-contracts）。
+ * P2-8：SOURCES / readJsonSource / 类型拆到 methodology-diagnostic-sources.ts，
+ * 新源消费逻辑拆到 methodology-diagnostic-advisory.ts，本文件保持在 800 行以下。
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   clampInteger,
   encodeRefComponent,
@@ -20,6 +23,15 @@ import {
   uniqueStrings,
 } from "./methodology-diagnostic-utils.js";
 import {
+  SOURCES,
+  readJsonSource,
+  unavailableReason,
+  type DiagnosticSourceAvailability,
+  type DiagnosticSourceId,
+  type DiagnosticSourceStatus,
+  type ReadJsonResult,
+} from "./methodology-diagnostic-sources.js";
+import {
   assessFatigueSeverity,
   buildClimaxOpportunity,
   buildOverdueAlerts,
@@ -28,28 +40,25 @@ import {
   type OverdueAlertEntry,
   type StagnationAssessment,
 } from "./methodology-diagnostic-derived.js";
+import {
+  buildAdvisorySignals,
+  type AdvisorySignalsDiagnosticContext,
+} from "./methodology-diagnostic-advisory.js";
 import { parseOpenArc, parsePendingForeshadow } from "./methodology-diagnostic-closure.js";
 
+// Re-export for backward compat (other modules import these from here).
+export type {
+  AdvisorySignalsDiagnosticContext,
+} from "./methodology-diagnostic-advisory.js";
+export type {
+  DiagnosticSourceAvailability,
+  DiagnosticSourceId,
+  DiagnosticSourceStatus,
+  ReadJsonResult,
+} from "./methodology-diagnostic-sources.js";
 export type { EnsembleClimaxOpportunity, OverdueAlertEntry, StagnationAssessment } from "./methodology-diagnostic-derived.js";
 
-export type DiagnosticSourceStatus = "available" | "missing" | "malformed";
 export type DiagnosticContextStatus = "available" | "unavailable";
-
-export interface DiagnosticSourceAvailability {
-  sourceId: DiagnosticSourceId;
-  relativePath: string;
-  sourceRef: string;
-  status: DiagnosticSourceStatus;
-  reason: string | null;
-}
-
-export type DiagnosticSourceId =
-  | "config"
-  | "narrative_state_store"
-  | "narrative_state"
-  | "fatigue_state"
-  | "world_items"
-  | "arc_registry";
 
 export interface DeclaredGenreDiagnosticContext {
   status: DiagnosticContextStatus;
@@ -234,6 +243,12 @@ export interface MethodologyDiagnosticState {
   worldRevelation: WorldRevelationDiagnosticContext;
   ensemble: EnsembleDiagnosticContext;
   closure: ClosureDiagnosticContext;
+  /**
+   * P1-5（2026-07-21）：advisory signals from reader feedback, return chapter
+   * provenance, and chapter progression contracts. advisory-only — never enters
+   * raw prompt, never authorizes candidates.
+   */
+  advisorySignals: AdvisorySignalsDiagnosticContext;
 }
 
 export interface LoadMethodologyDiagnosticStateInput {
@@ -241,23 +256,6 @@ export interface LoadMethodologyDiagnosticStateInput {
   chapterNumber: number;
   maxEntriesPerContext?: number;
 }
-
-interface ReadJsonResult {
-  source: DiagnosticSourceAvailability;
-  value: Record<string, unknown> | null;
-}
-
-const SOURCES: ReadonlyArray<{
-  sourceId: DiagnosticSourceId;
-  relativePath: string;
-}> = [
-  { sourceId: "config", relativePath: "config.json" },
-  { sourceId: "narrative_state_store", relativePath: "narrative-state-store.json" },
-  { sourceId: "narrative_state", relativePath: "series/narrative-state.json" },
-  { sourceId: "fatigue_state", relativePath: "series/fatigue-state.json" },
-  { sourceId: "world_items", relativePath: "series/world-items.json" },
-  { sourceId: "arc_registry", relativePath: "series/arc-registry.json" },
-];
 
 export class MethodologyDiagnosticStateLoader {
   load(input: LoadMethodologyDiagnosticStateInput): MethodologyDiagnosticState {
@@ -275,6 +273,10 @@ export class MethodologyDiagnosticStateLoader {
     const fatigueState = loaded.get("fatigue_state")!;
     const worldItems = loaded.get("world_items")!;
     const arcRegistry = loaded.get("arc_registry")!;
+    // P1-5（2026-07-21）：3 个新 advisory 源
+    const readerFeedback = loaded.get("reader_feedback")!;
+    const returnChapterProvenance = loaded.get("return_chapter_provenance")!;
+    const progressionContracts = loaded.get("chapter_progression_contracts")!;
 
     const declaredGenre = buildDeclaredGenre(config);
     const baseSerialState = buildSerialState(stateStore, narrativeState, fatigueState, chapterNumber, maxEntries);
@@ -289,6 +291,14 @@ export class MethodologyDiagnosticStateLoader {
     const stagnation = buildStagnation(baseSerialState, closure);
     const fatigueSeverity = assessFatigueSeverity(baseSerialState.fatigue);
     const climaxOpportunity = buildClimaxOpportunity(baseEnsemble, closure, baseSerialState, chapterNumber);
+    // P1-5（2026-07-21）：3 个新源的 advisory 信号
+    const advisorySignals = buildAdvisorySignals(
+      readerFeedback,
+      returnChapterProvenance,
+      progressionContracts,
+      chapterNumber,
+      maxEntries,
+    );
 
     return {
       schemaVersion: "methodology-diagnostic-state-v1",
@@ -307,6 +317,7 @@ export class MethodologyDiagnosticStateLoader {
       worldRevelation,
       ensemble: { ...baseEnsemble, climaxOpportunity },
       closure,
+      advisorySignals,
     };
   }
 }
@@ -320,18 +331,13 @@ export function collectMethodologyDiagnosticSourceRefs(
 ): string[] {
   const refs = new Set<string>();
   const visit = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      for (const entry of value) visit(entry);
-      return;
-    }
+    if (Array.isArray(value)) { for (const e of value) visit(e); return; }
     if (!isRecord(value)) return;
     for (const [key, entry] of Object.entries(value)) {
       if (key === "sourceRef" && typeof entry === "string" && entry.trim()) {
         refs.add(entry.trim());
       } else if (key === "sourceRefs" && Array.isArray(entry)) {
-        for (const ref of entry) {
-          if (typeof ref === "string" && ref.trim()) refs.add(ref.trim());
-        }
+        for (const ref of entry) if (typeof ref === "string" && ref.trim()) refs.add(ref.trim());
       } else {
         visit(entry);
       }
@@ -343,54 +349,9 @@ export function collectMethodologyDiagnosticSourceRefs(
     worldRevelation: state.worldRevelation,
     ensemble: state.ensemble,
     closure: state.closure,
+    advisorySignals: state.advisorySignals,
   });
   return [...refs].sort();
-}
-
-function readJsonSource(
-  workspacePath: string | undefined,
-  descriptor: { sourceId: DiagnosticSourceId; relativePath: string },
-): ReadJsonResult {
-  const base = {
-    sourceId: descriptor.sourceId,
-    relativePath: descriptor.relativePath,
-    sourceRef: descriptor.relativePath,
-  };
-  if (!workspacePath?.trim()) {
-    return {
-      source: { ...base, status: "missing", reason: "workspace_path_unavailable" },
-      value: null,
-    };
-  }
-  const absolutePath = join(workspacePath, ...descriptor.relativePath.split("/"));
-  if (!existsSync(absolutePath)) {
-    return {
-      source: { ...base, status: "missing", reason: "file_not_found" },
-      value: null,
-    };
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(absolutePath, "utf8")) as unknown;
-    if (!isRecord(parsed)) {
-      return {
-        source: { ...base, status: "malformed", reason: "json_root_must_be_object" },
-        value: null,
-      };
-    }
-    return {
-      source: { ...base, status: "available", reason: null },
-      value: parsed,
-    };
-  } catch (error: unknown) {
-    return {
-      source: {
-        ...base,
-        status: "malformed",
-        reason: error instanceof SyntaxError ? "invalid_json" : "read_failed",
-      },
-      value: null,
-    };
-  }
 }
 
 function buildDeclaredGenre(source: ReadJsonResult): DeclaredGenreDiagnosticContext {
@@ -585,20 +546,11 @@ function parseFatigue(
 
 function emptyFatigueContext(): FatigueDiagnosticContext {
   return {
-    recentPatterns: [],
-    consecutiveSameType: null,
-    recentHookTypes: [],
-    recentSceneTypes: [],
-    recentEmotionPeaks: [],
-    cooldownPeriods: {},
-    horrorTechniques: [],
-    consecutiveSameHorrorTechnique: null,
-    unresolvedExpectationCount: null,
-    chaptersSinceLastPeak: null,
-    lastPayoffChapter: null,
-    severity: "none",
-    severitySignals: [],
-    sourceRefs: [],
+    recentPatterns: [], consecutiveSameType: null, recentHookTypes: [],
+    recentSceneTypes: [], recentEmotionPeaks: [], cooldownPeriods: {},
+    horrorTechniques: [], consecutiveSameHorrorTechnique: null,
+    unresolvedExpectationCount: null, chaptersSinceLastPeak: null,
+    lastPayoffChapter: null, severity: "none", severitySignals: [], sourceRefs: [],
   };
 }
 
@@ -825,14 +777,6 @@ function buildClosure(
     sourceRefs,
     emptyReason: sourceRefs.length === 0 ? "no_open_arc_or_pending_foreshadow" : null,
   };
-}
-
-function unavailableReason(source: ReadJsonResult, fallback: string): string {
-  return source.source.status === "malformed"
-    ? `${source.source.sourceId}_malformed`
-    : source.source.status === "missing"
-      ? `${source.source.sourceId}_missing`
-      : fallback;
 }
 
 function isPriorStateEntry(value: Record<string, unknown>, chapterNumber: number): boolean {

@@ -242,10 +242,20 @@ export function commitAndSave(
   }
 
   // ── 3. STATE-BRIDGE-1 + CLOSURE-TRACKER-1：状态桥接 + ClosureTracker 接入 ──
-  // 在状态提交成功后，把 narrative-state-store.json 投影到 series/*.json，
-  // 并把 promise/expectation 推进反馈到 ClosureTracker 的 arc/foreshadow 状态。
-  // 桥接/接入失败不阻断主链路（narrative-state-store.json 已落盘），
-  // 只 warning + 写入 trace，供下游 MethodologyDiagnosticState 在下一章读取时降级处理。
+  // P0-1 事务边界修复（STATE-BRIDGE-TXN-FIX）：
+  // 桥接/closure/progression 是**可重建的 advisory cache**，不是权威状态。
+  // 权威状态是 narrative-state-store.json（已在第 2 步由 FinalStateCommit 原子落盘）。
+  // 桥接/closure/progression 写入 series/*-derived.json，与 FinalStateCommit 事务**独立**。
+  //
+  // 失败处理（advisory cache 失败不阻断主链路）：
+  // - 桥接/closure/progression 失败 → warning + 写入 trace，返回 ok=true
+  // - 这是**有意的设计**：state-store 已落盘，advisory cache 可从 state-store 重建
+  // - 不会导致正文/state-store 不一致（state-store 已先落盘）
+  // - 不会导致 arc-registry-derived.json 损坏（bridge 内部有 backup→write→rollback）
+  //
+  // 与 STEP-3 测试守护的关系：
+  // - arc-registry.json（权威）只能由 final-state-commit.js 写入
+  // - 桥接/closure 写入 arc-registry-derived.json（派生缓存），不违反 STEP-3 守护
   if (reanchoredForBridge) {
     try {
       const store = loadStateStore(input.workspaceId, input.projectRoot);
@@ -259,6 +269,9 @@ export function commitAndSave(
         ok: bridgeResult.ok,
         error: bridgeResult.error,
         writtenPaths: bridgeResult.writtenPaths,
+        // P0-1: 明确标记为 advisory cache，失败不阻断主链路
+        advisoryCache: true,
+        rebuildableFrom: "narrative-state-store.json",
       };
 
       // 桥接成功后接入 ClosureTracker（基于 reanchored stagedStateUpdate）。
@@ -278,13 +291,16 @@ export function commitAndSave(
         skippedReason: closureResult.skippedReason,
         // completenessReport 是 advisory，写入 trace 供诊断层读取
         completenessReport: closureResult.completenessReport,
+        // P0-1: 明确标记为 advisory cache
+        advisoryCache: true,
+        rebuildableFrom: "narrative-state-store.json",
       };
 
       // ── PROGRESSION-CONTRACT-1：持久化 ChapterProgressionContract ──
       // 从 stageResults.chapterQualityEvidence.structuralEvidence 派生实际推进轴，
       // 与 ChapterIntent.expectedAxes 对比生成复核信号，持久化到
       // series/chapter-progression-contracts.json 供下游诊断层读取跨章 delta。
-      // 失败不阻断主链路（advisory）。
+      // P0-1: 失败不阻断主链路（advisory cache，可从 state-store + structuralEvidence 重建）。
       try {
         const qualityEvidence = stageResults.chapterQualityEvidence as
           | ChapterQualityEvidence
@@ -313,15 +329,30 @@ export function commitAndSave(
           expectedAxes: contractResult.contract?.expectedAxes,
           actualAxes: contractResult.contract?.actualAxes,
           reviewSignals: contractResult.contract?.reviewSignals ?? [],
+          // P0-1: 明确标记为 advisory cache
+          advisoryCache: true,
+          rebuildableFrom: "narrative-state-store.json + structuralEvidence",
         };
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        stageResults.progressionContract = { ok: false, error: msg };
+        stageResults.progressionContract = {
+          ok: false,
+          error: msg,
+          advisoryCache: true,
+          rebuildableFrom: "narrative-state-store.json + structuralEvidence",
+        };
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      stageResults.stateBridge = { ok: false, error: msg };
-      // 桥接失败不阻断主链路（narrative-state-store.json 已落盘）
+      // P0-1: 桥接失败不阻断主链路（state-store 已落盘，advisory cache 可重建）
+      // 但必须在 trace 中留下明确证据，不能 silent degrade
+      stageResults.stateBridge = {
+        ok: false,
+        error: msg,
+        advisoryCache: true,
+        rebuildableFrom: "narrative-state-store.json",
+        warning: "bridge failed; advisory cache not written; rebuildable from state-store",
+      };
     }
   }
 

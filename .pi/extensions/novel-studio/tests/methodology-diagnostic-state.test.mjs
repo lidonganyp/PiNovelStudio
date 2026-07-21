@@ -335,7 +335,9 @@ test("MethodologyDiagnosticState: reports every missing source explicitly and ne
       chapterNumber: 1,
     });
 
-    assert.equal(result.sources.length, 6);
+    // P1-5（2026-07-21）：SOURCES 从 6 个扩展到 9 个（新增 reader_feedback /
+    // return_chapter_provenance / chapter_progression_contracts 三个 advisory 源）。
+    assert.equal(result.sources.length, 9);
     assert.ok(result.sources.every((source) => source.status === "missing"));
     assert.equal(result.declaredGenre.status, "unavailable");
     assert.equal(result.serialState.status, "unavailable");

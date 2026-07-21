@@ -26,6 +26,7 @@ import {
   recordReturnChapterProvenance,
   type ReturnChapterType,
 } from "../v2/core/return-chapter-provenance.js";
+import { resolveWorkspacePath } from "../utils/fs.js";
 
 // ============================================================================
 // 入口参数（与 HandleWorkspaceManagerInput 对齐）
@@ -76,7 +77,19 @@ export async function handleChapterAdvisory(
   input: ChapterAdvisoryInput,
 ): Promise<ChapterAdvisoryResult> {
   const projectRoot = input._projectRoot ?? process.cwd();
-  const workspacePath = join(projectRoot, "workspaces", input.workspaceId);
+  // P0-3 安全修复：复用 workspace 安全解析器，防止 workspaceId 路径穿越
+  // （workspaceId=".." 或含特殊字符会被 validateWorkspaceId 拒绝；
+  //  resolveWorkspacePath 二次校验 resolve 后路径仍在 workspaces/ 下）
+  const workspacesBase = join(projectRoot, "workspaces");
+  let workspacePath: string;
+  try {
+    workspacePath = resolveWorkspacePath(workspacesBase, input.workspaceId);
+  } catch (e: unknown) {
+    return {
+      status: "error",
+      error: `Invalid workspaceId: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
 
   if (!existsSync(workspacePath)) {
     return {
@@ -111,7 +124,12 @@ async function handleDiagnostic(
   const seriesDir = join(workspacePath, "series");
 
   // 1. ClosureTracker scanCompleteness（只读，不保存）
-  const arcRegistryPath = join(seriesDir, "arc-registry.json");
+  //    P0-1: 优先读 arc-registry-derived.json（派生缓存），fallback 到 arc-registry.json
+  const arcRegistryDerivedPath = join(seriesDir, "arc-registry-derived.json");
+  const arcRegistryLegacyPath = join(seriesDir, "arc-registry.json");
+  const arcRegistryPath = existsSync(arcRegistryDerivedPath)
+    ? arcRegistryDerivedPath
+    : arcRegistryLegacyPath;
   let closureReport: unknown | null = null;
   if (existsSync(arcRegistryPath)) {
     try {

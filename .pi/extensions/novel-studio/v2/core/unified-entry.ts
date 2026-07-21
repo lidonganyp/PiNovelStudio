@@ -550,6 +550,24 @@ export function buildStagedStateUpdate(
   //    expectation 关注"读者体验目标"（与 promise 关注"伏笔兑现"区分）。
   //    sourceRef 初始为 seed:expectation:*，由 reanchorStagedStateToFinalText
   //    在最终正文选定后重锚定为 finalText span/hash。
+  //
+  //    P1-7 修复（REM-LIFECYCLE-FIX）：
+  //    - 移除机械全关联：不再把本章全部开放弧线/角色/伏笔关联到单条 expectation。
+  //      关联字段留空（undefined），由 FinalStateCommit.reanchor 或后续 LLM 诊断
+  //      基于实际正文内容决定是否关联。机械全关联会污染后续 LLM 诊断（让 LLM 误以为
+  //      所有开放弧线都与本期待相关）。
+  //    - 添加 overdueWindow：基于 chapterFunction 给出保守默认窗口。
+  //      setup 章建立的期待通常在 3-8 章内兑现（避免烂尾）。
+  //    - 明示 seed-only 生命周期边界：此处只创建 expectation（status=open），
+  //      不处理 advanced/delayed/escalated/fulfilled 状态推进。
+  //      状态推进由两个路径负责：
+  //      (a) FinalStateCommit.reanchorStagedStateToFinalText：检查 expectation.description
+  //          关键词是否在 finalText 命中，命中则 status 可推进（但 reanchor 保守，通常只
+  //          提升 confidence，不自动改 status）。
+  //      (b) 后续 LLM 诊断 / 手动 feedback：通过 novel_strategy_feedback 或
+  //          novel_workspace_manager action=ingest_reader_feedback 提供证据，
+  //          由人工/LLM 决定是否推进 status。
+  //      本函数不替代这两个路径——它是 seed-only 的"建立"步骤。
   const chapterTheme = seed.intent?.chapterTheme?.trim();
   const intentPrimary = seed.intent?.primary?.trim();
   const targetEmotions = seed.intent?.targetEmotions ?? [];
@@ -559,6 +577,16 @@ export function buildStagedStateUpdate(
 
   if (shouldCreateExpectation && chapterTheme) {
     const expectationId = `expectation:ch${chapterNumber}:${intentPrimary || "setup"}`;
+    // P1-7: overdueWindow 默认窗口（章节号）
+    // setup 章建立的期待：最早 3 章后兑现（避免仓促），最佳 5 章后，最晚 8 章后（避免烂尾）
+    // foreshadow 章建立的期待：最早 2 章后，最佳 4 章后，最晚 7 章后
+    // 这些是保守默认值，可被 LLM 诊断/手动 feedback 覆盖
+    const isSetup = seed.chapterFunction === "setup";
+    const overdueWindow = {
+      earliest: chapterNumber + (isSetup ? 3 : 2),
+      optimal: chapterNumber + (isSetup ? 5 : 4),
+      latest: chapterNumber + (isSetup ? 8 : 7),
+    };
     additions.push({
       kind: "expectation",
       id: `expectation:ch${chapterNumber}:${intentPrimary || "setup"}`,
@@ -576,16 +604,10 @@ export function buildStagedStateUpdate(
       // REM 生命周期字段
       createdChapter: sourceChapter,
       lastAdvancedChapter: sourceChapter, // 建立即视为首次激活
-      // 关联字段（来自 currentPressure，便于 ClosureTracker / PromiseLedger 联动）
-      relatedArcIds: (seed.currentPressure?.openArcs ?? [])
-        .map((a) => a.arcId)
-        .filter((id): id is string => typeof id === "string" && id.length > 0),
-      relatedCharacterIds: characters
-        .map((c) => c.name)
-        .filter((name): name is string => typeof name === "string" && name.length > 0),
-      relatedForeshadowIds: (seed.currentPressure?.pendingForeshadowing ?? [])
-        .map((f) => f.id)
-        .filter((id): id is string => typeof id === "string" && id.length > 0),
+      overdueWindow,
+      // P1-7: 关联字段留空（不机械全关联）
+      // 由 FinalStateCommit.reanchor 或后续 LLM 诊断基于实际正文内容决定关联
+      // relatedArcIds / relatedCharacterIds / relatedForeshadowIds 不在此处设置
     });
   }
 

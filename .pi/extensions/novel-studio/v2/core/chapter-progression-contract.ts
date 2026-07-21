@@ -132,6 +132,11 @@ export function deriveExpectedAxes(
  *
  * 查找 dimension=five_axis_progression 的 evidence，从其 observation 解析轴名。
  * 保守策略：只识别明确有 span 证据的轴（status=partial/satisfied）。
+ *
+ * P0-2 修复：observation 格式为 `五维扫描结果：plot=有/info=无/character=有/world=无/causal=有；...`
+ * 之前用 `obs.includes("plot")` 判断，但 observation 总会包含全部 5 个轴名，
+ * 导致任何 partial/satisfied 报告都得到五轴全 true。
+ * 现在改用正则解析 `axis=有/无` 模式，只在 `=有` 时标记轴为 true。
  */
 export function deriveActualAxes(
   structuralEvidence: StructuralEvidence[],
@@ -147,15 +152,69 @@ export function deriveActualAxes(
   for (const e of structuralEvidence) {
     if (e.dimension !== "five_axis_progression") continue;
     if (e.status !== "partial" && e.status !== "satisfied") continue;
-    // observation 中可能包含轴名（如 "情节推进"、"信息释放"）
+    // P0-2: 解析 `axis=有/无` 格式，而非 includes 轴名
+    // observation 格式：`五维扫描结果：plot=有/info=无/character=有/world=无/causal=有；有效轴数（非 plot）= 3/4`
     const obs = e.observation ?? "";
-    if (obs.includes("情节") || obs.includes("plot")) axes.plot = true;
-    if (obs.includes("信息") || obs.includes("info")) axes.info = true;
-    if (obs.includes("角色") || obs.includes("character")) axes.character = true;
-    if (obs.includes("世界") || obs.includes("world")) axes.world = true;
-    if (obs.includes("因果") || obs.includes("causal")) axes.causal = true;
+    const parsed = parseAxisPresence(obs);
+    if (parsed.plot) axes.plot = true;
+    if (parsed.info) axes.info = true;
+    if (parsed.character) axes.character = true;
+    if (parsed.world) axes.world = true;
+    if (parsed.causal) axes.causal = true;
   }
 
+  return axes;
+}
+
+/**
+ * 解析 observation 中的 `axis=有/无` 模式。
+ *
+ * 支持两种轴名形式：
+ * - 英文：plot=有 / info=无 / character=有 / world=无 / causal=有
+ * - 中文（兼容旧格式）：情节=有 / 信息=无 / 角色=有 / 世界=无 / 因果=有
+ *
+ * 只在 `=有` 时标记为 true；`=无` 或缺失保持 false。
+ * 不会因 observation 中仅出现轴名（而无 =有/=无 后缀）而误判。
+ */
+function parseAxisPresence(observation: string): ProgressionAxes {
+  const axes: ProgressionAxes = {
+    plot: false,
+    info: false,
+    character: false,
+    world: false,
+    causal: false,
+  };
+  // 匹配 `轴名=有` 或 `轴名=无`，轴名支持英文和中文
+  // 英文轴名用 \b 防止子串匹配（如 "info" 不应匹配 "informer"）
+  const pattern = /(plot|info|character|world|causal|情节|信息|角色|世界|因果)=([有无])/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(observation)) !== null) {
+    const axisName = match[1];
+    const presence = match[2];
+    if (presence !== "有") continue;
+    switch (axisName) {
+      case "plot":
+      case "情节":
+        axes.plot = true;
+        break;
+      case "info":
+      case "信息":
+        axes.info = true;
+        break;
+      case "character":
+      case "角色":
+        axes.character = true;
+        break;
+      case "world":
+      case "世界":
+        axes.world = true;
+        break;
+      case "causal":
+      case "因果":
+        axes.causal = true;
+        break;
+    }
+  }
   return axes;
 }
 

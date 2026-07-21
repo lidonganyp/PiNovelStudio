@@ -44,14 +44,14 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
     // =========================================================================
     {
       name: "novel_workspace_manager",
-      description: "管理工作区。action=\"proxy_finalization\" 委托章节代理审批定稿子操作（accept/accept_with_edits/reject/rollback/inspect）；action=\"proxy_review\" 委托真实 gpt5.6-sol 章节代理初审（runRealChapterProxyReview，需独立授权卡）。保持 6 工具契约。",
+      description: "管理工作区。action=\"proxy_finalization\" 委托章节代理审批定稿子操作（accept/accept_with_edits/reject/rollback/inspect）；action=\"proxy_review\" 委托真实 gpt5.6-sol 章节代理初审（runRealChapterProxyReview，需独立授权卡）；action=\"diagnostic\"/\"ingest_reader_feedback\"/\"record_return_chapter\" 委托 advisory 子操作（仅产出 advisory 证据，不进入 raw prompt，不阻断生成，不决定文学胜负）。保持 6 工具契约。",
       inputSchema: {
         type: "object",
         properties: {
           action: {
             type: "string",
-            enum: ["list", "switch", "info", "chapters", "proxy_finalization", "proxy_review"],
-            description: "操作类型。proxy_finalization 委托章节代理审批定稿子操作；proxy_review 委托真实 gpt5.6-sol 章节代理初审。",
+            enum: ["list", "switch", "info", "chapters", "proxy_finalization", "proxy_review", "diagnostic", "ingest_reader_feedback", "record_return_chapter"],
+            description: "操作类型。proxy_finalization 委托章节代理审批定稿子操作；proxy_review 委托真实 gpt5.6-sol 章节代理初审；diagnostic 聚合当前 chapter advisory 信号；ingest_reader_feedback 写入读者反馈；record_return_chapter 记录回流章 provenance。后三个为 advisory-only 子操作。",
           },
           workspaceId: { type: "string", description: "workspace ID（proxy_finalization / proxy_review 必填）" },
           // ── proxy_finalization 子操作参数（仅 action="proxy_finalization" 时使用） ──
@@ -117,6 +117,41 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             description: "proxy_review：失分 span 引用",
           },
           holdReason: { type: "string", description: "proxy_review：HOLD_FOR_REGENERATION 原因，透传给 caller" },
+          // ── advisory 子操作参数（仅 action="diagnostic"/"ingest_reader_feedback"/"record_return_chapter" 时使用） ──
+          // advisory-only：不进入 raw prompt，不阻断生成，不决定文学胜负；只产出诊断证据。
+          // APPENDIX-FG-1（2026-07-21）：P1-4 修复——补齐 MCP schema，使三个 advisory action 实际可调用。
+          feedbackType: {
+            type: "string",
+            enum: ["positive", "negative", "neutral"],
+            description: "ingest_reader_feedback 必填：反馈类型",
+          },
+          feedbackText: {
+            type: "string",
+            description: "ingest_reader_feedback 必填：反馈正文",
+          },
+          sourceRef: {
+            type: "string",
+            description: "ingest_reader_feedback / record_return_chapter 必填：来源引用（必须可追溯，如章节 ID + 段落定位）",
+          },
+          focusDimensions: {
+            type: "array",
+            items: { type: "string" },
+            description: "ingest_reader_feedback 可选：聚焦维度（如 plot/character/pacing/style 等）",
+          },
+          returnType: {
+            type: "string",
+            enum: ["rewrite", "recap", "reveal"],
+            description: "record_return_chapter 必填：回流章类型",
+          },
+          sourceChapterIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "record_return_chapter 必填：源章节 ID 列表（非空数组）",
+          },
+          reason: {
+            type: "string",
+            description: "record_return_chapter 必填：回流章触发原因",
+          },
         },
         required: ["action"],
       },

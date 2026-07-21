@@ -200,10 +200,17 @@ function loadUnsettledDetails(workspacePath: string, chapterNumber: number): Uns
 }
 
 /**
- * 加载 arc-registry.json（closure tracker）
+ * 加载 arc-registry-derived.json（closure tracker）
+ *
+ * P0-1: 优先读 arc-registry-derived.json（派生缓存，由 NarrativeStateBridge +
+ * ClosureTracker 接入模块写入），fallback 到 arc-registry.json（旧名/手写权威文件）。
+ * 权威状态是 narrative-state-store.json；arc-registry-derived.json 是 advisory cache。
  */
 function loadClosureTrackerData(workspacePath: string) {
-  const registryPath = join(workspacePath, "series", "arc-registry.json");
+  const seriesDir = join(workspacePath, "series");
+  const derivedPath = join(seriesDir, "arc-registry-derived.json");
+  const legacyPath = join(seriesDir, "arc-registry.json");
+  const registryPath = existsSync(derivedPath) ? derivedPath : legacyPath;
   const tracker = loadClosureTracker(registryPath);
   if (!tracker) {
     return { openArcs: [], pendingForeshadows: [] };
