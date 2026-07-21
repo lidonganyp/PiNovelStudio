@@ -157,6 +157,10 @@ test("PUBLIC-DIAGNOSTIC: returns the complete methodology advisory package", asy
     assert.equal(result.diagnostic.methodologyDiagnosticState.advisoryOnly, true);
     assert.equal(result.diagnostic.methodologyDiagnosticState.canEnterRawPrompt, false);
     assert.equal(result.diagnostic.methodologyDiagnosticState.canDirectlyAuthorizeCandidate, false);
+    assert.equal(result.diagnostic.authorReviewGuidance.advisoryOnly, true);
+    assert.deepEqual(result.diagnostic.authorReviewGuidance.rewritePaths,
+      ["conservative_repair", "structural_rewrite"]);
+    assert.equal(result.diagnostic.authorReviewGuidance.requiresSpanEvidence, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
