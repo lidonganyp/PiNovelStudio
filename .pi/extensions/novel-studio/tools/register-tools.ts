@@ -185,7 +185,12 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           reviewDecision: { type: "string", description: "【恢复用】审阅决定：confirm 或 reject" },
           reviewFeedback: { type: "string", description: "【恢复用】审阅反馈/修改意见" },
           // REAL-QUALITY-1-PREFLIGHT：单次路由锁定 + 可复现种子
-          writerModel: { type: "string", enum: ["claude", "gemini31"], description: "正文主写模型：Gemini 3.1 Pro（默认）或 Claude Opus 4.6（显式备选）。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。" },
+          writerModel: {
+            type: "string",
+            enum: ["gemini31", "claude"],
+            default: "gemini31",
+            description: "正文主写模型：Gemini 3.1 Pro（默认）。通常省略本字段或传 gemini31；仅当用户明确要求 Claude 时才允许传 claude。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。",
+          },
           modelTestRoute: { type: "string", enum: ["glm", "gemini31", "claude48"], description: "显式模型对比路由：glm 锁定 GLM5.2；gemini31 锁定 Gemini 3.1 Pro；claude48 锁定 Claude Opus 4.8。正文实验路由均 fallback=[]，未传时走默认生产路由。" },
           seed: { type: "number", description: "【REAL-QUALITY-1-PREFLIGHT】随机种子（judge 匿名化 + Thompson Sampling 策略筛选可复现）；传入使 editorial 候选生成可复现（seed=1 时 sample≈0.6271≥0.5，策略被选中→生成 editorial 候选）。" },
           candidateTimeoutMs: { type: "number", description: "单次正文候选模型调用的有界超时（毫秒）；未传时使用统一主链路默认值。" },

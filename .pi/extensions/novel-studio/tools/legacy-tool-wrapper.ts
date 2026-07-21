@@ -15,7 +15,9 @@ export function toTypeBoxSchema(raw: any): TSchema {
 
   const props: Record<string, TSchema> = {};
   const stringSchema = (value: any): TSchema => {
-    const options = value.description ? { description: value.description } : {};
+    const options: Record<string, unknown> = {};
+    if (value.description) options.description = value.description;
+    if (value.default !== undefined) options.default = value.default;
     if (Array.isArray(value.enum) && value.enum.every((item: unknown) => typeof item === "string")) {
       return Type.String({ ...options, enum: [...value.enum] });
     }
