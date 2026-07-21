@@ -55,7 +55,8 @@ const RULES: MethodologyRule[] = [
     enforcement: "hard_boundary",
     runtimeFields: [
       "inviolableFacts", "factAndCharacterKnowledgeForbiddenZones",
-      "identityContract", "ontologyContract",
+      "identityContract", "ontologyContract", "historicalContinuity",
+      "historicalCharacterState", "recentPatternMemory", "knowledgeConsumption",
     ],
   },
   {
@@ -84,7 +85,7 @@ const RULES: MethodologyRule[] = [
     authority: "methodology",
     role: "strategy",
     enforcement: "candidate_only",
-    runtimeFields: ["craftGenes", "promptPatterns"],
+    runtimeFields: ["craftGenes", "promptPatterns", "candidateStrategyId"],
   },
   {
     id: "craft_diagnostics",
@@ -94,7 +95,7 @@ const RULES: MethodologyRule[] = [
     enforcement: "review_only",
     runtimeFields: [
       "promiseContext", "expectationContext", "genreContract", "dialogueCraft",
-      "emotionRhythm", "supportingFunction", "knowledgeConsumption",
+      "emotionRhythm", "supportingFunction",
       "characterVoiceContext", "worldPresentationContext", "ensembleLayeringContext",
       "craftPhenomenonReport",
     ],
