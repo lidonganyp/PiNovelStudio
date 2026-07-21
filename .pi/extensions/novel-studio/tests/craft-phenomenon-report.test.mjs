@@ -42,9 +42,29 @@ test("methodology report covers every craft domain without a literary score", ()
   assert.equal(report.advisoryOnly, true);
   assert.equal(report.canDirectlyRewrite, false);
   assert.equal(report.canSelectWinner, false);
+  assert.equal(report.canTriggerEditorialOpportunity, false);
   assert.equal("score" in report, false);
   assert.equal("passed" in report, false);
   assert.equal(report.observations[0].sourceSpans[0].excerpt, "她把沾血的钥匙推到他面前");
+  assert.equal(validateCraftPhenomenonReport(report), null);
+});
+
+test("uncertain craft observations remain advisory and cannot authorize candidates", () => {
+  const report = buildCraftPhenomenonReport({
+    rawText: RAW,
+    rawCandidateId: "candidate:raw:17",
+    observations: [{
+      domain: "rhythm_and_climax",
+      status: "uncertain",
+      phenomenon: "高潮后的影响是否被人物承受仍不确定",
+      readerImpact: "需要编辑结合前章状态复核",
+      evidenceExcerpt: "许岚没有回答",
+      confidence: 0.5,
+    }],
+  });
+
+  assert.equal(report.observations.length, 1);
+  assert.equal(report.canTriggerEditorialOpportunity, false);
   assert.equal(validateCraftPhenomenonReport(report), null);
 });
 
@@ -90,5 +110,56 @@ test("skipped report is explicit and cannot authorize generation", () => {
   assert.equal(report.canTriggerEditorialOpportunity, false);
   assert.equal(report.observations.length, 0);
   assert.equal(validateCraftPhenomenonReport(report), null);
+});
+
+test("cross-chapter observations require an allowed external state reference", () => {
+  const sourceRef = "narrative-state-store.json#expectation:door";
+  const report = buildCraftPhenomenonReport({
+    rawText: RAW,
+    rawCandidateId: "candidate:raw:17",
+    allowedContextEvidenceRefs: [sourceRef],
+    observations: [{
+      domain: "cross_chapter_health",
+      status: "observed",
+      phenomenon: "本章再次推迟门后身份问题",
+      readerImpact: "连续延期可能削弱读者对承诺的信任",
+      evidenceExcerpt: "你看见门里的人了吗",
+      contextEvidenceRefs: [sourceRef],
+      confidence: 0.72,
+    }],
+  });
+
+  assert.deepEqual(report.observations[0].contextEvidenceRefs, [sourceRef]);
+  assert.equal(validateCraftPhenomenonReport(report), null);
+});
+
+test("cross-chapter observations reject missing or invented external references", () => {
+  const allowedRef = "narrative-state-store.json#expectation:door";
+  const base = {
+    domain: "cross_chapter_health",
+    status: "uncertain",
+    phenomenon: "可能存在连续延期",
+    readerImpact: "可能削弱追读信心",
+    evidenceExcerpt: "你看见门里的人了吗",
+    confidence: 0.5,
+  };
+
+  const missing = buildCraftPhenomenonReport({
+    rawText: RAW,
+    rawCandidateId: "candidate:raw:17",
+    allowedContextEvidenceRefs: [allowedRef],
+    observations: [base],
+  });
+  const invented = buildCraftPhenomenonReport({
+    rawText: RAW,
+    rawCandidateId: "candidate:raw:17",
+    allowedContextEvidenceRefs: [allowedRef],
+    observations: [{ ...base, contextEvidenceRefs: ["invented#state"] }],
+  });
+
+  assert.equal(missing.observations.length, 0);
+  assert.match(missing.rejectedObservations[0].reason, /状态证据引用/);
+  assert.equal(invented.observations.length, 0);
+  assert.match(invented.rejectedObservations[0].reason, /未获准|不存在/);
 });
 

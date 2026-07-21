@@ -400,8 +400,10 @@ function makeEditorialPathStub(opts) {
     if (input.kind === "opportunity_judge") {
       return {
         text: JSON.stringify({
+          craftPhenomena: [],
           opportunities: [{
             opportunityType: "chapter_end_pressure",
+            craftDomain: "ending_and_closure",
             diagnosis: "章末因果牵引力不足",
             evidenceExcerpt: "坐在床边休息",
             expectedReaderGain: "增强继续阅读意愿",

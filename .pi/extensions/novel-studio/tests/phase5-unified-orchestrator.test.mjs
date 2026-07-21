@@ -126,9 +126,14 @@ function makeCompositeStub(opts) {
     editorialThrow = false,
     editorialEmpty = false,
     judgeThrow = false,
+    opportunities,
+    craftPhenomena = [],
+    opportunityNoOpReason = null,
+    captureCalls,
   } = opts;
 
   return async (input) => {
+    captureCalls?.push(input);
     if (input.kind === "raw_chapter") {
       if (rawThrow) throw new Error("raw 生成异常（stub）");
       return { text: rawText, model: "stub-raw", route: input.route, durationMs: 10 };
@@ -139,17 +144,20 @@ function makeCompositeStub(opts) {
       return { text: editorialText, model: "stub-ed", route: input.route, durationMs: 10 };
     }
     if (input.kind === "opportunity_judge") {
+      const resolvedOpportunities = opportunities ?? [{
+        opportunityType: "chapter_end_pressure",
+        craftDomain: "ending_and_closure",
+        diagnosis: "章末因果牵引力不足",
+        evidenceExcerpt: rawText.slice(0, Math.min(12, rawText.length)),
+        expectedReaderGain: "增强继续阅读意愿",
+        damageRisks: ["可能破坏既定章末事实"],
+        confidence: 0.8,
+      }];
       return {
         text: JSON.stringify({
-          opportunities: [{
-            opportunityType: "chapter_end_pressure",
-            diagnosis: "章末因果牵引力不足",
-            evidenceExcerpt: rawText.slice(0, Math.min(12, rawText.length)),
-            expectedReaderGain: "增强继续阅读意愿",
-            damageRisks: ["可能破坏既定章末事实"],
-            confidence: 0.8,
-          }],
-          noOpReason: null,
+          craftPhenomena,
+          opportunities: resolvedOpportunities,
+          noOpReason: opportunityNoOpReason,
         }),
         model: "stub-opportunity",
         route: input.route,
@@ -309,22 +317,44 @@ test("UnifiedOrchestrator: 成功路径有 hypothesis 和 editorial 候选", asy
 // ============================================================================
 
 test("UnifiedOrchestrator: 高质量 raw 无编辑机会 → 交付 raw + warning", async () => {
+  const observationExcerpt = "他把苏婉推到浅滩";
+  const calls = [];
   const input = makeOrchestratorInput({
-    modelGenerate: makeCompositeStub({ rawText: HIGH_QUALITY_RAW, editorialText: EDITORIAL_TEXT_STRONG_HOOK }),
+    modelGenerate: makeCompositeStub({
+      rawText: HIGH_QUALITY_RAW,
+      editorialText: EDITORIAL_TEXT_STRONG_HOOK,
+      opportunities: [],
+      craftPhenomena: [{
+        domain: "chapter_progression",
+        status: "observed",
+        phenomenon: "人物行动改变了场景状态",
+        evidenceExcerpt: observationExcerpt,
+        readerImpact: "救援推进具有可见结果",
+        confidence: 0.9,
+      }],
+      opportunityNoOpReason: "raw 已充分完成本章任务，无高价值编辑机会",
+      captureCalls: calls,
+    }),
   });
   try {
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
     assert.equal(result.status, "ok");
     assert.ok(result.stageResults.craftPhenomenonReport, "no-op/raw 路径也必须保留 post-raw 工艺报告");
-    // 高质量 raw 可能无编辑机会或有机会但裁判判 raw 胜
-    // 关键：如果无 hypothesis，应交付 raw + warning
-    if (result.hypotheses.length === 0) {
-      assert.equal(result.selectedSource, "raw");
-      assert.ok(result.warnings.some((w) => w.includes("raw")), `应有 raw warning：${result.warnings.join(";")}`);
-    }
-    // 无论哪种情况，状态都应是 ok（不是 blocked）
-    assert.equal(result.status, "ok");
+    assert.equal(result.hypotheses.length, 0);
+    assert.equal(result.selectedSource, "raw");
+    assert.equal(result.stageResults.craftPhenomenonReport.observations.length, 1);
+    assert.equal(result.stageResults.craftPhenomenonReport.observations[0].sourceSpans[0].excerpt, observationExcerpt);
+    assert.equal(result.stageResults.methodologyDiagnosticState.advisoryOnly, true);
+    assert.equal(result.stageResults.methodologyDiagnosticState.canEnterRawPrompt, false);
+    const rawCall = calls.find((call) => call.kind === "raw_chapter");
+    assert.ok(rawCall, "应捕获 raw 模型调用");
+    assert.doesNotMatch(
+      `${rawCall.systemPrompt}\n${rawCall.userPrompt}`,
+      /methodology-diagnostic-state|MethodologyDiagnosticState|跨章诊断状态/,
+      "方法论诊断状态不得进入 raw prompt",
+    );
+    assert.ok(result.warnings.some((w) => w.includes("raw")), `应有 raw warning：${result.warnings.join(";")}`);
   } finally {
     rmSync(input.projectRoot, { recursive: true, force: true });
   }
@@ -781,9 +811,11 @@ test("P1-6: 两个 editorial 都胜过 raw 时必须直接决赛", async () => {
     if (input.kind === "opportunity_judge") {
       return {
         text: JSON.stringify({
+          craftPhenomena: [],
           opportunities: [
             {
               opportunityType: "chapter_end_pressure",
+              craftDomain: "ending_and_closure",
               diagnosis: "ending needs pressure",
               evidenceExcerpt: RAW_TEXT_WEAK_END.slice(-30),
               expectedReaderGain: "stronger ending pressure",
@@ -792,6 +824,7 @@ test("P1-6: 两个 editorial 都胜过 raw 时必须直接决赛", async () => {
             },
             {
               opportunityType: "character_choice",
+              craftDomain: "chapter_progression",
               diagnosis: "choice needs consequence",
               evidenceExcerpt: RAW_TEXT_WEAK_END.slice(0, 30),
               expectedReaderGain: "clearer choice and cost",

@@ -18,9 +18,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   loadStateStore,
@@ -579,6 +580,55 @@ test("B4: orchestrator 输出 allArbitrationResults 含全部 editorial 候选�
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ============================================================================
+// STEP-3 guard rail: arc-registry.json must never be written outside the
+// FinalStateCommit transaction. Currently arc-registry is read-only. If/when
+// machine updates are needed, they must go through FinalStateCommit.commit()
+// with backup→write→rollback, not a standalone post-final file write.
+// ============================================================================
+
+test("STEP-3 guard: no production module writes arc-registry.json outside FinalStateCommit", () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  const distDir = join(__dirname, "..", "dist");
+  if (!existsSync(distDir)) return; // skip if dist not built
+
+  const offenders = [];
+  function scan(dir) {
+    for (const entry of readdirSync(dir)) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        scan(fullPath);
+      } else if (entry.endsWith(".js")) {
+        const content = readFileSync(fullPath, "utf8");
+        // 精确匹配带引号的路径字面量 "arc-registry.json"，而非裸子串 arc-registry。
+        // 这样可正确排除：
+        //  - 仅 import arc-registry.js 模块（类型/读取）的文件
+        //  - 仅在注释中提及 arc-registry.json 的文件（如 closure-tracker.ts 的 saveToFile
+        //    是死代码，且其 arc-registry.json 仅出现在注释，saveToFile 接受通用 filePath
+        //    参数，从未以 arc-registry.json 为字面量调用）
+        // 真正的违规会是：writeFileSync("...arc-registry.json"...) 或
+        // const p = join(dir, "arc-registry.json"); writeFileSync(p, ...)
+        const hasArcRegistryPathLiteral = content.includes('"arc-registry.json"');
+        const hasWriteOp = content.includes("writeFileSync") || content.includes("renameSync");
+        const isFinalStateCommit = fullPath.endsWith(join("final-state-commit.js"));
+        if (hasArcRegistryPathLiteral && hasWriteOp && !isFinalStateCommit) {
+          offenders.push(relative(distDir, fullPath));
+        }
+      }
+    }
+  }
+  scan(distDir);
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `arc-registry.json must only be written inside final-state-commit.js (transactional boundary). ` +
+      `Offending files: ${offenders.join(", ")}`,
+  );
 });
 
 test("B4: deliverRaw 路径 allArbitrationResults 为空数组", async () => {

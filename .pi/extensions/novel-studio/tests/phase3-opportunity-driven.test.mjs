@@ -905,8 +905,19 @@ test("CandidateGenerator: 无对应策略的 hypothesis → failure", async () =
 function makeOpportunityStubModel(verdict) {
   return async (input) => {
     if (input.kind === "opportunity_judge") {
+      const strictVerdict = {
+        craftPhenomena: verdict.craftPhenomena ?? [],
+        opportunities: (verdict.opportunities ?? []).map((opportunity) => ({
+          craftDomain: opportunity.craftDomain
+            ?? (opportunity.opportunityType === "chapter_end_pressure"
+              ? "ending_and_closure"
+              : "chapter_progression"),
+          ...opportunity,
+        })),
+        noOpReason: verdict.noOpReason ?? null,
+      };
       return {
-        text: JSON.stringify(verdict),
+        text: JSON.stringify(strictVerdict),
         model: "stub-opportunity",
         route: input.route,
         durationMs: 5,

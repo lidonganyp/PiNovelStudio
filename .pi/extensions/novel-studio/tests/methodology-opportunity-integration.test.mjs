@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createEditorialCandidateGenerator } from "../dist/v2/core/editorial-candidate-generator.js";
+import { parseOpportunityVerdict } from "../dist/v2/core/editorial-opportunity-contract.js";
 import { createEditorialOpportunityJudge } from "../dist/v2/core/editorial-opportunity-judge.js";
 import { createEditorialStrategyRegistry } from "../dist/v2/core/editorial-strategy-registry.js";
 
@@ -40,6 +41,72 @@ function makeContext() {
     bridgeContext: null,
   };
 }
+
+test("parseable objects must satisfy the complete opportunity verdict schema", () => {
+  assert.equal(parseOpportunityVerdict(JSON.stringify({ foo: 1 })), null);
+  assert.equal(parseOpportunityVerdict(JSON.stringify({
+    craftPhenomena: [],
+    opportunities: [{
+      opportunityType: "reader_payoff",
+      craftDomain: "chapter_progression",
+      diagnosis: "正文问题",
+      evidenceExcerpt: "原文",
+      expectedReaderGain: "读者收益",
+    }],
+    noOpReason: null,
+  })), null);
+});
+
+test("parseable schema-invalid output triggers exactly one schema-only repair", async () => {
+  const calls = [];
+  const result = await createEditorialOpportunityJudge().judge({
+    rawText: RAW,
+    rawCandidateId: "candidate:raw:17",
+    intent: makeIntent(),
+    context: makeContext(),
+    longTermState: null,
+    constitution: null,
+    characterNames: ["林默", "许岚"],
+    modelGenerate: async (input) => {
+      calls.push(input);
+      return {
+        text: calls.length === 1
+          ? JSON.stringify({ foo: 1 })
+          : JSON.stringify({
+            craftPhenomena: [],
+            opportunities: [],
+            noOpReason: "没有可引用正文证明的高价值编辑机会",
+          }),
+        model: "judge",
+        route: input.route,
+        durationMs: 1,
+      };
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(result.schemaRepairAttempts, 1);
+  assert.equal(result.llmJudged, true);
+  assert.equal(result.hypotheses.length, 0);
+});
+
+test("an immediate opportunity model failure records zero schema repair attempts", async () => {
+  const result = await createEditorialOpportunityJudge().judge({
+    rawText: RAW,
+    rawCandidateId: "candidate:raw:17",
+    intent: makeIntent(),
+    context: makeContext(),
+    longTermState: null,
+    constitution: null,
+    characterNames: ["林默", "许岚"],
+    modelGenerate: async () => {
+      throw new Error("model unavailable");
+    },
+  });
+
+  assert.equal(result.llmJudged, false);
+  assert.equal(result.schemaRepairAttempts, 0);
+});
 
 test("schema repair preserves diagnosis and produces a span-backed methodology report", async () => {
   const calls = [];
@@ -160,4 +227,113 @@ test("ordinary editorial generation sends Gemini profiles to the Gemini route", 
 
   assert.equal(requestedRoute, "v2_amplified_gemini31");
   assert.equal(result.candidates.length, 1);
+});
+
+test("strict opportunity schema rejects missing methodology fields and contradictory no-op reasons", () => {
+  const missingCraftPhenomena = JSON.stringify({
+    opportunities: [],
+    noOpReason: "没有机会",
+  });
+  const contradictoryReason = JSON.stringify({
+    craftPhenomena: [],
+    opportunities: [{
+      opportunityType: "relationship_progress",
+      craftDomain: "dialogue",
+      diagnosis: "关系变化未被承担",
+      evidenceExcerpt: "她把沾血的钥匙推到他面前",
+      expectedReaderGain: "让关系变化更清楚",
+      damageRisks: ["可能损伤留白"],
+      confidence: 0.7,
+    }],
+    noOpReason: "同时又声称没有机会",
+  });
+  const crossChapterOpportunityWithoutState = JSON.stringify({
+    craftPhenomena: [],
+    opportunities: [{
+      opportunityType: "promise_advancement",
+      craftDomain: "cross_chapter_health",
+      diagnosis: "承诺可能再次延期",
+      evidenceExcerpt: "你看见门里的人了吗",
+      expectedReaderGain: "恢复跨章承诺可信度",
+      damageRisks: ["可能过早解释"],
+      confidence: 0.65,
+    }],
+    noOpReason: null,
+  });
+
+  assert.equal(parseOpportunityVerdict(missingCraftPhenomena), null);
+  assert.equal(parseOpportunityVerdict(contradictoryReason), null);
+  assert.equal(parseOpportunityVerdict(crossChapterOpportunityWithoutState), null);
+});
+
+test("cross-chapter diagnosis keeps validated state references and exposes state only to the judge", async () => {
+  const sourceRef = "narrative-state-store.json#expectation:door";
+  let judgePrompt = "";
+  const result = await createEditorialOpportunityJudge().judge({
+    rawText: RAW,
+    rawCandidateId: "candidate:raw:17",
+    intent: makeIntent(),
+    longTermState: null,
+    constitution: null,
+    characterNames: ["林默", "许岚"],
+    methodologyDiagnosticState: {
+      schemaVersion: "methodology-diagnostic-state-v1",
+      chapterNumber: 17,
+      advisoryOnly: true,
+      canEnterRawPrompt: false,
+      canDirectlyAuthorizeCandidate: false,
+      sources: [],
+      declaredGenre: { status: "unavailable", genre: null, subGenres: [], sourceRefs: [], emptyReason: "test" },
+      serialState: {
+        status: "available",
+        expectations: [{
+          expectationId: "door",
+          description: "门后的身份何时揭晓",
+          status: "delayed",
+          targetReaderExperience: null,
+          delayReason: null,
+          sourceChapter: "ch3",
+          sourceRefs: [sourceRef],
+        }],
+        promises: [],
+        patterns: [],
+        fatigue: {
+          recentPatterns: [], consecutiveSameType: null, recentHookTypes: [], recentSceneTypes: [],
+          recentEmotionPeaks: [], cooldownPeriods: {}, horrorTechniques: [],
+          consecutiveSameHorrorTechnique: null, unresolvedExpectationCount: 1,
+          chaptersSinceLastPeak: null, lastPayoffChapter: null, sourceRefs: [sourceRef],
+        },
+        sourceRefs: [sourceRef],
+        emptyReason: null,
+      },
+      worldRevelation: { status: "unavailable", items: [], sourceRefs: [], emptyReason: "test" },
+      ensemble: { status: "unavailable", relationships: [], focusHistory: [], sourceRefs: [], emptyReason: "test" },
+      closure: { status: "unavailable", openArcs: [], pendingForeshadows: [], sourceRefs: [], emptyReason: "test" },
+    },
+    modelGenerate: async (input) => {
+      if (!judgePrompt) judgePrompt = input.userPrompt;
+      return {
+        text: JSON.stringify({
+          craftPhenomena: [{
+            domain: "cross_chapter_health",
+            status: "uncertain",
+            phenomenon: "门后身份可能再次延期",
+            evidenceExcerpt: "你看见门里的人了吗",
+            contextEvidenceRefs: [sourceRef],
+            readerImpact: "连续延期可能削弱承诺可信度",
+            confidence: 0.62,
+          }],
+          opportunities: [],
+          noOpReason: "证据只足以人工复核，不生成候选",
+        }),
+        model: "judge",
+        route: input.route,
+        durationMs: 1,
+      };
+    },
+  });
+
+  assert.match(judgePrompt, /methodology-diagnostic-state-v1/);
+  assert.deepEqual(result.craftPhenomenonReport.observations[0].contextEvidenceRefs, [sourceRef]);
+  assert.equal(result.hypotheses.length, 0);
 });

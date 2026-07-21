@@ -113,8 +113,10 @@ function makeCompositeStub(opts) {
     if (input.kind === "opportunity_judge") {
       return {
         text: JSON.stringify({
+          craftPhenomena: [],
           opportunities: [{
             opportunityType: "chapter_end_pressure",
+            craftDomain: "ending_and_closure",
             diagnosis: "章末因果牵引力不足",
             evidenceExcerpt: rawText.slice(0, Math.min(12, rawText.length)),
             expectedReaderGain: "增强继续阅读意愿",
