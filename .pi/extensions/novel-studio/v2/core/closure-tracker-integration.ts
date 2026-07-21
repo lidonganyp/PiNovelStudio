@@ -16,7 +16,7 @@
  * - 基于 stagedStateUpdate（已 reanchored 到 finalText）派生 arc/foreshadow 推进
  *   - promise.status==="advancing" 且在 finalText 有 span → 不变更 arc 状态（仍在推进）
  *   - promise.status==="fulfilled"（如有） → 标记对应 foreshadow recalled
- *   - expectation.status==="fulfilled" → 标记 relatedArcIds 状态为 climaxed（如适用）
+ *   - fulfilled expectation 仅在携带显式、finalText-backed 的 arcTransitionEvidence 时推进关联 arc
  * - 不机器生成新 arc/foreshadow：只更新已有条目状态
  * - scanCompleteness() 结果只写入 trace（advisory evidence，不阻断、不替代 judge）
  * - 失败不阻断主链路（narrative-state-store.json + 桥接已落盘），只 warning + trace
@@ -68,13 +68,13 @@ export interface ClosureIntegrationResult {
  *
  * @param workspacePath workspaces/{id} 绝对路径
  * @param staged 本章 stagedStateUpdate（已 reanchored 到 finalText）
- * @param chapterNumber 当前章节号
+ * @param _chapterNumber 当前章节号（保留参数以维持编排器接口稳定）
  * @returns ClosureIntegrationResult 含 arcUpdates / recalledForeshadowIds / completenessReport
  */
 export function integrateClosureTracker(
   workspacePath: string,
   staged: StagedStateUpdate,
-  chapterNumber: number,
+  _chapterNumber: number,
 ): ClosureIntegrationResult {
   // P0-1: 写入 arc-registry-derived.json（派生缓存），不写入受 STEP-3 守护的 arc-registry.json
   const arcRegistryPath = join(workspacePath, "series", "arc-registry-derived.json");
@@ -127,29 +127,27 @@ export function integrateClosureTracker(
       }
     }
 
-    // 2. 派生 arc 状态推进：从 stagedStateUpdate.expectation entries 推导
-    //    P1-6 修复：expectation.status==="fulfilled" → 标记 arc 为 climaxed（合法状态机）
-    //    （之前错误使用 "closing" as never，isLegalTransition 总是拒绝）
-    //    只对当前状态为 in_progress 的 arc 推进到 climaxed；
-    //    opened/in_progress 状态下 fulfilled 期待意味着弧线已达到高潮，可推进到 climaxed。
-    //    climaxed → resolved/abandoned 的最终关闭需要更严格的人工/LLM 确认，不在此自动执行。
+    // 2. 派生 arc 状态推进：fulfilled 只说明读者期待已兑现，不等于故事弧已到高潮。
+    //    仅消费显式 arcTransitionEvidence，且证据必须关联当前 expectation 的 arc、
+    //    锚定 finalText，并通过 ClosureTracker 的合法状态机复核。
     const expectationEntries = staged.additions.filter(
       (e): e is ExpectationEntry => e.kind === "expectation",
     );
     for (const exp of expectationEntries) {
       if (exp.status !== "fulfilled") continue;
-      // sourceRef 必须指向 finalText span
-      if (!exp.sourceRef || exp.sourceRef.startsWith("seed:")) continue;
-      const arcIds = exp.relatedArcIds ?? [];
-      for (const arcId of arcIds) {
-        // 推进到 climaxed（合法状态机：opened/in_progress → climaxed）
-        // isLegalTransition 会在不合法时返回 success=false，我们只记录成功的更新
-        const result = tracker.updateArcStatus(arcId, "climaxed");
+      // expectation 自身也必须已重锚定到最终正文，避免消费半成品状态。
+      if (!exp.sourceRef?.includes("#finalText:")) continue;
+      const relatedArcIds = new Set(exp.relatedArcIds ?? []);
+      for (const evidence of exp.arcTransitionEvidence ?? []) {
+        if (!relatedArcIds.has(evidence.arcId)) continue;
+        if (!evidence.sourceRef.includes("#finalText:")) continue;
+        // isLegalTransition 会在不合法时返回 success=false，我们只记录成功的更新。
+        const result = tracker.updateArcStatus(evidence.arcId, evidence.newStatus);
         if (result.success) {
           arcUpdates.push({
-            arcId,
-            newStatus: "climaxed",
-            reason: `expectation ${exp.expectationId} fulfilled in ch${chapterNumber}`,
+            arcId: evidence.arcId,
+            newStatus: evidence.newStatus,
+            reason: `explicit ${evidence.confirmedBy} arc evidence from ${evidence.sourceRef}`,
           });
         }
       }

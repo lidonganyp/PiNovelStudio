@@ -55,8 +55,30 @@ export interface PreflightWorkspaceReport {
   fixInstructions: string[];
   /** 各检查项的详细结果 */
   checks: Record<string, { passed: boolean; detail?: unknown }>;
+  /** Optional author preparation guidance. It never changes passed/blockingItems. */
+  authorWorkflow: AuthorWorkflowGuidance;
   /** 预检耗时（ms） */
   durationMs: number;
+}
+
+export interface AuthorWorkflowStep {
+  id:
+    | "story_promise"
+    | "minimal_bible"
+    | "reader_contract"
+    | "chapter_card"
+    | "scene_generation"
+    | "three_layer_review"
+    | "state_writeback";
+  status: "ready" | "needs_attention" | "available_after_generation";
+  sourceRefs: string[];
+  suggestion: string | null;
+}
+
+export interface AuthorWorkflowGuidance {
+  advisoryOnly: true;
+  canBlockGeneration: false;
+  steps: AuthorWorkflowStep[];
 }
 
 export interface PreflightWorkspaceOptions {
@@ -617,6 +639,7 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
   }
 
   const durationMs = Date.now() - startedAt;
+  const authorWorkflow = buildAuthorWorkflowGuidance(workspacePath, chapterNumber, checks);
 
   return {
     passed: blockingItems.length === 0,
@@ -624,7 +647,88 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
     warnings,
     fixInstructions: Array.from(fixInstructionsSet),
     checks,
+    authorWorkflow,
     durationMs,
+  };
+}
+
+function buildAuthorWorkflowGuidance(
+  workspacePath: string,
+  chapterNumber: number,
+  checks: Record<string, { passed: boolean; detail?: unknown }>,
+): AuthorWorkflowGuidance {
+  const constitutionPath = join(workspacePath, "creative-constitution.json");
+  let constitution: Record<string, unknown> | null = null;
+  if (existsSync(constitutionPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(constitutionPath, "utf-8")) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        constitution = parsed as Record<string, unknown>;
+      }
+    } catch {
+      constitution = null;
+    }
+  }
+  const hasStoryPromise = Boolean(
+    constitution
+      && typeof constitution.workIdentity === "string"
+      && constitution.workIdentity.trim()
+      && typeof constitution.protagonistCoreConflict === "string"
+      && constitution.protagonistCoreConflict.trim(),
+  );
+  const hasReaderContract = Boolean(
+    constitution
+      && Array.isArray(constitution.readerPromise)
+      && constitution.readerPromise.some(
+        (value) => typeof value === "string" && value.trim(),
+      ),
+  );
+  const minimalBibleReady = checks.config?.passed === true && checks.characters?.passed === true;
+  const seedSkipped = (checks.seedReadiness?.detail as { skipped?: boolean } | undefined)?.skipped;
+  const chapterCardReady = checks.explicitOutline?.passed === true
+    || (checks.seedReadiness?.passed === true && !seedSkipped);
+  const sceneReady = checks.seedReadiness?.passed === true && !seedSkipped;
+  const stateReady = chapterNumber <= 1 || checks.previousSkeleton?.passed === true;
+
+  return {
+    advisoryOnly: true,
+    canBlockGeneration: false,
+    steps: [
+      workflowStep("story_promise", hasStoryPromise, ["creative-constitution.json"],
+        "补充一句话故事承诺和主角核心矛盾。"),
+      workflowStep("minimal_bible", minimalBibleReady, ["config.json", "characters/"],
+        "补充会影响人物选择的最小世界规则和角色动机。"),
+      workflowStep("reader_contract", hasReaderContract,
+        ["creative-constitution.json#readerPromise"],
+        "由作者明确本书希望持续兑现的读者体验。"),
+      workflowStep("chapter_card", chapterCardReady,
+        [`series/ch${chapterNumber}-outline-explicit.md`, "ChapterSeed"],
+        "补充本章承诺、目标、阻力、不可逆变化、兑现项和禁区。"),
+      workflowStep("scene_generation", sceneReady, ["ChapterSeed"],
+        "补充事实性种子来源；不规定句式、对白比例或段落节奏。"),
+      workflowStep("three_layer_review", true,
+        ["novel_workspace_manager:diagnostic"], null),
+      {
+        id: "state_writeback",
+        status: stateReady ? "ready" : "available_after_generation",
+        sourceRefs: ["FinalStateCommit", "narrative-state-store.json"],
+        suggestion: stateReady ? null : "定稿后只回写正文实际支持的状态变化。",
+      },
+    ],
+  };
+}
+
+function workflowStep(
+  id: AuthorWorkflowStep["id"],
+  ready: boolean,
+  sourceRefs: string[],
+  suggestion: string | null,
+): AuthorWorkflowStep {
+  return {
+    id,
+    status: ready ? "ready" : "needs_attention",
+    sourceRefs,
+    suggestion: ready ? null : suggestion,
   };
 }
 
@@ -666,6 +770,16 @@ export function formatPreflightWorkspaceReport(report: PreflightWorkspaceReport)
     lines.push("警告：");
     for (const w of report.warnings) {
       lines.push(`  - ${w}`);
+    }
+  }
+  const pendingAuthorSteps = report.authorWorkflow.steps.filter(
+    (step) => step.status === "needs_attention",
+  );
+  if (pendingAuthorSteps.length > 0) {
+    lines.push("");
+    lines.push("作者工作流提示（advisory，不阻断）：");
+    for (const step of pendingAuthorSteps) {
+      lines.push(`  - [${step.id}] ${step.suggestion ?? "建议作者复核"}`);
     }
   }
   return lines.join("\n");

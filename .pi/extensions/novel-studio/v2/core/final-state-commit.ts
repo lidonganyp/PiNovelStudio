@@ -123,6 +123,13 @@ export interface ExpectationEntry extends StateEntryBase {
   relatedCharacterIds?: string[];
   /** 关联伏笔 id 列表（与 PromiseEntry.promiseId 对齐） */
   relatedForeshadowIds?: string[];
+  /** Explicit evidence that an associated story arc itself changed state. */
+  arcTransitionEvidence?: Array<{
+    arcId: string;
+    newStatus: "climaxed";
+    sourceRef: string;
+    confirmedBy: "author" | "human" | "llm";
+  }>;
 }
 
 export type NarrativeStateEntry = CanonEntry | CharacterStateEntry | PromiseEntry | PatternEntry | ExpectationEntry;

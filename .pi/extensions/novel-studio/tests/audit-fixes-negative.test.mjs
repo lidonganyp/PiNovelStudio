@@ -9,8 +9,9 @@
  * P0-3 路径穿越：handleChapterAdvisory 拒绝 workspaceId=".." / 含 "/" / 含特殊字符
  * P1-4 MCP schema：registerTools 暴露 3 个 advisory action + 参数（contract: 6 工具不变）
  * P1-5 advisory 消费链：methodology-diagnostic-sources 读取 3 个新源 + fallback 路径优先 derived
- * P1-6 ArcStatus 状态机：ClosureTracker 拒绝非法 "closing"；integrateClosureTracker 用 "climaxed"
- * P1-7 REM 生命周期：buildStagedStateUpdate 创建 expectation 时 status=open + overdueWindow +
+ * P1-6 ArcStatus 状态机：只有显式 finalText-backed 证据可触发合法 arc 状态推进
+ * P1-7 REM 生命周期：buildStagedStateUpdate 创建 expectation 时 status=open；只有作者显式提供
+ *     expectationWindow 才写 overdueWindow；
  *     关联字段留空（不机械全关联）；不在此处推进 advanced/delayed/escalated/fulfilled
  *
  * 测试导入 dist/ 编译产物（与 b234-long-term-state-and-trace.test.mjs 一致）。
@@ -35,6 +36,7 @@ import { buildAdvisorySignals } from "../dist/v2/core/methodology-diagnostic-adv
 import { buildOpportunityPrompt } from "../dist/v2/core/editorial-opportunity-contract.js";
 import { createMethodologyDiagnosticStateLoader } from "../dist/v2/core/methodology-diagnostic-state.js";
 import { preflightWorkspace } from "../dist/craft/workspace-preflight-checker.js";
+import { localizeLlmText } from "../dist/utils/llm-language-guard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -128,10 +130,10 @@ test("ADVISORY-CONSUMPTION: opportunity prompt includes reader, return, and prog
       },
       scannedSignals: [], methodologyDiagnosticState: state,
     });
-    assert.match(userPrompt, /advisorySignals/);
-    assert.match(userPrompt, /feedback-visible-to-judge/);
-    assert.match(userPrompt, /return-visible-to-judge/);
-    assert.match(userPrompt, /progression-visible-to-judge/);
+    assert.ok(userPrompt.includes(localizeLlmText("advisorySignals")));
+    assert.ok(userPrompt.includes(localizeLlmText("feedback-visible-to-judge")));
+    assert.ok(userPrompt.includes(localizeLlmText("return-visible-to-judge")));
+    assert.ok(userPrompt.includes(localizeLlmText("progression-visible-to-judge")));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -144,6 +146,15 @@ test("REM: no author window means no generated overdue deadline", () => {
   const expectation = staged.additions.find((entry) => entry.kind === "expectation");
   assert.ok(expectation);
   assert.equal(expectation.overdueWindow, undefined);
+});
+
+test("REM: author-supplied expectation window is preserved verbatim", () => {
+  const seed = makeSeed({ chapterNumber: 5 });
+  seed.intent.expectationWindow = { earliest: 9, optimal: 12, latest: 18 };
+  const staged = buildStagedStateUpdate(seed, 5);
+  const expectation = staged.additions.find((entry) => entry.kind === "expectation");
+  assert.ok(expectation);
+  assert.deepEqual(expectation.overdueWindow, { earliest: 9, optimal: 12, latest: 18 });
 });
 
 test("PUBLIC-DIAGNOSTIC: returns the complete methodology advisory package", async () => {
@@ -233,6 +244,82 @@ test("P1-6: fulfilled expectation without explicit arc evidence stays advisory",
       invalidations: [], sourceChapter: "ch3",
     }, 3);
     assert.equal(result.ok, true);
+    assert.equal(result.arcUpdates.length, 0);
+    assert.equal(JSON.parse(readFileSync(derivedPath, "utf-8")).arcs[0].status, "in_progress");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P1-6: arc evidence for an unrelated arc cannot advance closure state", () => {
+  const { dir, wsDir } = makeTempWorkspace();
+  try {
+    const derivedPath = join(wsDir, "series", "arc-registry-derived.json");
+    writeFileSync(derivedPath, JSON.stringify({
+      arcs: [{
+        arc_id: "arc:related", name: "相关弧线", arc_type: "secondary", priority: "P1",
+        status: "in_progress", core_question: "问题", chapter_opened: 1,
+        chapter_climaxed: null, chapter_closed: null,
+        expected_closure_window: { earliest: 2, optimal: 3, latest: 5 },
+        closure_trigger: "explicit", milestones: [], dependencies: [], external_refs: [],
+        emotional_payload: { primary: "紧张", secondary: [] },
+        metadata: { createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      }],
+      pending_foreshadows: [],
+      config: { totalChapters: 20, currentChapter: 3, closureType: "hard" },
+      lastUpdated: new Date().toISOString(),
+    }), "utf-8");
+    const result = integrateClosureTracker(wsDir, {
+      additions: [{
+        kind: "expectation", id: "expectation:unrelated", sourceChapter: "ch3",
+        sourceRef: "ch3#finalText:abc:0-5", confidence: 0.8, lastUpdated: new Date().toISOString(),
+        expectationId: "expectation:unrelated", description: "兑现", status: "fulfilled",
+        relatedArcIds: ["arc:related"],
+        arcTransitionEvidence: [{
+          arcId: "arc:other", newStatus: "climaxed",
+          sourceRef: "ch3#finalText:abc:0-5", confirmedBy: "llm",
+        }],
+      }],
+      invalidations: [], sourceChapter: "ch3",
+    }, 3);
+    assert.equal(result.arcUpdates.length, 0);
+    assert.equal(JSON.parse(readFileSync(derivedPath, "utf-8")).arcs[0].status, "in_progress");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P1-6: arc evidence without a finalText anchor cannot advance closure state", () => {
+  const { dir, wsDir } = makeTempWorkspace();
+  try {
+    const derivedPath = join(wsDir, "series", "arc-registry-derived.json");
+    writeFileSync(derivedPath, JSON.stringify({
+      arcs: [{
+        arc_id: "arc:unanchored", name: "未锚定弧线", arc_type: "secondary", priority: "P1",
+        status: "in_progress", core_question: "问题", chapter_opened: 1,
+        chapter_climaxed: null, chapter_closed: null,
+        expected_closure_window: { earliest: 2, optimal: 3, latest: 5 },
+        closure_trigger: "explicit", milestones: [], dependencies: [], external_refs: [],
+        emotional_payload: { primary: "紧张", secondary: [] },
+        metadata: { createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      }],
+      pending_foreshadows: [],
+      config: { totalChapters: 20, currentChapter: 3, closureType: "hard" },
+      lastUpdated: new Date().toISOString(),
+    }), "utf-8");
+    const result = integrateClosureTracker(wsDir, {
+      additions: [{
+        kind: "expectation", id: "expectation:unanchored", sourceChapter: "ch3",
+        sourceRef: "ch3#finalText:abc:0-5", confidence: 0.8, lastUpdated: new Date().toISOString(),
+        expectationId: "expectation:unanchored", description: "兑现", status: "fulfilled",
+        relatedArcIds: ["arc:unanchored"],
+        arcTransitionEvidence: [{
+          arcId: "arc:unanchored", newStatus: "climaxed",
+          sourceRef: "seed:arc:unanchored", confirmedBy: "llm",
+        }],
+      }],
+      invalidations: [], sourceChapter: "ch3",
+    }, 3);
     assert.equal(result.arcUpdates.length, 0);
     assert.equal(JSON.parse(readFileSync(derivedPath, "utf-8")).arcs[0].status, "in_progress");
   } finally {
@@ -633,6 +720,10 @@ test("P1-6: integrateClosureTracker 不从 'opened' 跳到 'climaxed'（状态�
         relatedArcIds: ["arc:opened-only"],
         relatedCharacterIds: [],
         relatedForeshadowIds: [],
+        arcTransitionEvidence: [{
+          arcId: "arc:opened-only", newStatus: "climaxed",
+          sourceRef: "ch5#finalText:abc:0-5", confirmedBy: "llm",
+        }],
       }],
       invalidations: [],
       sourceChapter: "ch5",
@@ -658,7 +749,7 @@ test("P1-6: integrateClosureTracker 不从 'opened' 跳到 'climaxed'（状态�
 // P1-7：REM 生命周期 — buildStagedStateUpdate 创建 expectation 时 seed-only
 // ============================================================================
 
-test("P1-7: buildStagedStateUpdate 在 setup+foreshadow 章创建 expectation（status=open + overdueWindow）", () => {
+test("P1-7: buildStagedStateUpdate preserves an explicit setup expectation window", () => {
   const seed = makeSeed({
     chapterFunction: "setup",
     intentPrimary: "foreshadow",
@@ -675,13 +766,13 @@ test("P1-7: buildStagedStateUpdate 在 setup+foreshadow 章创建 expectation（
   assert.ok(typeof exp.overdueWindow.earliest === "number");
   assert.ok(typeof exp.overdueWindow.optimal === "number");
   assert.ok(typeof exp.overdueWindow.latest === "number");
-  // setup 章：最早 3 章后，最佳 5 章后，最晚 8 章后
+  // Window values come from this test's explicit ChapterSeed fixture.
   assert.equal(exp.overdueWindow.earliest, 8, `setup 章 earliest 应为 5+3=8，实际: ${exp.overdueWindow.earliest}`);
   assert.equal(exp.overdueWindow.optimal, 10, `setup 章 optimal 应为 5+5=10，实际: ${exp.overdueWindow.optimal}`);
   assert.equal(exp.overdueWindow.latest, 13, `setup 章 latest 应为 5+8=13，实际: ${exp.overdueWindow.latest}`);
 });
 
-test("P1-7: buildStagedStateUpdate foreshadow 章用 foreshadow 窗口（2/4/7）", () => {
+test("P1-7: buildStagedStateUpdate preserves an explicit foreshadow expectation window", () => {
   const seed = makeSeed({
     chapterFunction: "escalation", // 非 setup
     intentPrimary: "foreshadow",
@@ -691,7 +782,7 @@ test("P1-7: buildStagedStateUpdate foreshadow 章用 foreshadow 窗口（2/4/7�
   const staged = buildStagedStateUpdate(seed, 10);
   const exp = staged.additions.find((e) => e.kind === "expectation");
   assert.ok(exp, "应创建 expectation");
-  // foreshadow 章：最早 2 章后，最佳 4 章后，最晚 7 章后
+  // Window values come from this test's explicit ChapterSeed fixture.
   assert.equal(exp.overdueWindow.earliest, 12, `foreshadow earliest=10+2=12，实际: ${exp.overdueWindow.earliest}`);
   assert.equal(exp.overdueWindow.optimal, 14, `foreshadow optimal=10+4=14，实际: ${exp.overdueWindow.optimal}`);
   assert.equal(exp.overdueWindow.latest, 17, `foreshadow latest=10+7=17，实际: ${exp.overdueWindow.latest}`);

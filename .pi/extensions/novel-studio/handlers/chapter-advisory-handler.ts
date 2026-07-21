@@ -27,6 +27,10 @@ import {
   type ReturnChapterType,
 } from "../v2/core/return-chapter-provenance.js";
 import { resolveWorkspacePath } from "../utils/fs.js";
+import {
+  createMethodologyDiagnosticStateLoader,
+  type MethodologyDiagnosticState,
+} from "../v2/core/methodology-diagnostic-state.js";
 
 // ============================================================================
 // 入口参数（与 HandleWorkspaceManagerInput 对齐）
@@ -62,12 +66,37 @@ export interface ChapterAdvisoryResult {
     progressionContract: unknown | null;
     readerFeedbackCount: number;
     returnChapterCount: number;
+    methodologyDiagnosticState: MethodologyDiagnosticState;
+    authorReviewGuidance: AuthorReviewGuidance;
   };
   // ingest_reader_feedback 结果
   feedbackEntry?: unknown;
   // record_return_chapter 结果
   provenanceEntry?: unknown;
 }
+
+export interface AuthorReviewGuidance {
+  advisoryOnly: true;
+  requiresSpanEvidence: true;
+  maxPriorityIssues: 3;
+  reviewOrder: ["structure", "content", "language"];
+  dimensions: string[];
+  rewritePaths: ["conservative_repair", "structural_rewrite"];
+  canModifyChapter: false;
+}
+
+const AUTHOR_REVIEW_GUIDANCE: AuthorReviewGuidance = {
+  advisoryOnly: true,
+  requiresSpanEvidence: true,
+  maxPriorityIssues: 3,
+  reviewOrder: ["structure", "content", "language"],
+  dimensions: [
+    "goal", "obstacle", "agency", "progression", "cost",
+    "continuity", "emotion", "dialogue", "payoff", "ending",
+  ],
+  rewritePaths: ["conservative_repair", "structural_rewrite"],
+  canModifyChapter: false,
+};
 
 // ============================================================================
 // 主入口
@@ -193,15 +222,23 @@ async function handleDiagnostic(
     }
   }
 
+  const diagnosticChapterNumber = input.chapterNumber ?? chapterNumber ?? 1;
+  const methodologyDiagnosticState = createMethodologyDiagnosticStateLoader().load({
+    workspacePath,
+    chapterNumber: diagnosticChapterNumber,
+  });
+
   return {
     status: "success",
     diagnostic: {
       workspaceId: input.workspaceId,
-      chapterNumber,
+      chapterNumber: diagnosticChapterNumber,
       closureReport,
       progressionContract,
       readerFeedbackCount,
       returnChapterCount,
+      methodologyDiagnosticState,
+      authorReviewGuidance: AUTHOR_REVIEW_GUIDANCE,
     },
   };
 }

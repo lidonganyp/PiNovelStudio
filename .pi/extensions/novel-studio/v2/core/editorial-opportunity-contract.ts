@@ -473,6 +473,9 @@ function buildMethodologyPromptPayload(state: MethodologyDiagnosticState): unkno
     canEnterRawPrompt: state.canEnterRawPrompt,
     canDirectlyAuthorizeCandidate: state.canDirectlyAuthorizeCandidate,
     derivedSignals: {
+      // Keep newly ingested cross-chapter evidence near the front of the
+      // bounded payload so it cannot be dropped behind verbose state details.
+      advisorySignals: state.advisorySignals,
       overdueAlerts,
       stagnation,
       fatigue: {

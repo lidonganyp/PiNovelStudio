@@ -556,8 +556,7 @@ export function buildStagedStateUpdate(
   //      关联字段留空（undefined），由 FinalStateCommit.reanchor 或后续 LLM 诊断
   //      基于实际正文内容决定是否关联。机械全关联会污染后续 LLM 诊断（让 LLM 误以为
   //      所有开放弧线都与本期待相关）。
-  //    - 添加 overdueWindow：基于 chapterFunction 给出保守默认窗口。
-  //      setup 章建立的期待通常在 3-8 章内兑现（避免烂尾）。
+  //    - overdueWindow 只接受作者/章卡显式输入；缺省时不生成机械期限。
   //    - 明示 seed-only 生命周期边界：此处只创建 expectation（status=open），
   //      不处理 advanced/delayed/escalated/fulfilled 状态推进。
   //      状态推进由两个路径负责：
@@ -577,16 +576,8 @@ export function buildStagedStateUpdate(
 
   if (shouldCreateExpectation && chapterTheme) {
     const expectationId = `expectation:ch${chapterNumber}:${intentPrimary || "setup"}`;
-    // P1-7: overdueWindow 默认窗口（章节号）
-    // setup 章建立的期待：最早 3 章后兑现（避免仓促），最佳 5 章后，最晚 8 章后（避免烂尾）
-    // foreshadow 章建立的期待：最早 2 章后，最佳 4 章后，最晚 7 章后
-    // 这些是保守默认值，可被 LLM 诊断/手动 feedback 覆盖
-    const isSetup = seed.chapterFunction === "setup";
-    const overdueWindow = {
-      earliest: chapterNumber + (isSetup ? 3 : 2),
-      optimal: chapterNumber + (isSetup ? 5 : 4),
-      latest: chapterNumber + (isSetup ? 8 : 7),
-    };
+    // Only author/chapter-card supplied windows become REM deadlines.
+    const overdueWindow = seed.intent?.expectationWindow;
     additions.push({
       kind: "expectation",
       id: `expectation:ch${chapterNumber}:${intentPrimary || "setup"}`,
@@ -604,7 +595,7 @@ export function buildStagedStateUpdate(
       // REM 生命周期字段
       createdChapter: sourceChapter,
       lastAdvancedChapter: sourceChapter, // 建立即视为首次激活
-      overdueWindow,
+      ...(overdueWindow ? { overdueWindow: { ...overdueWindow } } : {}),
       // P1-7: 关联字段留空（不机械全关联）
       // 由 FinalStateCommit.reanchor 或后续 LLM 诊断基于实际正文内容决定关联
       // relatedArcIds / relatedCharacterIds / relatedForeshadowIds 不在此处设置

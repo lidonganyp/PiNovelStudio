@@ -175,6 +175,12 @@ export const ChapterIntentSchema = Type.Object({
   }))),
   expectedIrreversibleChange: Type.Optional(Type.Array(Type.String())),
   causalEndPressure: Type.Optional(Type.Array(Type.String())),
+  /** Author/chapter-card supplied REM window. Absence means no deadline. */
+  expectationWindow: Type.Optional(Type.Object({
+    earliest: Type.Union([Type.Number({ minimum: 1 }), Type.Null()]),
+    optimal: Type.Union([Type.Number({ minimum: 1 }), Type.Null()]),
+    latest: Type.Union([Type.Number({ minimum: 1 }), Type.Null()]),
+  })),
   /**
    * P22新增：标记 outlineIntent 的来源
    * - "chapterSeed"：来自 ChapterSeed（新链路）

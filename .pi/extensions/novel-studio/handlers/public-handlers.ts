@@ -231,6 +231,11 @@ export async function handlePreflightWorkspace(input: {
       warnings: [],
       fixInstructions: [`检查 workspace 目录结构与 config.json 完整性`],
       checks: {},
+      authorWorkflow: {
+        advisoryOnly: true,
+        canBlockGeneration: false,
+        steps: [],
+      },
       durationMs: 0,
     };
     return {
