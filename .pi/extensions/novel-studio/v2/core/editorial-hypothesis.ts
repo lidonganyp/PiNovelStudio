@@ -12,6 +12,10 @@
 
 import type { TextSpan } from "./types.js";
 import type { CraftPhenomenonDomain } from "./craft-phenomenon-report.js";
+import {
+  isNarrativeFocusStrategyCompatible,
+  type NarrativeFocusStrategyId,
+} from "./narrative-focus-strategy.js";
 
 // ============================================================================
 // 类型定义
@@ -40,6 +44,8 @@ export interface EditorialHypothesis {
   confidence: number;
   /** Methodology domain that motivated this hypothesis, when available. */
   craftDomain?: CraftPhenomenonDomain;
+  /** Optional candidate-only strategy selected by the post-raw judge. */
+  candidateStrategyId?: NarrativeFocusStrategyId;
   /** Accepted-state references when the opportunity depends on cross-chapter evidence. */
   contextEvidenceRefs?: string[];
 }
@@ -82,6 +88,15 @@ export function validateHypothesis(h: EditorialHypothesis, rawText: string): Hyp
   }
   if (h.craftDomain === "cross_chapter_health" && !h.contextEvidenceRefs?.length) {
     errors.push("cross_chapter_health hypothesis 必须携带状态证据引用");
+  }
+  if (h.candidateStrategyId && !isNarrativeFocusStrategyCompatible(
+    h.candidateStrategyId,
+    h.opportunityType,
+    h.craftDomain,
+  )) {
+    errors.push(
+      `candidateStrategyId 与 opportunityType/craftDomain 不兼容：${h.candidateStrategyId}`,
+    );
   }
   if (typeof h.confidence !== "number" || h.confidence < 0 || h.confidence > 1) {
     errors.push("confidence 必须为 [0,1] 区间数值");

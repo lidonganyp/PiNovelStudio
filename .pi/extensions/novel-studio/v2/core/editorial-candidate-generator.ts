@@ -538,7 +538,7 @@ export class EditorialCandidateGenerator {
     }
 
     // 核心编辑假设（唯一主要目标）
-    userParts.push(this.buildHypothesisBlock(hypothesis, input.rawText));
+    userParts.push(this.buildHypothesisBlock(hypothesis, input.rawText, strategy));
 
     // 不可侵犯事实守卫（候选不得改变）
     userParts.push(this.buildInviolableGuardBlock(input.intent, strategy));
@@ -599,7 +599,7 @@ export class EditorialCandidateGenerator {
     );
 
     // 核心编辑假设
-    userParts.push(this.buildHypothesisBlock(hypothesis, input.rawText));
+    userParts.push(this.buildHypothesisBlock(hypothesis, input.rawText, strategy));
 
     // span 级局部编辑硬约束（关键：区别于整章重写）
     userParts.push(
@@ -654,10 +654,18 @@ export class EditorialCandidateGenerator {
    * 渲染核心编辑假设块：diagnosis、evidence span excerpt、expectedReaderGain、damageRisks。
    * 这是候选 prompt 的唯一主要目标。
    */
-  private buildHypothesisBlock(hypothesis: EditorialHypothesis, rawText: string): string {
+  private buildHypothesisBlock(
+    hypothesis: EditorialHypothesis,
+    rawText: string,
+    strategy: EditorialStrategyDef,
+  ): string {
     const lines: string[] = ["【本候选的核心编辑假设（唯一主要目标）】"];
     lines.push(`编辑机会类型：${hypothesis.opportunityType}`);
     if (hypothesis.craftDomain) lines.push(`方法论工艺域：${hypothesis.craftDomain}`);
+    if (strategy.candidateOnly && strategy.label && strategy.objective) {
+      lines.push(`候选策略：${strategy.label}（candidate-only，不是正文模板）`);
+      lines.push(`策略目标与边界：${strategy.objective}`);
+    }
     lines.push(`诊断：${hypothesis.diagnosis}`);
 
     // evidence span excerpt（从 raw 取真实文本片段）

@@ -176,10 +176,10 @@ function makeThrowingModel(err) {
 // 1. EditorialStrategyRegistry
 // ============================================================================
 
-test("StrategyRegistry: 默认注册 8 个策略（每 opportunityType 一个）", () => {
+test("StrategyRegistry: 默认注册 8 个通用策略和 3 个 candidate-only 空间叙事策略", () => {
   const registry = createEditorialStrategyRegistry();
   const all = registry.listStrategies();
-  assert.equal(all.length, 8);
+  assert.equal(all.length, 11);
   // 每个 opportunityType 都有策略
   const oppTypes = new Set(all.map((s) => s.opportunityType));
   assert.equal(oppTypes.size, 8);

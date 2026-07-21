@@ -344,6 +344,7 @@ export class EditorialOpportunityJudge {
         rewriteScope: scopeForOpportunity(opp.opportunityType),
         confidence: opp.confidence,
         craftDomain: opp.craftDomain,
+        ...(opp.candidateStrategyId ? { candidateStrategyId: opp.candidateStrategyId } : {}),
         ...(contextEvidenceRefs.length > 0 ? { contextEvidenceRefs } : {}),
       });
     }

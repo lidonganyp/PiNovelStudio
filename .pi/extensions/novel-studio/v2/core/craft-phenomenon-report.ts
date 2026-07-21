@@ -18,6 +18,7 @@ export const CRAFT_PHENOMENON_DOMAINS = [
   "ensemble",
   "ending_and_closure",
   "chapter_progression",
+  "narrative_focus_and_spatial_staging",
   "cross_chapter_health",
 ] as const;
 

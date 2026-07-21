@@ -21,6 +21,11 @@ import type {
 } from "./craft-phenomenon-report.js";
 import type { MethodologyDiagnosticState } from "./methodology-diagnostic-state.js";
 import { localizeLlmText } from "../../utils/llm-language-guard.js";
+import {
+  isNarrativeFocusStrategyCompatible,
+  parseNarrativeFocusStrategyId,
+  type NarrativeFocusStrategyId,
+} from "./narrative-focus-strategy.js";
 
 export interface OpportunityDiagnosticSignal {
   opportunityType: EditorialOpportunityType;
@@ -31,6 +36,7 @@ export interface OpportunityDiagnosticSignal {
 export interface ParsedOpportunity {
   opportunityType: EditorialOpportunityType;
   craftDomain: CraftPhenomenonDomain;
+  candidateStrategyId: NarrativeFocusStrategyId | null;
   diagnosis: string;
   evidenceExcerpt: string;
   expectedReaderGain: string;
@@ -95,6 +101,7 @@ const CRAFT_DOMAIN_LABEL_TO_DOMAIN = new Map<string, CraftPhenomenonDomain>([
   ["群像编排", "ensemble"],
   ["收尾闭合", "ending_and_closure"],
   ["章节推进", "chapter_progression"],
+  ["叙事聚焦与空间调度", "narrative_focus_and_spatial_staging"],
   ["跨章健康", "cross_chapter_health"],
 ]);
 
@@ -108,6 +115,7 @@ const INTERNAL_CRAFT_DOMAINS = new Set<string>([
   "ensemble",
   "ending_and_closure",
   "chapter_progression",
+  "narrative_focus_and_spatial_staging",
   "cross_chapter_health",
 ]);
 
@@ -120,6 +128,7 @@ const TOP_LEVEL_KEYS = new Set([
 const OPPORTUNITY_KEYS = new Set([
   "opportunityType", "机会类型",
   "craftDomain", "工艺领域",
+  "candidateStrategy", "候选策略",
   "diagnosis", "问题诊断",
   "evidenceExcerpt", "证据原文",
   "expectedReaderGain", "预期收益",
@@ -150,6 +159,7 @@ const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑
 - 群像编排：焦点是否清晰；非焦点角色是否以有信息的行动存在；多线交汇和高潮余波是否改变关系格局。
 - 收尾闭合：结尾是否回应本章因果；收尾阶段是否有伏笔遗漏、新坑、异常加速、角色失序、情感铺垫缺失或回落段缺失。
 - 章节推进：从章初到章末，情节、信息、人物、世界、因果哪些真实变化；不能用词频或固定总分替代状态差。
+- 叙事聚焦与空间调度：注意力是否落在真正改变信息、关系或情绪的动作与细节上；人物距离、遮挡、进出路径和物件位置是否承担已有的关系、权力或选择变化。不得用景别清单，不得要求远景—中景—特写顺序。
 - 跨章健康：结合长期状态检查预期超载、爽感通胀、连续停滞、人物失真、逻辑崩塌、情感断裂、模式疲劳；证据不足时只能标为不确定或不适用。
 
 工艺现象规则：
@@ -164,11 +174,15 @@ const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑
 - 跨章健康机会必须引用提供给你的状态证据引用；其他机会可为空数组。
 - 最多两个互不冲突的机会。本地扫描可能误报，不能单独授权候选。
 - 机会类型只能是：章末压力、人物选择、声音与自然度、读者回报、承诺推进、信息戏剧化、群像功能、关系进展。
+- 候选策略是可选项，只能是：过渡压缩、空间关系调度、焦点转移。策略不能单独授权候选，必须依附本条机会的正文 span；不适用时为 null。
+- 过渡压缩只适用于节奏与高潮/章节推进中的信息戏剧化或读者回报机会；不得省略关键选择、代价和连续性事实。
+- 空间关系调度只适用于叙事聚焦与空间调度中的关系进展、人物选择或群像功能机会；不得新增人物关系或故事事实。
+- 焦点转移只适用于叙事聚焦与空间调度/世界观揭示/收尾闭合中的读者回报或信息戏剧化机会；不得堆砌无因果作用的感官装饰。
 
 只输出一个严格结构化对象，不要代码块或解释：
 {
   "工艺现象": [{
-    "工艺领域": "上述十个中文工艺域之一",
+    "工艺领域": "上述十一个中文工艺域之一",
     "状态": "已观察|不确定|不适用",
     "现象": "具体观察",
     "证据原文": "逐字原文；不适用时为空字符串",
@@ -178,7 +192,8 @@ const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑
   }],
   "编辑机会": [{
     "机会类型": "上述八种中文类型之一",
-    "工艺领域": "上述十个中文工艺域之一",
+    "工艺领域": "上述十一个中文工艺域之一",
+    "候选策略": "过渡压缩|空间关系调度|焦点转移|null",
     "问题诊断": "具体问题",
     "证据原文": "逐字原文",
     "预期收益": "候选可能带来的读者收益",
@@ -313,6 +328,7 @@ function parseOpportunity(item: unknown): ParsedOpportunity | null {
   const evidenceExcerpt = readAliasedValue(value, "evidenceExcerpt", "证据原文");
   const expectedReaderGain = readAliasedValue(value, "expectedReaderGain", "预期收益");
   const risks = readAliasedValue(value, "damageRisks", "损伤风险");
+  const rawCandidateStrategy = readAliasedValue(value, "candidateStrategy", "候选策略");
   const contextEvidenceRefs = readOptionalAliasedStringArray(
     value,
     "contextEvidenceRefs",
@@ -331,10 +347,22 @@ function parseOpportunity(item: unknown): ParsedOpportunity | null {
     ? parseCraftPhenomenonDomain(rawDomain.value)
     : null;
   if (!craftDomain) return null;
+  let candidateStrategyId: NarrativeFocusStrategyId | null = null;
+  if (rawCandidateStrategy.found && rawCandidateStrategy.value !== null) {
+    if (typeof rawCandidateStrategy.value !== "string") return null;
+    candidateStrategyId = parseNarrativeFocusStrategyId(rawCandidateStrategy.value);
+    if (!candidateStrategyId) return null;
+    if (!isNarrativeFocusStrategyCompatible(
+      candidateStrategyId,
+      opportunityType as EditorialOpportunityType,
+      craftDomain,
+    )) return null;
+  }
   if (craftDomain === "cross_chapter_health" && contextEvidenceRefs.value.length === 0) return null;
   return {
     opportunityType: opportunityType as EditorialOpportunityType,
     craftDomain,
+    candidateStrategyId,
     diagnosis: diagnosis.value.trim(),
     evidenceExcerpt: evidenceExcerpt.value.trim(),
     expectedReaderGain: expectedReaderGain.value.trim(),

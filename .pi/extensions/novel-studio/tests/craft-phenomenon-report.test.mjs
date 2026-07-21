@@ -23,6 +23,7 @@ test("methodology report covers every craft domain without a literary score", ()
     "ensemble",
     "ending_and_closure",
     "chapter_progression",
+    "narrative_focus_and_spatial_staging",
     "cross_chapter_health",
   ]);
 

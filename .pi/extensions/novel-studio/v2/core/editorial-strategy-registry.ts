@@ -10,10 +10,21 @@ import type {
   EditorialHypothesis,
   EditorialOpportunityType,
 } from "./editorial-hypothesis.js";
+import type { CraftPhenomenonDomain } from "./craft-phenomenon-report.js";
+import {
+  NARRATIVE_FOCUS_STRATEGIES,
+  isNarrativeFocusStrategyCompatible,
+  type NarrativeFocusStrategyId,
+} from "./narrative-focus-strategy.js";
 
 export interface EditorialStrategyDef {
   strategyId: string;
   opportunityType: EditorialOpportunityType;
+  compatibleOpportunityTypes?: readonly EditorialOpportunityType[];
+  compatibleCraftDomains?: readonly CraftPhenomenonDomain[];
+  label?: string;
+  objective?: string;
+  candidateOnly?: true;
 }
 
 const DEFAULT_STRATEGIES: EditorialStrategyDef[] = [
@@ -25,6 +36,15 @@ const DEFAULT_STRATEGIES: EditorialStrategyDef[] = [
   { strategyId: "ensemble_function_focus", opportunityType: "ensemble_function" },
   { strategyId: "chapter_end_pressure_focus", opportunityType: "chapter_end_pressure" },
   { strategyId: "voice_and_naturalness_focus", opportunityType: "voice_and_naturalness" },
+  ...NARRATIVE_FOCUS_STRATEGIES.map((strategy): EditorialStrategyDef => ({
+    strategyId: strategy.strategyId,
+    opportunityType: strategy.compatibleOpportunityTypes[0],
+    compatibleOpportunityTypes: strategy.compatibleOpportunityTypes,
+    compatibleCraftDomains: strategy.compatibleCraftDomains,
+    label: strategy.label,
+    objective: strategy.objective,
+    candidateOnly: true,
+  })),
 ];
 
 export class EditorialStrategyRegistry {
@@ -37,9 +57,12 @@ export class EditorialStrategyRegistry {
 
   register(strategy: EditorialStrategyDef): void {
     this.strategies.set(strategy.strategyId, strategy);
-    const list = this.byOpportunity.get(strategy.opportunityType) ?? [];
-    list.push(strategy);
-    this.byOpportunity.set(strategy.opportunityType, list);
+    const opportunityTypes = strategy.compatibleOpportunityTypes ?? [strategy.opportunityType];
+    for (const opportunityType of opportunityTypes) {
+      const list = this.byOpportunity.get(opportunityType) ?? [];
+      list.push(strategy);
+      this.byOpportunity.set(opportunityType, list);
+    }
   }
 
   getStrategy(strategyId: string): EditorialStrategyDef | undefined {
@@ -59,7 +82,17 @@ export class EditorialStrategyRegistry {
   pickStrategyForHypothesis(
     hypothesis: EditorialHypothesis,
   ): EditorialStrategyDef | null {
-    return this.strategiesForOpportunity(hypothesis.opportunityType)[0] ?? null;
+    if (hypothesis.candidateStrategyId) {
+      const strategy = this.getStrategy(hypothesis.candidateStrategyId);
+      if (!strategy) return null;
+      return isNarrativeFocusStrategyCompatible(
+        hypothesis.candidateStrategyId as NarrativeFocusStrategyId,
+        hypothesis.opportunityType,
+        hypothesis.craftDomain,
+      ) ? strategy : null;
+    }
+    return this.strategiesForOpportunity(hypothesis.opportunityType)
+      .find((strategy) => strategy.candidateOnly !== true) ?? null;
   }
 }
 
