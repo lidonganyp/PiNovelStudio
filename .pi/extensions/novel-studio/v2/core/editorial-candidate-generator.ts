@@ -10,6 +10,7 @@ import type {
   CandidatePromptProfile,
   CompiledContext,
   ConstitutionSnapshot,
+  StyleReference,
   TextSpan,
 } from "./types.js";
 import type { ChapterIntent } from "./chapter-intent-builder.js";
@@ -90,6 +91,81 @@ const CALIBRATION_SYSTEM_PROMPT = `你是中文长篇小说编辑。请基于待
 - 只修正诊断指出的自然度问题，具体改法由你自行决定。
 - 不可破坏的事实绝不改动。
 - 输出必须是完整正文（含未修改部分），差异只能出现在证据 span 邻接区域内。`;
+
+const MAX_STYLE_GUIDANCE_ITEMS = 8;
+const MAX_STYLE_GUIDANCE_CHARS = 900;
+
+function parseStylePayload(reference: StyleReference): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(reference.content) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Extract only curated qualitative guidance from an author fingerprint.
+ * Observed ratios and paragraph percentiles remain diagnostic evidence and
+ * are deliberately excluded from the model prompt.
+ */
+function buildAuthorStyleReferenceBlock(
+  context: CompiledContext,
+  relevantCharacters: string[],
+): string | null {
+  const guidance: string[] = [];
+
+  for (const reference of context.styleReferences.filter((entry) => entry.kind === "fingerprint")) {
+    const payload = parseStylePayload(reference);
+    if (!payload) continue;
+
+    const usagePolicy = payload.usagePolicy;
+    if (
+      !usagePolicy
+      || typeof usagePolicy !== "object"
+      || Array.isArray(usagePolicy)
+      || (usagePolicy as Record<string, unknown>).editorialCandidate !== "span_evidence_only"
+    ) {
+      continue;
+    }
+
+    guidance.push(...stringList(payload.editorialGuidance).map((item) => `- [通用] ${item}`));
+
+    const voices = payload.characterVoiceGuidance;
+    if (voices && typeof voices === "object" && !Array.isArray(voices)) {
+      const voiceMap = voices as Record<string, unknown>;
+      for (const character of relevantCharacters) {
+        guidance.push(...stringList(voiceMap[character]).map((item) => `- [${character}] ${item}`));
+      }
+    }
+  }
+
+  const selected: string[] = [];
+  let usedChars = 0;
+  for (const item of guidance) {
+    if (selected.length >= MAX_STYLE_GUIDANCE_ITEMS) break;
+    if (usedChars + item.length > MAX_STYLE_GUIDANCE_CHARS) break;
+    selected.push(item);
+    usedChars += item.length;
+  }
+  if (selected.length === 0) return null;
+
+  return [
+    "【作者风格参考（只用于当前证据 span）】",
+    "以下是作者稳定偏好的定性参考，不是句段配额；只在不损伤原意与事实时用于本次局部校准。",
+    ...selected,
+  ].join("\n");
+}
 
 // 输入/输出类型
 
@@ -581,6 +657,14 @@ export class EditorialCandidateGenerator {
 
     // 上下文（精简）
     userParts.push(this.buildContextBlock(input.context, input.intent.relevantCharacters));
+
+    const authorStyleBlock = buildAuthorStyleReferenceBlock(
+      input.context,
+      input.intent.relevantCharacters,
+    );
+    if (authorStyleBlock) {
+      userParts.push(authorStyleBlock);
+    }
 
     const constitutionBlock = buildEditorialConstitutionBlock(input.constitution ?? null);
     if (constitutionBlock) {

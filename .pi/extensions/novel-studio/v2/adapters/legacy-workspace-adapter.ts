@@ -110,16 +110,22 @@ export function loadStyleProfile(
   projectRoot: string
 ): StyleProfileEntry | null {
   const styleProfileName = (bundle.config.styleProfile as string) || (bundle.config.styleProfileName as string);
-  if (!styleProfileName) return null;
   const candidatePaths = [
-    join(projectRoot, "styles", "profiles", `${styleProfileName}.json`),
-    join(bundle.workspacePath, "styles", `${styleProfileName}.json`),
+    // Workspace-local author fingerprints are work-specific and take precedence
+    // over a shared profile with the same configured name.
+    join(bundle.workspacePath, "styles", "profile.json"),
+    ...(styleProfileName
+      ? [
+          join(projectRoot, "styles", "profiles", `${styleProfileName}.json`),
+          join(bundle.workspacePath, "styles", `${styleProfileName}.json`),
+        ]
+      : []),
   ];
   for (const p of candidatePaths) {
     const raw = readJsonFile<any>(p);
     if (raw) {
       return {
-        id: `style:${styleProfileName}`,
+        id: `style:${styleProfileName || bundle.workspaceId}`,
         kind: "fingerprint",
         content: JSON.stringify(raw),
         sourcePath: p,
