@@ -1213,6 +1213,23 @@ const FAMILY_CONTRADICTIONS: { aliasPattern: RegExp; contradictionPattern: RegEx
  */
 const IDENTITY_HISTORICAL_CONTEXT = /曾经|当年|昔日|过去|从前|以前|回忆|想起|回想起|怀念|梦见|梦到|生前|传闻|据说|原本|本来|曾经是|原本是|一开始|最初|起初|原本只是/;
 
+/**
+ * 敌对实体的“伙伴/同伴”只有在正文直接建立身份关系时才构成硬矛盾。
+ * “水怪在同伴被杀后逃跑”描述的是敌群内部关系，不能据此推断水怪成为主角伙伴。
+ */
+function hasDirectHostileCompanionRelation(clause: string, entry: IdentityEntry): boolean {
+  const names = [entry.name, ...entry.aliases]
+    .filter(Boolean)
+    .map(escapeRegExp)
+    .join("|");
+  if (!names) return false;
+  const entity = `(?:${names})`;
+  const companion = "(?:伙伴|同伴|朋友|盟友|契约兽)";
+  return new RegExp(`${entity}.{0,8}(?:是|成为|成了|作为|被视为|被当作).{0,10}${companion}`).test(clause)
+    || new RegExp(`${companion}.{0,8}(?:是|包括|叫作|名为)?\\s*${entity}`).test(clause)
+    || new RegExp(`${entity}.{0,8}(?:被)?(?:驯服|收服)|(?:驯服|收服).{0,8}${entity}`).test(clause);
+}
+
 function identityClauseBounds(text: string, position: number): { start: number; end: number } {
   const boundaryPattern = /[，。！？!?；;\n]/;
   let start = position;
@@ -1270,6 +1287,10 @@ function checkIdentityContradiction(
       const roleContradiction = IDENTITY_CONTRADICTIONS[entry.role];
       const roleMatch = roleContradiction?.pattern.exec(clause) ?? null;
       if (roleContradiction && roleMatch) {
+        if ((entry.role === "monster" || entry.role === "antagonist-ally")
+          && !hasDirectHostileCompanionRelation(clause, entry)) {
+          continue;
+        }
         const relationPosition = clauseBounds.start + roleMatch.index;
         // FACTGUARD-DOWNGRADE-1：历史/回忆语境降为 review（描述过去状态，非当前设定矛盾）
         const isHistorical = IDENTITY_HISTORICAL_CONTEXT.test(clause);
