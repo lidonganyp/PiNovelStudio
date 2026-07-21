@@ -246,10 +246,10 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
 
 ### 类型路由策略
 
-- `novel_type_router` 已接入统一主链路 Preflight/ContextCompiler 阶段，执行三源融合识别（config声明 + 内容推断 + 漂移检测）
-- **默认策略为软门禁**：类型路由失败只记录警告，不阻断章节生成
-- Narrator 有 fallback 机制，会从 `type-profile.json` 或 `config.json` 推断类型参数
-- 如需硬阻断，可在 `config.json` 设置 `forceTypeBlock: true`
+- 写前只消费作者在 `config.json` / CreativeConstitution 中明确声明的类型与读者承诺，不用内容推断覆盖作者类型。
+- 类型漂移在 raw 通过 FactGuard 后，由 `MethodologyDiagnosticState → CraftPhenomenonReport.genre_contract` 做 span-backed advisory；它不进入 raw prompt、不阻断正文，也不能独立授权候选。
+- `orchestrator-raw.ts` 的 `driftGenre` 仍固定为 `null`，表示写前 TypeRouter 未接入；不得把 post-raw 诊断误写成“三源 TypeRouter 已接入”。
+- `type-profile.json` 只保留为历史/辅助资产，不是统一主链路的类型真相源。
 
 > **设计理由**：类型档案不属于主文档五层数据壁垒（风格指纹→场景→技法→Few-Shot→对比蒸馏），是增强能力而非强制前置。
 

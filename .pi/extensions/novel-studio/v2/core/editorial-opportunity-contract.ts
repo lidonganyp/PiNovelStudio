@@ -19,6 +19,7 @@ import type {
   CraftPhenomenonObservationInput,
   CraftPhenomenonStatus,
 } from "./craft-phenomenon-report.js";
+import type { MethodologyDiagnosticState } from "./methodology-diagnostic-state.js";
 import { localizeLlmText } from "../../utils/llm-language-guard.js";
 
 export interface OpportunityDiagnosticSignal {
@@ -29,11 +30,12 @@ export interface OpportunityDiagnosticSignal {
 
 export interface ParsedOpportunity {
   opportunityType: EditorialOpportunityType;
-  craftDomain?: CraftPhenomenonDomain;
+  craftDomain: CraftPhenomenonDomain;
   diagnosis: string;
   evidenceExcerpt: string;
   expectedReaderGain: string;
   damageRisks: string[];
+  contextEvidenceRefs: string[];
   confidence: number;
 }
 
@@ -53,6 +55,8 @@ export interface OpportunityPromptInput {
   voiceFingerprints?: VoiceFingerprintInput[];
   previousEmotionState?: string | null;
   craftAdvisory?: EditorialOpportunityAdvisory;
+  /** Read-only accepted-state evidence for post-raw diagnosis only. */
+  methodologyDiagnosticState?: MethodologyDiagnosticState;
 }
 
 const VALID_OPPORTUNITY_TYPES = new Set<string>([
@@ -107,6 +111,33 @@ const INTERNAL_CRAFT_DOMAINS = new Set<string>([
   "cross_chapter_health",
 ]);
 
+const TOP_LEVEL_KEYS = new Set([
+  "craftPhenomena", "工艺现象",
+  "opportunities", "编辑机会",
+  "noOpReason", "无操作原因",
+]);
+
+const OPPORTUNITY_KEYS = new Set([
+  "opportunityType", "机会类型",
+  "craftDomain", "工艺领域",
+  "diagnosis", "问题诊断",
+  "evidenceExcerpt", "证据原文",
+  "expectedReaderGain", "预期收益",
+  "damageRisks", "损伤风险",
+  "contextEvidenceRefs", "状态证据引用",
+  "confidence", "置信度",
+]);
+
+const CRAFT_OBSERVATION_KEYS = new Set([
+  "domain", "工艺领域",
+  "status", "状态",
+  "phenomenon", "现象",
+  "evidenceExcerpt", "证据原文",
+  "contextEvidenceRefs", "状态证据引用",
+  "readerImpact", "读者影响",
+  "confidence", "置信度",
+]);
+
 const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑。先理解本章，再判断是否值得生成编辑候选。方法论只帮助诊断，不是正文模板。
 
 按章节相关性检查以下工艺域，不要求每章全部适用：
@@ -124,11 +155,13 @@ const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑
 工艺现象规则：
 - 状态只能是已观察、不确定、不适用。
 - 已观察和不确定必须引用原始正文中逐字一致的连续片段；不适用的证据原文必须为空。
+- 跨章健康的已观察或不确定现象还必须引用提供给你的状态证据引用；不得编造引用。
 - 现象只描述观察与读者影响，不给分，不判通过，不直接下改写命令。
 
 编辑机会规则：
 - 只在存在明确、可引用正文片段证明的高价值机会时返回；没有明显整体收益就返回零个机会。
 - 每个机会只解决一个主要问题，必须说明读者收益、损伤风险和所属工艺域。
+- 跨章健康机会必须引用提供给你的状态证据引用；其他机会可为空数组。
 - 最多两个互不冲突的机会。本地扫描可能误报，不能单独授权候选。
 - 机会类型只能是：章末压力、人物选择、声音与自然度、读者回报、承诺推进、信息戏剧化、群像功能、关系进展。
 
@@ -139,6 +172,7 @@ const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑
     "状态": "已观察|不确定|不适用",
     "现象": "具体观察",
     "证据原文": "逐字原文；不适用时为空字符串",
+    "状态证据引用": ["跨章健康时至少一条；其他工艺域可为空"],
     "读者影响": "该现象可能怎样影响阅读",
     "置信度": 0.0
   }],
@@ -149,6 +183,7 @@ const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑
     "证据原文": "逐字原文",
     "预期收益": "候选可能带来的读者收益",
     "损伤风险": ["至少一条可能损伤"],
+    "状态证据引用": ["跨章健康时至少一条；其他工艺域可为空"],
     "置信度": 0.0
   }],
   "无操作原因": "无机会时说明原因；有机会时为空值"
@@ -161,23 +196,36 @@ export function parseOpportunityVerdict(text: string): ParsedOpportunityVerdict 
   try {
     const json = extractJsonObject(text);
     if (!json) return null;
-    const obj = JSON.parse(json) as Record<string, unknown>;
-    const rawOpportunities = obj.opportunities ?? obj["编辑机会"];
-    if (rawOpportunities !== undefined && !Array.isArray(rawOpportunities)) return null;
-
-    const opportunities: ParsedOpportunity[] = [];
-    for (const item of Array.isArray(rawOpportunities) ? rawOpportunities : []) {
-      const parsed = parseOpportunity(item);
-      if (parsed) opportunities.push(parsed);
+    const parsedJson = JSON.parse(json) as unknown;
+    if (!isRecord(parsedJson) || !hasOnlyKeys(parsedJson, TOP_LEVEL_KEYS)) return null;
+    const obj = parsedJson;
+    const rawCraftPhenomena = readAliasedValue(obj, "craftPhenomena", "工艺现象");
+    const rawOpportunities = readAliasedValue(obj, "opportunities", "编辑机会");
+    const noOpReasonValue = readAliasedValue(obj, "noOpReason", "无操作原因");
+    if (!rawCraftPhenomena.found || !Array.isArray(rawCraftPhenomena.value)) return null;
+    if (!rawOpportunities.found || !Array.isArray(rawOpportunities.value)) return null;
+    if (!noOpReasonValue.found || (noOpReasonValue.value !== null && typeof noOpReasonValue.value !== "string")) {
+      return null;
     }
 
-    const noOpReasonValue = obj.noOpReason ?? obj["无操作原因"];
-    const noOpReason = typeof noOpReasonValue === "string" && noOpReasonValue.trim()
-      ? noOpReasonValue
+    const opportunities: ParsedOpportunity[] = [];
+    if (rawOpportunities.value.length > 2) return null;
+    for (const item of rawOpportunities.value) {
+      const parsed = parseOpportunity(item);
+      if (!parsed) return null;
+      opportunities.push(parsed);
+    }
+
+    const craftObservations = parseCraftObservations(rawCraftPhenomena.value as unknown[]);
+    if (!craftObservations) return null;
+    const noOpReason = typeof noOpReasonValue.value === "string" && noOpReasonValue.value.trim()
+      ? noOpReasonValue.value
       : null;
+    if (opportunities.length === 0 && noOpReason === null) return null;
+    if (opportunities.length > 0 && noOpReason !== null) return null;
     return {
       opportunities,
-      craftObservations: parseCraftObservations(obj),
+      craftObservations,
       noOpReason,
     };
   } catch {
@@ -211,6 +259,11 @@ export function buildOpportunityPrompt(input: OpportunityPromptInput): {
     parts.push(`【已接受文本的角色声音证据（仅用于漂移诊断）】\n${truncateJson(input.voiceFingerprints, 4000)}`);
   }
   if (input.previousEmotionState?.trim()) parts.push(`【前章已接受情绪落点】\n${input.previousEmotionState.trim()}`);
+  if (input.methodologyDiagnosticState) {
+    parts.push(
+      `【跨章诊断状态（methodology-diagnostic-state-v1，仅用于 raw 后诊断）】\n${truncateJson(input.methodologyDiagnosticState, 9000)}`,
+    );
+  }
 
   const triggered = input.scannedSignals.filter((signal) => signal.triggered);
   if (triggered.length) {
@@ -224,9 +277,14 @@ export function buildOpportunityPrompt(input: OpportunityPromptInput): {
   if (input.craftAdvisory?.promptBlock) parts.push(input.craftAdvisory.promptBlock);
   parts.push("【原始正文】", "---", input.rawText, "---");
   parts.push("请基于原始正文实际质量判断是否存在值得生成编辑候选的机会，只输出严格的结构化数据。");
+  const localizedUserPrompt = localizeLlmText(parts.join("\n\n"));
+  const localizedSchemaId = localizeLlmText("methodology-diagnostic-state-v1");
   return {
     systemPrompt: localizeLlmText(OPPORTUNITY_SYSTEM_PROMPT),
-    userPrompt: localizeLlmText(parts.join("\n\n")),
+    userPrompt: localizedUserPrompt.replaceAll(
+      localizedSchemaId,
+      "methodology-diagnostic-state-v1",
+    ),
   };
 }
 
@@ -243,61 +301,139 @@ export function buildOpportunitySchemaRepairPrompt(invalidOutput: string): {
 }
 
 function parseOpportunity(item: unknown): ParsedOpportunity | null {
-  if (typeof item !== "object" || item === null) return null;
-  const value = item as Record<string, unknown>;
-  const rawType = value.opportunityType ?? value["机会类型"];
-  const opportunityType = typeof rawType === "string"
-    ? OPPORTUNITY_LABEL_TO_TYPE.get(rawType) ?? rawType
+  if (!isRecord(item) || !hasOnlyKeys(item, OPPORTUNITY_KEYS)) return null;
+  const value = item;
+  const rawType = readAliasedValue(value, "opportunityType", "机会类型");
+  if (!rawType.found) return null;
+  const opportunityType = typeof rawType.value === "string"
+    ? OPPORTUNITY_LABEL_TO_TYPE.get(rawType.value) ?? rawType.value
     : null;
   if (typeof opportunityType !== "string" || !VALID_OPPORTUNITY_TYPES.has(opportunityType)) return null;
-  const diagnosis = value.diagnosis ?? value["问题诊断"];
-  const evidenceExcerpt = value.evidenceExcerpt ?? value["证据原文"];
-  const expectedReaderGain = value.expectedReaderGain ?? value["预期收益"];
-  if (typeof diagnosis !== "string" || typeof evidenceExcerpt !== "string" || typeof expectedReaderGain !== "string") return null;
-  const risks = value.damageRisks ?? value["损伤风险"];
-  const rawConfidence = value.confidence ?? value["置信度"];
-  const confidence = typeof rawConfidence === "number" ? Math.max(0, Math.min(1, rawConfidence)) : 0.5;
-  const rawDomain = value.craftDomain ?? value["工艺领域"];
-  const craftDomain = typeof rawDomain === "string" ? parseCraftPhenomenonDomain(rawDomain) : null;
+  const diagnosis = readAliasedValue(value, "diagnosis", "问题诊断");
+  const evidenceExcerpt = readAliasedValue(value, "evidenceExcerpt", "证据原文");
+  const expectedReaderGain = readAliasedValue(value, "expectedReaderGain", "预期收益");
+  const risks = readAliasedValue(value, "damageRisks", "损伤风险");
+  const contextEvidenceRefs = readOptionalAliasedStringArray(
+    value,
+    "contextEvidenceRefs",
+    "状态证据引用",
+  );
+  const rawConfidence = readAliasedValue(value, "confidence", "置信度");
+  const rawDomain = readAliasedValue(value, "craftDomain", "工艺领域");
+  if (!diagnosis.found || typeof diagnosis.value !== "string" || !diagnosis.value.trim()) return null;
+  if (!evidenceExcerpt.found || typeof evidenceExcerpt.value !== "string" || !evidenceExcerpt.value.trim()) return null;
+  if (!expectedReaderGain.found || typeof expectedReaderGain.value !== "string" || !expectedReaderGain.value.trim()) return null;
+  if (!risks.found || !isNonEmptyStringArray(risks.value)) return null;
+  if (!contextEvidenceRefs.valid) return null;
+  if (!rawConfidence.found || !isConfidence(rawConfidence.value)) return null;
+  if (!rawDomain.found || typeof rawDomain.value !== "string") return null;
+  const craftDomain = typeof rawDomain.value === "string"
+    ? parseCraftPhenomenonDomain(rawDomain.value)
+    : null;
+  if (!craftDomain) return null;
+  if (craftDomain === "cross_chapter_health" && contextEvidenceRefs.value.length === 0) return null;
   return {
     opportunityType: opportunityType as EditorialOpportunityType,
-    ...(craftDomain ? { craftDomain } : {}),
-    diagnosis,
-    evidenceExcerpt,
-    expectedReaderGain,
-    damageRisks: Array.isArray(risks) ? risks.filter((risk): risk is string => typeof risk === "string") : [],
-    confidence,
+    craftDomain,
+    diagnosis: diagnosis.value.trim(),
+    evidenceExcerpt: evidenceExcerpt.value.trim(),
+    expectedReaderGain: expectedReaderGain.value.trim(),
+    damageRisks: risks.value.map((risk) => risk.trim()),
+    contextEvidenceRefs: contextEvidenceRefs.value,
+    confidence: rawConfidence.value,
   };
 }
 
-function parseCraftObservations(obj: Record<string, unknown>): CraftPhenomenonObservationInput[] {
-  const raw = obj.craftPhenomena ?? obj["工艺现象"];
-  if (!Array.isArray(raw)) return [];
+function parseCraftObservations(raw: unknown[]): CraftPhenomenonObservationInput[] | null {
   const observations: CraftPhenomenonObservationInput[] = [];
   for (const item of raw) {
-    if (typeof item !== "object" || item === null) continue;
-    const value = item as Record<string, unknown>;
-    const rawDomain = value.domain ?? value["工艺领域"];
-    const rawStatus = value.status ?? value["状态"];
-    const domain = typeof rawDomain === "string" ? parseCraftPhenomenonDomain(rawDomain) : null;
-    const status = typeof rawStatus === "string" ? parseCraftPhenomenonStatus(rawStatus) : null;
-    const phenomenon = value.phenomenon ?? value["现象"];
-    const readerImpact = value.readerImpact ?? value["读者影响"];
-    const evidenceExcerpt = value.evidenceExcerpt ?? value["证据原文"];
-    const confidence = value.confidence ?? value["置信度"];
-    if (!domain || !status || typeof phenomenon !== "string" || !phenomenon.trim()) continue;
-    if (typeof readerImpact !== "string" || !readerImpact.trim()) continue;
-    if (typeof confidence !== "number" || confidence < 0 || confidence > 1) continue;
+    if (!isRecord(item) || !hasOnlyKeys(item, CRAFT_OBSERVATION_KEYS)) return null;
+    const rawDomain = readAliasedValue(item, "domain", "工艺领域");
+    const rawStatus = readAliasedValue(item, "status", "状态");
+    const phenomenon = readAliasedValue(item, "phenomenon", "现象");
+    const readerImpact = readAliasedValue(item, "readerImpact", "读者影响");
+    const evidenceExcerpt = readAliasedValue(item, "evidenceExcerpt", "证据原文");
+    const contextEvidenceRefs = readOptionalAliasedStringArray(
+      item,
+      "contextEvidenceRefs",
+      "状态证据引用",
+    );
+    const confidence = readAliasedValue(item, "confidence", "置信度");
+    if (!rawDomain.found || typeof rawDomain.value !== "string") return null;
+    if (!rawStatus.found || typeof rawStatus.value !== "string") return null;
+    const domain = parseCraftPhenomenonDomain(rawDomain.value);
+    const status = parseCraftPhenomenonStatus(rawStatus.value);
+    if (!domain || !status) return null;
+    if (!phenomenon.found || typeof phenomenon.value !== "string" || !phenomenon.value.trim()) return null;
+    if (!readerImpact.found || typeof readerImpact.value !== "string" || !readerImpact.value.trim()) return null;
+    if (!evidenceExcerpt.found || typeof evidenceExcerpt.value !== "string") return null;
+    if (status === "not_applicable" ? evidenceExcerpt.value.trim() : !evidenceExcerpt.value.trim()) return null;
+    if (!contextEvidenceRefs.valid) return null;
+    if (status === "not_applicable" && contextEvidenceRefs.value.length > 0) return null;
+    if (domain === "cross_chapter_health" && status !== "not_applicable"
+      && contextEvidenceRefs.value.length === 0) return null;
+    if (!confidence.found || !isConfidence(confidence.value)) return null;
     observations.push({
       domain,
       status,
-      phenomenon,
-      readerImpact,
-      ...(typeof evidenceExcerpt === "string" && evidenceExcerpt.trim() ? { evidenceExcerpt } : {}),
-      confidence,
+      phenomenon: phenomenon.value.trim(),
+      readerImpact: readerImpact.value.trim(),
+      ...(evidenceExcerpt.value.trim() ? { evidenceExcerpt: evidenceExcerpt.value.trim() } : {}),
+      ...(contextEvidenceRefs.value.length > 0
+        ? { contextEvidenceRefs: contextEvidenceRefs.value }
+        : {}),
+      confidence: confidence.value,
     });
   }
   return observations;
+}
+
+function readOptionalAliasedStringArray(
+  value: Record<string, unknown>,
+  englishKey: string,
+  chineseKey: string,
+): { valid: boolean; value: string[] } {
+  const hasEnglish = Object.prototype.hasOwnProperty.call(value, englishKey);
+  const hasChinese = Object.prototype.hasOwnProperty.call(value, chineseKey);
+  if (hasEnglish && hasChinese) return { valid: false, value: [] };
+  if (!hasEnglish && !hasChinese) return { valid: true, value: [] };
+  const raw = hasEnglish ? value[englishKey] : value[chineseKey];
+  if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    return { valid: false, value: [] };
+  }
+  return {
+    valid: true,
+    value: [...new Set(raw.map((entry) => (entry as string).trim()))],
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function readAliasedValue(
+  value: Record<string, unknown>,
+  englishKey: string,
+  chineseKey: string,
+): { found: boolean; value: unknown } {
+  const hasEnglish = Object.prototype.hasOwnProperty.call(value, englishKey);
+  const hasChinese = Object.prototype.hasOwnProperty.call(value, chineseKey);
+  if (hasEnglish === hasChinese) return { found: false, value: undefined };
+  return { found: true, value: hasEnglish ? value[englishKey] : value[chineseKey] };
+}
+
+function isConfidence(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function isNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((entry) => typeof entry === "string" && entry.trim().length > 0);
 }
 
 function parseCraftPhenomenonDomain(value: string): CraftPhenomenonDomain | null {

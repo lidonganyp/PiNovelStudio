@@ -27,6 +27,7 @@ import type { SceneSolutionCard } from "./scene-solution-search.js";
 import type { PortableCraftGene } from "./portable-craft-gene.js";
 import type { PromptPatternResolution } from "./prompt-pattern-library.js";
 import type { WriterPromptProfile } from "./model-prompt-adapter.js";
+import type { MethodologyDiagnosticState } from "./methodology-diagnostic-state.js";
 // P0-3 审批闭环接通（2026-07-17）：代理审批阶段类型
 // 计划 §6.3：FinalFactRecheck → ChapterProxyApproval → saveProxyApprovedDraft
 // → UserRevisionOrAcceptance → FinalFactRecheck(user) → FinalStateCommit → AtomicChapterSave
@@ -152,6 +153,8 @@ export interface UnifiedOrchestratorInput {
   context: CompiledContext;
   /** 作品宪法快照（可空） */
   constitution: ConstitutionSnapshot | null;
+  /** Optional preloaded read-only state for post-raw methodology diagnosis. */
+  methodologyDiagnosticState?: MethodologyDiagnosticState;
   /** 本章已知角色名（用于 ensemble 扫描） */
   characterNames: string[];
   /** WORLD-ONTOLOGY-1：workspace config 中声明的 closed-world levels。 */

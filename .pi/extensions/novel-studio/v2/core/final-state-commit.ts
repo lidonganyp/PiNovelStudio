@@ -840,6 +840,10 @@ export class FinalStateCommit {
     }
 
     // 落盘
+    // STEP-3 事务边界：arc-registry.json 的更新（如未来需要机器更新 arc/foreshadow
+    // 状态）必须在此事务内完成，不能在 post-final 阶段独立写入。当前 arc-registry
+    // 是只读输入；如需写入，必须在 saveStateStore 同一事务内以 backup→write→rename
+    // 原子方式落盘，并在任一文件失败时回滚全部变更。
     saveStateStore(compacted, workspaceId, projectRoot);
 
     this.staged = null;

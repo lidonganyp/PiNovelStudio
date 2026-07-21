@@ -45,7 +45,7 @@ import type {
 } from "../adapters/legacy-model-route-adapter.js";
 // QUALITY-11：证据感知编辑机会 advisory context（可选注入 LLM prompt，不改变机会判定逻辑）
 import type { EditorialOpportunityAdvisory } from "./editorial-opportunity-advisory.js";
-import { locateLlmExcerpt } from "../../utils/llm-language-guard.js";
+import { localizeLlmText, locateLlmExcerpt } from "../../utils/llm-language-guard.js";
 import {
   buildCraftPhenomenonReport,
   skippedCraftPhenomenonReport,
@@ -58,6 +58,10 @@ import {
   parseOpportunityVerdict,
   type ParsedOpportunityVerdict,
 } from "./editorial-opportunity-contract.js";
+import {
+  collectMethodologyDiagnosticSourceRefs,
+  type MethodologyDiagnosticState,
+} from "./methodology-diagnostic-state.js";
 
 // ============================================================================
 // 输入/输出类型
@@ -80,6 +84,8 @@ export interface OpportunityJudgeInput {
   voiceFingerprints?: VoiceFingerprintInput[];
   /** Previous accepted ending emotion for post-raw transition diagnosis only. */
   previousEmotionState?: string | null;
+  /** Compact accepted-state evidence, visible only to the post-raw judge. */
+  methodologyDiagnosticState?: MethodologyDiagnosticState;
   /** 本章已知角色名（用于 ensemble 扫描） */
   characterNames: string[];
   /**
@@ -128,6 +134,11 @@ export interface OpportunityJudgeResult {
   /** Post-raw methodology observations; advisory only. */
   craftPhenomenonReport: CraftPhenomenonReport;
   /** Number of schema-only repair calls; never rewrites chapter prose. */
+  schemaRepairAttempts: number;
+}
+
+interface OpportunityLlmAttemptResult {
+  result: OpportunityJudgeResult | null;
   schemaRepairAttempts: number;
 }
 
@@ -217,10 +228,12 @@ export class EditorialOpportunityJudge {
     scannedSignals.push(this.scanEnsemble(rawText, intent, input.characterNames));
 
     // P1-9：LLM 主导判断（传入 modelGenerate 时）
+    let failedSchemaRepairAttempts = 0;
     if (input.modelGenerate) {
-      const llmResult = await this.judgeWithLLM(input, rawText, scannedSignals, maxHypotheses);
-      if (llmResult !== null) {
-        return llmResult; // LLM 成功，使用其判断
+      const llmAttempt = await this.judgeWithLLM(input, rawText, scannedSignals, maxHypotheses);
+      failedSchemaRepairAttempts = llmAttempt.schemaRepairAttempts;
+      if (llmAttempt.result !== null) {
+        return llmAttempt.result; // LLM 成功，使用其判断
       }
       // LLM 失败时保留 raw；机械扫描只提供诊断，不能升级为编辑授权。
     }
@@ -242,7 +255,7 @@ export class EditorialOpportunityJudge {
         input.modelGenerate ? "opportunity judge schema repair exhausted" : "未提供 opportunity judge 模型",
         input.rawCandidateId ?? "candidate:raw:unknown",
       ),
-      schemaRepairAttempts: input.modelGenerate ? 1 : 0,
+      schemaRepairAttempts: failedSchemaRepairAttempts,
     };
   }
 
@@ -261,7 +274,7 @@ export class EditorialOpportunityJudge {
     rawText: string,
     scannedSignals: ScannedSignal[],
     maxHypotheses: number
-  ): Promise<OpportunityJudgeResult | null> {
+  ): Promise<OpportunityLlmAttemptResult> {
     const { intent } = input;
     const route = OPPORTUNITY_LLM_ROUTE;
     const timeoutMs = input.timeoutMs ?? DEFAULT_OPPORTUNITY_TIMEOUT_MS;
@@ -276,6 +289,7 @@ export class EditorialOpportunityJudge {
       context: input.context,
       voiceFingerprints: input.voiceFingerprints,
       previousEmotionState: input.previousEmotionState,
+      methodologyDiagnosticState: input.methodologyDiagnosticState,
     });
 
     let parsed: ParsedOpportunityVerdict | null = null;
@@ -283,6 +297,7 @@ export class EditorialOpportunityJudge {
     let schemaRepairAttempts = 0;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
+        if (attempt === 1) schemaRepairAttempts = 1;
         const repairPrompt = attempt === 0
           ? { systemPrompt, userPrompt }
           : buildOpportunitySchemaRepairPrompt(invalidOutput);
@@ -297,18 +312,28 @@ export class EditorialOpportunityJudge {
         invalidOutput = output.text ?? "";
         parsed = parseOpportunityVerdict(invalidOutput);
         if (parsed) break;
-        if (attempt === 0) schemaRepairAttempts = 1;
       } catch {
-        return null;
+        return { result: null, schemaRepairAttempts };
       }
     }
-    if (!parsed) return null;
+    if (!parsed) return { result: null, schemaRepairAttempts };
 
     // LLM 机会 → hypothesis（span 强制：excerpt 必须在 raw 中真实存在）
     const llmHypotheses: EditorialHypothesis[] = [];
+    const allowedContextRefs = new Map<string, string>();
+    for (const ref of input.methodologyDiagnosticState
+      ? collectMethodologyDiagnosticSourceRefs(input.methodologyDiagnosticState)
+      : []) {
+      allowedContextRefs.set(ref, ref);
+      allowedContextRefs.set(localizeLlmText(ref), ref);
+    }
     for (const opp of parsed.opportunities) {
       const span = locateExcerptInRaw(rawText, opp.evidenceExcerpt);
       if (!span) continue; // excerpt 不在 raw 中 → 丢弃（span 强制）
+      const contextEvidenceRefs = opp.contextEvidenceRefs
+        .map((ref) => allowedContextRefs.get(ref))
+        .filter((ref): ref is string => Boolean(ref));
+      if (contextEvidenceRefs.length !== opp.contextEvidenceRefs.length) continue;
       llmHypotheses.push({
         id: `hypothesis:llm:${opp.opportunityType}`,
         opportunityType: opp.opportunityType,
@@ -318,7 +343,8 @@ export class EditorialOpportunityJudge {
         damageRisks: opp.damageRisks.length > 0 ? opp.damageRisks : ["LLM 未提供损伤评估"],
         rewriteScope: scopeForOpportunity(opp.opportunityType),
         confidence: opp.confidence,
-        ...(opp.craftDomain ? { craftDomain: opp.craftDomain } : {}),
+        craftDomain: opp.craftDomain,
+        ...(contextEvidenceRefs.length > 0 ? { contextEvidenceRefs } : {}),
       });
     }
 
@@ -334,9 +360,12 @@ export class EditorialOpportunityJudge {
       rawText,
       rawCandidateId: input.rawCandidateId ?? "candidate:raw:unknown",
       observations: parsed.craftObservations,
+      allowedContextEvidenceRefs: input.methodologyDiagnosticState
+        ? collectMethodologyDiagnosticSourceRefs(input.methodologyDiagnosticState)
+        : [],
     });
 
-    return {
+    return { result: {
       hypotheses: admission.selected,
       rejected: admission.rejected,
       rejectReasons: admission.reasons,
@@ -345,7 +374,7 @@ export class EditorialOpportunityJudge {
       llmJudged: true,
       craftPhenomenonReport,
       schemaRepairAttempts,
-    };
+    }, schemaRepairAttempts };
   }
 
   // --------------------------------------------------------------------------

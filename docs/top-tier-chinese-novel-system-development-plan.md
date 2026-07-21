@@ -61,6 +61,8 @@ LLM 负责：
 
 raw 通过事实守卫后，`CraftPhenomenonReport` 才可使用方法论工艺知识。报告按章节相关性覆盖对话、节奏与高潮、连载预期、类型契约、配角、世界观揭示、群像、收尾、五维推进和跨章健康十个领域；结论只允许 `observed / uncertain / not_applicable`，`observed / uncertain` 必须引用 raw 中逐字存在的 span。报告不得进入 raw prompt、不得给文学总分、不得直接改文或选择 winner。
 
+跨章诊断使用只读 `MethodologyDiagnosticState`，从作品声明、已接受叙事状态、疲劳状态、世界揭示计划和 arc registry 中提取紧凑且带来源的先前状态。它只在 raw 通过 FactGuard 后加载，不进入 raw prompt，不读取目标章之后的信息，也不能独立授权 candidate。`cross_chapter_health` 的现象或机会除 raw span 外还必须引用本次快照中实际存在的 `sourceRef`；缺失或伪造引用时拒绝该条诊断。
+
 `EditorialOpportunityJudge` 在同一次 post-raw 结构化判断中生成工艺报告和至多两个编辑机会。JSON 解析失败时最多追加一次 schema-only 修复调用，不允许因 schema 错误重写正文。普通 editorial candidate 跟随本章显式 writer family：默认 Gemini 使用 `v2_amplified_gemini31`，显式 Claude 使用 `v2_amplified`；中文自然度的受限 span 校准继续使用独立校准路由。
 
 ### 2.2 单一主链路

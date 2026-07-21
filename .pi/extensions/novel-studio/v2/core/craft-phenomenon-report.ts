@@ -6,6 +6,7 @@
  */
 
 import type { TextSpan } from "./types.js";
+import { localizeLlmText } from "../../utils/llm-language-guard.js";
 
 export const CRAFT_PHENOMENON_DOMAINS = [
   "dialogue",
@@ -29,6 +30,8 @@ export interface CraftPhenomenonObservationInput {
   phenomenon: string;
   readerImpact: string;
   evidenceExcerpt?: string;
+  /** External accepted-state evidence used by cross-chapter observations. */
+  contextEvidenceRefs?: string[];
   confidence: number;
 }
 
@@ -38,6 +41,7 @@ export interface CraftPhenomenonObservation {
   phenomenon: string;
   readerImpact: string;
   sourceSpans: TextSpan[];
+  contextEvidenceRefs: string[];
   confidence: number;
 }
 
@@ -57,7 +61,7 @@ export interface CraftPhenomenonReport {
   advisoryOnly: true;
   canDirectlyRewrite: false;
   canSelectWinner: false;
-  canTriggerEditorialOpportunity: boolean;
+  canTriggerEditorialOpportunity: false;
   emptyReason: string | null;
 }
 
@@ -65,6 +69,8 @@ export interface BuildCraftPhenomenonReportInput {
   rawText: string;
   rawCandidateId: string;
   observations: CraftPhenomenonObservationInput[];
+  /** Exact source refs made available to the post-raw judge. */
+  allowedContextEvidenceRefs?: string[];
 }
 
 const DOMAIN_SET = new Set<string>(CRAFT_PHENOMENON_DOMAINS);
@@ -75,6 +81,12 @@ export function buildCraftPhenomenonReport(
 ): CraftPhenomenonReport {
   const observations: CraftPhenomenonObservation[] = [];
   const rejectedObservations: RejectedCraftPhenomenonObservation[] = [];
+  const allowedRefs = new Map<string, string>();
+  for (const ref of input.allowedContextEvidenceRefs ?? []) {
+    if (!ref.trim()) continue;
+    allowedRefs.set(ref, ref);
+    allowedRefs.set(localizeLlmText(ref), ref);
+  }
 
   for (const observation of input.observations) {
     const rejection = validateObservationInput(observation);
@@ -84,7 +96,7 @@ export function buildCraftPhenomenonReport(
     }
 
     if (observation.status === "not_applicable") {
-      if (observation.evidenceExcerpt?.trim()) {
+      if (observation.evidenceExcerpt?.trim() || observation.contextEvidenceRefs?.length) {
         rejectedObservations.push({
           observation,
           reason: "not_applicable 不能携带正文 span",
@@ -97,6 +109,7 @@ export function buildCraftPhenomenonReport(
         phenomenon: observation.phenomenon.trim(),
         readerImpact: observation.readerImpact.trim(),
         sourceSpans: [],
+        contextEvidenceRefs: [],
         confidence: observation.confidence,
       });
       continue;
@@ -111,12 +124,37 @@ export function buildCraftPhenomenonReport(
       });
       continue;
     }
+    const normalizedContextRefs: string[] = [];
+    let invalidContextRef: string | null = null;
+    for (const ref of observation.contextEvidenceRefs ?? []) {
+      const normalized = allowedRefs.get(ref);
+      if (!normalized) {
+        invalidContextRef = ref;
+        break;
+      }
+      if (!normalizedContextRefs.includes(normalized)) normalizedContextRefs.push(normalized);
+    }
+    if (invalidContextRef) {
+      rejectedObservations.push({
+        observation,
+        reason: `状态证据引用未获准或不存在：${invalidContextRef}`,
+      });
+      continue;
+    }
+    if (observation.domain === "cross_chapter_health" && normalizedContextRefs.length === 0) {
+      rejectedObservations.push({
+        observation,
+        reason: "跨章工艺现象必须携带至少一条状态证据引用",
+      });
+      continue;
+    }
     observations.push({
       domain: observation.domain,
       status: observation.status,
       phenomenon: observation.phenomenon.trim(),
       readerImpact: observation.readerImpact.trim(),
       sourceSpans: [{ start, end: start + excerpt.length, excerpt }],
+      contextEvidenceRefs: normalizedContextRefs,
       confidence: observation.confidence,
     });
   }
@@ -132,9 +170,7 @@ export function buildCraftPhenomenonReport(
     advisoryOnly: true,
     canDirectlyRewrite: false,
     canSelectWinner: false,
-    canTriggerEditorialOpportunity: observations.some(
-      (entry) => entry.status === "observed" || entry.status === "uncertain",
-    ),
+    canTriggerEditorialOpportunity: false,
     emptyReason: observations.length === 0 ? "没有通过 span 校验的工艺现象" : null,
   };
 }
@@ -164,6 +200,7 @@ export function validateCraftPhenomenonReport(report: CraftPhenomenonReport): st
   if (report.advisoryOnly !== true) return "advisoryOnly 必须为 true";
   if (report.canDirectlyRewrite !== false) return "工艺报告不得直接改写正文";
   if (report.canSelectWinner !== false) return "工艺报告不得选择 winner";
+  if (report.canTriggerEditorialOpportunity !== false) return "工艺报告不得授权编辑候选";
   if (!report.sourceCandidateId) return "sourceCandidateId 不能为空";
   for (const observation of report.observations) {
     if (!DOMAIN_SET.has(observation.domain)) return `未知工艺域：${observation.domain}`;
@@ -173,6 +210,10 @@ export function validateCraftPhenomenonReport(report: CraftPhenomenonReport): st
     }
     if (observation.status !== "not_applicable" && observation.sourceSpans.length === 0) {
       return `${observation.status} 必须携带正文 span`;
+    }
+    if (observation.domain === "cross_chapter_health" && observation.status !== "not_applicable"
+      && observation.contextEvidenceRefs.length === 0) {
+      return "跨章工艺现象必须携带状态证据引用";
     }
   }
   return null;

@@ -27,6 +27,7 @@ import type {
   Diagnostic,
   FinalSelectionReport,
   FinalSelectedSource,
+  LongTermStateSnapshot,
   ProjectGain,
   V2Input,
   V2Output,
@@ -278,6 +279,71 @@ export function resolveWriterModelRouteLock(
     };
   }
   return null;
+}
+
+type RetrievedExpectation = NonNullable<LongTermStateSnapshot["expectation"]>[number];
+
+const ACTIVE_EXPECTATION_STATUS_RANK: Readonly<Record<string, number>> = {
+  escalated: 4,
+  delayed: 3,
+  advanced: 2,
+  open: 1,
+};
+
+/**
+ * Select only chapter-relevant, non-terminal expectations from the already
+ * future-filtered ContextCompiler snapshot. This is intent evidence only: it
+ * neither writes ExpectationLedger state nor grants literary authority.
+ */
+function selectExpectationsForIntent(
+  expectations: readonly RetrievedExpectation[],
+  currentPressure: readonly string[],
+  targetEmotions: readonly string[],
+): RetrievedExpectation[] {
+  const pressureSignals = currentPressure.map((value) => value.trim()).filter(Boolean);
+  const emotionSignals = targetEmotions.map((value) => value.trim()).filter(Boolean);
+
+  return expectations
+    .map((expectation, index) => ({
+      expectation,
+      index,
+      statusRank: ACTIVE_EXPECTATION_STATUS_RANK[expectation.status] ?? 0,
+      relevance: expectationRelevance(expectation, pressureSignals, emotionSignals),
+    }))
+    .filter((item) => item.statusRank > 0)
+    .sort((left, right) =>
+      right.statusRank - left.statusRank
+      || right.relevance - left.relevance
+      || left.index - right.index
+    )
+    .slice(0, 3)
+    .map((item) => item.expectation);
+}
+
+function expectationRelevance(
+  expectation: RetrievedExpectation,
+  pressureSignals: readonly string[],
+  emotionSignals: readonly string[],
+): number {
+  const description = expectation.description.trim();
+  const readerExperience = expectation.targetReaderExperience?.trim() ?? "";
+  let score = 0;
+
+  for (const pressure of pressureSignals) {
+    if (description.includes(pressure) || pressure.includes(description)) score += 2;
+  }
+  for (const emotion of emotionSignals) {
+    if (description.includes(emotion) || readerExperience.includes(emotion)) score += 1;
+  }
+  return score;
+}
+
+function expectationEvidenceKey(expectation: {
+  expectationId: string;
+  sourceChapter: string;
+  sourceRef?: string;
+}): string {
+  return `${expectation.expectationId}\u0000${expectation.sourceChapter}\u0000${expectation.sourceRef ?? ""}`;
 }
 
 /** Route only prose generation calls; calibration and judge routes retain their own providers. */
@@ -1080,6 +1146,25 @@ export async function runUnifiedPipeline(
   // builder 合并 constitution.forbiddenDrift。
   const constitution = loadCreativeConstitution(workspaceId, projectRoot);
   const stateStore = loadStateStore(workspaceId, projectRoot);
+  const currentPressureSummary = [
+    ...(seed.currentPressure?.pendingForeshadowing ?? []).map((f) => f.description),
+    ...(seed.currentPressure?.openArcs ?? []).map((a) => a.name),
+    ...(seed.previousChapterContinuation?.unresolvedTensions ?? []),
+    ...(seed.previousChapterContinuation?.openHooks ?? []),
+  ];
+  const selectedExpectations = selectExpectationsForIntent(
+    context.longTermState?.expectation ?? [],
+    currentPressureSummary,
+    seed.intent?.targetEmotions ?? [],
+  );
+  const selectedExpectationKeys = new Set(selectedExpectations.map(expectationEvidenceKey));
+  const intentStateStore = {
+    ...stateStore,
+    expectation: (stateStore.expectation ?? []).filter((expectation) =>
+      ACTIVE_EXPECTATION_STATUS_RANK[expectation.status] !== undefined
+      && selectedExpectationKeys.has(expectationEvidenceKey(expectation))
+    ),
+  };
 
   const intentInput: ChapterIntentInput = {
     chapterNumber,
@@ -1101,19 +1186,19 @@ export async function runUnifiedPipeline(
       id: f.id,
       description: f.description,
     })),
+    openExpectations: selectedExpectations.map((expectation) => ({
+      expectationId: expectation.expectationId,
+      description: expectation.description,
+      targetReaderExperience: expectation.targetReaderExperience,
+    })),
     openArcs: (seed.currentPressure?.openArcs ?? []).map((a) => ({
       arcId: a.arcId,
       name: a.name,
       coreQuestion: a.coreQuestion,
     })),
-    currentPressureSummary: [
-      ...(seed.currentPressure?.pendingForeshadowing ?? []).map((f) => f.description),
-      ...(seed.currentPressure?.openArcs ?? []).map((a) => a.name),
-      // REAL-QUALITY-4：补入前章悬置状态，让 intent.currentPressure 携带前章未解张力/开放钩子，
-      // 避免跨章因果断裂（此前只含 foreshadowing+openArcs，漏掉 previousChapterContinuation）。
-      ...(seed.previousChapterContinuation?.unresolvedTensions ?? []),
-      ...(seed.previousChapterContinuation?.openHooks ?? []),
-    ],
+    // REAL-QUALITY-4：补入前章悬置状态，让 intent.currentPressure 携带前章未解张力/开放钩子，
+    // 避免跨章因果断裂（此前只含 foreshadowing+openArcs，漏掉 previousChapterContinuation）。
+    currentPressureSummary,
     prevContinuationAvailable: seed.previousChapterContinuation?.available ?? false,
     // INTENT-1：接线 pendingCosts（seed.currentPressure.pendingCosts），
     // 供 ChapterIntentBuilder 派生 choicesAndCosts / expectedIrreversibleChange。
@@ -1134,7 +1219,7 @@ export async function runUnifiedPipeline(
   const { intent, warnings: intentWarnings } = intentBuilder.build(
     intentInput,
     constitution,
-    stateStore
+    intentStateStore
   );
 
   // ── 3. ModelGenerateFn：真实链路或 stub ────────────────────────────────

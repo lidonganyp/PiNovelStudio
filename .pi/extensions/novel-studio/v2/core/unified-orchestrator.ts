@@ -21,8 +21,8 @@
  * - 旧 FinalSelector（机械总分选择）→ 由 JudgeArbitrator + SelectionPolicy 取代
  * - 旧 v2-orchestrator 降级链（→ legacy）→ 改为 raw → hard block
  *
- * 本编排器不直接读 workspace 文件（context/intent/constitution 由调用方构建传入），
- * 只负责主链路控制流、降级、状态提交与原子保存。
+ * context/intent/constitution 由调用方构建传入；编排器只额外读取紧凑、只读的
+ * MethodologyDiagnosticState，且该状态只能进入 raw 后诊断，不能进入 raw prompt。
  */
 
 import { writeFileSync, mkdirSync, renameSync, existsSync } from "fs";
@@ -212,6 +212,7 @@ import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-
 // 排除 agentic 调用（与路由名 AGENTIC_RAW_ROUTE="novelos_agentic" 区分，二者不可混用）。
 import { AGENTIC_RAW_KIND } from "../../novelos/agent/agentic-raw-candidate-source.js";
 import type { ContextSafetyResult } from "./context-safety.js";
+import { createMethodologyDiagnosticStateLoader } from "./methodology-diagnostic-state.js";
 import {
   buildTrustedControlPlane,
   validateModelLock,
@@ -1071,6 +1072,17 @@ export class UnifiedOrchestrator {
       return this.deliverRaw(input, rawCandidate, warnings, stageResults, null, [], candidates);
     }
 
+    // 方法论状态只在 raw 通过 FactGuard 后加载，并且只提供给 post-raw judge。
+    // 它不参与 raw prompt，也不能独立授权 candidate。
+    const methodologyDiagnosticState = input.methodologyDiagnosticState
+      ?? createMethodologyDiagnosticStateLoader().load({
+        workspacePath: typeof projectRoot === "string" && projectRoot.trim()
+          ? join(projectRoot, "workspaces", workspaceId)
+          : undefined,
+        chapterNumber,
+      });
+    stageResults.methodologyDiagnosticState = methodologyDiagnosticState;
+
     const rawCraftAdvisory = timeSync("stage2.5_rawCraftAdvisory", () =>
       runRawCraftAdvisory(rawText, rawCandidateId, input, stageResults, warnings)
     );
@@ -1115,6 +1127,7 @@ export class UnifiedOrchestrator {
         context,
         voiceFingerprints: input.voiceFingerprints,
         previousEmotionState: input.previousEmotionState,
+        methodologyDiagnosticState,
         characterNames,
         // P1-9：传入 modelGenerate 启用 LLM 结构化判断；失败时本地信号只写 trace 并保留 raw
         // REAL-QUALITY-1-PREFLIGHT：opportunity judge 走 judge 轨（nb4_judge_glm），

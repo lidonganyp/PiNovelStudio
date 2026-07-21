@@ -253,6 +253,7 @@ import "../v2/core/preference-rule-retriever.js";
 import "../v2/core/human-rubric.js";
 import "../v2/core/user-revision-delta.js";
 import "../v2/core/real-quality-acceptance.js";
+import "../v2/core/methodology-diagnostic-state.js";
 import "../v2/core/scene-solution-search.js";
 import "../v2/core/prompt-pattern-library.js";
 import "../v2/core/positive-gain-candidate-generator.js";

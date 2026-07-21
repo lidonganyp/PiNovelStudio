@@ -40,6 +40,8 @@ export interface EditorialHypothesis {
   confidence: number;
   /** Methodology domain that motivated this hypothesis, when available. */
   craftDomain?: CraftPhenomenonDomain;
+  /** Accepted-state references when the opportunity depends on cross-chapter evidence. */
+  contextEvidenceRefs?: string[];
 }
 
 // ============================================================================
@@ -71,6 +73,15 @@ export function validateHypothesis(h: EditorialHypothesis, rawText: string): Hyp
   }
   if (!Array.isArray(h.damageRisks) || h.damageRisks.length === 0) {
     errors.push("damageRisks 必须非空（必须评估修订可能造成的损伤）");
+  }
+  if (h.contextEvidenceRefs !== undefined && (
+    !Array.isArray(h.contextEvidenceRefs)
+    || h.contextEvidenceRefs.some((ref) => typeof ref !== "string" || !ref.trim())
+  )) {
+    errors.push("contextEvidenceRefs 必须是非空字符串数组");
+  }
+  if (h.craftDomain === "cross_chapter_health" && !h.contextEvidenceRefs?.length) {
+    errors.push("cross_chapter_health hypothesis 必须携带状态证据引用");
   }
   if (typeof h.confidence !== "number" || h.confidence < 0 || h.confidence > 1) {
     errors.push("confidence 必须为 [0,1] 区间数值");

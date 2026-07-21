@@ -83,7 +83,7 @@ git diff --check
 
 测试读取编译后的 `dist/`、`dist-eval/`、`dist-test/`，修改 TypeScript 后必须先构建。
 
-2026-07-21 最新验证证据：`npm run build`、`npm run typecheck`、`npm run simplicity-gate` 通过；方法论故事上下文与表达自由聚焦套件 `46/46`；完整 `npm test` 为 `2777 total / 2769 pass / 0 fail / 8 skip`。固定场景规划器、旧多候选生成器、段落节奏硬门与全局场景准入接口已从生产闭包或代码表面物理移除。本地词频/长度扫描只写 diagnostic trace，不能独立授权候选；机会 judge 失败时保留 raw。机器文学自动选择默认 fail-closed，只有显式通过自然人对齐授权时才可开启；置信度候选门槛导出已删除。
+2026-07-21 最新验证证据：`npm run build`、`npm run typecheck`、`npm run simplicity-gate` 通过；核心方法论状态/编排聚焦套件 `51/51`，preview 与生产模型隔离回归 `19/19`；完整 `npm test` 为 `2751 total / 2743 pass / 0 fail / 8 skip`。普通 editorial candidate 跟随当前 writer family，默认 Gemini 使用 `v2_amplified_gemini31`。raw 通过 FactGuard 后才加载只读 `MethodologyDiagnosticState`；该状态不进入 raw prompt，排除目标章之后的状态与世界揭示内容，跨章现象和机会必须同时引用 raw span 与快照内合法 `sourceRef`。固定场景规划器、旧多候选生成器、段落节奏硬门与全局场景准入接口已从生产闭包或代码表面物理移除。本地词频/长度扫描只写 diagnostic trace，不能独立授权候选；机会 judge 失败时保留 raw。机器文学自动选择默认 fail-closed，只有显式通过自然人对齐授权时才可开启；置信度候选门槛导出已删除。
 
 ### 2026-07-17 测试失败修正
 

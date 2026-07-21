@@ -282,13 +282,26 @@ const STUB_RAW_TEXT = [
  * 让 EditorialOpportunityJudge.judgeWithLLM 解析成功 → llmJudged=true + 1 个 hypothesis。
  */
 const STUB_OPPORTUNITY_VERDICT = JSON.stringify({
+  craftPhenomena: [
+    {
+      domain: "ending_and_closure",
+      status: "observed",
+      phenomenon: "章末压力存在，但尚未形成新的因果问题",
+      evidenceExcerpt: "他咬牙继续下潜，肺中的氧气即将耗尽。",
+      contextEvidenceRefs: [],
+      readerImpact: "读者能感到即时危险，但后续牵引仍可加强",
+      confidence: 0.7,
+    },
+  ],
   opportunities: [
     {
       opportunityType: "chapter_end_pressure",
+      craftDomain: "ending_and_closure",
       diagnosis: "章末缺少翻页牵引力，末段无新问题或压力",
       evidenceExcerpt: "他咬牙继续下潜，肺中的氧气即将耗尽。",
       expectedReaderGain: "章末抛出新悬念或压力，提升翻页牵引力",
       damageRisks: ["强行加钩子可能与本章已建立的事实冲突"],
+      contextEvidenceRefs: [],
       confidence: 0.7,
     },
   ],
