@@ -32,6 +32,9 @@ import { integrateClosureTracker } from "../dist/v2/core/closure-tracker-integra
 import { buildStagedStateUpdate } from "../dist/v2/core/unified-entry.js";
 import { readJsonSource, SOURCES } from "../dist/v2/core/methodology-diagnostic-sources.js";
 import { buildAdvisorySignals } from "../dist/v2/core/methodology-diagnostic-advisory.js";
+import { buildOpportunityPrompt } from "../dist/v2/core/editorial-opportunity-contract.js";
+import { createMethodologyDiagnosticStateLoader } from "../dist/v2/core/methodology-diagnostic-state.js";
+import { preflightWorkspace } from "../dist/craft/workspace-preflight-checker.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -71,6 +74,11 @@ function makeSeed(opts = {}) {
       keywords: [],
       chapterTheme,
       targetEmotions,
+      expectationWindow: {
+        earliest: chapterNumber + (chapterFunction === "setup" ? 3 : 2),
+        optimal: chapterNumber + (chapterFunction === "setup" ? 5 : 4),
+        latest: chapterNumber + (chapterFunction === "setup" ? 8 : 7),
+      },
       _source: "chapterSeed",
     },
     builtAt: new Date().toISOString(),
@@ -84,6 +92,93 @@ function makeTempWorkspace() {
   mkdirSync(join(wsDir, "series"), { recursive: true });
   return { dir, workspaceId, wsDir };
 }
+
+test("ADVISORY-CONSUMPTION: opportunity prompt includes reader, return, and progression signals", () => {
+  const { dir, wsDir } = makeTempWorkspace();
+  try {
+    writeFileSync(join(wsDir, "config.json"), JSON.stringify({ genre: "mystery", subGenres: [] }), "utf-8");
+    writeFileSync(join(wsDir, "series", "reader-feedback.json"), JSON.stringify({
+      feedbacks: [{
+        id: "feedback-visible-to-judge", chapterId: "ch1", chapterNumber: 1,
+        feedbackType: "negative", focusDimensions: ["pacing"],
+        sourceRef: "series/reader-feedback.json#feedback-visible-to-judge",
+      }],
+    }), "utf-8");
+    writeFileSync(join(wsDir, "series", "return-chapter-provenance.json"), JSON.stringify({
+      entries: [{
+        id: "return-visible-to-judge", chapterId: "ch3", chapterNumber: 3,
+        returnType: "recap", sourceChapterIds: ["ch1"], reason: "resume",
+        sourceRef: "series/return-chapter-provenance.json#return-visible-to-judge",
+      }],
+    }), "utf-8");
+    writeFileSync(join(wsDir, "series", "chapter-progression-contracts.json"), JSON.stringify({
+      contracts: [{
+        chapterNumber: 2,
+        expectedAxes: { plot: true, info: false, character: false, world: false, causal: true },
+        actualAxes: { plot: false, info: false, character: false, world: false, causal: false },
+        reviewSignals: [{ dimension: "plot", reason: "progression-visible-to-judge" }],
+      }],
+    }), "utf-8");
+    const state = createMethodologyDiagnosticStateLoader().load({ workspacePath: wsDir, chapterNumber: 3 });
+    const { userPrompt } = buildOpportunityPrompt({
+      rawText: "原始正文测试。",
+      intent: {
+        chapterFunction: "development", readerExperience: [], currentPressure: [],
+        relevantCharacters: [], inviolableFacts: [],
+      },
+      scannedSignals: [], methodologyDiagnosticState: state,
+    });
+    assert.match(userPrompt, /advisorySignals/);
+    assert.match(userPrompt, /feedback-visible-to-judge/);
+    assert.match(userPrompt, /return-visible-to-judge/);
+    assert.match(userPrompt, /progression-visible-to-judge/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("REM: no author window means no generated overdue deadline", () => {
+  const seed = makeSeed({ chapterNumber: 5 });
+  delete seed.intent.expectationWindow;
+  const staged = buildStagedStateUpdate(seed, 5);
+  const expectation = staged.additions.find((entry) => entry.kind === "expectation");
+  assert.ok(expectation);
+  assert.equal(expectation.overdueWindow, undefined);
+});
+
+test("PUBLIC-DIAGNOSTIC: returns the complete methodology advisory package", async () => {
+  const { dir, workspaceId, wsDir } = makeTempWorkspace();
+  try {
+    writeFileSync(join(wsDir, "config.json"), JSON.stringify({ genre: "mystery", subGenres: [] }), "utf-8");
+    const result = await handleChapterAdvisory({
+      action: "diagnostic", workspaceId, chapterNumber: 2, _projectRoot: dir,
+    });
+    assert.equal(result.status, "success");
+    assert.equal(result.diagnostic.methodologyDiagnosticState.advisoryOnly, true);
+    assert.equal(result.diagnostic.methodologyDiagnosticState.canEnterRawPrompt, false);
+    assert.equal(result.diagnostic.methodologyDiagnosticState.canDirectlyAuthorizeCandidate, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AUTHOR-WORKFLOW: preflight exposes seven-step advisory guidance without adding blockers", () => {
+  const { dir, workspaceId, wsDir } = makeTempWorkspace();
+  try {
+    const report = preflightWorkspace({
+      workspacePath: wsDir, workspaceId, chapterId: "1", chapterNumber: 1,
+      projectRoot: dir, skipSeedReadiness: true,
+    });
+    assert.equal(report.authorWorkflow.advisoryOnly, true);
+    assert.deepEqual(
+      report.authorWorkflow.steps.map((step) => step.id),
+      ["story_promise", "minimal_bible", "reader_contract", "chapter_card", "scene_generation", "three_layer_review", "state_writeback"],
+    );
+    assert.equal(report.blockingItems.some((item) => item.check.startsWith("author_workflow")), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 // ============================================================================
 // P0-3：路径穿越 — handleChapterAdvisory 拒绝 unsafe workspaceId
@@ -101,6 +196,41 @@ test("P0-3: handleChapterAdvisory 拒绝 workspaceId='..' (路径穿越)", async
     assert.equal(result.status, "error", `应拒绝 ".."，实际 status=${result.status}`);
     assert.match(result.error ?? "", /Invalid workspaceId|Path traversal/i,
       `error 应说明拒绝原因，实际: ${result.error}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P1-6: fulfilled expectation without explicit arc evidence stays advisory", () => {
+  const { dir, wsDir } = makeTempWorkspace();
+  try {
+    const derivedPath = join(wsDir, "series", "arc-registry-derived.json");
+    writeFileSync(derivedPath, JSON.stringify({
+      arcs: [{
+        arc_id: "arc:no-evidence", name: "无证据弧线", arc_type: "secondary", priority: "P1",
+        status: "in_progress", core_question: "问题", chapter_opened: 1,
+        chapter_climaxed: null, chapter_closed: null,
+        expected_closure_window: { earliest: 2, optimal: 3, latest: 5 },
+        closure_trigger: "explicit", milestones: [], dependencies: [], external_refs: [],
+        emotional_payload: { primary: "紧张", secondary: [] },
+        metadata: { createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      }],
+      pending_foreshadows: [],
+      config: { totalChapters: 20, currentChapter: 3, closureType: "hard" },
+      lastUpdated: new Date().toISOString(),
+    }), "utf-8");
+    const result = integrateClosureTracker(wsDir, {
+      additions: [{
+        kind: "expectation", id: "expectation:no-evidence", sourceChapter: "ch3",
+        sourceRef: "ch3#finalText:abc:0-5", confidence: 0.8, lastUpdated: new Date().toISOString(),
+        expectationId: "expectation:no-evidence", description: "兑现", status: "fulfilled",
+        relatedArcIds: ["arc:no-evidence"], relatedCharacterIds: [], relatedForeshadowIds: [],
+      }],
+      invalidations: [], sourceChapter: "ch3",
+    }, 3);
+    assert.equal(result.ok, true);
+    assert.equal(result.arcUpdates.length, 0);
+    assert.equal(JSON.parse(readFileSync(derivedPath, "utf-8")).arcs[0].status, "in_progress");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -421,6 +551,10 @@ test("P1-6: integrateClosureTracker 用合法 'climaxed' 状态推进 arc（不�
         relatedArcIds: ["arc:dark-current"],
         relatedCharacterIds: [],
         relatedForeshadowIds: [],
+        arcTransitionEvidence: [{
+          arcId: "arc:dark-current", newStatus: "climaxed",
+          sourceRef: "ch5#finalText:abc123:0-10", confirmedBy: "llm",
+        }],
       }],
       invalidations: [],
       sourceChapter: "ch5",
