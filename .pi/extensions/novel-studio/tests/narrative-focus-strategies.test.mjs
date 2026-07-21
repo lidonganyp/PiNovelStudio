@@ -8,11 +8,13 @@ import {
   CRAFT_PHENOMENON_DOMAINS,
 } from "../dist/v2/core/craft-phenomenon-report.js";
 import { createEditorialCandidateGenerator } from "../dist/v2/core/editorial-candidate-generator.js";
+import { validateHypothesis } from "../dist/v2/core/editorial-hypothesis.js";
 import {
   buildOpportunityPrompt,
   parseOpportunityVerdict,
 } from "../dist/v2/core/editorial-opportunity-contract.js";
 import { createEditorialStrategyRegistry } from "../dist/v2/core/editorial-strategy-registry.js";
+import { compileMethodologyApplicationReport } from "../dist/v2/core/methodology-policy.js";
 
 const RAW = [
   "父子隔着三盘菜相对而坐。",
@@ -191,3 +193,29 @@ test("editorial candidate receives the selected strategy without a cinematic che
   assert.doesNotMatch(sentPrompt, /必须使用.*镜头/);
 });
 
+test("candidate strategy cannot authorize a hypothesis without a raw span", () => {
+  const validation = validateHypothesis({
+    id: "hypothesis:no-span",
+    opportunityType: "relationship_progress",
+    craftDomain: "narrative_focus_and_spatial_staging",
+    candidateStrategyId: "spatial_relationship_staging",
+    diagnosis: "空间关系可能承载关系变化",
+    evidenceSpans: [],
+    expectedReaderGain: "提升关系张力",
+    damageRisks: ["可能损伤留白"],
+    rewriteScope: "event_candidate",
+    confidence: 0.7,
+  }, RAW);
+
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors.join(";"), /evidenceSpans 必须非空/);
+});
+
+test("methodology policy fails closed if candidateStrategyId is ever consumed by raw", () => {
+  const report = compileMethodologyApplicationReport(["candidateStrategyId"]);
+  const rule = report.rules.find((entry) => entry.id === "craft_strategy_hypotheses");
+
+  assert.equal(rule?.enforcement, "candidate_only");
+  assert.deepEqual(rule?.matchedFields, ["candidateStrategyId"]);
+  assert.deepEqual(report.violations, ["craft_strategy_hypotheses:candidateStrategyId"]);
+});
