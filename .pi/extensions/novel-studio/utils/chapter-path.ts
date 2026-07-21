@@ -166,7 +166,7 @@ export function resolveChapterDirFromChaptersDir(
 // 兼容读取（只读，不写）。canonical 优先，避免读到旧分裂产物。
 // ============================================================================
 
-export type ChapterPathFormat = "canonical" | "padded2" | "padded3" | "double_prefix";
+export type ChapterPathFormat = "canonical" | "numeric" | "padded2" | "padded3" | "double_prefix";
 
 export interface ResolvedChapterPath {
   path: string;
@@ -186,6 +186,7 @@ function chapterFileCandidates(
   const padded3 = id.padStart(3, "0");
   return [
     { path: join(chaptersDir, `chapter-${id}.md`), format: "canonical" },
+    { path: join(chaptersDir, `${id}.md`), format: "numeric" },
     { path: join(chaptersDir, `chapter-${padded2}.md`), format: "padded2" },
     { path: join(chaptersDir, `chapter-${padded3}.md`), format: "padded3" },
     { path: join(chaptersDir, `chapter-chapter-${id}.md`), format: "double_prefix" },
@@ -220,6 +221,17 @@ export function resolveExistingChapterFile(
   chapterId: string,
 ): ResolvedChapterPath | null {
   const chaptersDir = join(workspacePath, "chapters");
+  return resolveExistingChapterFileFromChaptersDir(chaptersDir, chapterId);
+}
+
+/**
+ * 兼容读取已知 chapters/ 目录下的章节正文。用于离线验收脚本等已经持有
+ * 章节目录的调用点，避免重新拼接 workspace 路径。
+ */
+export function resolveExistingChapterFileFromChaptersDir(
+  chaptersDir: string,
+  chapterId: string,
+): ResolvedChapterPath | null {
   for (const c of chapterFileCandidates(chaptersDir, chapterId)) {
     if (existsSync(c.path)) {
       return c;
