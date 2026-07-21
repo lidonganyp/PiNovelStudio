@@ -213,10 +213,12 @@ test("public chapter tool exposes writerModel without widening modelTestRoute", 
   const chapterTool = registerTools(handlers).find((tool) => tool.name === "novel_generate_chapter");
   assert.ok(chapterTool);
   const writerSchema = chapterTool.parameters.properties.writerModel;
-  assert.deepEqual(writerSchema.enum, ["claude", "gemini31"]);
+  assert.deepEqual(writerSchema.enum, ["gemini31", "claude"]);
+  assert.equal(writerSchema.default, "gemini31");
   assert.equal(chapterTool.parameters.properties.boundedBestOf3.type, "boolean");
   assert.match(chapterTool.parameters.properties.boundedBestOf3.description, /退出生产主链路/);
   assert.match(writerSchema.description, /Gemini 3\.1 Pro/);
+  assert.match(writerSchema.description, /仅当用户明确要求 Claude/);
   assert.match(writerSchema.description, /fallback=\[\]/);
   assert.equal(chapterTool.parameters.properties.candidateTimeoutMs.type, "number");
   assert.equal(chapterTool.parameters.properties.sceneSolution.type, undefined, "object fields use the public Type.Any bridge");
