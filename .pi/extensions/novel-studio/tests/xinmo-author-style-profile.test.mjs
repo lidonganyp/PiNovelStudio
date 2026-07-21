@@ -141,6 +141,7 @@ test("XINMO-AUTHOR-STYLE-1 · 仅 span-backed 自然度候选消费精炼作者�
   assert.equal(result.candidates.length, 1, JSON.stringify(result.failures));
   assert.match(capturedPrompt, /作者风格参考（只用于当前证据 span）/);
   assert.match(capturedPrompt, /情绪优先通过身体反应、静默或动作呈现/);
+  assert.match(capturedPrompt, /李一凡.*普通穷学生的生活感/);
   assert.doesNotMatch(capturedPrompt, /medianCnChars|p75CnChars|observedRatio|对白比例/);
   assert.equal(result.candidates[0].promptProfile.type, "editorial");
 });
