@@ -39,6 +39,7 @@ import {
 import type { ChapterSeed } from "../../craft/chapter-seed-types.js";
 import { loadCreativeConstitution } from "./creative-constitution.js";
 import { loadStateStore } from "./final-state-commit.js";
+import { backfillAcceptedChapterState } from "./historical-state-backfill.js";
 import { retrieveNarrativeContext } from "./context-retrieval.js";
 
 // ============================================================================
@@ -73,8 +74,9 @@ function deriveCharacterStates(seed: ChapterSeed): CharacterStateFact[] {
       recentAction: c.recentAction,
       pendingTension: c.pendingTension,
       aliases: c.aliases,
+      narrativeProfile: c.narrativeProfile,
     },
-    sourceIds: [`character:${c.name}`],
+    sourceIds: [`character:${c.name}`, ...(c.narrativeProfile?.sourceId ? [c.narrativeProfile.sourceId] : [])],
   }));
 }
 
@@ -257,6 +259,11 @@ function deriveLongTermState(
   chapterNumber: number,
   seed: ChapterSeed,
 ): LongTermStateSnapshot | null {
+  backfillAcceptedChapterState({
+    workspaceId,
+    projectRoot,
+    beforeChapterNumber: chapterNumber,
+  });
   const store = loadStateStore(workspaceId, projectRoot);
   // 空状态文件视为无快照（避免向候选注入空噪音）
   const isEmpty =

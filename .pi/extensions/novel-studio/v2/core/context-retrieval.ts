@@ -137,7 +137,19 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
       || left.entry.id.localeCompare(right.entry.id)
     );
   const passingScore = scored.filter((item) => item.score >= 10);
-  const selected = passingScore.slice(0, Math.max(0, input.maxItems));
+  const itemLimit = Math.max(0, Math.floor(input.maxItems));
+  const perKindFloor = Math.min(4, Math.floor(itemLimit / 4));
+  const selectedIdSet = new Set<string>();
+  for (const kind of ["canon", "pattern"] as const) {
+    for (const item of passingScore.filter((candidate) => candidate.entry.kind === kind).slice(0, perKindFloor)) {
+      selectedIdSet.add(item.entry.id);
+    }
+  }
+  for (const item of passingScore) {
+    if (selectedIdSet.size >= itemLimit) break;
+    selectedIdSet.add(item.entry.id);
+  }
+  const selected = passingScore.filter((item) => selectedIdSet.has(item.entry.id));
   const selectedIds = new Set(selected.map((item) => item.entry.id));
 
   // recall：必需 promise 的可达性（仅在 eligible 集合内检索）

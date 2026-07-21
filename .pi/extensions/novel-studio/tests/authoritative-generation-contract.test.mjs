@@ -42,7 +42,7 @@ function createWorkspace(chapterNumber = 1) {
       { id: "unused", name: "未出场者", role: "supporting" },
     ],
   }), "utf8");
-  const explicitOutline = `# 第${chapterNumber}章\n\n## 章节定位\n- **承接**：前章末林川在门外听见许岚的声音\n- **本章功能**：确认门后身份并推进失踪案\n- **章末目标**：真正的许岚从楼梯口出现\n\n### 事件 1：门外试探\n- **参与角色**：林川、许岚\n- **人物动机**：林川要确认许岚是否可信\n- **内容摘要**：林川依据门锁事实确认门后的声音在冒充许岚。\n- **感知锚点**：冷空气、脚步声、门缝霉味\n- **必须包含**：门锁只能从室内打开、声音说出不该知道的信息\n- **状态变化**：林川从怀疑转为确认冒充者存在\n- **因果关系**：门锁事实与错误记忆共同暴露冒充者\n- **伏笔埋设**：许岚失踪与旧案有关\n\n## 风格基调强约束\n- 短句，段落极短\n- 强制使用听觉与嗅觉\n- 对白不带说话标签\n+`;
+  const explicitOutline = `# 第${chapterNumber}章\n\n## 章节定位\n- **承接**：前章末林川在门外听见许岚的声音\n- **本章功能**：确认门后身份并推进失踪案\n- **章末目标**：真正的许岚从楼梯口出现\n\n### 事件 1：门外试探\n- **参与角色**：林川、许岚\n- **人物动机**：林川要确认许岚是否可信\n- **内容摘要**：林川依据门锁事实确认门后的声音在冒充许岚。\n- **感知锚点**：冷空气、脚步声、门缝霉味\n- **必须包含**：[anchor]门锁只能从室内打开、[verbatim]「别开门」、声音说出不该知道的信息\n- **状态变化**：林川从怀疑转为确认冒充者存在\n- **因果关系**：门锁事实与错误记忆共同暴露冒充者\n- **伏笔埋设**：许岚失踪与旧案有关\n\n## 风格基调强约束\n- 短句，段落极短\n- 强制使用听觉与嗅觉\n- 对白不带说话标签\n+`;
   writeFileSync(
     join(workspacePath, "series", `ch${chapterNumber}-outline-explicit.md`),
     explicitOutline,
@@ -159,6 +159,8 @@ test("显式章纲内容契约进入 ChapterSeed，但感知锚点和风格强�
     assert.equal(contract?.chapterFunction, "确认门后身份并推进失踪案");
     assert.deepEqual(contract?.eventSummaries, ["林川依据门锁事实确认门后的声音在冒充许岚。​".replace("\u200b", "")]);
     assert.ok(contract?.mustInclude.includes("门锁只能从室内打开"));
+    assert.ok(contract?.mustInclude.includes("原句：「别开门」"));
+    assert.equal(contract?.mustInclude.some((entry) => /\[(?:anchor|verbatim)\]/iu.test(entry)), false);
     assert.ok(contract?.stateChanges.includes("林川从怀疑转为确认冒充者存在"));
     assert.ok(contract?.foreshadowing.includes("许岚失踪与旧案有关"));
     assert.ok(contract?.causalRelations.includes("门锁事实与错误记忆共同暴露冒充者"));
@@ -167,6 +169,183 @@ test("显式章纲内容契约进入 ChapterSeed，但感知锚点和风格强�
     assert.equal(result.seed.candidateAnchors.some((entry) => /冷空气|脚步声|霉味/.test(entry.description)), false);
     assert.equal(JSON.stringify(contract).includes("短句"), false);
     assert.equal(JSON.stringify(contract).includes("嗅觉"), false);
+  } finally {
+    rmSync(workspace.projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("经验文档最小章卡字段进入 AuthorChapterContract", () => {
+  const workspace = createWorkspace(3);
+  try {
+    writeFileSync(join(workspace.workspacePath, "series", "ch3-outline-explicit.md"), `# 第3章
+
+## 章节定位
+- **本章功能**：确认门后身份
+- **目标读者体验**：紧张；确认规则后的认知反转
+- **当前压力**：门后的声音正在逼近
+- **焦点角色目标**：林川：确认许岚是否可信
+- **本章阻力**：声音会利用错误记忆误导判断
+- **选择与代价**：选择：主动敲门试探｜代价：暴露自己已经识破冒充者
+- **不可逆变化**：林川失去继续伪装不知情的机会
+- **因果章末压力**：试探暴露模仿限制，真正的许岚因此现身
+
+### 事件 1：门外试探
+- **参与角色**：林川、许岚
+- **内容摘要**：林川依据门锁事实确认门后的声音在冒充许岚。
+- **必须包含**：[fact]门锁只能从室内打开
+`, "utf8");
+    const contract = buildChapterSeed({
+      workspacePath: workspace.workspacePath,
+      workspaceId: workspace.workspaceId,
+      chapterId: "3",
+      chapterNumber: 3,
+    }).seed.authorChapterContract;
+    assert.deepEqual(contract.readerExperience, ["紧张", "确认规则后的认知反转"]);
+    assert.deepEqual(contract.currentPressure, ["门后的声音正在逼近"]);
+    assert.deepEqual(contract.focusCharacterGoals, [{ character: "林川", goal: "确认许岚是否可信" }]);
+    assert.deepEqual(contract.resistance, ["声音会利用错误记忆误导判断"]);
+    assert.deepEqual(contract.choicesAndCosts, [{ choice: "主动敲门试探", cost: "暴露自己已经识破冒充者" }]);
+    assert.deepEqual(contract.expectedIrreversibleChange, ["林川失去继续伪装不知情的机会"]);
+    assert.deepEqual(contract.causalEndPressure, ["试探暴露模仿限制，真正的许岚因此现身"]);
+  } finally {
+    rmSync(workspace.projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("角色档案中的叙事身份进入 ChapterSeed，但机械写法字段不进入", () => {
+  const workspace = createWorkspace(2);
+  try {
+    writeFileSync(join(workspace.workspacePath, "characters", "hero.md"), `# 林川（主角）
+
+## 外貌（不可变）
+- 黑发，左眉有旧伤
+
+## 性格画像
+- **底色**：冷静理性，但涉及妹妹时容易冒险
+- **深层逻辑**：先验证再信任，不把希望寄托在运气上
+
+## 语言风格
+- **register**：克制、直接，压力越大越少解释
+- **内心独白频率**：高
+
+## 关键关系
+- **许岚**：互不完全信任，但必须合作
+
+## 已发生事件（截至第1章）
+- 在旧仓库发现许岚留下的假钥匙
+`, "utf8");
+
+    const result = buildChapterSeed({
+      workspacePath: workspace.workspacePath,
+      workspaceId: workspace.workspaceId,
+      chapterId: "2",
+      chapterNumber: 2,
+    });
+    const hero = result.seed.characters.find((entry) => entry.name === "林川");
+
+    assert.ok(hero?.narrativeProfile?.personality.some((entry) => entry.includes("冷静理性")));
+    assert.ok(hero?.narrativeProfile?.decisionLogic.some((entry) => entry.includes("先验证再信任")));
+    assert.ok(hero?.narrativeProfile?.voice.some((entry) => entry.includes("压力越大越少解释")));
+    assert.ok(hero?.narrativeProfile?.relationships.some((entry) => entry.includes("许岚")));
+    assert.ok(hero?.narrativeProfile?.establishedHistory.some((entry) => entry.includes("假钥匙")));
+    assert.equal(JSON.stringify(hero?.narrativeProfile).includes("内心独白频率"), false);
+  } finally {
+    rmSync(workspace.projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("群像合档中的角色叙事身份分别进入对应 CharacterState", () => {
+  const workspace = createWorkspace(1);
+  try {
+    writeFileSync(join(workspace.workspacePath, "config.json"), JSON.stringify({
+      novelName: "群像测试",
+      genre: "都市",
+      characters: [
+        { id: "su-qing", name: "苏晴", role: "supporting" },
+        { id: "bai-xiaorou", name: "白小柔", role: "supporting" },
+      ],
+    }), "utf8");
+    writeFileSync(join(workspace.workspacePath, "characters", "ensemble.md"), `# 月光战队群像
+
+## 苏晴（supporting）
+- **人设**：冷静，遇到队友受伤时会主动承担风险
+- **关键关系**：对白小柔负有保护责任
+
+## 白小柔（supporting）
+- **人设**：外向，但会用玩笑掩饰恐惧
+- **关键关系**：信任苏晴的现场判断
+`, "utf8");
+
+    const seed = buildChapterSeed({
+      workspacePath: workspace.workspacePath,
+      workspaceId: workspace.workspaceId,
+      chapterId: "1",
+      chapterNumber: 1,
+    }).seed;
+    const suQing = seed.characters.find((entry) => entry.name === "苏晴");
+    const baiXiaorou = seed.characters.find((entry) => entry.name === "白小柔");
+    assert.ok(suQing?.narrativeProfile?.personality.some((entry) => entry.includes("冷静")));
+    assert.ok(suQing?.narrativeProfile?.relationships.some((entry) => entry.includes("白小柔")));
+    assert.ok(baiXiaorou?.narrativeProfile?.personality.some((entry) => entry.includes("外向")));
+  } finally {
+    rmSync(workspace.projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("显式章卡存在时只加载相关高层方向，不注入整本 outline", () => {
+  const workspace = createWorkspace(17);
+  try {
+    writeFileSync(join(workspace.workspacePath, "series", "outline.md"), [
+      "# 作品总纲",
+      `全书核心冲突：失踪案迫使林川重新学习信任。${"总纲背景。".repeat(300)}`,
+      "## 第16章：旧方向",
+      `这一章与当前生成无关。${"旧章噪音。".repeat(900)}`,
+      "## 第17章：门后的人",
+      `本章继续验证门后的身份，并让旧案线索发生不可逆变化。${"当前方向。".repeat(120)}`,
+      "## 第80章：未来剧透",
+      `林川最终发现幕后真相。${"未来内容。".repeat(900)}`,
+    ].join("\n"), "utf8");
+
+    const seed = buildChapterSeed({
+      workspacePath: workspace.workspacePath,
+      workspaceId: workspace.workspaceId,
+      chapterId: "17",
+      chapterNumber: 17,
+    }).seed;
+    const notes = seed.highLevelDirection.backgroundNotes.join("\n");
+    assert.ok(notes.length <= 4000, `高层方向预算失控：${notes.length}`);
+    assert.match(notes, /本章继续验证门后的身份/);
+    assert.doesNotMatch(notes, /这一章与当前生成无关|林川最终发现幕后真相/);
+  } finally {
+    rmSync(workspace.projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("当前压力只保留章卡命中项与即时承接，不灌入全部历史开放项", () => {
+  const workspace = createWorkspace(1);
+  try {
+    const seed = buildChapterSeed({
+      workspacePath: workspace.workspacePath,
+      workspaceId: workspace.workspaceId,
+      chapterId: "1",
+      chapterNumber: 1,
+    }).seed;
+    seed.currentPressure.pendingForeshadowing = Array.from({ length: 20 }, (_, index) => ({
+      id: `F-${index + 1}`,
+      description: index === 12 ? "许岚失踪与旧案有关" : `无关历史伏笔${index + 1}`,
+    }));
+    seed.previousChapterContinuation = {
+      available: true,
+      openHooks: ["门后的脚步声正在接近"],
+      introducedCharacters: [],
+      unresolvedTensions: ["林川尚未确认许岚身份"],
+    };
+    const selected = unifiedEntry.selectChapterPressureSignals(seed);
+    assert.ok(selected.includes("许岚失踪与旧案有关"));
+    assert.ok(selected.includes("门后的脚步声正在接近"));
+    assert.ok(selected.includes("林川尚未确认许岚身份"));
+    assert.ok(selected.length <= 8);
+    assert.equal(selected.some((entry) => entry === "无关历史伏笔1"), false);
   } finally {
     rmSync(workspace.projectRoot, { recursive: true, force: true });
   }
@@ -212,6 +391,39 @@ test("损坏或空壳 skeleton 不得压过真实前章正文", () => {
     });
     assert.match(result.seed.previousChapterContinuation.lastEventSummary ?? "", /前章真实结尾/);
     assert.deepEqual(result.seed.previousChapterContinuation.sourceIds, ["chapters/1.md"]);
+  } finally {
+    rmSync(workspace.projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("非空但陈旧的 skeleton 也不得压过已接受前章正文", () => {
+  const workspace = createWorkspace(2);
+  try {
+    writeFileSync(join(workspace.workspacePath, "series", "skeleton.json"), JSON.stringify({
+      chapterSkeletons: {
+        "1": {
+          facts: ["陈旧摘要：林川已经离开城市"],
+          stateChanges: [{ subject: "林川", before: "在城内", after: "离城", isReversible: false }],
+          activeDilemmas: ["陈旧悬念"],
+        },
+      },
+    }), "utf8");
+    writeFileSync(
+      join(workspace.workspacePath, "chapters", "1.md"),
+      "正式定稿中，林川没有离城。他在门外听见许岚的声音，决定先验证钥匙。",
+      "utf8",
+    );
+
+    const result = buildChapterSeed({
+      workspacePath: workspace.workspacePath,
+      workspaceId: workspace.workspaceId,
+      chapterId: "2",
+      chapterNumber: 2,
+    });
+
+    assert.match(result.seed.previousChapterContinuation.lastEventSummary ?? "", /正式定稿中/);
+    assert.deepEqual(result.seed.previousChapterContinuation.sourceIds, ["chapters/1.md"]);
+    assert.doesNotMatch(result.seed.previousChapterContinuation.lastEventSummary ?? "", /陈旧摘要/);
   } finally {
     rmSync(workspace.projectRoot, { recursive: true, force: true });
   }

@@ -116,6 +116,13 @@ export interface ChapterIntentInput {
   authorChapterContract?: {
     available?: boolean;
     chapterFunction?: string;
+    readerExperience?: string[];
+    currentPressure?: string[];
+    focusCharacterGoals?: Array<{ character: string; goal: string }>;
+    resistance?: string[];
+    choicesAndCosts?: Array<{ choice: string; cost: string }>;
+    expectedIrreversibleChange?: string[];
+    causalEndPressure?: string[];
     eventSummaries: string[];
     mustInclude: string[];
     stateChanges: string[];
@@ -164,6 +171,10 @@ export class ChapterIntentBuilder {
 
     // readerExperience：constitution.readerPromise + 目标情绪
     const readerExperience: string[] = [];
+    if (authorContract?.readerExperience?.length) {
+      readerExperience.push(...authorContract.readerExperience);
+      sourceRefs.push(...authorContract.sourceIds);
+    }
     if (constitution?.readerPromise?.length) {
       readerExperience.push(...constitution.readerPromise);
       sourceRefs.push("creative-constitution:readerPromise");
@@ -178,7 +189,10 @@ export class ChapterIntentBuilder {
     }
 
     // currentPressure
-    const currentPressure = [...input.currentPressureSummary];
+    const currentPressure = dedupe([
+      ...(authorContract?.currentPressure ?? []),
+      ...input.currentPressureSummary,
+    ]);
     if (currentPressure.length) sourceRefs.push("chapter-seed:currentPressure");
 
     // meaningfulChoices：从开放弧线的 coreQuestion 派生
@@ -324,15 +338,24 @@ export class ChapterIntentBuilder {
     //    修复轮：ChapterSeed.characters 无 goal 字段（只有 mentality/recentAction/
     //    pendingTension/role），这些都是状态/动作/身份，不是角色目标。不伪造目标。
     //    只有输入存在明确目标证据时才生成 goal；当前 schema 无可靠 goal 字段 → 空 + warning。
-    const focusCharacterGoals: Array<{ character: string; goal: string }> = [];
-    warnings.push("focusCharacterGoals 为空：ChapterSeed.characters 无 goal 字段，pendingTension/recentAction/mentality/role 均非角色目标，不伪造");
-    // 空字段不记录 fieldSourceRefs
+    const focusCharacterGoals: Array<{ character: string; goal: string }> = [
+      ...(authorContract?.focusCharacterGoals ?? []),
+    ].filter((entry) => relevantCharacters.includes(entry.character)).slice(0, 3);
+    if (focusCharacterGoals.length > 0) {
+      fieldSourceRefs.focusCharacterGoals = authorContract?.sourceIds ?? [];
+    } else {
+      warnings.push("focusCharacterGoals 为空：ChapterSeed.characters 无 goal 字段，pendingTension/recentAction/mentality/role 均非角色目标，不伪造");
+    }
 
     // 4. resistance 阻力：阻止焦点角色达成目标的具体阻力
     //    来源：currentPressureSummary + protagonistCoreConflict + openArcs 的 coreQuestion
     //    修复轮：fieldSourceRefs 动态追踪实际贡献来源。
     const resistance: string[] = [];
     const resistanceSources: string[] = [];
+    if (authorContract?.resistance?.length) {
+      resistance.push(...authorContract.resistance);
+      resistanceSources.push(...authorContract.sourceIds);
+    }
     if (input.currentPressureSummary.length) {
       resistance.push(...input.currentPressureSummary);
       resistanceSources.push("chapter-seed:currentPressure");
@@ -357,7 +380,10 @@ export class ChapterIntentBuilder {
     //    修复轮：openArcs.coreQuestion 不能自动生成虚构代价"推进该弧线的代价（待正文落实）"。
     //    没有明确 cost 证据时不生成该条目，只记录 warning。
     const choicesAndCosts: Array<{ choice: string; cost: string }> = [];
-    if (input.choicesAndCosts?.length) {
+    if (authorContract?.choicesAndCosts?.length) {
+      choicesAndCosts.push(...authorContract.choicesAndCosts);
+      fieldSourceRefs.choicesAndCosts = authorContract.sourceIds;
+    } else if (input.choicesAndCosts?.length) {
       choicesAndCosts.push(...input.choicesAndCosts);
       fieldSourceRefs.choicesAndCosts = ["chapter-seed:intent.choicesAndCosts"];
     } else if (input.pendingCosts?.length) {
@@ -374,9 +400,14 @@ export class ChapterIntentBuilder {
     //    修复轮：pendingCosts 无 irreversible 标志，pending cost 不自动等于"预期不可逆变化"。
     //    只有来源明确声明不可逆或现有结构能可靠证明时才生成；不追加"（不可逆）"制造新事实。
     //    当前 schema 无可靠不可逆证据 → 空 + warning，不记录 fieldSourceRefs。
-    const expectedIrreversibleChange = [...(input.expectedIrreversibleChange ?? [])];
+    const expectedIrreversibleChange = dedupe([
+      ...(authorContract?.expectedIrreversibleChange ?? []),
+      ...(input.expectedIrreversibleChange ?? []),
+    ]);
     if (expectedIrreversibleChange.length > 0) {
-      fieldSourceRefs.expectedIrreversibleChange = ["chapter-seed:intent.expectedIrreversibleChange"];
+      fieldSourceRefs.expectedIrreversibleChange = authorContract?.expectedIrreversibleChange?.length
+        ? authorContract.sourceIds
+        : ["chapter-seed:intent.expectedIrreversibleChange"];
     } else {
       warnings.push("expectedIrreversibleChange 为空：未提供显式 ChapterSeed 契约，不从 pendingCosts 推断不可逆变化");
     }
@@ -422,12 +453,26 @@ export class ChapterIntentBuilder {
         selectedPromisesToAdvance.push({ promiseId: p.id, description: p.description });
       }
     }
+    // 旧 workspace 的 ledger 可能尚未使用章卡里的 HOOK-* 标识。章卡明确声明的
+    // 伏笔本身就是本章选中项；无 ledger 匹配时保守保留最多 3 条，不推断推进动作。
+    if (selectedPromisesToAdvance.length === 0 && authorForeshadowing.length > 0) {
+      authorForeshadowing.slice(0, 3).forEach((description, index) => {
+        selectedPromisesToAdvance.push({
+          promiseId: `author-chapter-${input.chapterNumber}-${index + 1}`,
+          description,
+        });
+      });
+    }
     if (selectedPromisesToAdvance.length === 0) {
       warnings.push("selectedPromisesToAdvance 为空：openPromises 与 state.promise 均缺失，无选中承诺");
     } else {
-      fieldSourceRefs.selectedPromisesToAdvance = statePromisesMatched.length > 0
-        ? ["chapter-seed:openPromises", "narrative-state:promise"]
-        : ["chapter-seed:openPromises"];
+      const usedAuthorFallback = selectedPromisesToAdvance.some((entry) =>
+        entry.promiseId.startsWith(`author-chapter-${input.chapterNumber}-`));
+      fieldSourceRefs.selectedPromisesToAdvance = usedAuthorFallback
+        ? (authorContract?.sourceIds ?? [])
+        : (statePromisesMatched.length > 0
+            ? ["chapter-seed:openPromises", "narrative-state:promise"]
+            : ["chapter-seed:openPromises"]);
     }
 
     // EXPECTATION-LEDGER-1：selectedExpectationsToAdvance 本章选中的读者期待（≤3）
@@ -487,6 +532,7 @@ export class ChapterIntentBuilder {
     //    当前 ChapterIntentInput schema 无明确因果压力字段（currentPressureSummary 是通用压力，
     //    非"必须建立的章末因果"）→ 空 + warning，不把通用主题问题改写成必须建立的章末因果。
     const causalEndPressure = dedupe([
+      ...(authorContract?.causalEndPressure ?? []),
       ...(authorContract?.endingTarget ? [authorContract.endingTarget] : []),
       ...(input.causalEndPressure ?? []),
     ]);

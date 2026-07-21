@@ -25,9 +25,22 @@ export interface ChapterContract {
   forbiddenDrift: string[];
   overallPlotDirection: string[];
   chapterFunction: string[];
+  readerExperience: string[];
+  currentPressure: string[];
   previousState: string[];
   relevantCharacters: string[];
+  relevantCharacterStates: string[];
+  historicalContinuity: string[];
+  historicalCharacterState: string[];
+  recentPatternMemory: string[];
   characterMotivations: string[];
+  focusCharacterGoals: string[];
+  resistance: string[];
+  choicesAndCosts: string[];
+  expectedIrreversibleChange: string[];
+  selectedPromisesToAdvance: string[];
+  selectedExpectationsToAdvance: string[];
+  causalEndPressure: string[];
   eventSummaries: string[];
   mustInclude: string[];
   stateChanges: string[];
@@ -77,29 +90,158 @@ function compact(values: ReadonlyArray<string | undefined>): string[] {
   return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
 }
 
+function isMechanicalOrOperationalDirective(value: string): boolean {
+  return /(?:感知锚点|对白比例|句式|段落|标点|感叹号|句号|短句|长句|比喻|修辞|视角|镜头|章纲|CONTRACT|AI\s*生成|用户重写|阻断级|写作约束|抒情陈词|声明.{0,3}执行|五步链路|蓄水.{0,8}爆发|至少出三件|语言精英化|网文常见词)/iu.test(value);
+}
+
+function narrativeConstitutionValues(values: ReadonlyArray<string | undefined>): string[] {
+  return compact(values).filter((value) => !isMechanicalOrOperationalDirective(value));
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? compact(value.filter((entry): entry is string => typeof entry === "string"))
+    : [];
+}
+
+function clip(value: string, maxChars: number): string {
+  return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function buildRelevantCharacterStates(input: UnifiedOrchestratorInput): string[] {
+  const selectedNames = new Set(compact([
+    ...(input.intent.relevantCharacters ?? []),
+    ...(input.intent.focusCharacterGoals ?? []).map((entry) => entry.character),
+  ]));
+  if (selectedNames.size === 0) return [];
+
+  const entries: string[] = [];
+  let remainingBudget = 3200;
+  for (const character of input.context.characterStates ?? []) {
+    const aliases = stringArray(character.state?.aliases);
+    if (!selectedNames.has(character.name) && !aliases.some((alias) => selectedNames.has(alias))) continue;
+
+    const profile = character.state?.narrativeProfile;
+    const narrativeProfile = profile && typeof profile === "object"
+      ? profile as Record<string, unknown>
+      : {};
+    const details = compact([
+      typeof character.state?.role === "string" ? `身份：${character.state.role}` : undefined,
+      typeof character.state?.mentality === "string" ? `当前心态：${character.state.mentality}` : undefined,
+      typeof character.state?.recentAction === "string" ? `近期行动：${character.state.recentAction}` : undefined,
+      typeof character.state?.pendingTension === "string" ? `未解张力：${character.state.pendingTension}` : undefined,
+      ...stringArray(narrativeProfile.personality).map((value) => `性格：${value}`),
+      ...stringArray(narrativeProfile.desires).map((value) => `欲望：${value}`),
+      ...stringArray(narrativeProfile.fears).map((value) => `恐惧：${value}`),
+      ...stringArray(narrativeProfile.decisionLogic).map((value) => `决策逻辑：${value}`),
+      ...stringArray(narrativeProfile.voice).map((value) => `表达特征：${value}`),
+      ...stringArray(narrativeProfile.relationships).map((value) => `关系：${value}`),
+      ...stringArray(narrativeProfile.knowledgeBoundaries).map((value) => `知识边界：${value}`),
+      ...stringArray(narrativeProfile.capabilityCosts).map((value) => `能力限制与代价：${value}`),
+      ...stringArray(narrativeProfile.unfinishedChoices).map((value) => `未完成选择：${value}`),
+      ...stringArray(narrativeProfile.establishedHistory).map((value) => `已发生事件：${value}`),
+      ...stringArray(narrativeProfile.boundaries).map((value) => `人物边界：${value}`),
+    ]);
+    if (details.length === 0) continue;
+    const rendered = clip(`${character.name}｜${details.join("；")}`, Math.min(900, remainingBudget));
+    if (!rendered || remainingBudget <= 0) break;
+    entries.push(rendered);
+    remainingBudget -= rendered.length;
+  }
+  return entries;
+}
+
+function boundedEntries(values: ReadonlyArray<string>, maxEntries: number, maxChars: number): string[] {
+  const entries: string[] = [];
+  let remaining = maxChars;
+  for (const value of compact(values).slice(0, maxEntries)) {
+    if (remaining <= 0) break;
+    const rendered = clip(value, remaining);
+    if (!rendered) continue;
+    entries.push(rendered);
+    remaining -= rendered.length;
+  }
+  return entries;
+}
+
+function chapterNumber(value: string): number {
+  const match = value.match(/(\d+)/u);
+  return match ? Number(match[1]) : 0;
+}
+
+function buildHistoricalContext(input: UnifiedOrchestratorInput): Pick<
+  ChapterContract,
+  "historicalContinuity" | "historicalCharacterState" | "recentPatternMemory"
+> {
+  const state = input.context.longTermState;
+  if (!state) {
+    return { historicalContinuity: [], historicalCharacterState: [], recentPatternMemory: [] };
+  }
+  const relevantNames = new Set(compact([
+    ...(input.intent.relevantCharacters ?? []),
+    ...(input.intent.focusCharacterGoals ?? []).map((entry) => entry.character),
+  ]));
+  const newestFirst = <T extends { sourceChapter: string }>(entries: ReadonlyArray<T>): T[] =>
+    [...entries].sort((left, right) => chapterNumber(right.sourceChapter) - chapterNumber(left.sourceChapter));
+
+  return {
+    historicalContinuity: boundedEntries(
+      newestFirst(state.canon).map((entry) => `${entry.sourceChapter}｜${entry.fact}`),
+      4,
+      2400,
+    ),
+    historicalCharacterState: boundedEntries(
+      newestFirst(state.character)
+        .filter((entry) => relevantNames.has(entry.characterId))
+        .map((entry) => `${entry.sourceChapter}｜${entry.characterId}.${entry.field}：${entry.value}`),
+      6,
+      1800,
+    ),
+    recentPatternMemory: boundedEntries(
+      newestFirst(state.pattern).map((entry) =>
+        `${entry.sourceChapter}｜${entry.patternType}：${entry.description}（累计 ${entry.occurrenceCount} 次）`),
+      4,
+      1000,
+    ),
+  };
+}
+
 /** Compile the model-independent narrative requirements for one chapter. */
 export function buildChapterContract(input: UnifiedOrchestratorInput): ChapterContract {
   const contextFacts = (input.context.facts ?? [])
     .filter((fact) => fact.kind === "fact")
     .map((fact) => fact.content);
-  const forbiddenDrift = compact(input.constitution?.forbiddenDrift ?? []);
+  const forbiddenDrift = narrativeConstitutionValues(input.constitution?.forbiddenDrift ?? []);
   const inviolableFacts = compact([
     ...(input.intent.inviolableFacts ?? []),
     ...contextFacts,
-  ]).filter((fact) => !forbiddenDrift.includes(fact));
+  ]).filter((fact) => !forbiddenDrift.includes(fact) && !isMechanicalOrOperationalDirective(fact));
+  const historicalContext = buildHistoricalContext(input);
 
   return {
     workIdentity: compact([input.constitution?.workIdentity]),
-    readerPromises: compact(input.constitution?.readerPromise ?? []),
-    genrePromises: compact(input.constitution?.genrePromises ?? []),
+    readerPromises: narrativeConstitutionValues(input.constitution?.readerPromise ?? []),
+    genrePromises: narrativeConstitutionValues(input.constitution?.genrePromises ?? []),
     protagonistCoreConflict: compact([input.constitution?.protagonistCoreConflict]),
-    thematicQuestions: compact(input.constitution?.thematicQuestions ?? []),
+    thematicQuestions: narrativeConstitutionValues(input.constitution?.thematicQuestions ?? []),
     forbiddenDrift,
     overallPlotDirection: compact(input.intent.overallPlotDirection ?? []),
     chapterFunction: compact([input.intent.chapterFunction]),
+    readerExperience: compact(input.intent.readerExperience ?? []),
+    currentPressure: compact(input.intent.currentPressure ?? []),
     previousState: compact(input.intent.previousState ?? []),
     relevantCharacters: compact(input.intent.relevantCharacters ?? []),
+    relevantCharacterStates: buildRelevantCharacterStates(input),
+    ...historicalContext,
     characterMotivations: compact((input.intent.characterMotivations ?? []).map((entry) => `${entry.character}：${entry.motivation}`)),
+    focusCharacterGoals: compact((input.intent.focusCharacterGoals ?? []).map((entry) => `${entry.character}：${entry.goal}`)),
+    resistance: compact(input.intent.resistance ?? []),
+    choicesAndCosts: compact((input.intent.choicesAndCosts ?? []).map((entry) => `${entry.choice}（代价：${entry.cost}）`)),
+    expectedIrreversibleChange: compact(input.intent.expectedIrreversibleChange ?? []),
+    selectedPromisesToAdvance: compact((input.intent.selectedPromisesToAdvance ?? []).map((entry) => `${entry.promiseId}：${entry.description}`)),
+    selectedExpectationsToAdvance: compact((input.intent.selectedExpectationsToAdvance ?? []).map((entry) =>
+      `${entry.expectationId}：${entry.description}${entry.targetReaderExperience ? `（目标体验：${entry.targetReaderExperience}）` : ""}`)),
+    causalEndPressure: compact(input.intent.causalEndPressure ?? []),
     eventSummaries: compact(input.intent.authorEventSummaries ?? []),
     mustInclude: compact(input.intent.authorMustInclude ?? []),
     stateChanges: compact(input.intent.authorStateChanges ?? []),
@@ -107,7 +249,8 @@ export function buildChapterContract(input: UnifiedOrchestratorInput): ChapterCo
     causalRelations: compact(input.intent.causalRelations ?? []),
     endingTarget: compact(input.intent.endingTarget ?? []),
     inviolableFacts,
-    stateConstraints: compact(input.intent.factAndCharacterKnowledgeForbiddenZones ?? []),
+    stateConstraints: compact(input.intent.factAndCharacterKnowledgeForbiddenZones ?? [])
+      .filter((value) => !isMechanicalOrOperationalDirective(value)),
     forbidReferenceLeakage: true,
     preserveEstablishedState: true,
   };
@@ -147,9 +290,22 @@ function renderContract(contract: ChapterContract): string {
     renderList("禁止偏离", contract.forbiddenDrift),
     renderList("整体剧情方向", contract.overallPlotDirection),
     renderList("本章功能", contract.chapterFunction),
+    renderList("目标读者体验", contract.readerExperience),
+    renderList("当前压力", contract.currentPressure),
     renderList("前文状态", contract.previousState),
     renderList("本章相关角色", contract.relevantCharacters),
+    renderList("相关人物状态", contract.relevantCharacterStates),
+    renderList("已接受正文中的历史连续性", contract.historicalContinuity),
+    renderList("相关人物的历史状态", contract.historicalCharacterState),
+    renderList("近期已出现的叙事模式", contract.recentPatternMemory),
     renderList("人物动机", contract.characterMotivations),
+    renderList("焦点角色目标", contract.focusCharacterGoals),
+    renderList("本章阻力", contract.resistance),
+    renderList("选择与代价", contract.choicesAndCosts),
+    renderList("预期不可逆变化", contract.expectedIrreversibleChange),
+    renderList("本章选中承诺", contract.selectedPromisesToAdvance),
+    renderList("本章选中读者期待", contract.selectedExpectationsToAdvance),
+    renderList("因果章末压力", contract.causalEndPressure),
     renderList("事件内容", contract.eventSummaries),
     renderList("必须包含", contract.mustInclude),
     renderList("状态变化", contract.stateChanges),

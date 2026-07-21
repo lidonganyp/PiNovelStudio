@@ -23,6 +23,23 @@ import { Type, Static } from "@sinclair/typebox";
 // ChapterSeed 核心类型
 // ============================================================================
 
+/** 角色档案中会影响选择、关系和连续性的叙事信息。 */
+export const CharacterNarrativeProfileSchema = Type.Object({
+  personality: Type.Array(Type.String(), { default: [] }),
+  desires: Type.Array(Type.String(), { default: [] }),
+  fears: Type.Array(Type.String(), { default: [] }),
+  decisionLogic: Type.Array(Type.String(), { default: [] }),
+  voice: Type.Array(Type.String(), { default: [] }),
+  relationships: Type.Array(Type.String(), { default: [] }),
+  knowledgeBoundaries: Type.Array(Type.String(), { default: [] }),
+  capabilityCosts: Type.Array(Type.String(), { default: [] }),
+  unfinishedChoices: Type.Array(Type.String(), { default: [] }),
+  establishedHistory: Type.Array(Type.String(), { default: [] }),
+  boundaries: Type.Array(Type.String(), { default: [] }),
+  sourceId: Type.String(),
+});
+export type CharacterNarrativeProfile = Static<typeof CharacterNarrativeProfileSchema>;
+
 /** 角色状态摘要（来自 narrative-state.json / 角色档案） */
 export const CharacterStateSummarySchema = Type.Object({
   name: Type.String({ description: "角色名" }),
@@ -31,6 +48,7 @@ export const CharacterStateSummarySchema = Type.Object({
   recentAction: Type.Optional(Type.String({ description: "最近一次行动/登场动作" })),
   pendingTension: Type.Optional(Type.String({ description: "未解决张力" })),
   aliases: Type.Optional(Type.Array(Type.String())),
+  narrativeProfile: Type.Optional(CharacterNarrativeProfileSchema),
 });
 export type CharacterStateSummary = Static<typeof CharacterStateSummarySchema>;
 
@@ -146,6 +164,19 @@ export type HighLevelDirection = Static<typeof HighLevelDirectionSchema>;
 export const AuthorChapterContractSchema = Type.Object({
   available: Type.Boolean(),
   chapterFunction: Type.Optional(Type.String()),
+  readerExperience: Type.Array(Type.String(), { default: [] }),
+  currentPressure: Type.Array(Type.String(), { default: [] }),
+  focusCharacterGoals: Type.Array(Type.Object({
+    character: Type.String(),
+    goal: Type.String(),
+  }), { default: [] }),
+  resistance: Type.Array(Type.String(), { default: [] }),
+  choicesAndCosts: Type.Array(Type.Object({
+    choice: Type.String(),
+    cost: Type.String(),
+  }), { default: [] }),
+  expectedIrreversibleChange: Type.Array(Type.String(), { default: [] }),
+  causalEndPressure: Type.Array(Type.String(), { default: [] }),
   eventSummaries: Type.Array(Type.String(), { default: [] }),
   mustInclude: Type.Array(Type.String(), { default: [] }),
   stateChanges: Type.Array(Type.String(), { default: [] }),

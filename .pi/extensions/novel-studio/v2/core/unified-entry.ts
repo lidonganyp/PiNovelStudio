@@ -39,6 +39,7 @@ import { UnifiedOrchestrator, type UnifiedOrchestratorOutput, type ModelCallEntr
 import type { ArbitratorResult } from "./judge-arbitrator.js";
 import { loadCreativeConstitution } from "./creative-constitution.js";
 import { loadStateStore, type StagedStateUpdate, type NarrativeStateEntry } from "./final-state-commit.js";
+import { selectAcceptedChapterReferences } from "./historical-state-backfill.js";
 import type { ChapterSeed } from "../../craft/chapter-seed-types.js";
 import {
   createLegacyModelGenerateFn,
@@ -344,6 +345,51 @@ function expectationEvidenceKey(expectation: {
   sourceRef?: string;
 }): string {
   return `${expectation.expectationId}\u0000${expectation.sourceChapter}\u0000${expectation.sourceRef ?? ""}`;
+}
+
+/** Select bounded, chapter-relevant pressure instead of forwarding every open ledger item. */
+export function selectChapterPressureSignals(seed: ChapterSeed): string[] {
+  const contract = seed.authorChapterContract;
+  const authorText = [
+    contract.chapterFunction,
+    ...contract.eventSummaries,
+    ...contract.mustInclude,
+    ...contract.stateChanges,
+    ...contract.foreshadowing,
+    ...contract.causalRelations,
+    contract.endingTarget,
+    ...contract.relevantCharacters,
+  ].filter((value): value is string => Boolean(value?.trim())).join("\n");
+  const bridgeText = [
+    seed.previousChapterContinuation.lastEventSummary,
+    ...seed.previousChapterContinuation.openHooks,
+    ...seed.previousChapterContinuation.unresolvedTensions,
+  ].filter((value): value is string => Boolean(value?.trim())).join("\n");
+  const relevanceText = `${authorText}\n${bridgeText}`;
+  const selected: string[] = [];
+  const add = (value: string | undefined): void => {
+    const normalized = value?.trim();
+    if (normalized && !selected.includes(normalized) && selected.length < 8) selected.push(normalized);
+  };
+
+  seed.previousChapterContinuation.openHooks.slice(0, 2).forEach(add);
+  seed.previousChapterContinuation.unresolvedTensions.slice(0, 2).forEach(add);
+  seed.currentPressure.pendingCosts.slice(0, 2).forEach((entry) =>
+    add(`${entry.action}的代价：${entry.cost}`));
+
+  for (const entry of seed.currentPressure.pendingForeshadowing) {
+    const directlySelected = contract.foreshadowing.some((value) =>
+      value.includes(entry.id) || value.includes(entry.description) || entry.description.includes(value));
+    const chapterMatched = relevanceText.includes(entry.id) || relevanceText.includes(entry.description);
+    if (directlySelected || chapterMatched) add(entry.description);
+  }
+  for (const arc of seed.currentPressure.openArcs) {
+    if (relevanceText.includes(arc.arcId) || relevanceText.includes(arc.name)
+      || (arc.coreQuestion && relevanceText.includes(arc.coreQuestion))) {
+      add(arc.coreQuestion ? `${arc.name}：${arc.coreQuestion}` : arc.name);
+    }
+  }
+  return selected;
 }
 
 /** Route only prose generation calls; calibration and judge routes retain their own providers. */
@@ -1227,12 +1273,7 @@ export async function runUnifiedPipeline(
   // builder 合并 constitution.forbiddenDrift。
   const constitution = loadCreativeConstitution(workspaceId, projectRoot);
   const stateStore = loadStateStore(workspaceId, projectRoot);
-  const currentPressureSummary = [
-    ...(seed.currentPressure?.pendingForeshadowing ?? []).map((f) => f.description),
-    ...(seed.currentPressure?.openArcs ?? []).map((a) => a.name),
-    ...(seed.previousChapterContinuation?.unresolvedTensions ?? []),
-    ...(seed.previousChapterContinuation?.openHooks ?? []),
-  ];
+  const currentPressureSummary = selectChapterPressureSignals(seed);
   const selectedExpectations = selectExpectationsForIntent(
     context.longTermState?.expectation ?? [],
     currentPressureSummary,
@@ -1349,6 +1390,21 @@ export async function runUnifiedPipeline(
 
   // ── 4. characterNames：从 seed 角色列表派生（CANON-IDENTITY-1: 含 aliases） ──
   const characterNames = (seed.characters ?? []).flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+  const acceptedChapterReferences = selectAcceptedChapterReferences({
+    workspaceId,
+    projectRoot,
+    beforeChapterNumber: chapterNumber,
+    relevantCharacters: intent.relevantCharacters ?? [],
+    keywords: [
+      intent.chapterFunction,
+      ...(intent.authorEventSummaries ?? []),
+      ...(intent.authorMustInclude ?? []),
+      ...(intent.currentPressure ?? []),
+      ...(intent.selectedPromisesToAdvance ?? []).map((entry) => entry.description),
+    ].filter((value): value is string => Boolean(value?.trim())),
+    targetEmotion: intent.readerExperience?.[0],
+    maxExamples: 2,
+  });
 
   // ── 5. UnifiedOrchestrator：raw → editorial → judge → select → commit ──
   // P0-5: 从 seed 派生 stagedStateUpdate，接线状态提交链路。
@@ -1399,6 +1455,7 @@ export async function runUnifiedPipeline(
     context: contextSafety.workingContext,
     constitution: context.constitution ?? null,
     characterNames,
+    fewshotSelection: acceptedChapterReferences,
     ontologyLevels,
     modelGenerate,
     // REAL-QUALITY-1-PREFLIGHT：双轨路由锁定（modelTestRoute=glm 时）

@@ -221,6 +221,31 @@ test("FUTURE-STATE-ISOLATION-1 单元：ch20 可以检索 ch19，但不能检索
   assert.ok(excludedIds.has("promise:ch20-leak"), "futureStateExcluded 应含 ch20 promise leak");
 });
 
+test("ContextRetrieval 为 Canon 和 Pattern 保留跨类型配额，避免被人物状态挤出", () => {
+  const state = {
+    canon: Array.from({ length: 4 }, (_, index) =>
+      makeCanon(`canon:${index}`, `已接受事实${index}`, "timeline", "ch16")),
+    character: Array.from({ length: 30 }, (_, index) =>
+      makeCharacter(`character:${index}`, "凌", "历史状态", `人物证据${index}`, "ch16")),
+    promise: [],
+    pattern: Array.from({ length: 4 }, (_, index) =>
+      makePattern(`pattern:${index}`, "hook_type", `已用章末模式${index}`, "ch16")),
+  };
+
+  const result = retrieveNarrativeContext({
+    chapterNumber: 17,
+    relevantCharacters: ["凌"],
+    selectedPromiseIds: [],
+    keywords: [],
+    state,
+    maxItems: 24,
+  });
+
+  assert.equal(result.workingSet.canon.length, 4);
+  assert.equal(result.workingSet.pattern.length, 4);
+  assert.equal(result.report.retrieved.length, 24);
+});
+
 test("FUTURE-STATE-ISOLATION-1 单元：必需 promise 只存在于未来章节时报告 missing，不得回填", () => {
   const state = {
     canon: [],

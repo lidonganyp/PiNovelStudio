@@ -18,7 +18,7 @@
 
 import { join } from "path";
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { parseExplicitOutline } from "./explicit-outline-parser.js";
+import { parseExplicitOutline, parseMandatoryElementTag } from "./explicit-outline-parser.js";
 import type {
   ChapterSeed,
   CharacterStateSummary,
@@ -30,6 +30,7 @@ import type {
   HighLevelDirection,
   ChapterIntent,
   AuthorChapterContract,
+  CharacterNarrativeProfile,
 } from "./chapter-seed-types.js";
 import {
   createDefaultNarrativeState,
@@ -87,13 +88,22 @@ function loadWorkspaceConfig(workspacePath: string): any {
 /**
  * 加载角色档案目录
  */
-function loadCharacterProfiles(workspacePath: string): Array<{ id: string; name: string; content: string; role?: string; aliases?: string[] }> {
+interface LoadedCharacterProfile {
+  id: string;
+  name: string;
+  content: string;
+  sourceId?: string;
+  role?: string;
+  aliases?: string[];
+}
+
+function loadCharacterProfiles(workspacePath: string): LoadedCharacterProfile[] {
   const charsDir = join(workspacePath, "characters");
   if (!existsSync(charsDir)) {
     return [];
   }
 
-  const roster: Array<{ id: string; name: string; content: string; role?: string; aliases?: string[] }> = [];
+  const roster: LoadedCharacterProfile[] = [];
   for (const entry of readdirSync(charsDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) {
       continue;
@@ -102,7 +112,24 @@ function loadCharacterProfiles(workspacePath: string): Array<{ id: string; name:
     try {
       const content = readFileSync(join(charsDir, entry.name), "utf-8");
       const name = extractFirstCharacterName(content) || id;
-      roster.push({ id, name, content });
+      const ensembleSections = [...content.matchAll(/^##\s+([\u4e00-\u9fa5·]{2,12})\s*[（(]([^）)]+)[）)]\s*$/gmu)]
+        .filter((match) => /(?:protagonist|supporting|deceased|antagonist|mentor|family|love-interest|supporting-future|monster)/iu.test(match[2]));
+      if (ensembleSections.length >= 2) {
+        for (let index = 0; index < ensembleSections.length; index += 1) {
+          const match = ensembleSections[index];
+          const start = (match.index ?? 0) + match[0].length;
+          const end = ensembleSections[index + 1]?.index ?? content.length;
+          roster.push({
+            id,
+            name: match[1].trim(),
+            role: match[2].trim(),
+            content: `# ${match[1].trim()}\n${content.slice(start, end).trim()}`,
+            sourceId: `characters/${entry.name}`,
+          });
+        }
+      } else {
+        roster.push({ id, name, content, sourceId: `characters/${entry.name}` });
+      }
     } catch {
       // ignore
     }
@@ -132,6 +159,99 @@ function extractFirstCharacterName(text: string): string | null {
   }
 
   return null;
+}
+
+const MECHANICAL_PROFILE_FIELD = /(?:频率|比例|占比|字数|句数|段落|句式|视角|镜头|写作约束|叙述人称|全书.{0,10}(?:切|唯一)|每.{0,4}(?:句|段|章)|内心独白.{0,4}(?:高|低|次)|对白.{0,4}(?:多|少|%))/u;
+
+function cleanProfileEntry(line: string): { label: string; value: string } | null {
+  const trimmed = line.trim();
+  const tableCells = trimmed.startsWith("|")
+    ? trimmed.split("|").slice(1, -1).map((cell) => cell.trim())
+    : [];
+  if (tableCells.length > 0 && (tableCells.every((cell) => /^[-:]+$/u.test(cell))
+    || /^(?:层次|字段|项目)$/u.test(tableCells[0])
+    || /^(?:内容|说明|描述)$/u.test(tableCells[1] ?? ""))) {
+    return null;
+  }
+  const source = tableCells.length >= 2
+    ? `${tableCells[0]}：${tableCells.slice(1).join("；")}`
+    : line;
+  const cleaned = source
+    .replace(/^\s*[-*+]\s*/u, "")
+    .replace(/^\s*\d+[.)、]\s*/u, "")
+    .trim();
+  if (!cleaned || MECHANICAL_PROFILE_FIELD.test(cleaned)) return null;
+  const match = cleaned.match(/^(?:\*\*)?([^：:*]{1,24})(?:\*\*)?\s*[：:]\s*(.+)$/u);
+  if (!match) return { label: "", value: cleaned.replace(/\*\*/gu, "").trim() };
+  return {
+    label: match[1].replace(/\*\*/gu, "").trim(),
+    value: match[2].replace(/\*\*/gu, "").trim(),
+  };
+}
+
+function extractCharacterNarrativeProfile(
+  profile: LoadedCharacterProfile,
+): CharacterNarrativeProfile | undefined {
+  const result: CharacterNarrativeProfile = {
+    personality: [],
+    desires: [],
+    fears: [],
+    decisionLogic: [],
+    voice: [],
+    relationships: [],
+    knowledgeBoundaries: [],
+    capabilityCosts: [],
+    unfinishedChoices: [],
+    establishedHistory: [],
+    boundaries: [],
+    sourceId: profile.sourceId ?? `characters/${profile.id}.md`,
+  };
+  let section = "";
+  const push = (field: keyof Omit<CharacterNarrativeProfile, "sourceId">, value: string): void => {
+    const normalized = value.trim();
+    if (normalized && !result[field].includes(normalized)) result[field].push(normalized);
+  };
+
+  for (const rawLine of profile.content.split(/\r?\n/u)) {
+    const heading = rawLine.match(/^#{2,4}\s+(.+)$/u);
+    if (heading) {
+      section = heading[1].replace(/\*\*/gu, "").trim();
+      continue;
+    }
+    const entry = cleanProfileEntry(rawLine);
+    if (!entry) continue;
+    const labeledValue = entry.label ? `${entry.label}：${entry.value}` : entry.value;
+
+    if (/(?:决策逻辑|行为逻辑|深层逻辑|decision)/iu.test(entry.label)) {
+      push("decisionLogic", entry.value);
+    } else if (/(?:性格|人设|行为模式|personality|底色)/iu.test(section) || /(?:底色|性格|人设)/u.test(entry.label)) {
+      push("personality", entry.value);
+    } else if (/(?:欲望|诉求|长期目标|desire)/iu.test(section)) {
+      push("desires", labeledValue);
+    } else if (/(?:恐惧|害怕|fear)/iu.test(section)) {
+      push("fears", labeledValue);
+    } else if (/(?:决策逻辑|行为逻辑|行动逻辑|decision)/iu.test(section)) {
+      push("decisionLogic", entry.value);
+    } else if (/(?:语言风格|语言特征|说话方式|表达特征|声音指纹|voice)/iu.test(section)) {
+      push("voice", entry.value);
+    } else if (/(?:关键关系|人物关系|关系网络|与.{1,12}的?关系|关系演进|relationship)/iu.test(section)
+      || /(?:关键关系|人物关系)/u.test(entry.label)) {
+      push("relationships", labeledValue);
+    } else if (/(?:知识边界|认知边界|知道与不知道|knowledge)/iu.test(section)) {
+      push("knowledgeBoundaries", labeledValue);
+    } else if (/(?:能力限制|能力代价|能力与限制|限制与代价|capabilit|cost)/iu.test(section)) {
+      push("capabilityCosts", labeledValue);
+    } else if (/(?:未完成选择|未决选择|待决两难|unfinished)/iu.test(section)) {
+      push("unfinishedChoices", labeledValue);
+    } else if (/(?:已发生事件|既往经历|已知经历|关键经历|history)/iu.test(section)) {
+      push("establishedHistory", labeledValue);
+    } else if (/(?:行为边界|人物底线|不可违背|主世界禁令|boundary)/iu.test(section)) {
+      push("boundaries", labeledValue);
+    }
+  }
+
+  const hasContent = Object.entries(result).some(([key, value]) => key !== "sourceId" && Array.isArray(value) && value.length > 0);
+  return hasContent ? result : undefined;
 }
 
 /**
@@ -298,16 +418,34 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
     }
     flushBuffer();
 
+    const explicitPath = join(workspacePath, "series", `ch${chapterNumber}-outline-explicit.md`);
+    const currentChapterPattern = new RegExp(`(?:第\\s*0*${chapterNumber}\\s*章|ch(?:apter)?\\s*0*${chapterNumber}\\b)`, "iu");
+    const globalPattern = /^\[(?:(?:[一二三四五六七八九十]+|\d+)[、.．-])?(?:作品|全书|故事)?(?:总纲|核心(?:设计理念|思想命题|设定|冲突|主题)?|主线|主题|作品定位|故事梗概|全书阶段规划)/u;
+    const currentNotes = backgroundNotes.filter((note) => currentChapterPattern.test(note));
+    const globalNotes = backgroundNotes.filter((note) => globalPattern.test(note));
+    const candidates = existsSync(explicitPath)
+      ? [...currentNotes, ...globalNotes]
+      : (currentNotes.length > 0 || globalNotes.length > 0 ? [...currentNotes, ...globalNotes] : backgroundNotes);
+    const selectedBackgroundNotes: string[] = [];
+    let remainingBudget = 3600;
+    for (const note of Array.from(new Set(candidates))) {
+      if (remainingBudget <= 0) break;
+      const clipped = note.slice(0, Math.min(1200, remainingBudget)).trim();
+      if (!clipped) continue;
+      selectedBackgroundNotes.push(clipped);
+      remainingBudget -= clipped.length;
+    }
+
     // Extract explicit factual prohibitions. Prose/style instructions are not
     // facts and are filtered by expression terminology.
     const constraintPattern = /(?:必须|不可|不能|禁止|务必)[^\n。，；！？]{4,80}/g;
     let match: RegExpExecArray | null;
-    while ((match = constraintPattern.exec(text)) !== null) {
+    const selectedOutlineText = selectedBackgroundNotes.join("\n");
+    while ((match = constraintPattern.exec(selectedOutlineText)) !== null) {
       if (/句式|段落|对白|感官|修辞|字数|节奏|开头|描写|语言|短句|长句/u.test(match[0])) continue;
       immutableFacts.push(match[0]);
     }
 
-    const explicitPath = join(workspacePath, "series", `ch${chapterNumber}-outline-explicit.md`);
     let chapterThemeHint: string | undefined;
     if (existsSync(explicitPath)) {
       try {
@@ -320,7 +458,7 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
 
     return {
       available: true,
-      backgroundNotes,
+      backgroundNotes: selectedBackgroundNotes,
       chapterThemeHint,
       immutableFacts: Array.from(new Set(immutableFacts)),
     };
@@ -338,11 +476,13 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
  */
 function buildCharacterStateSummaries(
   config: any,
-  profiles: Array<{ id: string; name: string; content: string; role?: string; aliases?: string[] }>,
+  profiles: LoadedCharacterProfile[],
   narrativeState: NarrativeState
 ): CharacterStateSummary[] {
   const summaries: CharacterStateSummary[] = [];
   const seen = new Set<string>();
+  const profilesByName = new Map(profiles.map((profile) => [profile.name, profile]));
+  const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
 
   // 1. 从 config.characters 提取
   if (Array.isArray(config.characters)) {
@@ -353,12 +493,14 @@ function buildCharacterStateSummaries(
       seen.add(name);
 
       const relationship = narrativeState.relationshipTemperature[name];
+      const profile = profilesByName.get(name) ?? profilesById.get(typeof raw.id === "string" ? raw.id : "");
       summaries.push({
         name,
         role: typeof raw.role === "string" ? raw.role : undefined,
         mentality: relationship?.pendingTension ? `pendingTension: ${relationship.pendingTension}` : undefined,
         pendingTension: relationship?.pendingTension ?? undefined,
         aliases: Array.isArray(raw.aliases) ? raw.aliases : undefined,
+        narrativeProfile: profile ? extractCharacterNarrativeProfile(profile) : undefined,
       });
     }
   }
@@ -374,6 +516,7 @@ function buildCharacterStateSummaries(
       mentality: relationship?.pendingTension ? `pendingTension: ${relationship.pendingTension}` : undefined,
       pendingTension: relationship?.pendingTension ?? undefined,
       aliases: profile.aliases,
+      narrativeProfile: extractCharacterNarrativeProfile(profile),
     });
   }
 
@@ -441,6 +584,10 @@ function buildPreviousChapterContinuation(
       unresolvedTensions: [],
     };
   }
+
+  // 已接受正文是连续性的权威来源；skeleton 只是正文缺失时的派生回退。
+  const acceptedText = loadPreviousChapterTextContinuation(workspacePath, chapterNumber);
+  if (acceptedText) return acceptedText;
 
   // 尝试从 chapterSkeletons 中提取前章（chapterNumber - 1）的骨架
   const prevChapterKey = String(chapterNumber - 1);
@@ -820,12 +967,65 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
   return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
 }
 
+function normalizeMandatoryElement(value: string): string {
+  const parsed = parseMandatoryElementTag(value.trim());
+  if (!parsed.content) return "";
+  if (parsed.tag !== "verbatim") return parsed.content;
+  const quote = parsed.content.replace(/^[「『“"]|[」』”"]$/gu, "").trim();
+  return quote ? `原句：「${quote}」` : "";
+}
+
+function extractAllMarkdownFieldValues(text: string, labels: string[]): string[] {
+  const labelSet = new Set(labels);
+  const values: string[] = [];
+  for (const line of text.split(/\r?\n/u)) {
+    const match = line.match(/^\s*[-*]?\s*(?:\*\*)?([^*：:]{1,24})(?:\*\*)?\s*[：:]\s*(.+)$/u);
+    if (!match || !labelSet.has(match[1].trim())) continue;
+    const value = match[2].trim();
+    if (value) values.push(value);
+  }
+  return uniqueStrings(values);
+}
+
+function splitNarrativeContractItems(values: string[]): string[] {
+  return uniqueStrings(values.flatMap((value) => value.split(/[；;]+/u).map((item) => item.trim())));
+}
+
+function parseFocusCharacterGoals(values: string[]): Array<{ character: string; goal: string }> {
+  const goals: Array<{ character: string; goal: string }> = [];
+  for (const item of splitNarrativeContractItems(values)) {
+    const match = item.match(/^([^：:]{1,20})[：:]\s*(.+)$/u);
+    if (!match) continue;
+    goals.push({ character: match[1].trim(), goal: match[2].trim() });
+  }
+  return goals.filter((entry, index, all) =>
+    all.findIndex((candidate) => candidate.character === entry.character && candidate.goal === entry.goal) === index);
+}
+
+function parseChoicesAndCosts(values: string[]): Array<{ choice: string; cost: string }> {
+  const result: Array<{ choice: string; cost: string }> = [];
+  for (const value of values) {
+    const match = value.match(/^(?:选择\s*[：:=]\s*)?(.+?)(?:[｜|]|，|,)\s*(?:代价|成本)\s*[：:=]\s*(.+)$/u);
+    if (!match) continue;
+    result.push({ choice: match[1].trim(), cost: match[2].trim() });
+  }
+  return result.filter((entry, index, all) =>
+    all.findIndex((candidate) => candidate.choice === entry.choice && candidate.cost === entry.cost) === index);
+}
+
 function loadAuthorChapterContract(workspacePath: string, chapterNumber: number): AuthorChapterContract {
   const sourceId = `series/ch${chapterNumber}-outline-explicit.md`;
   const outlinePath = join(workspacePath, sourceId);
   if (!existsSync(outlinePath)) {
     return {
       available: false,
+      readerExperience: [],
+      currentPressure: [],
+      focusCharacterGoals: [],
+      resistance: [],
+      choicesAndCosts: [],
+      expectedIrreversibleChange: [],
+      causalEndPressure: [],
       eventSummaries: [],
       mustInclude: [],
       stateChanges: [],
@@ -843,6 +1043,13 @@ function loadAuthorChapterContract(workspacePath: string, chapterNumber: number)
     if (parsed.parseError) {
       return {
         available: false,
+        readerExperience: [],
+        currentPressure: [],
+        focusCharacterGoals: [],
+        resistance: [],
+        choicesAndCosts: [],
+        expectedIrreversibleChange: [],
+        causalEndPressure: [],
         eventSummaries: [],
         mustInclude: [],
         stateChanges: [],
@@ -866,6 +1073,13 @@ function loadAuthorChapterContract(workspacePath: string, chapterNumber: number)
     }
 
     const reversedEvents = [...parsed.events].reverse();
+    const readerExperience = splitNarrativeContractItems(extractAllMarkdownFieldValues(text, ["目标读者体验", "读者体验"]));
+    const currentPressure = splitNarrativeContractItems(extractAllMarkdownFieldValues(text, ["当前压力", "开场压力"]));
+    const focusCharacterGoals = parseFocusCharacterGoals(extractAllMarkdownFieldValues(text, ["焦点角色目标", "角色目标"]));
+    const resistance = splitNarrativeContractItems(extractAllMarkdownFieldValues(text, ["本章阻力", "阻力"]));
+    const choicesAndCosts = parseChoicesAndCosts(extractAllMarkdownFieldValues(text, ["选择与代价", "选择代价"]));
+    const expectedIrreversibleChange = splitNarrativeContractItems(extractAllMarkdownFieldValues(text, ["不可逆变化", "预期不可逆变化"]));
+    const causalEndPressure = splitNarrativeContractItems(extractAllMarkdownFieldValues(text, ["因果章末压力", "章末因果压力"]));
     const endingTarget = extractMarkdownField(text, ["章末目标", "章末落点"])
       ?? reversedEvents.find((event) => event.endingTarget)?.endingTarget
       ?? reversedEvents.find((event) => event.stateDeltas?.length)?.stateDeltas?.at(-1)
@@ -873,8 +1087,15 @@ function loadAuthorChapterContract(workspacePath: string, chapterNumber: number)
     return {
       available: parsed.events.length > 0,
       chapterFunction: extractMarkdownField(text, ["本章功能", "章节功能"]),
+      readerExperience,
+      currentPressure,
+      focusCharacterGoals,
+      resistance,
+      choicesAndCosts,
+      expectedIrreversibleChange,
+      causalEndPressure,
       eventSummaries: uniqueStrings(parsed.events.map((event) => event.summary)),
-      mustInclude: uniqueStrings(parsed.events.flatMap((event) => event.mandatoryElements)),
+      mustInclude: uniqueStrings(parsed.events.flatMap((event) => event.mandatoryElements).map(normalizeMandatoryElement)),
       stateChanges: uniqueStrings(parsed.events.flatMap((event) => [
         ...(event.stateDeltas ?? []),
         ...(event.relationshipDeltas ?? []),
@@ -890,6 +1111,13 @@ function loadAuthorChapterContract(workspacePath: string, chapterNumber: number)
   } catch {
     return {
       available: false,
+      readerExperience: [],
+      currentPressure: [],
+      focusCharacterGoals: [],
+      resistance: [],
+      choicesAndCosts: [],
+      expectedIrreversibleChange: [],
+      causalEndPressure: [],
       eventSummaries: [],
       mustInclude: [],
       stateChanges: [],

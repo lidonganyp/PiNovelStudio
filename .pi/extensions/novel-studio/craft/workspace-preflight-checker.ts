@@ -32,6 +32,7 @@ import { getModelRequestTimeoutMs } from "../api/request-timeout.js";
 // P26新增：统一显式章纲解析器，Stage 0/Preflight 提前校验显式章纲
 // P27新增：hasVerifiableMandatoryElements 用于 mandatoryElements 可验证性校验
 import { parseExplicitOutline } from "./explicit-outline-parser.js";
+import { resolveExistingChapterFile } from "../utils/chapter-path.js";
 
 export interface PreflightBlockingItem {
   /** 检查项标识，如 "config_missing" / "characters_missing" / "seed_readiness" */
@@ -195,11 +196,14 @@ function validateStateStoreContinuity(
   }
   const stateHash = hashMatch[1].toLowerCase();
 
-  const prevChapterPath = join(workspacePath, "chapters", `${previousChapter}.md`);
-  if (!existsSync(prevChapterPath)) {
+  const resolvedPreviousChapter = resolveExistingChapterFile(workspacePath, String(previousChapter));
+  const barePreviousChapterPath = join(workspacePath, "chapters", `${previousChapter}.md`);
+  const prevChapterPath = resolvedPreviousChapter?.path
+    ?? (existsSync(barePreviousChapterPath) ? barePreviousChapterPath : null);
+  if (!prevChapterPath) {
     return {
       valid: false,
-      reason: `state-store-chapter-file-missing: chapters/${previousChapter}.md not found but state claims ${previousChapterId} committed`,
+      reason: `state-store-chapter-file-missing: no compatible chapter file found for ${previousChapterId}`,
     };
   }
 

@@ -203,6 +203,12 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
   if (!fewshotSel && knowledgeConsumption.emptyReason) {
     knowledgeConsumption.emptyReason = "未提供 fewshot 检索结果（L0 阶段无 fewshot 加载器或调用方未传 fewshotSelection）";
   }
+  const acceptedReferenceBlock = knowledgeConsumption.entries.length > 0
+    ? [
+        "本书已接受正文片段（只用于保持既定事实、人物与语感连续性，不得复述或仿写具体表达）：",
+        ...knowledgeConsumption.entries.map((entry, index) => `【片段${index + 1}】\n${entry.text}`),
+      ].join("\n")
+    : null;
 
   // ── QUALITY-5：本章相关角色声音/状态提示编译（在 prompt 构建前编译，空时写 emptyReason 不静默） ──
   // 只编译 focusCharacterGoals ∪ relevantCharacters 命中项，不灌全量 characterStates；
@@ -246,10 +252,15 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
   dialogueCraft.consumedByRawPrompt = false;
   emotionRhythm.consumedByRawPrompt = false;
   supportingFunction.consumedByRawPrompt = false;
-  knowledgeConsumption.consumedByRawPrompt = false;
+  knowledgeConsumption.consumedByRawPrompt = acceptedReferenceBlock !== null;
   characterVoiceContext.consumedByRawPrompt = false;
   worldPresentationContext.consumedByRawPrompt = false;
   ensembleLayeringContext.consumedByRawPrompt = false;
+
+  if (acceptedReferenceBlock) {
+    parts.push(acceptedReferenceBlock);
+    consumedFields.push("knowledgeConsumption");
+  }
 
   // ── CANON-IDENTITY-1：角色身份契约 compact block ──
   // 从 characterStates 编译身份契约；raw prompt 与 FactGuard 消费同一 contract（id/hash 一致）。
@@ -294,9 +305,22 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
   const contractFields: Array<[keyof ChapterContract, string]> = [
     ["overallPlotDirection", "overallPlotDirection"],
     ["chapterFunction", "chapterFunction"],
+    ["readerExperience", "readerExperience"],
+    ["currentPressure", "currentPressure"],
     ["previousState", "previousState"],
     ["relevantCharacters", "relevantCharacters"],
+    ["relevantCharacterStates", "relevantCharacterStates"],
+    ["historicalContinuity", "historicalContinuity"],
+    ["historicalCharacterState", "historicalCharacterState"],
+    ["recentPatternMemory", "recentPatternMemory"],
     ["characterMotivations", "characterMotivations"],
+    ["focusCharacterGoals", "focusCharacterGoals"],
+    ["resistance", "resistance"],
+    ["choicesAndCosts", "choicesAndCosts"],
+    ["expectedIrreversibleChange", "expectedIrreversibleChange"],
+    ["selectedPromisesToAdvance", "selectedPromisesToAdvance"],
+    ["selectedExpectationsToAdvance", "selectedExpectationsToAdvance"],
+    ["causalEndPressure", "causalEndPressure"],
     ["eventSummaries", "authorEventSummaries"],
     ["mustInclude", "authorMustInclude"],
     ["stateChanges", "authorStateChanges"],

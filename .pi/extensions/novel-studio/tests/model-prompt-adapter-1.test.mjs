@@ -43,8 +43,8 @@ function makeInput(rawPromptProfile) {
       resistance: ["声音会利用林默的记忆误导判断"],
       choicesAndCosts: [{ choice: "主动敲门试探", cost: "暴露自己已经识破模仿" }],
       expectedIrreversibleChange: ["林默失去继续伪装不知情的机会"],
-      selectedPromisesToAdvance: [],
-      selectedExpectationsToAdvance: [],
+      selectedPromisesToAdvance: [{ promiseId: "p-1", description: "许岚失踪与旧案有关" }],
+      selectedExpectationsToAdvance: [{ expectationId: "e-1", description: "确认门后身份", targetReaderExperience: "认知反转" }],
       causalEndPressure: ["门内的声音准确说出只有许岚知道的秘密"],
       factAndCharacterKnowledgeForbiddenZones: ["许岚不知道林默昨夜见过谁"],
       fieldSourceRefs: {},
@@ -74,7 +74,24 @@ function makeInput(rawPromptProfile) {
     context: {
       facts: [{ id: "fact-1", content: "安全门从内部反锁", sourceIds: ["chapter-6"], kind: "fact" }],
       characterStates: [
-        { characterId: "lin-mo", name: "林默", state: { role: "protagonist", mentality: "警觉" }, sourceIds: ["character:lin-mo"] },
+        {
+          characterId: "lin-mo",
+          name: "林默",
+          state: {
+            role: "protagonist",
+            mentality: "保持怀疑，先验证再行动",
+            narrativeProfile: {
+              personality: ["冷静理性，但涉及同伴安危时会承担风险"],
+              decisionLogic: ["先验证信息，再决定是否信任"],
+              voice: ["表达克制直接，压力越大越少解释"],
+              relationships: ["许岚：互不完全信任，但必须合作"],
+              establishedHistory: ["曾在旧仓库发现许岚留下的假钥匙"],
+              boundaries: [],
+              sourceId: "characters/lin-mo.md",
+            },
+          },
+          sourceIds: ["character:lin-mo"],
+        },
         { characterId: "xu-lan", name: "许岚", state: { role: "supporting" }, sourceIds: ["character:xu-lan"] },
       ],
       openLoops: [],
@@ -98,7 +115,7 @@ function makeInput(rawPromptProfile) {
       genrePromises: ["恐惧来自可验证但代价高昂的规则"],
       protagonistCoreConflict: "林默必须在不信任他人的同时依赖他人",
       thematicQuestions: ["记忆能否证明身份"],
-      aestheticDirection: ["克制", "冷峻"],
+      aestheticDirection: ["冷峻美学", "霓虹感"],
       forbiddenDrift: ["不把异常写成无规则幻觉"],
       sourceIds: ["constitution"],
     },
@@ -127,8 +144,15 @@ describe("MODEL-PROMPT-ADAPTER-1", () => {
       assert.match(result.userPrompt, /林默尚不知道门后人的身份/);
       assert.match(result.userPrompt, /门锁事实与错误记忆共同暴露模仿者/);
       assert.match(result.userPrompt, /真正的许岚从楼梯口出现/);
+      assert.match(result.userPrompt, /当前压力/);
+      assert.match(result.userPrompt, /声音会利用林默的记忆误导判断/);
+      assert.match(result.userPrompt, /主动敲门试探/);
+      assert.match(result.userPrompt, /林默失去继续伪装不知情的机会/);
+      assert.match(result.userPrompt, /许岚失踪与旧案有关/);
+      assert.match(result.userPrompt, /先验证信息，再决定是否信任/);
+      assert.match(result.userPrompt, /互不完全信任，但必须合作/);
       assert.doesNotMatch(result.userPrompt, /主动试探|替代方案|选择代价|模板化惊吓/);
-      assert.doesNotMatch(result.userPrompt, /克制|冷峻/);
+      assert.doesNotMatch(result.userPrompt, /冷峻美学|霓虹感/);
     }
   });
 
@@ -205,6 +229,37 @@ describe("MODEL-PROMPT-ADAPTER-1", () => {
     assert.doesNotMatch(adapted.userPrompt, /本章未声明/);
   });
 
+  test("作品宪法只注入叙事承诺，不注入工具术语和机械写法", () => {
+    const input = makeInput();
+    input.constitution = {
+      ...input.constitution,
+      readerPromise: [...input.constitution.readerPromise, "爽点使用蓄水→爆发→余韵三段式"],
+      genrePromises: [...input.constitution.genrePromises, "多写短句，限制长句"],
+      forbiddenDrift: [
+        ...input.constitution.forbiddenDrift,
+        "用感知锚点替代作者总结",
+        "显式章纲是 AI 生成时的 CONTRACT",
+        "禁止凭空知道未获知的信息",
+      ],
+    };
+    input.intent = {
+      ...input.intent,
+      inviolableFacts: [...input.intent.inviolableFacts, "用感知锚点替代作者总结"],
+      factAndCharacterKnowledgeForbiddenZones: [
+        ...input.intent.factAndCharacterKnowledgeForbiddenZones,
+        "显式章纲是 AI 生成时的 CONTRACT",
+      ],
+    };
+    const adapted = adaptWriterPrompt({
+      profile: "gemini_writer_v2",
+      chapterNumber: input.chapterNumber,
+      contract: buildChapterContract(input),
+      sharedContext: "共享上下文",
+    });
+    assert.match(adapted.userPrompt, /禁止凭空知道未获知的信息/);
+    assert.doesNotMatch(adapted.userPrompt, /蓄水|感知锚点|CONTRACT|多写短句|限制长句/);
+  });
+
   test("buildRawPrompt 默认 Gemini v2，显式 profile 可消融且记录适配元数据", () => {
     const defaultPrompt = buildRawPrompt(makeInput());
     const genericPrompt = buildRawPrompt(makeInput("generic_writer_v1"));
@@ -225,7 +280,8 @@ describe("MODEL-PROMPT-ADAPTER-1", () => {
     assert.equal(chinesePrompt.userPrompt, geminiPrompt.userPrompt);
     assert.doesNotMatch(chinesePrompt.userPrompt, /中文表达要求/);
     assert.doesNotMatch(geminiPrompt.userPrompt, /完整上下文/);
-    assert.equal(gptPrompt.userPrompt.split("主动敲门试探").length - 1, 0, "场景执行方案不得进入统一内容契约");
+    assert.equal(gptPrompt.userPrompt.split("主动敲门试探").length - 1, 1, "作者章卡中的选择与代价必须进入统一内容契约");
+    assert.equal(gptPrompt.userPrompt.split("故意问一个答案相反的问题").length - 1, 0, "场景执行方案不得进入统一内容契约");
     assert.equal(gptPrompt.userPrompt.split("林默尚不知道门后人的身份").length - 1, 1, "硬事实只由 ChapterContract 渲染一次");
     assert.equal(gptPrompt.userPrompt.split("不把异常写成无规则幻觉").length - 1, 1, "宪法禁止偏离不得在契约中重复");
     assert.deepEqual(defaultPrompt.constitutionConsumedFields, [

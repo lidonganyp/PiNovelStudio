@@ -189,6 +189,21 @@ describe("PREFLIGHT-STATE-STORE-CONTINUITY-1: 前章连续性预检（state stor
     cleanupTestWorkspace();
   });
 
+  it("1b. state-only: padded chapter-02.md 与 finalText hash 可通过连续性预检", () => {
+    const chapterNumber = 3;
+    const prevText = "前章接受正文，使用历史兼容的补零文件名。";
+    setupBaseWorkspace();
+    writeFileSync(join(testWorkspacePath, "chapters", "chapter-02.md"), prevText, "utf-8");
+    writeStateStore(buildValidStateStore(chapterNumber - 1, prevText));
+
+    const report = runPreflight(chapterNumber);
+
+    const stateBlock = report.blockingItems.find(b => b.check === "previous_state_store_invalid");
+    assert.equal(stateBlock, undefined, "兼容章节文件名不应被误判为缺失");
+    assert.equal(report.checks.previousSkeleton.passed, true);
+    cleanupTestWorkspace();
+  });
+
   it("2. skeleton-only: 有效 skeleton + 无 state store → 不阻断（legacy 回退）", () => {
     const chapterNumber = 2;
     setupBaseWorkspace();
