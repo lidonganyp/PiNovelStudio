@@ -5,8 +5,8 @@
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -257,6 +257,71 @@ test("read-only full pipeline previews do not retry an entire chapter after mode
     workspaceId: "w", chapterId: "1", chapterNumber: 1, fullPipelinePreview: true,
   }, undefined, undefined, { cwd: process.cwd() });
   assert.equal(calls, 1);
+});
+
+test("blocked chapter generation restores the pre-call chapter file and warns PI not to write the draft", async () => {
+  const workspacesRoot = resolve(process.cwd(), "../../../workspaces");
+  const workspacePath = mkdtempSync(join(workspacesRoot, "tool-block-protection-"));
+  const workspaceId = basename(workspacePath);
+  const chaptersDir = join(workspacePath, "chapters");
+  const chapterPath = join(chaptersDir, "17.md");
+  mkdirSync(chaptersDir, { recursive: true });
+  writeFileSync(chapterPath, "已通过门禁的旧正文", "utf8");
+
+  try {
+    const handlers = new Proxy({}, {
+      get: (_target, key) => key === "handleGenerateChapter"
+        ? async () => {
+            writeFileSync(chapterPath, "被 FactGuard 阻断的候选稿", "utf8");
+            return {
+              status: "blocked",
+              chapterFilePath: null,
+              failureEnvelope: { stage: "raw_fact_guard", severity: "hard" },
+            };
+          }
+        : async () => ({}),
+    });
+    const chapterTool = registerTools(handlers).find((tool) => tool.name === "novel_generate_chapter");
+    const response = await chapterTool.execute("blocked-write", {
+      workspaceId,
+      chapterId: "17",
+      chapterNumber: 17,
+    }, undefined, undefined, { cwd: process.cwd() });
+
+    assert.equal(readFileSync(chapterPath, "utf8"), "已通过门禁的旧正文");
+    assert.match(response.content[0].text, /禁止写入章节文件/);
+  } finally {
+    rmSync(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test("blocked chapter generation removes a newly leaked chapter file", async () => {
+  const workspacesRoot = resolve(process.cwd(), "../../../workspaces");
+  const workspacePath = mkdtempSync(join(workspacesRoot, "tool-new-block-protection-"));
+  const workspaceId = basename(workspacePath);
+  const chapterPath = join(workspacePath, "chapters", "18.md");
+
+  try {
+    const handlers = new Proxy({}, {
+      get: (_target, key) => key === "handleGenerateChapter"
+        ? async () => {
+            mkdirSync(join(workspacePath, "chapters"), { recursive: true });
+            writeFileSync(chapterPath, "不应交付的阻断稿", "utf8");
+            return { status: "blocked", chapterFilePath: null };
+          }
+        : async () => ({}),
+    });
+    const chapterTool = registerTools(handlers).find((tool) => tool.name === "novel_generate_chapter");
+    await chapterTool.execute("blocked-new-write", {
+      workspaceId,
+      chapterId: "18",
+      chapterNumber: 18,
+    }, undefined, undefined, { cwd: process.cwd() });
+
+    assert.equal(existsSync(chapterPath), false);
+  } finally {
+    rmSync(workspacePath, { recursive: true, force: true });
+  }
 });
 
 test("public schema adapter preserves required and optional string enums", () => {
