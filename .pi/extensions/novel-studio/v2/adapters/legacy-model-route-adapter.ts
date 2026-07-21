@@ -85,6 +85,33 @@ export interface ModelGenerateOutput {
 export type ModelGenerateFn = (input: ModelGenerateInput) => Promise<ModelGenerateOutput>;
 
 const MAX_GENERATION_TOKENS = 32768;
+const DEFAULT_JUDGE_MAX_RETRIES = 1;
+const MAX_CONFIGURABLE_JUDGE_RETRIES = 3;
+const STREAMING_JUDGE_ROUTES = new Set([
+  "v2_opportunity_judge",
+  "v2_literary_judge",
+]);
+
+function parseRetryLimit(value: string | undefined, maximum: number): number | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= maximum
+    ? parsed
+    : undefined;
+}
+
+function resolveJudgeMaxRetries(route: string): number | undefined {
+  if (!STREAMING_JUDGE_ROUTES.has(route)) return undefined;
+  const judgeLimit = parseRetryLimit(
+    process.env.PINOVEL_JUDGE_MAX_RETRIES,
+    MAX_CONFIGURABLE_JUDGE_RETRIES,
+  ) ?? DEFAULT_JUDGE_MAX_RETRIES;
+  const globalLimit = parseRetryLimit(
+    process.env.PINOVEL_MODEL_MAX_RETRIES,
+    MAX_CONFIGURABLE_JUDGE_RETRIES,
+  );
+  return globalLimit === undefined ? judgeLimit : Math.min(judgeLimit, globalLimit);
+}
 
 export function resolveGenerationMaxTokens(): number | undefined {
   const raw = process.env.PINOVEL_GENERATION_MAX_TOKENS?.trim();
@@ -371,7 +398,11 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
     // 动态 import legacy fallback-manager，避免 V2 typecheck 依赖 legacy 内部类型
     const fallbackMod: any = await import("../../api/fallback-manager.js");
     const candidateTimeoutMs = input.timeoutMs ?? 600000;
-    const manager = fallbackMod.createAPIFallbackManager({ totalTimeoutMs: candidateTimeoutMs });
+    const judgeMaxRetries = resolveJudgeMaxRetries(input.route);
+    const manager = fallbackMod.createAPIFallbackManager({
+      totalTimeoutMs: candidateTimeoutMs,
+      ...(judgeMaxRetries === undefined ? {} : { maxRetries: judgeMaxRetries }),
+    });
     const messages = localizeLlmMessages([
       { role: "system", content: input.systemPrompt },
       { role: "user", content: input.userPrompt },
@@ -389,7 +420,7 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
       {
         ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
         timeoutMs: candidateTimeoutMs,
-        ...(input.route === "v2_literary_judge" ? { stream: true } : {}),
+        ...(STREAMING_JUDGE_ROUTES.has(input.route) ? { stream: true } : {}),
       },
     );
     const text = extractTextFromFallbackResult(result);
