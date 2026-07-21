@@ -123,7 +123,8 @@ function buildAuthorStyleReferenceBlock(
   context: CompiledContext,
   relevantCharacters: string[],
 ): string | null {
-  const guidance: string[] = [];
+  const generalGuidance: string[] = [];
+  const characterGuidance: string[] = [];
 
   for (const reference of context.styleReferences.filter((entry) => entry.kind === "fingerprint")) {
     const payload = parseStylePayload(reference);
@@ -139,17 +140,22 @@ function buildAuthorStyleReferenceBlock(
       continue;
     }
 
-    guidance.push(...stringList(payload.editorialGuidance).map((item) => `- [通用] ${item}`));
+    generalGuidance.push(...stringList(payload.editorialGuidance).map((item) => `- [通用] ${item}`));
 
     const voices = payload.characterVoiceGuidance;
     if (voices && typeof voices === "object" && !Array.isArray(voices)) {
       const voiceMap = voices as Record<string, unknown>;
       for (const character of relevantCharacters) {
-        guidance.push(...stringList(voiceMap[character]).map((item) => `- [${character}] ${item}`));
+        characterGuidance.push(...stringList(voiceMap[character]).map((item) => `- [${character}] ${item}`));
       }
     }
   }
 
+  const selectedCharacterGuidance = characterGuidance.slice(0, 2);
+  const guidance = [
+    ...generalGuidance.slice(0, MAX_STYLE_GUIDANCE_ITEMS - selectedCharacterGuidance.length),
+    ...selectedCharacterGuidance,
+  ];
   const selected: string[] = [];
   let usedChars = 0;
   for (const item of guidance) {
