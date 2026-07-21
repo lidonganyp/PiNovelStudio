@@ -55,7 +55,7 @@ import type { VoiceFingerprintInput } from "./dialogue-craft-compiler.js";
 import {
   buildOpportunityPrompt,
   buildOpportunitySchemaRepairPrompt,
-  parseOpportunityVerdict,
+  parseOpportunityVerdictWithDiagnostics,
   type ParsedOpportunityVerdict,
 } from "./editorial-opportunity-contract.js";
 import {
@@ -140,6 +140,7 @@ export interface OpportunityJudgeResult {
 interface OpportunityLlmAttemptResult {
   result: OpportunityJudgeResult | null;
   schemaRepairAttempts: number;
+  failureReason?: string;
 }
 
 // ============================================================================
@@ -229,9 +230,11 @@ export class EditorialOpportunityJudge {
 
     // P1-9：LLM 主导判断（传入 modelGenerate 时）
     let failedSchemaRepairAttempts = 0;
+    let failedLlmReason: string | undefined;
     if (input.modelGenerate) {
       const llmAttempt = await this.judgeWithLLM(input, rawText, scannedSignals, maxHypotheses);
       failedSchemaRepairAttempts = llmAttempt.schemaRepairAttempts;
+      failedLlmReason = llmAttempt.failureReason;
       if (llmAttempt.result !== null) {
         return llmAttempt.result; // LLM 成功，使用其判断
       }
@@ -250,7 +253,9 @@ export class EditorialOpportunityJudge {
       noOpReason,
       scannedSignals,
       llmJudged: false,
-      llmFallbackReason: input.modelGenerate ? "LLM 调用/解析失败；本地信号仅作诊断，保留 raw" : undefined,
+      llmFallbackReason: input.modelGenerate
+        ? `LLM 结构化判断失败（${failedLlmReason ?? "unknown_failure"}）；本地信号仅作诊断，保留 raw`
+        : undefined,
       craftPhenomenonReport: skippedCraftPhenomenonReport(
         input.modelGenerate ? "opportunity judge schema repair exhausted" : "未提供 opportunity judge 模型",
         input.rawCandidateId ?? "candidate:raw:unknown",
@@ -295,6 +300,7 @@ export class EditorialOpportunityJudge {
     let parsed: ParsedOpportunityVerdict | null = null;
     let invalidOutput = "";
     let schemaRepairAttempts = 0;
+    let failureReason = "unknown_schema_failure";
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (attempt === 1) schemaRepairAttempts = 1;
@@ -310,13 +316,25 @@ export class EditorialOpportunityJudge {
         };
         const output = await input.modelGenerate!(genInput);
         invalidOutput = output.text ?? "";
-        parsed = parseOpportunityVerdict(invalidOutput);
+        const parseResult = parseOpportunityVerdictWithDiagnostics(invalidOutput);
+        parsed = parseResult.verdict;
+        failureReason = parseResult.failureReason ?? failureReason;
         if (parsed) break;
       } catch {
-        return { result: null, schemaRepairAttempts };
+        return {
+          result: null,
+          schemaRepairAttempts,
+          failureReason: `model_call_failed，输出长度=${invalidOutput.length}`,
+        };
       }
     }
-    if (!parsed) return { result: null, schemaRepairAttempts };
+    if (!parsed) {
+      return {
+        result: null,
+        schemaRepairAttempts,
+        failureReason: `${failureReason}，输出长度=${invalidOutput.length}`,
+      };
+    }
 
     // LLM 机会 → hypothesis（span 强制：excerpt 必须在 raw 中真实存在）
     const llmHypotheses: EditorialHypothesis[] = [];

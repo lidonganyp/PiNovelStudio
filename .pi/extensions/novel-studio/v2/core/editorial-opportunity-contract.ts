@@ -51,6 +51,11 @@ export interface ParsedOpportunityVerdict {
   noOpReason: string | null;
 }
 
+export interface OpportunityVerdictParseResult {
+  verdict: ParsedOpportunityVerdict | null;
+  failureReason: string | null;
+}
+
 export interface OpportunityPromptInput {
   rawText: string;
   intent: ChapterIntent;
@@ -207,45 +212,67 @@ const OPPORTUNITY_SYSTEM_PROMPT = `你是证据驱动的中文长篇小说编辑
 const OPPORTUNITY_SCHEMA_REPAIR_SYSTEM_PROMPT = `你只负责修复结构化输出。不要重新评价正文，不要增加、删除或改写诊断内容。把输入转换为指定结构；无法恢复的条目丢弃。只输出结构化对象。`;
 
 export function parseOpportunityVerdict(text: string): ParsedOpportunityVerdict | null {
-  if (!text?.trim()) return null;
+  return parseOpportunityVerdictWithDiagnostics(text).verdict;
+}
+
+/**
+ * Parse the judge response while retaining a compact, non-sensitive failure
+ * reason for trace diagnostics. Purely advisory fields may be omitted, but
+ * every field that can authorize an editorial candidate remains strict.
+ */
+export function parseOpportunityVerdictWithDiagnostics(text: string): OpportunityVerdictParseResult {
+  if (!text?.trim()) return parseFailure("empty_output");
   try {
     const json = extractJsonObject(text);
-    if (!json) return null;
+    if (!json) return parseFailure("missing_json_object");
     const parsedJson = JSON.parse(json) as unknown;
-    if (!isRecord(parsedJson) || !hasOnlyKeys(parsedJson, TOP_LEVEL_KEYS)) return null;
+    if (!isRecord(parsedJson)) return parseFailure("invalid_top_level_object");
+    if (!hasOnlyKeys(parsedJson, TOP_LEVEL_KEYS)) return parseFailure("unsupported_top_level_keys");
     const obj = parsedJson;
     const rawCraftPhenomena = readAliasedValue(obj, "craftPhenomena", "工艺现象");
     const rawOpportunities = readAliasedValue(obj, "opportunities", "编辑机会");
     const noOpReasonValue = readAliasedValue(obj, "noOpReason", "无操作原因");
-    if (!rawCraftPhenomena.found || !Array.isArray(rawCraftPhenomena.value)) return null;
-    if (!rawOpportunities.found || !Array.isArray(rawOpportunities.value)) return null;
-    if (!noOpReasonValue.found || (noOpReasonValue.value !== null && typeof noOpReasonValue.value !== "string")) {
-      return null;
+    const craftPhenomena = rawCraftPhenomena.found ? rawCraftPhenomena.value : [];
+    if (!Array.isArray(craftPhenomena)) return parseFailure("invalid_craft_phenomena");
+    if (!rawOpportunities.found) return parseFailure("missing_opportunities");
+    if (!Array.isArray(rawOpportunities.value)) return parseFailure("invalid_opportunities");
+    if (noOpReasonValue.found
+      && noOpReasonValue.value !== null
+      && typeof noOpReasonValue.value !== "string") {
+      return parseFailure("invalid_no_op_reason");
     }
 
     const opportunities: ParsedOpportunity[] = [];
-    if (rawOpportunities.value.length > 2) return null;
-    for (const item of rawOpportunities.value) {
+    if (rawOpportunities.value.length > 2) return parseFailure("too_many_opportunities");
+    for (let index = 0; index < rawOpportunities.value.length; index += 1) {
+      const item = rawOpportunities.value[index];
       const parsed = parseOpportunity(item);
-      if (!parsed) return null;
+      if (!parsed) return parseFailure(`invalid_opportunity_${index}`);
       opportunities.push(parsed);
     }
 
-    const craftObservations = parseCraftObservations(rawCraftPhenomena.value as unknown[]);
-    if (!craftObservations) return null;
+    const craftObservations = parseCraftObservations(craftPhenomena as unknown[]);
+    if (!craftObservations) return parseFailure("invalid_craft_observations");
     const noOpReason = typeof noOpReasonValue.value === "string" && noOpReasonValue.value.trim()
       ? noOpReasonValue.value
       : null;
-    if (opportunities.length === 0 && noOpReason === null) return null;
-    if (opportunities.length > 0 && noOpReason !== null) return null;
+    if (opportunities.length === 0 && noOpReason === null) return parseFailure("missing_no_op_reason");
+    if (opportunities.length > 0 && noOpReason !== null) return parseFailure("contradictory_no_op_reason");
     return {
-      opportunities,
-      craftObservations,
-      noOpReason,
+      verdict: {
+        opportunities,
+        craftObservations,
+        noOpReason,
+      },
+      failureReason: null,
     };
   } catch {
-    return null;
+    return parseFailure("invalid_json");
   }
+}
+
+function parseFailure(failureReason: string): OpportunityVerdictParseResult {
+  return { verdict: null, failureReason };
 }
 
 export function buildOpportunityPrompt(input: OpportunityPromptInput): {

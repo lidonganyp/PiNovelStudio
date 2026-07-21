@@ -232,7 +232,7 @@ test("ordinary editorial generation sends Gemini profiles to the Gemini route", 
   assert.equal(result.candidates.length, 1);
 });
 
-test("strict opportunity schema rejects missing methodology fields and contradictory no-op reasons", () => {
+test("opportunity schema defaults missing advisory fields but rejects contradictory no-op reasons", () => {
   const missingCraftPhenomena = JSON.stringify({
     opportunities: [],
     noOpReason: "没有机会",
@@ -264,7 +264,7 @@ test("strict opportunity schema rejects missing methodology fields and contradic
     noOpReason: null,
   });
 
-  assert.equal(parseOpportunityVerdict(missingCraftPhenomena), null);
+  assert.deepEqual(parseOpportunityVerdict(missingCraftPhenomena)?.craftObservations, []);
   assert.equal(parseOpportunityVerdict(contradictoryReason), null);
   assert.equal(parseOpportunityVerdict(crossChapterOpportunityWithoutState), null);
 });
