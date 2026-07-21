@@ -1,6 +1,6 @@
 # PiNovelStudio 顶尖中文长篇小说生成系统完整开发计划
 
-**版本**：v1.2
+**版本**：v1.3
 **日期**：2026-07-21
 **状态**：目标架构与迁移实施基线
 **取代范围**：`quality_amplifier_v2` 试验性双链路设计、Stage0-8 运行时主架构、机械 comparator 主裁判
@@ -57,7 +57,7 @@ LLM 负责：
 
 `CreativeConstitution` 进入 raw 的字段限于作品身份、读者承诺、类型承诺、主角核心冲突、长期主题问题和禁止偏离。`aestheticDirection` 与自动学习的表达偏好不直接进入 raw，避免把作品审美退化成固定写法。
 
-一次跨章序列偏好不得外推为所有章节的生产规则。每个候选都必须基于本章 raw 的可引用机会产生，并在本章独立比较；缺少自然人对齐的文学选择权威时保留 raw。
+一次跨章序列偏好不得外推为所有章节的生产规则。每个候选都必须基于本章 raw 的可引用机会产生，并在本章独立匿名比较。自然人金标用于校准 judge 与发现系统性偏差，不作为全局来源偏置；逐章比较有效且明确时交付质量赢家，比较不可用、证据无效、tie 或复判冲突时才保留 raw。
 
 raw 通过事实守卫后，`CraftPhenomenonReport` 才可使用方法论工艺知识。报告按章节相关性覆盖对话、节奏与高潮、连载预期、类型契约、配角、世界观揭示、群像、收尾、五维推进、叙事聚焦与空间调度、跨章健康十一个领域；结论只允许 `observed / uncertain / not_applicable`，`observed / uncertain` 必须引用 raw 中逐字存在的 span。报告不得进入 raw prompt、不得给文学总分、不得直接改文或选择 winner。
 
@@ -134,8 +134,8 @@ novel_generate_chapter
   -> LanguageRiskAnalyzer(all candidates)
   -> PairwiseLiteraryJudge
   -> SelectionPolicy
-       -> clear amplified win: amplified
-       -> unclear/conflict/regression: raw
+       -> clear raw/editorial win: deliver the quality winner
+       -> judge unavailable/tie/conflict/regression: raw safety fallback
   -> optional SpanRepairCandidate
   -> FinalFactRecheck
   -> ChapterProxyApproval(gpt5.6-sol)
@@ -754,7 +754,7 @@ Phase 2 与 Phase 1 可部分并行；Phase 4 可在 Phase 3 输出 schema 稳�
 - `novel_generate_chapter` 只有一条生产生成路径；
 - raw 永久存在且可安全交付；
 - 只有带具体证据的编辑机会才生成候选；
-- 文学候选由匿名、span 约束的 LLM pairwise judge 提供证据；只有通过自然人对齐闸门后才允许自动决定胜负，未通过时保留 raw 并进入人工复核；
+- 文学候选由匿名、span 约束的 LLM pairwise judge 提供证据；有效、明确的逐章结论自动选择质量赢家，judge 不可用、证据无效、tie 或复判冲突时保留 raw，并在 trace 中区分 `decisive_winner`、`judge_unavailable` 与 `comparison_inconclusive`；
 - 事实硬伤由确定性代码守护；
 - legacy 正收益资产已有明确新 owner；
 - Stage0-8 不再加工正文；

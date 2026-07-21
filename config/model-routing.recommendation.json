@@ -6,7 +6,7 @@
   "_lastExperimentConclusionTier": "preliminary_stage2_signal",
   "_v46MigrationNote": "v4.6.0 (2026-07-05) Stage 2 fallback 污染治理后，Doubao 不再作为 Stage 2 生产 fallback。本文件历史实验结论需重新跑矩阵复核（route=narrator_primary provider=doubao 的旧样本会被审计脚本标记为 PRODUCTION_STAGE2_FORBIDDEN_PROVIDER_FALLBACK contaminated，不再算 clean Claude 样本）。",
   "productionCurrent": {
-    "_note": "以下为当前生产路由实际策略，来源 config/model-routing.json v4.29.0 (AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1)。Gemini 自由生成 raw；固定场景解法与 bounded best-of-3 已退出生产。只有 raw span 支持的机会可生成 0-2 个 editorial candidate，未通过自然人对齐的机器裁判不得替换 raw。",
+    "_note": "以下为当前生产路由实际策略，来源 config/model-routing.json v4.30.0 (QUALITY-WINNER-SELECTION-1)。Gemini 自由生成 raw；固定场景解法与 bounded best-of-3 已退出生产。只有 raw span 支持的机会可生成 0-2 个 editorial candidate；有效明确的逐章匿名比较选择质量赢家，比较不可用/tie/冲突时保留 raw。",
     "narrator_primary": "gemini-3.1-pro-preview",
     "narrator_backup": "null (Gemini raw 失败由 v2_rawstage2_gemini31.fallback=[] hard block；Claude 4.6 仅通过 writerModel=claude 显式选择)",
     "style_shaper": "claude-opus-4-6",

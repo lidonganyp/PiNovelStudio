@@ -29,11 +29,11 @@ PI Agent（编排大脑）
     → PairwiseJudge (匿名 A/B, span 约束, 可反向复判)
     → SelectionPolicy → SpanRepair → FinalFactRecheck → FinalStateCommit → AtomicSave + Trace
 
-AI 路由策略（真相源: config/model-routing.json v4.29.0）:
+AI 路由策略（真相源: config/model-routing.json v4.30.0）:
 ├── Gemini 3.1 Pro: 默认 raw 正文 + 普通 editorial candidate，使用 Gemini 专用路由与 Prompt；fallback=[]
 ├── Claude Opus 4.6: 显式 `writerModel=claude` 正文备选，并继续负责风格塑形、终审与角色节点；不作为静默 fallback
 ├── 同模型 bounded best-of-3: 显式 `boundedBestOf3=true` 时由当前主写生成 raw + 最多 2 个场景解法候选；Gemini 4 次尝试中 2 次受控且均由 raw 胜出，默认关闭
-├── gpt-5.6-sol: opportunity/pairwise/reverse 异源 judge（advisory-only；人工对齐通过前不得自动替换 Gemini raw）
+├── gpt-5.6-sol: opportunity/pairwise/reverse 异源 judge（有效明确的逐章比较选质量赢家；不可用/tie/冲突时 raw 回退）
 ├── GPT 5.5: 结构化节点（类型路由/依赖检查/Anti-AI 检测等）
 ├── Doubao Seed 2.1 Pro: 受限 span 驱动中文校准候选（1C COMPLETE_L0）
 ├── GLM 5.2: 显式开发验证 / NovelBench lab route，生产默认禁用

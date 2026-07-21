@@ -1,7 +1,7 @@
 # PiNovelStudio 项目记忆
 
 **快照日期**：2026-07-21  
-**代码基线**：`67f6654`（已包含叙事聚焦与空间调度的 RED+GREEN candidate-only 策略及 raw 权限守护）
+**代码基线**：`3faa47a`（已包含 opportunity judge 流式稳定性修复与逐章质量赢家选择策略）
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
 
 ## 当前架构
@@ -9,7 +9,7 @@
 - 章节生成只有 `novel_generate_chapter` 一个公开入口，运行时只有统一主链路：`raw → editorial opportunity → 0-2 candidates → heterogeneous pairwise judge → selection → final recheck → state commit → atomic save`。
 - legacy Stage0-8 正文编排已经物理删除；生产 `dist/`、评测 `dist-eval/`、测试 `dist-test/` 由三个 tsconfig 隔离。
 - 生产严格保留 6 个公开工具。代理审批定稿通过 `novel_workspace_manager` 的 `proxy_finalization` action 消费，不新增第 7 个公开工具。
-- raw 是内部基线与安全回退。Gemini 自由生成 raw；只有存在 raw span 证据的编辑机会时才生成 0-2 个 candidate。固定场景搜索不进入生产，机器文学裁判在自然人对齐前只提供 advisory evidence，不能替换 raw；长期叙事状态只允许依据最终选定正文提交。
+- raw 是内部基线与安全回退。Gemini 自由生成 raw；只有存在 raw span 证据的编辑机会时才生成 0-2 个 candidate。固定场景搜索不进入生产。逐章匿名比较有效且明确时选择质量赢家；504、schema 失败、证据无效、tie 或复判冲突时保留 raw，并标记为比较不可用/不确定，而不是宣称 raw 更优。长期叙事状态只允许依据最终选定正文提交。
 
 ## 2026-07-17 已完成变更
 
@@ -26,7 +26,7 @@
 
 ## 当前模型职责
 
-`config/model-routing.json` v4.29.0 是唯一运行时真相源：
+`config/model-routing.json` v4.30.0 是唯一运行时真相源：
 
 - Gemini 3.1 Pro Preview：默认 raw 正文与普通 editorial candidate 主写；未传 `writerModel` 时使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`。`fallback=[]`，失败 hard block，不静默切换 Claude 或其他正文模型。
 - Claude Opus 4.6：通过显式 `writerModel=claude` 使用独立 raw/editorial 路由；继续负责正式 StyleShaper、Stage 8 final gate 与 character_agent，不是 Gemini 的自动 fallback。
@@ -56,7 +56,7 @@
 
 1. `CEILING-BEST-OF-3-1` 已退出生产：Gemini 受控样本中第二候选 `0` 胜，固定候选数不得为凑门槛继续扩大。
 2. `CEILING-CONTINUOUS-CHAPTERS-1` 只有一名自然人对一组 3 章序列的整体裁决；该结果不能外推为其他章节类型的生产规则。
-3. `CEILING-HUMAN-REVIEW-1` 的机器裁判校准尚未完成：GPT-5.6-sol 与隔离 Gemini reader judge 均曾反向选择 Claude。至少补足 3 个自然人样本并通过一致率门槛前，机器胜率只能作诊断，不能自动选择文学候选或推荐默认模型。
+3. `CEILING-HUMAN-REVIEW-1` 的机器裁判校准尚未完成：GPT-5.6-sol 与隔离 Gemini reader judge 均曾反向选择 Claude。该证据仍要求继续补足自然人样本、监控误选率，且不能用于推荐全局默认模型；但它不再构成逐章质量选择的全局关闭开关，有效明确的本章比较会选择胜者。
 4. gpt-5.6-sol 文学裁判虽已完成连续真实运行，但单对比较尾延迟约 `11-15` 分钟；生产可靠性和严格 JSON schema 长窗口仍需继续治理。
 5. G7 最终稿的 Canon/Character/Promise 完整重新派生仍有工程差距；当前不能把 Pattern 以外的空 `StagedStateUpdate` 注入描述成四类状态完整闭环。
 6. `final-selector.ts` 虽不在统一生产编排器中，但 `legacy-trace-adapter.ts` 仍导入 `classifyCandidateSource`，需先迁移该依赖再考虑删除。
@@ -84,7 +84,7 @@ git diff --check
 
 测试读取编译后的 `dist/`、`dist-eval/`、`dist-test/`，修改 TypeScript 后必须先构建。
 
-2026-07-21 最新验证证据：`npm run build`、`npm run typecheck`、`npm run simplicity-gate` 通过；核心方法论状态/编排聚焦套件 `51/51`，preview 与生产模型隔离回归 `19/19`；完整 `npm test` 为 `2751 total / 2743 pass / 0 fail / 8 skip`。普通 editorial candidate 跟随当前 writer family，默认 Gemini 使用 `v2_amplified_gemini31`。raw 通过 FactGuard 后才加载只读 `MethodologyDiagnosticState`；该状态不进入 raw prompt，排除目标章之后的状态与世界揭示内容，跨章现象和机会必须同时引用 raw span 与快照内合法 `sourceRef`。固定场景规划器、旧多候选生成器、段落节奏硬门与全局场景准入接口已从生产闭包或代码表面物理移除。本地词频/长度扫描只写 diagnostic trace，不能独立授权候选；机会 judge 失败时保留 raw。机器文学自动选择默认 fail-closed，只有显式通过自然人对齐授权时才可开启；置信度候选门槛导出已删除。
+2026-07-21 最新验证证据：`npm run build`、`npm run typecheck`、`npm run simplicity-gate` 通过；核心方法论状态/编排聚焦套件 `51/51`，preview 与生产模型隔离回归 `19/19`；上一轮完整 `npm test` 为 `2751 total / 2743 pass / 0 fail / 8 skip`。本轮质量赢家策略、路由契约、统一编排与 504 流式回归为 `93/93`；选择核心覆盖率为 line `90.29%`、branch `83.33%`、functions `100%`。普通 editorial candidate 跟随当前 writer family，默认 Gemini 使用 `v2_amplified_gemini31`。raw 通过 FactGuard 后才加载只读 `MethodologyDiagnosticState`；该状态不进入 raw prompt，排除目标章之后的状态与世界揭示内容，跨章现象和机会必须同时引用 raw span 与快照内合法 `sourceRef`。固定场景规划器、旧多候选生成器、段落节奏硬门与全局场景准入接口已从生产闭包或代码表面物理移除。本地词频/长度扫描只写 diagnostic trace，不能独立授权候选。机会 judge 失败时保留 raw 并记录 `judge_unavailable`；有效明确的逐章 pairwise 结果默认选择质量赢家；置信度候选门槛导出已删除。
 
 ### 2026-07-17 测试失败修正
 

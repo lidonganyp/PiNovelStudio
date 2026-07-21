@@ -22,15 +22,19 @@ const routing = JSON.parse(
   readFileSync(resolve(process.cwd(), "../../../config/model-routing.json"), "utf8"),
 );
 
-test("routing records the Gemini human-alignment and search-depth evidence", () => {
-  assert.equal(routing._version, "4.29.0");
+test("routing records calibration evidence while enabling chapter quality-winner selection", () => {
+  assert.equal(routing._version, "4.30.0");
   assert.deepEqual(routing.model_strategy.literary_judge_admission.evidence_paths, [
     "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
     "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority-gemini31-reader.json",
   ]);
   assert.match(
     routing.agent_routing.v2_literary_judge.note,
-    /advisory only.*cannot decide the winner/i,
+    /valid decisive verdict selects its winner/i,
+  );
+  assert.equal(
+    routing.model_strategy.literary_judge_admission.automatic_literary_selection_enabled,
+    true,
   );
 });
 
@@ -81,7 +85,12 @@ test("writer admission keeps human model preference but retires cross-chapter sc
   assert.equal(routing.model_strategy.writer_admission.human_override.winner, "gemini31");
   assert.equal(routing.model_strategy.writer_admission.scene_solution_admission.status, "retired_from_production");
   assert.equal(routing.model_strategy.writer_admission.scene_solution_admission.policy, "historical_evidence_only_no_global_extrapolation");
-  assert.deepEqual(routing.model_strategy.writer_admission.scene_solution_admission.raw_fallback_on, ["always_without_chapter_specific_human_authority"]);
+  assert.deepEqual(routing.model_strategy.writer_admission.scene_solution_admission.raw_fallback_on, [
+    "judge_unavailable",
+    "evidence_invalid",
+    "tie",
+    "reverse_review_conflict",
+  ]);
   assert.equal(routing.best_of_n_config.enabled, false);
   assert.equal(routing.best_of_n_config.runtime_status, "not_wired");
   assert.equal(routing.best_of_n_config.automatic_dual_writer, false);

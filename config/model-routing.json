@@ -1,9 +1,10 @@
 {
   "_comment": "PiNovelStudio AI Model Routing",
-  "_version": "4.29.0",
+  "_version": "4.30.0",
   "_updated": "2026-07-21",
   "disabled_providers": ["qwen", "ernie"],
   "_migration_notes": [
+    "v4.30.0 (QUALITY-WINNER-SELECTION-1): Production selection is source-neutral. Raw remains the baseline and the safety fallback when opportunity/literary judging is unavailable, evidence is invalid, the verdict is tied, or reverse review conflicts. A valid decisive chapter-specific anonymous pairwise verdict now selects its winner whether that winner is raw or editorial. Natural-human gold remains calibration and monitoring evidence, not a global switch that forces every chapter back to raw. Trace distinguishes decisive_winner, judge_unavailable, comparison_inconclusive, and advisory_only. Provider fallback remains disabled for judge routes; a 504 means comparison unavailable, not that raw was judged better.",
     "v4.29.0 (AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1): Retires the global GEMINI-SCENE-PRIMARY-1 extrapolation. The chapter writer receives author-owned plot direction, chapter function, prior state, character motivations, foreshadowing/promises, causality, inviolable facts, and ending target; sensory choices, diction, syntax, rhetoric, dialogue, paragraph rhythm, and concrete scene expression remain model-owned. Fixed scene-solution search and boundedBestOf3 are removed from production. A chapter candidate may replace raw only after chapter-specific comparison and a human-aligned selection authority; current machine literary judges remain advisory, so production preserves raw when no human-authoritative choice is available.",
     "v4.28.0 (GEMINI-SCENE-PRIMARY-1): The natural-human blind review of the continuous chapter 18-20 sequences clearly selected sequence B, privately mapped to shared ChapterSeed + pre-writing scene-solution search + Gemini raw. The default single-candidate Gemini production path now treats the first scene-search draft as the human-admitted primary after FactGuard, story-preservation, completeness, and final fact recheck. Ordinary Gemini raw remains the untouched baseline and fallback. GPT-5.6-sol literary output remains advisory and cannot decide the winner. Explicit Claude, modelTestRoute, qualityExperiment, and boundedBestOf3 paths are excluded from this admission.",
     "v4.27.0 (GEMINI-HUMAN-ALIGNED-ADMISSION-1): Gemini 3.1 Pro Preview remains the production default through the gemini_writer_v2 route family. The saved natural-human gold selected Gemini for native Chinese feel, novel voice, and scene immersion, while both GPT-5.6-sol and the isolated Gemini reader judge selected Claude; neither AI judge is aligned. Literary judging is therefore advisory only and cannot automatically replace Gemini raw until the natural-human alignment gate passes. Gemini same-model bounded best-of-3 produced four attempts and two controlled three-candidate cases; raw won both, the second candidate won zero, and final-gate vetoes were zero, so boundedBestOf3 remains disabled by default and explicit_opt_in_unadmitted.",
@@ -67,7 +68,7 @@
         "v2_rawstage2_gemini31",
         "v2_amplified_gemini31"
       ],
-      "role": "Default production raw/editorial writer selected by explicit natural-person review. It never participates in automatic fallback or automatic dual writing. Machine-judge comparison counts remain diagnostic while the natural-human alignment gate is uncalibrated; Claude remains an explicit alternative, not a silent fallback."
+      "role": "Default production raw/editorial writer selected by explicit natural-person review. It never participates in automatic fallback or automatic dual writing. Cross-model comparison counts remain diagnostic for choosing a global default; chapter-specific anonymous pairwise verdicts may select a valid decisive editorial or raw winner. Claude remains an explicit alternative, not a silent fallback."
     },
     "gpt": {
       "model": "gpt-5.5",
@@ -203,8 +204,8 @@
       "treatment": "shared ChapterSeed + pre-writing scene solution + Gemini raw",
       "winner": "scene_solution",
       "policy": "historical_evidence_only_no_global_extrapolation",
-      "machine_judge_role": "advisory",
-      "raw_fallback_on": ["always_without_chapter_specific_human_authority"],
+      "machine_judge_role": "chapter_specific_quality_selection_only",
+      "raw_fallback_on": ["judge_unavailable", "evidence_invalid", "tie", "reverse_review_conflict"],
       "excluded_paths": [
         "explicit_claude",
         "model_test_routes",
@@ -263,13 +264,13 @@
       "natural_human_alignment": "failed",
       "gpt56_aligned_with_human_gold": false,
       "gemini31_reader_aligned_with_human_gold": false,
-      "automatic_literary_selection_enabled": false,
-      "runtime_mode": "advisory_candidates_human_review",
+      "automatic_literary_selection_enabled": true,
+      "runtime_mode": "chapter_specific_quality_winner",
       "evidence_paths": [
         "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
         "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority-gemini31-reader.json"
       ],
-      "policy": "AI judges may report facts, structure, spans, and risks but cannot automatically replace Gemini raw until natural-human alignment passes"
+      "policy": "A valid decisive anonymous chapter-specific verdict selects its winner; natural-human gold calibrates the judge and global writer recommendations but does not force a raw-source preference"
     },
     "stage2_loopback_policy": "disabled",
     "stage2_loopback_policy_reason": "ERNIE 已停用；对白回环不再调用 ERNIE，避免无余额 provider 被触发。",
@@ -1038,7 +1039,7 @@
       "api_key_env": "NOVELOS_JUDGE_API_KEY",
       "model_env": "NOVELOS_JUDGE_MODEL",
       "fallback": [],
-      "note": "MODEL-ROUTING-CLAUDE46-1A/1E-fix: V2 编辑机会 LLM 裁判路由（opportunity judge）。异源 judge：不得由 Claude 或 Doubao 自审其生成的编辑机会。MODEL-ROUTING-CLAUDE46-1E-fix: 模型从 gpt-5.5 切到 gpt-5.6-sol（与 novel_quality_judge 一致的第三方兼容端点，model/base_url/api_key 全部从 NOVELOS_JUDGE_* env 读取，不进生产 fallback 链；gpt-5.6-sol 非官方 OpenAI model ID）。fallback=[] 保证失败时不回退 Claude/Doubao/GLM，保留 raw（不静默切换 judge provider）。provider allowlist: 只允许 gpt。"
+      "note": "MODEL-ROUTING-CLAUDE46-1A/1E-fix + QUALITY-WINNER-SELECTION-1: V2 编辑机会 LLM 裁判路由（opportunity judge）。异源 judge：不得由 Claude 或 Doubao 自审其生成的编辑机会。模型从 gpt-5.5 切到 gpt-5.6-sol（与 novel_quality_judge 一致的第三方兼容端点，model/base_url/api_key 全部从 NOVELOS_JUDGE_* env 读取，不进生产 fallback 链；gpt-5.6-sol 非官方 OpenAI model ID）。fallback=[] 保证失败时不回退 Claude/Doubao/GLM；失败表示机会比较不可用并保留 raw，不表示 raw 质量胜出。provider allowlist: 只允许 gpt。"
     },
     "v2_literary_judge": {
       "provider": "gpt",
@@ -1047,7 +1048,7 @@
       "api_key_env": "NOVELOS_JUDGE_API_KEY",
       "model_env": "NOVELOS_JUDGE_MODEL",
       "fallback": [],
-      "note": "V2 pairwise literary judge route (pairwise judge + reverse review). Anonymous A/B, eight-dimension direct comparison, reverse review, and span evidence remain available for facts, structure, and risk diagnosis. Literary output is advisory only and cannot decide the winner until natural-human alignment passes. No historical scene-solution preference controls production selection. The route uses gpt-5.6-sol through NOVELOS_JUDGE_* and fallback=[]; provider allowlist permits only gpt."
+      "note": "QUALITY-WINNER-SELECTION-1: V2 pairwise literary judge route (pairwise judge + reverse review). Anonymous A/B, reader-experience-first comparison, reverse review, and span evidence produce a chapter-specific auditable decision. A valid decisive verdict selects its winner whether raw or editorial; unavailable, invalid, tied, or conflicting comparison preserves raw as a safety fallback. Natural-human gold calibrates and monitors the judge but is not a global raw preference. No historical scene-solution preference controls production selection. The route uses gpt-5.6-sol through NOVELOS_JUDGE_* and fallback=[]; provider allowlist permits only gpt."
     },
     "v2_editorial_planner": {
       "provider": "gpt",

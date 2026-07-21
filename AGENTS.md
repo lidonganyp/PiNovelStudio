@@ -9,7 +9,7 @@ PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [
 1. **单一生成主链路**：系统最终只保留 `novel_generate_chapter` 一个公开入口与一套运行时编排。不再存在 `legacy | quality_amplifier_v2` 两种生成模式，不再保留章节白名单。
 2. **raw 是内部基线与安全回退**：raw 不是另一条旧链路，而是新主链路内部的原生基线。编辑/裁判失败或候选无明确胜出时交付 raw，不交付低于 raw 的文本。
 3. **机会驱动候选**：每章先生成 raw，仅当存在可引用正文 span 证明的编辑机会时才生成 0-2 个 editorial candidate；禁止固定多候选。
-4. **自然人对齐优先的文学选择**：匿名 A/B、span 约束和反向复判继续提供事实、结构、风险与候选证据；机器 judge 通过自然人对齐闸门后才可主导自动文学选择。当前 GPT-5.6-sol 与 Gemini reader judge 均未对齐用户金标，自动选择关闭，不得覆盖 Gemini raw。
+4. **质量赢家优先的文学选择**：匿名 A/B、span 约束和反向复判用于形成逐章可审计结论；比较有效且明确时交付质量赢家，不因候选来自 raw 或 editorial 而偏置。自然人金标继续用于校准与监控 judge，但不再作为全局关闭自动选择的开关；judge 不可用、tie、证据无效或复判冲突时才回退 raw，并明确标记为“比较不可用/不确定”，不得宣称 raw 更优。
 5. **作品级 CreativeConstitution + 四类长期叙事状态**：CanonState / CharacterState / PromiseLedger / PatternMemory；状态只在最终正文选定后提交。
 6. **按模型版本隔离策略信誉**：contextual bandit 在线调整编辑策略；旧模型经验不限制新模型能力。
 
@@ -35,7 +35,7 @@ PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [
 ### 当前项目记忆（2026-07-20）
 
 - 跨会话快照见 [docs/project-memory.md](docs/project-memory.md)。它记录当前代码基线、已完成清理、脏工作树保护、模型路由状态与授权边界。
-- 当前路由基线为 `config/model-routing.json` v4.29.0：Gemini 3.1 Pro Preview 是默认 raw/editorial 主写；普通 raw 是生产基线。第 18-20 章一次序列偏好只保留为历史样本，不再外推为全局场景策略。固定场景解法与 `boundedBestOf3` 已退出生产。GPT-5.6-sol 与隔离 Gemini reader judge 均未通过当前自然人金标，机器文学判断只作 advisory evidence，不能决定文学胜负。
+- 当前路由基线为 `config/model-routing.json` v4.30.0：Gemini 3.1 Pro Preview 是默认 raw/editorial 主写；普通 raw 是生产基线。第 18-20 章一次序列偏好只保留为历史样本，不再外推为全局场景策略。固定场景解法与 `boundedBestOf3` 已退出生产。GPT-5.6-sol 的逐章匿名比较在证据有效且结论明确时决定本章质量赢家；自然人金标用于后续校准，不再让产品无条件偏向 raw。
 - 7.75GB `corpus/` 已从仓库删除，生产路径对原始语料零依赖。离线数据重建必须显式使用外部语料，不得继续把“仓库内置 100+ 部全文”写成当前事实。
 - `cd15cd2` 删除 4 个 craft 文件后 `030420f`（P0 阻断项修复）已恢复并纳入版本控制，`npm run build` / `build:prod` 通过，clean checkout 完整。
 - 当前工作树包含用户正在进行的代理审批代码、staged 测试修改、未跟踪 RED 测试与模型验证输出；未经明确指示不得恢复、删除、暂存或覆盖。现有 stash 也不得擅自 `pop/drop`。
@@ -193,7 +193,7 @@ brainholes/patterns/ # 脑洞模式 Markdown
 2. **正文表达归模型**：开头、感官、词汇、句式、修辞、对白、段落节奏和具体场景表达不得由系统机械指定。
 3. **事实硬门、文学软诊断**：空文、截断、事实/实体/时间线/世界观硬冲突可阻断；风格、AI 腔、节拍、对白比例和结构扫描只作 diagnostic/candidate evidence。
 4. **raw 基线**：任何编辑必须形成 candidate 并与本章 raw 比较；没有本章明确胜出不得覆盖 raw。
-5. **人工文学权威**：机器 judge 未通过自然人对齐前只作 advisory evidence，不得自动决定文学胜负。
+5. **逐章质量选择**：机器 judge 必须匿名比较、引用正文 span 并通过证据校验；形成明确有效结论时选择本章质量赢家。自然人反馈用于持续校准与撤销错误策略，不得被外推成“所有章节固定选 raw/editorial”的来源偏置。
 6. **状态事务**：长期状态只在最终正文经事实复检并由有效权威确认后提交。
 
 ## 生成流程
@@ -231,11 +231,11 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
 | 文学创作(Stage 2 主力 / raw 正文) | Gemini 3.1 Pro Preview | GEMINI-DEFAULT-WRITER-1：未传 `writerModel` 时使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 与 `gemini_writer_v2`；`fallback=[]`，失败 hard block，不静默切换其他正文模型 |
 | 显式备选正文模型 | Claude Opus 4.6 | `writerModel=claude` 时使用 `v2_rawstage2` / `v2_amplified` 与 `claude_writer_v1`；`fallback=[]`，不作为 Gemini 的自动备援 |
 | 中文校准候选(受限) | Doubao Seed 2.1 Pro | MODEL-ROUTING-CLAUDE46-1C：Doubao 降为受限中文校准器，仅 `v2_chinese_calibration` 在有 raw span 证据时调用；不能直接覆盖 raw，必须经 FactGuard / pairwise judge / SelectionPolicy |
-| 文学裁判(opportunity judge + pairwise + reverse review) | gpt-5.6-sol（异源 judge） | `v2_opportunity_judge` / `v2_literary_judge` 通过 `NOVELOS_JUDGE_*` 解析端点；当前只提供事实、结构、span 与风险证据。GPT 与隔离 Gemini reader judge 均未通过自然人金标，人工对齐通过前自动文学选择关闭，不能替换 Gemini raw |
+| 文学裁判(opportunity judge + pairwise + reverse review) | gpt-5.6-sol（异源 judge） | `v2_opportunity_judge` / `v2_literary_judge` 通过 `NOVELOS_JUDGE_*` 解析端点；逐章匿名比较必须有 span 证据并经反向复判/冲突治理。有效明确的 verdict 选择质量赢家；504、schema 失败、tie 或冲突只表示比较不可用/不确定，此时保留 raw |
 | 本地质量扫描 | local diagnostics | 只提供 span、事实、结构与风险证据；不得按风格、AI 腔、对白或段落指标阻断/改写/选 winner |
 | 开发验证(GLM) | GLM 5.2 | MODEL-ROUTING-CLAUDE46-1D：GLM 仅作开发验证，只允许显式 `modelTestRoute=glm` / NovelBench lab route；不得进入生产默认或 fallback。`narrator_testing_glm` / `style_shaper_testing_glm` / `chinese_naturalizer_glm` 显式 `fallback=[]` + lab_testing 标注 |
 
-> **路由真相源**：`config/model-routing.json` v4.29.0 为路由唯一真相源，本表与之同步；不一致时以 `model-routing.json` 为准。AGENTS.md 路由表为人类可读摘要，不作为运行时路由依据。历史场景准入与模型主写决策只保留在 `_migration_notes` 中作参考，不再作为当前态。
+> **路由真相源**：`config/model-routing.json` v4.30.0 为路由唯一真相源，本表与之同步；不一致时以 `model-routing.json` 为准。AGENTS.md 路由表为人类可读摘要，不作为运行时路由依据。历史场景准入与模型主写决策只保留在 `_migration_notes` 中作参考，不再作为当前态。
 
 ## 生产规则
 
@@ -288,13 +288,13 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
    - ❌ 禁止直接调用 `novel_critic` 替代质量审查
    - ❌ 禁止在未通过 `novel_generate_chapter` 的情况下输出"第X章"内容
 
-4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.29.0）：
+4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.30.0）：
    - `v2_rawstage2_gemini31` / `v2_amplified_gemini31` → Gemini 3.1 Pro Preview；默认 `writerModel`，使用 `gemini_writer_v2`，失败 hard block，不静默切换 Claude 或其他正文模型
    - 默认 Gemini 生产路径 → 自由生成普通 raw；固定写前场景解法不再进入生产。只有有 raw span 证据的 editorial hypothesis 才能生成 0-2 个 candidate，且必须逐章与 raw 比较
    - `v2_rawstage2` / `v2_amplified` → Claude Opus 4.6；仅由显式 `writerModel=claude` 选择，使用 `claude_writer_v1`，route-level `fallback=[]`，不作为 Gemini 的自动备援
    - `boundedBestOf3` → 历史评测兼容字段；固定场景多候选已退出生产，旧证据不限制当前或未来模型能力
    - `v2_chinese_calibration` → Doubao Seed 2.1 Pro；仅允许有 raw span 证据的 `voice_and_naturalness` hypothesis 触发中文校准候选。span 边界与完整性是硬门；自然度优劣进入逐章比较，不由机械风险扫描提前淘汰
-   - `v2_opportunity_judge` / `v2_literary_judge` → gpt-5.6-sol 异源 judge（通过 `NOVELOS_JUDGE_*` env 解析端点）；当前为 advisory-only，不得决定文学胜负；历史自然人样本不得跨章直接决定候选
+   - `v2_opportunity_judge` / `v2_literary_judge` → gpt-5.6-sol 异源 judge（通过 `NOVELOS_JUDGE_*` env 解析端点）；有效、明确且证据通过校验的逐章 verdict 决定质量赢家。历史自然人样本不得跨章直接决定候选；judge 不可用或结论不确定时保留 raw，但 trace 必须记录 `judge_unavailable` / `comparison_inconclusive`，不得伪装成 raw 质量胜出
    - `style_shaper` / `stage5_style_shaper` / `stage8_final_gate` / `character_agent` → Claude Opus 4.6
    - `novel_critic` → local / quad-gates；其他结构化检查按配置路由到 GPT 5.5
    - GLM 5.2 仅允许显式开发/NovelBench testing route，生产默认和 fallback 禁止使用；Qwen、ERNIE 当前 disabled
