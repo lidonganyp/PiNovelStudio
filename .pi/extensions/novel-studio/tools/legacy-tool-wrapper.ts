@@ -77,8 +77,16 @@ export function wrapLegacyTool(raw: any): any {
           };
         }
         const result = await raw.invoke(paramsWithRoot);
+        const serialized = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+        const isBlockedChapterResult = raw.name === "novel_generate_chapter"
+          && result
+          && typeof result === "object"
+          && result.status !== "ok";
+        const text = isBlockedChapterResult
+          ? `【禁止写入章节文件】本次章节生成未通过完整门禁。不得把阻断候选、证据正文或中间稿复制到 chapters/。\n${serialized}`
+          : serialized;
         return {
-          content: [{ type: "text" as const, text: typeof result === "string" ? result : JSON.stringify(result, null, 2) }],
+          content: [{ type: "text" as const, text }],
           details: result,
         };
       } catch (error: any) {

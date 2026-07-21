@@ -15,7 +15,72 @@
  */
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { wrapLegacyTool } from "./legacy-tool-wrapper.js";
+import { atomicSave } from "../v2/core/orchestrator-commit-save.js";
+
+interface ChapterFileSnapshot {
+  path: string;
+  existed: boolean;
+  text: string | null;
+}
+
+function captureChapterFileSnapshot(input: Record<string, unknown>): ChapterFileSnapshot | null {
+  const projectRoot = typeof input._projectRoot === "string" ? input._projectRoot : null;
+  const workspaceId = typeof input.workspaceId === "string" ? input.workspaceId : null;
+  const chapterId = typeof input.chapterId === "string" ? input.chapterId : null;
+  if (!projectRoot || !workspaceId || !chapterId) return null;
+
+  const workspacesRoot = resolve(projectRoot, "workspaces");
+  const path = resolve(workspacesRoot, workspaceId, "chapters", `${chapterId}.md`);
+  const relativePath = relative(workspacesRoot, path);
+  if (relativePath.startsWith("..") || isAbsolute(relativePath)) return null;
+  const existed = existsSync(path);
+  return {
+    path,
+    existed,
+    text: existed ? readFileSync(path, "utf8") : null,
+  };
+}
+
+function protectChapterFileAfterNonDeliverableResult(
+  snapshot: ChapterFileSnapshot | null,
+  result: any,
+): any {
+  if (!snapshot || result?.status === "ok") return result;
+  try {
+    let action = "unchanged";
+    if (snapshot.existed && snapshot.text !== null) {
+      const currentText = existsSync(snapshot.path) ? readFileSync(snapshot.path, "utf8") : null;
+      if (currentText !== snapshot.text) {
+        atomicSave(snapshot.path, snapshot.text);
+        action = "restored_previous_chapter";
+      }
+    } else if (existsSync(snapshot.path)) {
+      unlinkSync(snapshot.path);
+      action = "removed_blocked_draft";
+    }
+    return {
+      ...result,
+      chapterWriteProtection: {
+        protected: true,
+        action,
+        chapterFilePath: snapshot.path,
+      },
+    };
+  } catch (error: unknown) {
+    return {
+      ...result,
+      chapterWriteProtection: {
+        protected: false,
+        action: "restore_failed",
+        chapterFilePath: snapshot.path,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
 
 /**
  * 生产工具 handler 接口 — 6 个公开工具。
@@ -170,7 +235,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
     // （lab-entry / novel_generate_chapter_legacy_test 已不存在）。
     {
       name: "novel_generate_chapter",
-      description: "统一章节生成编排器 - 唯一公开入口，走统一主链路（raw → editorial → judge → select → commit）。严禁绕过此工具直接调用 novel_narrator 等单工具生成章节正文。",
+      description: "统一章节生成编排器 - 唯一公开入口，走统一主链路（raw → editorial → judge → select → commit）。严禁绕过此工具直接调用 novel_narrator 等单工具生成章节正文。只有 status=ok 的结果可作为正式章节；blocked/error 结果及 blocked-candidate-evidence 中的正文严禁复制或写入 chapters/。",
       inputSchema: {
         type: "object",
         properties: {
@@ -243,23 +308,29 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         // recoverable=true + severity=recoverable 时，重试一次（带 _modelTimeoutRetryAttempt 标记，
         // 供 index.ts 顶层 catch 区分首次失败与重试耗尽）。非 model_timeout 失败不重试。
         // =========================================================================
+        const chapterFileSnapshot = captureChapterFileSnapshot(input as unknown as Record<string, unknown>);
         const _mtMaxRetries = input.fullPipelinePreview || input.previewOnly ? 0 : 1;
         let _mtAttempt = 0;
         let _mtResult: any;
-        while (_mtAttempt <= _mtMaxRetries) {
-          const _mtInput = _mtAttempt === 0
-            ? input
-            : { ...input, _modelTimeoutRetryAttempt: _mtAttempt } as any;
-          _mtResult = await handlers.handleGenerateChapter(_mtInput);
-          const _mtEnv = _mtResult?.failureEnvelope;
-          const _mtShouldRetry = _mtEnv?.gate === "model_timeout"
-            && _mtEnv?.recoverable === true
-            && _mtEnv?.severity === "recoverable"
-            && _mtAttempt < _mtMaxRetries;
-          if (!_mtShouldRetry) break;
-          _mtAttempt++;
+        try {
+          while (_mtAttempt <= _mtMaxRetries) {
+            const _mtInput = _mtAttempt === 0
+              ? input
+              : { ...input, _modelTimeoutRetryAttempt: _mtAttempt } as any;
+            _mtResult = await handlers.handleGenerateChapter(_mtInput);
+            const _mtEnv = _mtResult?.failureEnvelope;
+            const _mtShouldRetry = _mtEnv?.gate === "model_timeout"
+              && _mtEnv?.recoverable === true
+              && _mtEnv?.severity === "recoverable"
+              && _mtAttempt < _mtMaxRetries;
+            if (!_mtShouldRetry) break;
+            _mtAttempt++;
+          }
+        } catch (error: unknown) {
+          protectChapterFileAfterNonDeliverableResult(chapterFileSnapshot, { status: "error" });
+          throw error;
         }
-        return _mtResult;
+        return protectChapterFileAfterNonDeliverableResult(chapterFileSnapshot, _mtResult);
       },
     },
 
