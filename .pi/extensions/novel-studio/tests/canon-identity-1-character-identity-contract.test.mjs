@@ -146,6 +146,26 @@ test("IRE1: 跨分句的伙伴不应归因给梦魇或水怪", () => {
   assert.equal(identityDiags.length, 0, `跨分句关系不应误归因，实际：${JSON.stringify(identityDiags)}`);
 });
 
+test("IRE1: 怪物提及自己的同伴死亡不等于成为主角伙伴", () => {
+  const contract = compileIdentityContract(XINMO_CHARACTERS);
+  const allNames = contract.entries.flatMap((e) => [e.name, ...e.aliases]);
+
+  const guard = createFactContinuityGuard();
+  const report = guard.check({
+    text: "第三只水怪在同伴被秒杀的瞬间松开猎物，拼命朝水底岩缝钻。",
+    context: {
+      facts: [], characterStates: [], openLoops: [], worldRules: [],
+      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+    },
+    knownCharacterNames: allNames,
+    identityContract: contract,
+  });
+
+  const identityDiags = report.allDiagnostics.filter((d) => d.source === "identity_contradiction");
+  assert.equal(identityDiags.length, 0, `同类关系不得误判成主角伙伴关系，实际：${JSON.stringify(identityDiags)}`);
+  assert.equal(report.hasHardBlock, false);
+});
+
 test("IRE1: 同分句直接关系仍 hard 且 span 覆盖关系证据", () => {
   const contract = compileIdentityContract(XINMO_CHARACTERS);
   const allNames = contract.entries.flatMap((e) => [e.name, ...e.aliases]);
