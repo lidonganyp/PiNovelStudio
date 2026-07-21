@@ -2,7 +2,7 @@
 
 ## 目标架构：统一主链路（最高优先级，2026-07-10）
 
-PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [docs/top-tier-chinese-novel-system-development-plan.md](docs/top-tier-chinese-novel-system-development-plan.md)（v1.0，2026-07-10）。本节为项目最高优先级；下文任何旧规则与本节或新计划冲突时，以本节和新计划为准。
+PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [docs/top-tier-chinese-novel-system-development-plan.md](docs/top-tier-chinese-novel-system-development-plan.md)（v1.2，2026-07-21）。本节为项目最高优先级；下文任何旧规则与本节或新计划冲突时，以本节和新计划为准。
 
 ### 架构决策（取代旧双模式设计）
 
@@ -57,7 +57,7 @@ PiNovelStudio 的唯一存在理由是：在同等模型、同等上下文下，
 7. **默认最小修复**：修订优先级为 `no_op` → `sentence_patch` → `paragraph_patch` → `bridge_patch` → `event_patch` → `event_rewrite`。`chapter_rewrite` 仅允许灾难级失败使用。
 8. **项目必须证明正收益**：每次 v2 验收必须比较 direct baseline、rawStage2、legacy full-chain、v2 amplified。不能只以 build/test 通过宣称小说质量提升。
 
-v2 目标模块与任务清单原见 `docs/quality-amplifier-v2-design.md`（该历史设计文档已在 HISTORY-RETIREMENT-1 中删除）。本节为 legacy 行为说明与迁移参考；与上文"目标架构：统一主链路"或新计划冲突时，**以上文统一主链路目标与新计划为准**。当前架构真相源为 [docs/top-tier-chinese-novel-system-development-plan.md](docs/top-tier-chinese-novel-system-development-plan.md)（v1.1）。
+v2 目标模块与任务清单原见 `docs/quality-amplifier-v2-design.md`（该历史设计文档已在 HISTORY-RETIREMENT-1 中删除）。本节为 legacy 行为说明与迁移参考；与上文"目标架构：统一主链路"或新计划冲突时，**以上文统一主链路目标与新计划为准**。当前架构真相源为 [docs/top-tier-chinese-novel-system-development-plan.md](docs/top-tier-chinese-novel-system-development-plan.md)（v1.2）。
 
 **版本**: v1.3 | **更新日期**: 2026-06-10
 

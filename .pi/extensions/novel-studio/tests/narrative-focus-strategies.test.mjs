@@ -15,6 +15,11 @@ import {
 } from "../dist/v2/core/editorial-opportunity-contract.js";
 import { createEditorialStrategyRegistry } from "../dist/v2/core/editorial-strategy-registry.js";
 import { compileMethodologyApplicationReport } from "../dist/v2/core/methodology-policy.js";
+import {
+  getNarrativeFocusStrategy,
+  isNarrativeFocusStrategyCompatible,
+  parseNarrativeFocusStrategyId,
+} from "../dist/v2/core/narrative-focus-strategy.js";
 
 const RAW = [
   "父子隔着三盘菜相对而坐。",
@@ -218,4 +223,26 @@ test("methodology policy fails closed if candidateStrategyId is ever consumed by
   assert.equal(rule?.enforcement, "candidate_only");
   assert.deepEqual(rule?.matchedFields, ["candidateStrategyId"]);
   assert.deepEqual(report.violations, ["craft_strategy_hypotheses:candidateStrategyId"]);
+});
+
+test("strategy metadata parser and compatibility checks fail closed on unknown or incomplete input", () => {
+  assert.equal(parseNarrativeFocusStrategyId(" 过渡压缩 "), "transition_compression");
+  assert.equal(parseNarrativeFocusStrategyId("固定分镜"), null);
+  assert.equal(getNarrativeFocusStrategy("unknown_strategy"), null);
+
+  assert.equal(isNarrativeFocusStrategyCompatible(
+    "focal_attention_shift",
+    "reader_payoff",
+    "world_revelation",
+  ), true);
+  assert.equal(isNarrativeFocusStrategyCompatible(
+    "focal_attention_shift",
+    "reader_payoff",
+    undefined,
+  ), false);
+  assert.equal(isNarrativeFocusStrategyCompatible(
+    "spatial_relationship_staging",
+    "relationship_progress",
+    "dialogue",
+  ), false);
 });

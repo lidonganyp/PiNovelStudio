@@ -1,7 +1,7 @@
 # PiNovelStudio 顶尖中文长篇小说生成系统完整开发计划
 
-**版本**：v1.1
-**日期**：2026-07-14
+**版本**：v1.2
+**日期**：2026-07-21
 **状态**：目标架构与迁移实施基线
 **取代范围**：`quality_amplifier_v2` 试验性双链路设计、Stage0-8 运行时主架构、机械 comparator 主裁判
 **控制平面调研**：`docs/open-source-coding-agent-constraint-research-and-adoption-plan.md`
@@ -59,11 +59,15 @@ LLM 负责：
 
 一次跨章序列偏好不得外推为所有章节的生产规则。每个候选都必须基于本章 raw 的可引用机会产生，并在本章独立比较；缺少自然人对齐的文学选择权威时保留 raw。
 
-raw 通过事实守卫后，`CraftPhenomenonReport` 才可使用方法论工艺知识。报告按章节相关性覆盖对话、节奏与高潮、连载预期、类型契约、配角、世界观揭示、群像、收尾、五维推进和跨章健康十个领域；结论只允许 `observed / uncertain / not_applicable`，`observed / uncertain` 必须引用 raw 中逐字存在的 span。报告不得进入 raw prompt、不得给文学总分、不得直接改文或选择 winner。
+raw 通过事实守卫后，`CraftPhenomenonReport` 才可使用方法论工艺知识。报告按章节相关性覆盖对话、节奏与高潮、连载预期、类型契约、配角、世界观揭示、群像、收尾、五维推进、叙事聚焦与空间调度、跨章健康十一个领域；结论只允许 `observed / uncertain / not_applicable`，`observed / uncertain` 必须引用 raw 中逐字存在的 span。报告不得进入 raw prompt、不得给文学总分、不得直接改文或选择 winner。
 
 跨章诊断使用只读 `MethodologyDiagnosticState`，从作品声明、已接受叙事状态、疲劳状态、世界揭示计划和 arc registry 中提取紧凑且带来源的先前状态。它只在 raw 通过 FactGuard 后加载，不进入 raw prompt，不读取目标章之后的信息，也不能独立授权 candidate。`cross_chapter_health` 的现象或机会除 raw span 外还必须引用本次快照中实际存在的 `sourceRef`；缺失或伪造引用时拒绝该条诊断。
 
 `EditorialOpportunityJudge` 在同一次 post-raw 结构化判断中生成工艺报告和至多两个编辑机会。JSON 解析失败时最多追加一次 schema-only 修复调用，不允许因 schema 错误重写正文。普通 editorial candidate 跟随本章显式 writer family：默认 Gemini 使用 `v2_amplified_gemini31`，显式 Claude 使用 `v2_amplified`；中文自然度的受限 span 校准继续使用独立校准路由。
+
+`narrative_focus_and_spatial_staging` 只检查注意力是否落在真正改变信息、关系或情绪的动作与细节上，以及人物距离、遮挡、进出路径和物件位置是否承担已有的关系、权力或选择变化。它不要求远景/中景/特写顺序，不统计感官数量，也不把“电影感”当作质量代理。
+
+post-raw 方法论可为已成立的编辑机会附加三种 candidate-only 策略：`transition_compression`、`spatial_relationship_staging`、`focal_attention_shift`。策略必须同时通过 opportunityType、craftDomain 和 raw span 兼容性校验；策略本身不能授权候选、不能进入 raw prompt、不能改变事实边界，也不能决定 winner。
 
 ### 2.2 单一主链路
 
@@ -121,7 +125,7 @@ novel_generate_chapter
   -> RawCandidateGenerator
   -> FactAndContinuityGuard
   -> EditorialOpportunityJudge
-       -> CraftPhenomenonReport(10 domains, span-backed, advisory-only)
+       -> CraftPhenomenonReport(11 domains, span-backed, advisory-only)
        -> schema-only repair(max 1, no prose rewrite)
        -> no_op: raw
        -> 1-2 EditorialHypotheses
@@ -251,10 +255,23 @@ interface EditorialHypothesis {
   damageRisks: string[];
   rewriteScope: "chapter_candidate" | "event_candidate" | "span_candidate";
   confidence: number;
+  craftDomain?: CraftPhenomenonDomain;
+  candidateStrategyId?:
+    | "transition_compression"
+    | "spatial_relationship_staging"
+    | "focal_attention_shift";
 }
 ```
 
 只有包含真实 span、明确读者增益和损伤风险的 hypothesis 才能触发候选生成。
+
+三种策略的生产兼容边界如下。未显式选择策略时继续使用原有 opportunityType 通用策略，保持向后兼容。
+
+| candidateStrategyId | 允许的 opportunityType | 允许的 craftDomain | 禁止损伤 |
+|---|---|---|---|
+| `transition_compression` | `information_dramatization` / `reader_payoff` | `rhythm_and_climax` / `chapter_progression` | 省略关键选择、代价或连续性事实 |
+| `spatial_relationship_staging` | `relationship_progress` / `character_choice` / `ensemble_function` | `narrative_focus_and_spatial_staging` | 新增关系、人物或故事事实 |
+| `focal_attention_shift` | `reader_payoff` / `information_dramatization` | `narrative_focus_and_spatial_staging` / `world_revelation` / `ending_and_closure` | 堆砌与因果无关的感官装饰 |
 
 ### 4.5 JudgeVerdict
 
@@ -682,7 +699,7 @@ LLM judge 的回归允许单独运行，不放入每次 `npm test` 的确定性�
 - CreativeConstitution 版本；
 - ChapterIntent 与 sourceRefs；
 - raw candidate；
-- EditorialHypotheses；
+- EditorialHypotheses（含 candidateStrategyId；不兼容组合不得进入候选）；
 - CraftPhenomenonReport、schema repair 次数与被拒绝的无效 span；
 - 所有 candidate；
 - fact/risk evidence；

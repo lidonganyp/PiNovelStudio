@@ -1,7 +1,7 @@
 # PiNovelStudio 项目记忆
 
 **快照日期**：2026-07-21  
-**代码基线**：`e43bc60`（含 G8 RED+GREEN：release-health-evaluator + release-eligibility-recomputer 测试先行）  
+**代码基线**：`67f6654`（已包含叙事聚焦与空间调度的 RED+GREEN candidate-only 策略及 raw 权限守护）
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
 
 ## 当前架构
@@ -33,6 +33,7 @@
 - 默认切换依据：2026-07-20 自然人直接对比明确选择 Gemini，认为其中文感、小说语感、场景沉浸明显高于 Claude。同一保存样本的 GPT 5.6 正反复判误选 Claude；加入读者体验主判后仍未对齐；隔离 Gemini reader judge 也误选 Claude。因此两个 AI judge 都未通过当前自然人金标，文学输出只作事实、结构、span 和风险证据，不能自动覆盖 Gemini raw。自动双写和跨模型候选位仍未准入。
 - `AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1`：第 18-20 章的一次序列偏好仅保留为历史实验，不再外推为全局生产策略。固定写前场景解法与 `boundedBestOf3` 已退出生产；普通 raw 是默认基线，候选必须逐章与 raw 比较。
 - `METHODOLOGY-STORY-CONTEXT-1`：方法论权限已分为作者/已接受正文/方法论/启发式四类来源与 generation/hard/candidate/review/excluded 五种执行位置。CreativeConstitution 的作品身份、长期承诺、核心冲突和主题问题进入 ChapterContract，`aestheticDirection` 与感官/句式/对白/段落执行规则不进入 raw；无章纲时相关角色按主角与本章叙事信号保守选择，不再灌入全部存量角色。每章 trace 记录 methodology policy 与 raw prompt constraint audit。
+- `NARRATIVE-FOCUS-STRATEGIES-1`：post-raw `CraftPhenomenonReport` 增加 `narrative_focus_and_spatial_staging` 第 11 工艺域；只在 opportunityType、craftDomain 与 raw span 兼容时允许 `transition_compression` / `spatial_relationship_staging` / `focal_attention_shift` 三种 candidate-only 策略。它们不进入 raw、不按景别或句长控制正文、不授权候选或 winner。
 - gpt-5.6-sol 的 `v2_literary_judge` 已改为 SSE，关系、悬疑、动作三个真实 production-final 运行均完成；但单对比较约 11-15 分钟，尾延迟仍是生产可靠性约束，不能把“传输完成”解释为质量正收益。
 - GPT 5.5 / gpt-5.6-sol：`v2_opportunity_judge`、`v2_literary_judge` 等异源判断与结构化节点。
 - Doubao Seed 2.1 Pro：受限的 span 驱动中文校准候选，不是 raw 主写，也不是 judge。
