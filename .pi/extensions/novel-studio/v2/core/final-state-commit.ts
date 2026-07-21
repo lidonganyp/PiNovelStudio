@@ -93,6 +93,36 @@ export interface ExpectationEntry extends StateEntryBase {
   /** 延期理由（status=delayed 时必填） */
   delayReason?: string;
   status: "open" | "advanced" | "delayed" | "escalated" | "fulfilled";
+  /**
+   * REM 字段扩展（EXPECTATION-LEDGER-1，2026-07-21）：
+   * 让期待账本具备完整生命周期追溯能力，使 buildOverdueAlerts 不再
+   * 只依赖 status=delayed/escalated，而是按 overdueWindow.latest 计算
+   * 实际逾期程度。
+   */
+  /** 创建该期待的章节（如 "ch3"） */
+  createdChapter?: string;
+  /** 上次推进/激活该期待的章节（status=advanced/delayed/escalated 时填写） */
+  lastAdvancedChapter?: string;
+  /** 上次兑现该期待的章节（status=fulfilled 时填写） */
+  lastFulfilledChapter?: string;
+  /**
+   * 独立逾期窗口（章节号）。
+   * - earliest：最早可兑现章节（在此之前兑现会显得仓促）
+   * - optimal：最佳兑现章节（叙事节奏上最合适的兑现时机）
+   * - latest：最晚兑现章节（超过此章节视为逾期，触发 escalated）
+   * 三者均可空：null 表示无约束/未指定。
+   */
+  overdueWindow?: {
+    earliest: number | null;
+    optimal: number | null;
+    latest: number | null;
+  };
+  /** 关联弧线 id 列表（ClosureTracker 的 arc.id） */
+  relatedArcIds?: string[];
+  /** 关联角色 id 列表（与 CharacterStateEntry.characterId 对齐） */
+  relatedCharacterIds?: string[];
+  /** 关联伏笔 id 列表（与 PromiseEntry.promiseId 对齐） */
+  relatedForeshadowIds?: string[];
 }
 
 export type NarrativeStateEntry = CanonEntry | CharacterStateEntry | PromiseEntry | PatternEntry | ExpectationEntry;

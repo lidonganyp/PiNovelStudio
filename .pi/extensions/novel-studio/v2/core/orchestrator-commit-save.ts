@@ -21,8 +21,13 @@ import {
   reanchorStagedStateToFinalText,
   computeFinalTextHash,
   type PatternEntry,
+  type StagedStateUpdate,
 } from "./final-state-commit.js";
 import { createLanguageRiskLibrary } from "./language-risk-library.js";
+import { bridgeStateToSeriesFiles } from "./narrative-state-bridge.js";
+import { integrateClosureTracker } from "./closure-tracker-integration.js";
+import { persistChapterProgressionContract } from "./chapter-progression-contract.js";
+import type { StructuralEvidence, ChapterQualityEvidence } from "./chapter-quality-evidence.js";
 // G7-Checkpoint：代理审批稿 pending 守护（计划 §6.3 / §12.2）
 // 用户最终确认前，FinalStateCommit 和正式章节原子保存均不得执行。
 // hasPendingProxyDraft 检查 workspaces/{id}/chapter-approvals/{chapterId}.pending.json
@@ -131,6 +136,10 @@ export function commitAndSave(
 
   let committed = 0;
   let rejected = 0;
+  // reanchored 提升到外层作用域，供 STATE-BRIDGE-1 + CLOSURE-TRACKER-1 使用。
+  // reanchor 把 seed:* sourceRef 重锚定为 finalText span，ClosureTracker 接入
+  // 依据 reanchored sourceRef 判断 promise/expectation 是否在正文中实际兑现。
+  let reanchoredForBridge: StagedStateUpdate | null = null;
   if (input.stagedStateUpdate) {
     // ── 2.5 P1 回滚支持：备份章节前叙事状态 ─────────────────────
     // 在状态提交前备份 narrative-state-store.json，供 rollbackCommittedChapter 恢复。
@@ -201,6 +210,8 @@ export function commitAndSave(
         if (patternEntries.length > 0) {
           reanchored.additions.push(...patternEntries);
         }
+        // 保存 reanchored 给 STATE-BRIDGE-1 + CLOSURE-TRACKER-1 使用
+        reanchoredForBridge = reanchored;
         const stateCommit = createFinalStateCommit();
         stateCommit.stage(reanchored);
         const store = loadStateStore(workspaceId, projectRoot);
@@ -228,6 +239,90 @@ export function commitAndSave(
     }
   } else {
     stageResults.stateCommit = { skipped: "无 stagedStateUpdate" };
+  }
+
+  // ── 3. STATE-BRIDGE-1 + CLOSURE-TRACKER-1：状态桥接 + ClosureTracker 接入 ──
+  // 在状态提交成功后，把 narrative-state-store.json 投影到 series/*.json，
+  // 并把 promise/expectation 推进反馈到 ClosureTracker 的 arc/foreshadow 状态。
+  // 桥接/接入失败不阻断主链路（narrative-state-store.json 已落盘），
+  // 只 warning + 写入 trace，供下游 MethodologyDiagnosticState 在下一章读取时降级处理。
+  if (reanchoredForBridge) {
+    try {
+      const store = loadStateStore(input.workspaceId, input.projectRoot);
+      const bridgeResult = bridgeStateToSeriesFiles(
+        workspacePath,
+        store,
+        reanchoredForBridge,
+        input.chapterNumber,
+      );
+      stageResults.stateBridge = {
+        ok: bridgeResult.ok,
+        error: bridgeResult.error,
+        writtenPaths: bridgeResult.writtenPaths,
+      };
+
+      // 桥接成功后接入 ClosureTracker（基于 reanchored stagedStateUpdate）。
+      // reanchored 的 promise/expectation sourceRef 已重锚定为 finalText span
+      // （非 seed:*），ClosureTracker 据此判断是否实际兑现并触发 arc/foreshadow 状态推进。
+      const closureResult = integrateClosureTracker(
+        workspacePath,
+        reanchoredForBridge,
+        input.chapterNumber,
+      );
+      stageResults.closureIntegration = {
+        ok: closureResult.ok,
+        error: closureResult.error,
+        arcRegistryPath: closureResult.arcRegistryPath,
+        arcUpdates: closureResult.arcUpdates,
+        recalledForeshadowIds: closureResult.recalledForeshadowIds,
+        skippedReason: closureResult.skippedReason,
+        // completenessReport 是 advisory，写入 trace 供诊断层读取
+        completenessReport: closureResult.completenessReport,
+      };
+
+      // ── PROGRESSION-CONTRACT-1：持久化 ChapterProgressionContract ──
+      // 从 stageResults.chapterQualityEvidence.structuralEvidence 派生实际推进轴，
+      // 与 ChapterIntent.expectedAxes 对比生成复核信号，持久化到
+      // series/chapter-progression-contracts.json 供下游诊断层读取跨章 delta。
+      // 失败不阻断主链路（advisory）。
+      try {
+        const qualityEvidence = stageResults.chapterQualityEvidence as
+          | ChapterQualityEvidence
+          | undefined;
+        const structuralEvidence: StructuralEvidence[] =
+          qualityEvidence?.structuralEvidence ?? [];
+        // input.intent 是 ChapterIntentBuilder 输出（chapter-intent-builder.ChapterIntent），
+        // 已含 chapterFunction / readerExperience / causalEndPressure 等字段。
+        const intent = input.intent;
+        const finalTextHash = computeFinalTextHash(finalText);
+
+        const contractResult = persistChapterProgressionContract(
+          workspacePath,
+          input.workspaceId,
+          input.chapterNumber,
+          input.chapterId,
+          intent,
+          structuralEvidence,
+          reanchoredForBridge,
+          finalTextHash,
+        );
+        stageResults.progressionContract = {
+          ok: contractResult.ok,
+          error: contractResult.error,
+          chapterNumber: input.chapterNumber,
+          expectedAxes: contractResult.contract?.expectedAxes,
+          actualAxes: contractResult.contract?.actualAxes,
+          reviewSignals: contractResult.contract?.reviewSignals ?? [],
+        };
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        stageResults.progressionContract = { ok: false, error: msg };
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      stageResults.stateBridge = { ok: false, error: msg };
+      // 桥接失败不阻断主链路（narrative-state-store.json 已落盘）
+    }
   }
 
   // 成功路径不会吞掉 stateCommit 异常；异常已在上方回滚并以 ok=false 返回。

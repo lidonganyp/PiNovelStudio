@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createEditorialCandidateGenerator } from "../dist/v2/core/editorial-candidate-generator.js";
-import { parseOpportunityVerdict } from "../dist/v2/core/editorial-opportunity-contract.js";
+import {
+  buildOpportunityPrompt,
+  parseOpportunityVerdict,
+} from "../dist/v2/core/editorial-opportunity-contract.js";
 import { createEditorialOpportunityJudge } from "../dist/v2/core/editorial-opportunity-judge.js";
 import { createEditorialStrategyRegistry } from "../dist/v2/core/editorial-strategy-registry.js";
 
@@ -336,4 +339,98 @@ test("cross-chapter diagnosis keeps validated state references and exposes state
   assert.match(judgePrompt, /methodology-diagnostic-state-v1/);
   assert.deepEqual(result.craftPhenomenonReport.observations[0].contextEvidenceRefs, [sourceRef]);
   assert.equal(result.hypotheses.length, 0);
+});
+
+test("opportunity prompt preserves derived methodology alerts when state details exceed the budget", () => {
+  const marker = "必须保留的派生逾期警报";
+  const methodologyDiagnosticState = {
+    schemaVersion: "methodology-diagnostic-state-v1",
+    chapterNumber: 17,
+    advisoryOnly: true,
+    canEnterRawPrompt: false,
+    canDirectlyAuthorizeCandidate: false,
+    sources: [],
+    declaredGenre: {
+      status: "available",
+      genre: "都市悬疑",
+      subGenres: [],
+      sourceRefs: ["config.json#genre"],
+      emptyReason: null,
+    },
+    serialState: {
+      status: "available",
+      expectations: [{
+        expectationId: "large-history",
+        description: "历史细节".repeat(5000),
+        status: "open",
+        targetReaderExperience: null,
+        delayReason: null,
+        sourceChapter: "ch1",
+        sourceRefs: ["narrative-state-store.json#expectation:large-history"],
+      }],
+      promises: [],
+      patterns: [],
+      fatigue: {
+        recentPatterns: [],
+        consecutiveSameType: null,
+        recentHookTypes: [],
+        recentSceneTypes: [],
+        recentEmotionPeaks: [],
+        cooldownPeriods: {},
+        horrorTechniques: [],
+        consecutiveSameHorrorTechnique: null,
+        unresolvedExpectationCount: 1,
+        chaptersSinceLastPeak: 4,
+        lastPayoffChapter: 12,
+        severity: "moderate",
+        severitySignals: ["consecutiveSameType:2"],
+        sourceRefs: ["series/narrative-state.json#readerExpectation"],
+      },
+      overdueAlerts: [{
+        itemId: marker,
+        itemType: "expectation",
+        severity: "yellow",
+        description: marker,
+        expectedLatest: null,
+        chaptersOverdue: null,
+        sourceRef: "narrative-state-store.json#expectation:large-history",
+      }],
+      stagnation: {
+        detected: true,
+        chaptersSinceLastPeak: 4,
+        stagnantArcIds: [],
+        sourceRefs: ["series/narrative-state.json#readerExpectation.chaptersSinceLastPeak"],
+        emptyReason: null,
+      },
+      sourceRefs: ["narrative-state-store.json#expectation:large-history"],
+      emptyReason: null,
+    },
+    worldRevelation: { status: "unavailable", items: [], sourceRefs: [], emptyReason: "test" },
+    ensemble: {
+      status: "unavailable",
+      relationships: [],
+      focusHistory: [],
+      climaxOpportunity: {
+        detected: false,
+        convergentArcs: [],
+        criticalRelationships: [],
+        convergentExpectations: [],
+        estimatedWindow: null,
+        sourceRefs: [],
+        emptyReason: "test",
+      },
+      sourceRefs: [],
+      emptyReason: "test",
+    },
+    closure: { status: "unavailable", openArcs: [], pendingForeshadows: [], sourceRefs: [], emptyReason: "test" },
+  };
+
+  const { userPrompt } = buildOpportunityPrompt({
+    rawText: RAW,
+    intent: makeIntent(),
+    scannedSignals: [],
+    methodologyDiagnosticState,
+  });
+
+  assert.match(userPrompt, new RegExp(marker));
 });

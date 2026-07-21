@@ -261,7 +261,7 @@ export function buildOpportunityPrompt(input: OpportunityPromptInput): {
   if (input.previousEmotionState?.trim()) parts.push(`【前章已接受情绪落点】\n${input.previousEmotionState.trim()}`);
   if (input.methodologyDiagnosticState) {
     parts.push(
-      `【跨章诊断状态（methodology-diagnostic-state-v1，仅用于 raw 后诊断）】\n${truncateJson(input.methodologyDiagnosticState, 9000)}`,
+      `【跨章诊断状态（methodology-diagnostic-state-v1，仅用于 raw 后诊断）】\n${truncateJson(buildMethodologyPromptPayload(input.methodologyDiagnosticState), 9000)}`,
     );
   }
 
@@ -461,5 +461,33 @@ function extractJsonObject(text: string): string | null {
 function truncateJson(value: unknown, maxLength: number): string {
   const serialized = JSON.stringify(value);
   return serialized.length <= maxLength ? serialized : `${serialized.slice(0, maxLength)}...`;
+}
+
+function buildMethodologyPromptPayload(state: MethodologyDiagnosticState): unknown {
+  const { overdueAlerts, stagnation, fatigue, ...serialDetails } = state.serialState;
+  const { climaxOpportunity, ...ensembleDetails } = state.ensemble;
+  return {
+    schemaVersion: state.schemaVersion,
+    chapterNumber: state.chapterNumber,
+    advisoryOnly: state.advisoryOnly,
+    canEnterRawPrompt: state.canEnterRawPrompt,
+    canDirectlyAuthorizeCandidate: state.canDirectlyAuthorizeCandidate,
+    derivedSignals: {
+      overdueAlerts,
+      stagnation,
+      fatigue: {
+        severity: fatigue.severity,
+        severitySignals: fatigue.severitySignals,
+        sourceRefs: fatigue.sourceRefs,
+      },
+      climaxOpportunity,
+    },
+    declaredGenre: state.declaredGenre,
+    serialState: { ...serialDetails, fatigue },
+    worldRevelation: state.worldRevelation,
+    ensemble: ensembleDetails,
+    closure: state.closure,
+    sources: state.sources,
+  };
 }
 

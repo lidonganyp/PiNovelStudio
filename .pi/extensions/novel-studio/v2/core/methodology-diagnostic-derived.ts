@@ -97,17 +97,48 @@ export function buildOverdueAlerts(
   }
 
   for (const expectation of serialState.expectations) {
-    if (expectation.status === "escalated") {
+    // REM 逾期窗口计算（EXPECTATION-LEDGER-1，2026-07-21）：
+    // 优先使用 overdueWindow.latest 计算逾期程度，使账本具备完整生命周期追溯。
+    // 旧逻辑只看 status=escalated/delayed，会漏掉 status=open 但已过 latest 的期待。
+    const latest = expectation.overdueWindow?.latest ?? null;
+    const isFulfilled = expectation.status === "fulfilled";
+
+    if (latest !== null && !isFulfilled) {
+      // 有 overdueWindow.latest 且未兑现：按窗口计算逾期
+      if (chapterNumber > latest) {
+        alerts.push({
+          itemId: expectation.expectationId,
+          itemType: "expectation",
+          severity: "red",
+          description: expectation.description,
+          expectedLatest: latest,
+          chaptersOverdue: chapterNumber - latest,
+          sourceRef: expectation.sourceRefs[0] ?? "",
+        });
+      } else if (chapterNumber >= latest - YELLOW_WINDOW) {
+        alerts.push({
+          itemId: expectation.expectationId,
+          itemType: "expectation",
+          severity: "yellow",
+          description: expectation.description,
+          expectedLatest: latest,
+          chaptersOverdue: null,
+          sourceRef: expectation.sourceRefs[0] ?? "",
+        });
+      }
+    } else if (expectation.status === "escalated") {
+      // 无 overdueWindow 或已兑现，但状态为 escalated：仍报 red
       alerts.push({
         itemId: expectation.expectationId,
         itemType: "expectation",
         severity: "red",
         description: expectation.description,
-        expectedLatest: null,
+        expectedLatest: latest,
         chaptersOverdue: null,
         sourceRef: expectation.sourceRefs[0] ?? "",
       });
-    } else if (expectation.status === "delayed") {
+    } else if (expectation.status === "delayed" && latest === null) {
+      // 无 overdueWindow 且状态为 delayed：报 yellow（窗口未知但已延期蓄势）
       alerts.push({
         itemId: expectation.expectationId,
         itemType: "expectation",
@@ -138,22 +169,22 @@ export function buildOverdueAlerts(
 }
 
 /**
- * Detect consecutive stagnation: primary signal is chaptersSinceLastPeak from
- * readerExpectation; secondary signal is multiple open arcs that haven't started
- * advancing. Advisory only — does not block or force rewrite.
+ * Detect consecutive stagnation from the accepted reader-expectation history.
+ * Open arcs describe what may be stalled only after that explicit cross-chapter
+ * signal fires; their mere existence is not evidence of stagnation.
  */
 export function buildStagnation(
   serialState: SerialDiagnosticState,
   closure: ClosureDiagnosticContext,
 ): StagnationAssessment {
   const chaptersSinceLastPeak = serialState.fatigue.chaptersSinceLastPeak;
-  const stagnantArcIds = closure.openArcs
-    .filter((arc) => arc.status === "idle" || arc.status === "opened" || arc.status === "open")
-    .map((arc) => arc.arcId);
-
-  const detected =
-    (chaptersSinceLastPeak !== null && chaptersSinceLastPeak >= STAGNATION_THRESHOLD) ||
-    stagnantArcIds.length >= 2;
+  const detected = chaptersSinceLastPeak !== null
+    && chaptersSinceLastPeak >= STAGNATION_THRESHOLD;
+  const stagnantArcIds = detected
+    ? closure.openArcs
+        .filter((arc) => arc.status === "idle" || arc.status === "opened" || arc.status === "open")
+        .map((arc) => arc.arcId)
+    : [];
 
   const sourceRefs = new Set<string>();
   if (chaptersSinceLastPeak !== null) {

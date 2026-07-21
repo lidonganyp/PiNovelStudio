@@ -26,6 +26,11 @@ import {
   handleChapterProxyReview,
   type HandleChapterProxyReviewInput,
 } from "../handlers/chapter-proxy-review-handler.js";
+import {
+  handleChapterAdvisory,
+  type ChapterAdvisoryInput,
+  type ChapterAdvisoryResult,
+} from "../handlers/chapter-advisory-handler.js";
 import type { FinalizationEntryResult } from "../v2/governance/chapter-proxy-approval-finalization-entry.js";
 import type { IngestProxyApprovalFeedbackResult } from "../v2/governance/chapter-proxy-approval-feedback-ingestor.js";
 import type { ReleaseHealthReport } from "../v2/governance/release-health-aggregator.js";
@@ -96,6 +101,21 @@ export interface HandleWorkspaceManagerInput {
   callerOverride?: HandleChapterProxyReviewInput["callerOverride"];
   /** HOLD_FOR_REGENERATION 原因 */
   holdReason?: string;
+  // ── advisory 子操作参数（仅 action="diagnostic"/"ingest_reader_feedback"/"record_return_chapter" 时使用） ──
+  /** ingest_reader_feedback 用：反馈类型（positive/negative/neutral） */
+  feedbackType?: ChapterAdvisoryInput["feedbackType"];
+  /** ingest_reader_feedback 用：反馈正文 */
+  feedbackText?: string;
+  /** ingest_reader_feedback / record_return_chapter 用：来源引用（必须可追溯） */
+  sourceRef?: string;
+  /** ingest_reader_feedback 用：聚焦维度（可选） */
+  focusDimensions?: string[];
+  /** record_return_chapter 用：回流章类型（rewrite/recap/reveal） */
+  returnType?: ChapterAdvisoryInput["returnType"];
+  /** record_return_chapter 用：源章节 ID 列表（非空数组） */
+  sourceChapterIds?: string[];
+  /** record_return_chapter 用：回流章触发原因 */
+  reason?: string;
   _projectRoot?: string;
   _commitAndSaveFn?: HandleChapterProxyFinalizationInput["_commitAndSaveFn"];
   /** 测试用：注入 chapterRegistry mock */
@@ -128,6 +148,13 @@ export interface HandleWorkspaceManagerResult {
   releaseId?: string;
   /** runRealChapterProxyReview 返回的 ChapterProxyReviewResult（含 finalStatus/artifact/canDeliverProxyDraft） */
   review?: ChapterProxyReviewResult;
+  // ── advisory 委托结果（仅 action="diagnostic"/"ingest_reader_feedback"/"record_return_chapter" 时存在） ──
+  /** diagnostic 聚合结果 */
+  diagnostic?: ChapterAdvisoryResult["diagnostic"];
+  /** ingest_reader_feedback 写入的反馈条目 */
+  feedbackEntry?: ChapterAdvisoryResult["feedbackEntry"];
+  /** record_return_chapter 写入的 provenance 条目 */
+  provenanceEntry?: ChapterAdvisoryResult["provenanceEntry"];
 }
 
 export async function handleWorkspaceManager(
@@ -145,6 +172,18 @@ export async function handleWorkspaceManager(
     // 不注册第 7 个公开工具。REQUIRES_AUTH 边界由 runner 内部守护（无授权卡 -> status=error）
     if (input.action === "proxy_review") {
       return await handleProxyReview(input);
+    }
+
+    // ── advisory 路径：委托 chapter-advisory-handler ──
+    // APPENDIX-FG-1（2026-07-21）：通过现有 novel_workspace_manager 暴露
+    // diagnostic / ingest_reader_feedback / record_return_chapter 三个 advisory 子操作，
+    // 不注册第 7 个公开工具。advisory-only：不进入 raw prompt，不阻断生成，不决定文学胜负。
+    if (
+      input.action === "diagnostic" ||
+      input.action === "ingest_reader_feedback" ||
+      input.action === "record_return_chapter"
+    ) {
+      return await handleAdvisory(input);
     }
 
     const manager = await createWorkspaceManager();
@@ -402,5 +441,73 @@ async function handleProxyReview(
     releaseId: reviewResult.releaseId,
     review: reviewResult.review,
     error: reviewResult.error,
+  };
+}
+
+// ============================================================================
+// advisory 子操作委托
+// ============================================================================
+
+/**
+ * 委托 handleChapterAdvisory 执行附录 F/G 工作流 advisory 子操作。
+ *
+ * 子操作（action）：
+ * - diagnostic：只读聚合查询 ClosureTracker scanCompleteness + ChapterProgressionContract
+ *   + reader feedback 计数 + return chapter 计数。不修改任何文件。
+ * - ingest_reader_feedback：摄入读者反馈到 series/reader-feedback.json（advisory 元数据）
+ * - record_return_chapter：记录回流章 provenance 到 series/return-chapter-provenance.json（advisory 元数据）
+ *
+ * 必填参数校验（缺失 -> status=error）：
+ * - workspaceId 必填
+ * - ingest_reader_feedback：chapterId / chapterNumber / feedbackType / feedbackText / sourceRef
+ * - record_return_chapter：chapterId / chapterNumber / returnType / reason / sourceRef / sourceChapterIds
+ *
+ * advisory-only 边界：
+ * - 不进入 raw prompt，不阻断生成，不决定文学胜负
+ * - diagnostic 是只读查询，不修改任何文件
+ * - ingest_reader_feedback / record_return_chapter 只写入 series/*.json advisory 元数据，
+ *   不修改 chapters/ 正文，不修改 narrative-state-store.json 长期状态
+ */
+async function handleAdvisory(
+  input: HandleWorkspaceManagerInput,
+): Promise<HandleWorkspaceManagerResult> {
+  // 必填参数校验
+  if (!input.workspaceId) {
+    return { status: "error", error: "advisory 需要 workspaceId" };
+  }
+  if (
+    input.action !== "diagnostic" &&
+    input.action !== "ingest_reader_feedback" &&
+    input.action !== "record_return_chapter"
+  ) {
+    return { status: "error", error: `未知 advisory action: ${input.action}` };
+  }
+
+  // 委托 handleChapterAdvisory
+  const advisoryResult = await handleChapterAdvisory({
+    action: input.action,
+    workspaceId: input.workspaceId,
+    chapterNumber: input.chapterNumber,
+    feedbackType: input.feedbackType,
+    feedbackText: input.feedbackText,
+    sourceRef: input.sourceRef,
+    focusDimensions: input.focusDimensions,
+    chapterId: input.chapterId,
+    returnType: input.returnType,
+    sourceChapterIds: input.sourceChapterIds,
+    reason: input.reason,
+    _projectRoot: input._projectRoot,
+  });
+
+  // 包装结果：workspace_manager 顶层字段映射
+  // - advisoryResult.status=success/error -> 透传为顶层 status
+  // - diagnostic / feedbackEntry / provenanceEntry 放在对应字段
+  // - error 透传到顶层（便于调用方直接读取）
+  return {
+    status: advisoryResult.status,
+    diagnostic: advisoryResult.diagnostic,
+    feedbackEntry: advisoryResult.feedbackEntry,
+    provenanceEntry: advisoryResult.provenanceEntry,
+    error: advisoryResult.error,
   };
 }

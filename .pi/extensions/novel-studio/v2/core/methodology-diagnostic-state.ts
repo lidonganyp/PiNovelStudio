@@ -28,12 +28,9 @@ import {
   type OverdueAlertEntry,
   type StagnationAssessment,
 } from "./methodology-diagnostic-derived.js";
+import { parseOpenArc, parsePendingForeshadow } from "./methodology-diagnostic-closure.js";
 
-export type {
-  EnsembleClimaxOpportunity,
-  OverdueAlertEntry,
-  StagnationAssessment,
-} from "./methodology-diagnostic-derived.js";
+export type { EnsembleClimaxOpportunity, OverdueAlertEntry, StagnationAssessment } from "./methodology-diagnostic-derived.js";
 
 export type DiagnosticSourceStatus = "available" | "missing" | "malformed";
 export type DiagnosticContextStatus = "available" | "unavailable";
@@ -70,6 +67,27 @@ export interface ExpectationDiagnosticEntry {
   delayReason: string | null;
   sourceChapter: string;
   sourceRefs: string[];
+  /**
+   * REM 生命周期字段（EXPECTATION-LEDGER-1，2026-07-21）：
+   * 用于 buildOverdueAlerts 计算逾期程度，不再只依赖 status=delayed/escalated。
+   */
+  createdChapter: string | null;
+  lastAdvancedChapter: string | null;
+  lastFulfilledChapter: string | null;
+  /**
+   * 独立逾期窗口（章节号）。
+   * - earliest/optimal/latest 为 null 表示无约束/未指定。
+   * - latest 非空时，chapterNumber > latest 视为逾期（red），
+   *   chapterNumber >= latest - YELLOW_WINDOW 视为临近期（yellow）。
+   */
+  overdueWindow: {
+    earliest: number | null;
+    optimal: number | null;
+    latest: number | null;
+  } | null;
+  relatedArcIds: string[];
+  relatedCharacterIds: string[];
+  relatedForeshadowIds: string[];
 }
 
 export interface PromiseDiagnosticEntry {
@@ -240,8 +258,6 @@ const SOURCES: ReadonlyArray<{
   { sourceId: "world_items", relativePath: "series/world-items.json" },
   { sourceId: "arc_registry", relativePath: "series/arc-registry.json" },
 ];
-
-const OPEN_ARC_STATUSES = new Set(["idle", "opened", "open", "advancing", "climaxed", "in_progress"]);
 
 export class MethodologyDiagnosticStateLoader {
   load(input: LoadMethodologyDiagnosticStateInput): MethodologyDiagnosticState {
@@ -458,7 +474,43 @@ function parseExpectation(value: Record<string, unknown>): ExpectationDiagnostic
     delayReason: stringValue(value.delayReason),
     sourceChapter,
     sourceRefs: stateEntrySourceRefs("expectation", expectationId, value.sourceRef),
+    // REM 生命周期字段（向后兼容：旧 state store 无这些字段时为 null/空）
+    createdChapter: stringValue(value.createdChapter),
+    lastAdvancedChapter: stringValue(value.lastAdvancedChapter),
+    lastFulfilledChapter: stringValue(value.lastFulfilledChapter),
+    overdueWindow: parseOverdueWindow(value.overdueWindow),
+    relatedArcIds: stringArrayValue(value.relatedArcIds),
+    relatedCharacterIds: stringArrayValue(value.relatedCharacterIds),
+    relatedForeshadowIds: stringArrayValue(value.relatedForeshadowIds),
   };
+}
+
+/**
+ * 解析 overdueWindow 字段（向后兼容：旧 state store 无此字段时返回 null）。
+ * 字段格式：{ earliest: number|null, optimal: number|null, latest: number|null }
+ */
+function parseOverdueWindow(value: unknown): {
+  earliest: number | null;
+  optimal: number | null;
+  latest: number | null;
+} | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    earliest: finiteNumber(record.earliest),
+    optimal: finiteNumber(record.optimal),
+    latest: finiteNumber(record.latest),
+  };
+}
+
+/**
+ * 安全解析字符串数组字段（向后兼容：缺失或类型不匹配时返回空数组）。
+ */
+function stringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => (typeof v === "string" ? v : null))
+    .filter((v): v is string => v !== null && v.length > 0);
 }
 
 function parsePromise(value: Record<string, unknown>): PromiseDiagnosticEntry | null {
@@ -775,41 +827,6 @@ function buildClosure(
   };
 }
 
-function parseOpenArc(value: Record<string, unknown>): OpenArcDiagnosticEntry | null {
-  const arcId = stringValue(value.arc_id) ?? stringValue(value.id);
-  const name = stringValue(value.name);
-  const status = stringValue(value.status) ?? "unknown";
-  if (!arcId || !name || !OPEN_ARC_STATUSES.has(status)) return null;
-  return {
-    arcId,
-    name,
-    arcType: stringValue(value.arc_type) ?? stringValue(value.type) ?? "unknown",
-    priority: stringValue(value.priority) ?? "unknown",
-    status,
-    coreQuestion: stringValue(value.core_question) ?? stringValue(value.coreQuestion) ?? "",
-    chapterOpened: finiteNumber(value.chapter_opened) ?? finiteNumber(value.openedChapter),
-    expectedClosureWindow: numericWindow(value.expected_closure_window)
-      ?? singleChapterWindow(value.expectedClosureChapter),
-    sourceRef: `series/arc-registry.json#arcs:${encodeRefComponent(arcId)}`,
-  };
-}
-
-function parsePendingForeshadow(value: Record<string, unknown>): PendingForeshadowDiagnosticEntry | null {
-  const foreshadowId = stringValue(value.id);
-  const description = stringValue(value.description);
-  const recalled = value.recalled === true || stringValue(value.status) === "resolved";
-  if (!foreshadowId || !description || recalled) return null;
-  return {
-    foreshadowId,
-    description,
-    level: stringValue(value.level),
-    chapterPlanted: finiteNumber(value.chapter_planted) ?? finiteNumber(value.openedChapter),
-    expectedRecallWindow: numericWindow(value.expected_recall_window)
-      ?? singleChapterWindow(value.expectedRecallChapter),
-    sourceRef: `series/arc-registry.json#pending_foreshadows:${encodeRefComponent(foreshadowId)}`,
-  };
-}
-
 function unavailableReason(source: ReadJsonResult, fallback: string): string {
   return source.source.status === "malformed"
     ? `${source.source.sourceId}_malformed`
@@ -822,21 +839,6 @@ function isPriorStateEntry(value: Record<string, unknown>, chapterNumber: number
   const sourceChapter = stringValue(value.sourceChapter);
   const match = sourceChapter?.match(/^ch(\d+)$/u);
   return Boolean(match && Number(match[1]) < chapterNumber);
-}
-
-function numericWindow(value: unknown): Record<string, number | null> | null {
-  const record = recordValue(value);
-  if (!record) return null;
-  const result: Record<string, number | null> = {};
-  for (const key of ["earliest", "optimal", "latest", "start", "end"]) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) result[key] = finiteNumber(record[key]);
-  }
-  return Object.keys(result).length > 0 ? result : null;
-}
-
-function singleChapterWindow(value: unknown): Record<string, number | null> | null {
-  const chapter = finiteNumber(value);
-  return chapter === null ? null : { optimal: chapter };
 }
 
 function numericRecord(value: unknown, limit: number): Record<string, number> {

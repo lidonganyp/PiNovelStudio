@@ -653,3 +653,161 @@ test("MethodologyDiagnosticState: derived fields preserve advisory-only invarian
     rmSync(workspacePath, { recursive: true, force: true });
   }
 });
+
+test("MethodologyDiagnosticState: production camelCase recall targets produce overdue alerts", () => {
+  const workspacePath = makeWorkspace();
+  try {
+    writeJson(workspacePath, "config.json", { genre: "规则副本" });
+    writeJson(workspacePath, "narrative-state-store.json", {
+      schemaVersion: 1,
+      expectation: [],
+      promise: [],
+      pattern: [],
+    });
+    writeJson(workspacePath, "series/narrative-state.json", {
+      currentChapter: 20,
+      readerExpectation: { chaptersSinceLastPeak: 1 },
+    });
+    writeJson(workspacePath, "series/arc-registry.json", {
+      arcs: [],
+      pending_foreshadows: [{
+        id: "F-production",
+        description: "生产格式伏笔",
+        level: "A",
+        openedChapter: 1,
+        expectedRecallChapter: 20,
+        status: "opened",
+      }],
+    });
+
+    const result = createMethodologyDiagnosticStateLoader().load({
+      workspacePath,
+      chapterNumber: 21,
+    });
+
+    assert.deepEqual(result.closure.pendingForeshadows[0].expectedRecallWindow, {
+      earliest: 20,
+      optimal: 20,
+      latest: 20,
+    });
+    assert.equal(
+      result.serialState.overdueAlerts.some(
+        (alert) => alert.itemId === "F-production" && alert.severity === "red",
+      ),
+      true,
+    );
+  } finally {
+    rmSync(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test("MethodologyDiagnosticState: multiple newly opened arcs do not imply consecutive stagnation", () => {
+  const workspacePath = makeWorkspace();
+  try {
+    writeJson(workspacePath, "config.json", { genre: "都市悬疑" });
+    writeJson(workspacePath, "narrative-state-store.json", {
+      schemaVersion: 1,
+      expectation: [],
+      promise: [],
+      pattern: [],
+    });
+    writeJson(workspacePath, "series/narrative-state.json", {
+      currentChapter: 1,
+      readerExpectation: { chaptersSinceLastPeak: 0 },
+    });
+    writeJson(workspacePath, "series/arc-registry.json", {
+      arcs: [
+        {
+          id: "arc-a",
+          name: "刚开启的主线",
+          type: "primary",
+          priority: "P0",
+          status: "opened",
+          coreQuestion: "问题 A",
+          openedChapter: 1,
+          expectedClosureChapter: 20,
+        },
+        {
+          id: "arc-b",
+          name: "刚开启的关系线",
+          type: "relational",
+          priority: "P1",
+          status: "opened",
+          coreQuestion: "问题 B",
+          openedChapter: 1,
+          expectedClosureChapter: 18,
+        },
+      ],
+      pending_foreshadows: [],
+    });
+
+    const result = createMethodologyDiagnosticStateLoader().load({
+      workspacePath,
+      chapterNumber: 2,
+    });
+
+    assert.equal(result.serialState.stagnation.detected, false);
+    assert.deepEqual(result.serialState.stagnation.stagnantArcIds, []);
+  } finally {
+    rmSync(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test("MethodologyDiagnosticState: canonical ArcRegistry chapter fields remain visible", () => {
+  const workspacePath = makeWorkspace();
+  try {
+    writeJson(workspacePath, "config.json", { genre: "悬疑" });
+    writeJson(workspacePath, "narrative-state-store.json", {
+      schemaVersion: 1,
+      expectation: [],
+      promise: [],
+      pattern: [],
+    });
+    writeJson(workspacePath, "series/narrative-state.json", {
+      currentChapter: 4,
+      readerExpectation: { chaptersSinceLastPeak: 1 },
+    });
+    writeJson(workspacePath, "series/arc-registry.json", {
+      arcs: [{
+        arc_id: "arc-canonical",
+        name: "规范弧线",
+        arc_type: "primary",
+        priority: "P0",
+        status: "in_progress",
+        core_question: "规范字段能否读取？",
+        chapter_opened: 1,
+        expected_closure_window: {
+          earliestChapter: 8,
+          latestChapter: 12,
+          hardDeadline: true,
+        },
+      }],
+      pending_foreshadows: [{
+        id: "F-canonical",
+        description: "规范伏笔",
+        level: "A",
+        plantedChapter: 2,
+        targetChapter: 6,
+        recalled: false,
+      }],
+    });
+
+    const result = createMethodologyDiagnosticStateLoader().load({
+      workspacePath,
+      chapterNumber: 5,
+    });
+
+    assert.deepEqual(result.closure.openArcs[0].expectedClosureWindow, {
+      earliest: 8,
+      latest: 12,
+    });
+    assert.equal(result.closure.pendingForeshadows[0].chapterPlanted, 2);
+    assert.deepEqual(result.closure.pendingForeshadows[0].expectedRecallWindow, {
+      earliest: 6,
+      optimal: 6,
+      latest: 6,
+    });
+  } finally {
+    rmSync(workspacePath, { recursive: true, force: true });
+  }
+});

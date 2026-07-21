@@ -543,12 +543,80 @@ export function buildStagedStateUpdate(
   // 4. PatternMemory：由编排器在最终正文生成后从 LanguageRiskLibrary 扫描追加，
   //    此处不生成（pattern 需要正文文本分析，seed 不携带 pattern 信息）。
 
+  // 5. ExpectationEntry（REM 扩展，2026-07-21）：
+  //    从 seed.intent 派生本章"建立/激活的读者期待"。
+  //    保守策略：仅当 chapterFunction==="setup" 且 intent.chapterTheme 非空，
+  //    或 intent.primary==="foreshadow" 时创建 1 条 expectation entry。
+  //    expectation 关注"读者体验目标"（与 promise 关注"伏笔兑现"区分）。
+  //    sourceRef 初始为 seed:expectation:*，由 reanchorStagedStateToFinalText
+  //    在最终正文选定后重锚定为 finalText span/hash。
+  const chapterTheme = seed.intent?.chapterTheme?.trim();
+  const intentPrimary = seed.intent?.primary?.trim();
+  const targetEmotions = seed.intent?.targetEmotions ?? [];
+  const shouldCreateExpectation =
+    (seed.chapterFunction === "setup" && !!chapterTheme) ||
+    intentPrimary === "foreshadow";
+
+  if (shouldCreateExpectation && chapterTheme) {
+    const expectationId = `expectation:ch${chapterNumber}:${intentPrimary || "setup"}`;
+    additions.push({
+      kind: "expectation",
+      id: `expectation:ch${chapterNumber}:${intentPrimary || "setup"}`,
+      sourceChapter,
+      sourceRef: `seed:expectation:${intentPrimary || "setup"}`,
+      confidence: 0.6, // intended establishment，非 confirmed 兑现
+      lastUpdated: now,
+      expectationId,
+      description: chapterTheme,
+      expectationType: mapIntentPrimaryToExpectationType(intentPrimary),
+      targetReaderExperience: targetEmotions.length > 0
+        ? targetEmotions.join("、")
+        : undefined,
+      status: "open", // 本章建立，未兑现
+      // REM 生命周期字段
+      createdChapter: sourceChapter,
+      lastAdvancedChapter: sourceChapter, // 建立即视为首次激活
+      // 关联字段（来自 currentPressure，便于 ClosureTracker / PromiseLedger 联动）
+      relatedArcIds: (seed.currentPressure?.openArcs ?? [])
+        .map((a) => a.arcId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+      relatedCharacterIds: characters
+        .map((c) => c.name)
+        .filter((name): name is string => typeof name === "string" && name.length > 0),
+      relatedForeshadowIds: (seed.currentPressure?.pendingForeshadowing ?? [])
+        .map((f) => f.id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    });
+  }
+
   return {
     additions,
     invalidations: [],
     sourceChapter,
     // finalCandidateId 留空：编排器用 selectedCandidateId 校验
   };
+}
+
+/**
+ * 把 ChapterSeed.intent.primary 映射为 expectationType（TYPE-1 ~ TYPE-8）。
+ * 来源：legacy reader-expectation-manager 的 8 类期待。
+ * 未识别的 primary 返回 undefined（advisory，不阻断）。
+ */
+function mapIntentPrimaryToExpectationType(
+  primary: string | undefined
+): string | undefined {
+  if (!primary) return undefined;
+  const map: Record<string, string> = {
+    foreshadow: "TYPE-1-information",
+    character: "TYPE-5-character",
+    reversal: "TYPE-3-reversal",
+    romance: "TYPE-6-romance",
+    setting: "TYPE-2-worldbuilding",
+    combat: "TYPE-7-tension",
+    humor: "TYPE-8-justice",
+    tension: "TYPE-7-tension",
+  };
+  return map[primary];
 }
 
 // ============================================================================
