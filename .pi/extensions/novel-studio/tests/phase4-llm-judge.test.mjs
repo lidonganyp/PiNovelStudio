@@ -797,7 +797,7 @@ test("HUMAN-JUDGE-ALIGNMENT-GATE-2: 未对齐的主观 judge 不得自动覆盖 
   assert.match(result.auditSummary, /人工对齐门未通过|候选仅供人工复核/);
 });
 
-test("HUMAN-JUDGE-ALIGNMENT-GATE-2: 缺省值必须 fail-closed 保留 raw", async () => {
+test("QUALITY-WINNER-SELECTION-1: 缺省值选择有有效证据的质量赢家", async () => {
   const raw = makeCandidate("raw-default-gate", RAW_TEXT, "raw");
   const editorial = makeCandidate("ed-default-gate", EDITORIAL_TEXT);
   const result = await createJudgeArbitrator().arbitrate({
@@ -808,9 +808,9 @@ test("HUMAN-JUDGE-ALIGNMENT-GATE-2: 缺省值必须 fail-closed 保留 raw", asy
     modelGenerate: makeContentAwareStub("没有署名", "clear"),
     seed: 42,
   });
-  assert.equal(result.finalSelectedCandidateId, raw.id);
-  assert.equal(result.selection.selectedCandidateId, raw.id);
-  assert.match(result.auditSummary, /人工对齐门未通过|候选仅供人工复核/);
+  assert.equal(result.finalSelectedCandidateId, editorial.id);
+  assert.equal(result.selection.selectedCandidateId, editorial.id);
+  assert.equal(result.selectionStatus, "decisive_winner");
 });
 
 test("Step 4b: PINOVEL_JUDGE_CLEAR_SKIP=0 时 clear 胜出仍触发反向复判", async () => {

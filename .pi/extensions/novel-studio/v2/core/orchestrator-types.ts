@@ -145,7 +145,7 @@ export interface UnifiedOrchestratorInput {
   positiveGainProductionEnabled?: boolean;
   /** CEILING-BEST-OF-3-1：1=raw+1 场景候选；2=raw+2 不同场景候选。 */
   positiveGainCandidateLimit?: 1 | 2;
-  /** False while model-based literary preference is not aligned with natural-human gold. */
+  /** Internal evaluation opt-out; production/default quality-winner selection is enabled. */
   allowAutomaticLiterarySelection?: boolean;
   /** 正文模型提示词表达层；生产入口按实际生成 provider 解析，eval 可显式覆盖。 */
   rawPromptProfile?: WriterPromptProfile;

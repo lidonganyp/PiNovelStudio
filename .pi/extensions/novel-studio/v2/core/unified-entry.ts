@@ -1424,9 +1424,9 @@ export async function runUnifiedPipeline(
     positiveGainPromptPatternResolution: evalMode === undefined ? promptPatternResolution : undefined,
     positiveGainProductionEnabled: false,
     positiveGainCandidateLimit: boundedBestOf3 ? 2 : 1,
-    // HUMAN-JUDGE-ALIGNMENT-GATE-2: both GPT and Gemini judges disagree with the
-    // current natural-human gold pair. Keep machine literary verdicts advisory.
-    allowAutomaticLiterarySelection: false,
+    // QUALITY-WINNER-SELECTION-1: raw is the baseline and unresolved-comparison
+    // fallback; a valid, decisive chapter comparison must deliver its winner.
+    allowAutomaticLiterarySelection: true,
     rawPromptProfile: testRouteLock
       ? resolveWriterPromptProfile({
           route: testRouteLock.generateRoute,

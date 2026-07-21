@@ -65,9 +65,18 @@ export interface ArbitratorInput {
   route?: string;
   /** 超时 ms */
   timeoutMs?: number;
-  /** Natural-human alignment gate. False keeps the left/raw baseline for human review. */
+  /**
+   * Internal evaluation override. Production/default behavior selects a valid
+   * quality winner; false keeps the result advisory-only for review studies.
+   */
   allowAutomaticLiterarySelection?: boolean;
 }
+
+export type QualitySelectionStatus =
+  | "decisive_winner"
+  | "comparison_inconclusive"
+  | "judge_unavailable"
+  | "advisory_only";
 
 export interface ArbitratorRoundRecord {
   /** 轮次标识：first / reverse / arbitration */
@@ -99,6 +108,8 @@ export interface ArbitratorResult {
   finalSelectedCandidateId: string | null;
   /** 审计摘要：为什么选择/保留 */
   auditSummary: string;
+  /** Distinguishes a quality winner from a raw safety fallback. */
+  selectionStatus: QualitySelectionStatus;
 }
 
 // ============================================================================
@@ -129,7 +140,7 @@ export class JudgeArbitrator {
       modelGenerate,
       arbitratorModelGenerate,
     } = input;
-    const allowAutomaticLiterarySelection = input.allowAutomaticLiterarySelection === true;
+    const allowAutomaticLiterarySelection = input.allowAutomaticLiterarySelection !== false;
 
     // Step 4b：clear 胜出跳过复判显式化 + 可配置。默认 1=跳过（行为不变）；
     // PINOVEL_JUDGE_CLEAR_SKIP=0 时 clear 胜出也进入反向复判（A/B 评测用）。
@@ -179,7 +190,16 @@ export class JudgeArbitrator {
             auditSummary: `${params.auditSummary}；人工对齐门未通过，候选仅供人工复核，保留 raw`,
           }
         : params;
-      const r = this.buildResult(gatedParams);
+      const selectionStatus: QualitySelectionStatus = !allowAutomaticLiterarySelection
+        ? "advisory_only"
+        : gatedParams.rounds.some((round) => round.result.degraded)
+          ? "judge_unavailable"
+          : gatedParams.conflicted
+            || gatedParams.finalSelectedCandidateId === null
+            || gatedParams.rounds.every((round) => round.winnerCandidateId === null)
+            ? "comparison_inconclusive"
+            : "decisive_winner";
+      const r = this.buildResult({ ...gatedParams, selectionStatus });
       this.cache.set(cacheKey, r);
       return r;
     };
@@ -367,6 +387,7 @@ export class JudgeArbitrator {
     conflicted: boolean;
     finalSelectedCandidateId: string | null;
     auditSummary: string;
+    selectionStatus: QualitySelectionStatus;
   }): ArbitratorResult {
     return {
       selection: params.selection,
@@ -379,6 +400,7 @@ export class JudgeArbitrator {
       conflicted: params.conflicted,
       finalSelectedCandidateId: params.finalSelectedCandidateId,
       auditSummary: params.auditSummary,
+      selectionStatus: params.selectionStatus,
     };
   }
 }

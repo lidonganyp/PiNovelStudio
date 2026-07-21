@@ -314,11 +314,19 @@ export class UnifiedOrchestrator {
 
     const warnings: string[] = [];
     const stageResults: Record<string, unknown> = {};
+    const automaticQualityWinnerSelectionEnabled = input.allowAutomaticLiterarySelection !== false;
+    stageResults.qualitySelectionPolicy = {
+      mode: automaticQualityWinnerSelectionEnabled ? "quality_winner" : "advisory_only",
+      automaticQualityWinnerSelectionEnabled,
+      rawRole: "baseline_and_unresolved_comparison_fallback",
+    };
+    // Backward-compatible trace key. Human alignment is no longer inferred
+    // from whether automatic product selection is enabled.
     stageResults.judgeAlignmentGate = {
-      naturalHumanAlignmentPassed: input.allowAutomaticLiterarySelection === true,
-      automaticLiterarySelectionEnabled: input.allowAutomaticLiterarySelection === true,
-      mode: input.allowAutomaticLiterarySelection === true
-        ? "automatic_selection"
+      naturalHumanAlignmentPassed: null,
+      automaticLiterarySelectionEnabled: automaticQualityWinnerSelectionEnabled,
+      mode: automaticQualityWinnerSelectionEnabled
+        ? "quality_winner_selection"
         : "advisory_candidates_human_review",
     };
     const candidates: Candidate[] = [];
@@ -1608,13 +1616,14 @@ export class UnifiedOrchestrator {
       arbitrationTriggered: judgeResult?.arbitrationTriggered ?? false,
       conflicted: judgeResult?.conflicted ?? false,
       finalSelectedCandidateId: judgeResult?.finalSelectedCandidateId ?? null,
+      selectionStatus: judgeResult?.selectionStatus ?? "judge_unavailable",
       auditSummary: judgeResult?.auditSummary ?? "machine judge unavailable; raw baseline preserved",
       rounds: judgeResult?.rounds.map((r) => ({
         round: r.round,
         winnerCandidateId: r.winnerCandidateId,
         degraded: r.result.degraded,
       })) ?? [],
-      advisoryOnly: input.allowAutomaticLiterarySelection !== true,
+      advisoryOnly: input.allowAutomaticLiterarySelection === false,
       allArbitrations: arbitrationResults.map(({ candidate, result }) => ({
         candidateId: candidate.id,
         finalSelectedCandidateId: result.finalSelectedCandidateId,
