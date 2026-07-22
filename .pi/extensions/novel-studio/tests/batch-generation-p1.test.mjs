@@ -153,24 +153,19 @@ describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // P1-03：可选 ChapterSeed 规划阶段
+  // P1-03：可选 ChapterSeed 规划阶段（P0-FIX-3：写入 series/ch{N}-outline-explicit.md）
   //
   // seedSource="workspace_or_planner" 且无 workspace 种子时，
-  // 规划阶段应生成结构化种子文件（JSON，非正文）。
+  // 规划阶段应生成 series/ch{N}-outline-explicit.md 显式章纲文件。
+  // ChapterSeedBuilder.loadAuthorChapterContract 会读取此文件。
   // ──────────────────────────────────────────────────────────────────────
   describe("P1-03：ChapterSeed 规划阶段", () => {
-    it("workspace_or_planner 模式下无种子时自动规划结构化种子", async () => {
+    it("workspace_or_planner 模式下无种子时自动规划显式章纲", async () => {
       const wsId = "batch-p1-planner-test";
       const workspacePath = join(PROJECT_ROOT, "workspaces", wsId);
       createBatchWorkspace(wsId);
 
-      // 删除 config.json 的 chapterSeeds（模拟无种子）
-      const configPath = join(workspacePath, "config.json");
-      const config = JSON.parse(readFileSync(configPath, "utf-8"));
-      delete config.chapterSeeds;
-      writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-
-      // 确保无显式章纲
+      // 确保无显式章纲（模拟无种子）
       const explicitPath = join(workspacePath, "series", "ch1-outline-explicit.md");
       assert.ok(!existsSync(explicitPath), "不应有显式章纲");
 
@@ -195,28 +190,26 @@ describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
       );
 
       const details = result.details || result;
-      // 规划阶段应生成种子，批量任务应成功执行（不被阻断）
-      assert.equal(details.status, "completed", "规划种子后应完成批量任务");
+      // 规划阶段应生成显式章纲，批量任务应成功执行（不被阻断）
+      assert.equal(details.status, "completed", "规划显式章纲后应完成批量任务");
       assert.equal(mock.calls.length, 3, "应调用 3 章模型");
 
-      // 规划的种子文件应存在
-      const seedsDir = join(workspacePath, "batch-jobs", "planned-seeds");
-      assert.ok(existsSync(seedsDir), "planned-seeds 目录应存在");
+      // P0-FIX-3：规划的显式章纲应写入 series/ch{N}-outline-explicit.md（不是 batch-jobs/planned-seeds/）
+      for (let n = 1; n <= 3; n++) {
+        const outlinePath = join(workspacePath, "series", `ch${n}-outline-explicit.md`);
+        assert.ok(existsSync(outlinePath), `应生成 series/ch${n}-outline-explicit.md`);
+      }
 
-      const seedFiles = readdirSync(seedsDir).filter((f) => f.endsWith(".json"));
-      assert.ok(seedFiles.length >= 3, `应至少生成 3 个种子文件，实际 ${seedFiles.length}`);
-
-      // 验证种子文件是结构化 JSON（非正文）
-      const seed1 = JSON.parse(readFileSync(join(seedsDir, "ch1.json"), "utf-8"));
-      assert.ok(typeof seed1.chapterNumber === "number", "种子含 chapterNumber");
-      assert.ok(typeof seed1.chapterFunction === "string", "种子含 chapterFunction");
-      assert.ok(Array.isArray(seed1.characters), "种子含 characters 数组");
-      assert.ok(seed1.intent, "种子含 intent");
-      assert.ok(seed1.intent._source === "chapterSeed", "种子 intent._source = chapterSeed");
+      // 验证显式章纲文件是 markdown 格式（非正文），可被 parseExplicitOutline 解析
+      const outline1Text = readFileSync(join(workspacePath, "series", "ch1-outline-explicit.md"), "utf-8");
+      assert.ok(outline1Text.includes("## 事件 1"), "显式章纲应含 `## 事件 1` 事件头");
+      assert.ok(outline1Text.includes("内容摘要"), "显式章纲应含内容摘要字段");
       // 不得含正文内容
-      assert.ok(!seed1.prose, "种子不得含 prose 字段");
-      assert.ok(!seed1.text, "种子不得含 text 字段");
-      assert.ok(!seed1.body, "种子不得含 body 字段");
+      assert.ok(!outline1Text.includes("# 第1章\n\n这是第1章的正文"), "显式章纲不得含正文");
+
+      // 旧的 planned-seeds 目录不应存在（P0-FIX-3：不再写 JSON 到该目录）
+      const oldSeedsDir = join(workspacePath, "batch-jobs", "planned-seeds");
+      assert.ok(!existsSync(oldSeedsDir), "不应再创建 batch-jobs/planned-seeds 目录");
 
       cleanupWorkspace(wsId);
     });
@@ -226,11 +219,9 @@ describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
       const workspacePath = join(PROJECT_ROOT, "workspaces", wsId);
       createBatchWorkspace(wsId);
 
-      // 删除 chapterSeeds
-      const configPath = join(workspacePath, "config.json");
-      const config = JSON.parse(readFileSync(configPath, "utf-8"));
-      delete config.chapterSeeds;
-      writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+      // 确保无显式章纲
+      const explicitPath = join(workspacePath, "series", "ch1-outline-explicit.md");
+      assert.ok(!existsSync(explicitPath), "不应有显式章纲");
 
       const mock = createMockGenerateChapter({ workspacePath });
       const result = await tool.execute(
@@ -260,9 +251,8 @@ describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
       );
       assert.equal(mock.calls.length, 0, "workspace_only 无种子时不应调用模型");
 
-      // 不应生成规划种子
-      const seedsDir = join(workspacePath, "batch-jobs", "planned-seeds");
-      assert.ok(!existsSync(seedsDir), "workspace_only 模式不应生成规划种子");
+      // 不应生成规划显式章纲
+      assert.ok(!existsSync(explicitPath), "workspace_only 模式不应生成显式章纲");
 
       cleanupWorkspace(wsId);
     });

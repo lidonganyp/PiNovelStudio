@@ -16,6 +16,7 @@
 import { existsSync, readFileSync, unlinkSync } from "fs";
 import { join } from "node:path";
 import { atomicSave } from "./orchestrator-commit-save.js";
+import { validateWorkspaceId, validateJobId } from "./batch-generation-job-store.js";
 
 // ============================================================================
 // 常量
@@ -55,6 +56,7 @@ export type AcquireLockResult =
  * workspaces/{workspaceId}/batch-jobs/.lock
  */
 export function batchLockPath(workspaceId: string, projectRoot: string): string {
+  validateWorkspaceId(workspaceId);
   return join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR, LOCK_FILE_NAME);
 }
 
@@ -72,6 +74,33 @@ export function isPidAlive(pid: number): boolean {
 }
 
 /**
+ * 读取当前锁文件。无锁或损坏返回 null。
+ * P0-FIX-2：供崩溃恢复判断使用。
+ */
+export function readBatchLock(
+  workspaceId: string,
+  projectRoot: string,
+): BatchLockInfo | null {
+  const lockPath = batchLockPath(workspaceId, projectRoot);
+  if (!existsSync(lockPath)) return null;
+  try {
+    return JSON.parse(readFileSync(lockPath, "utf-8")) as BatchLockInfo;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 判断锁是否存活（PID 存活 AND 未超时）。
+ * P0-FIX-2：供崩溃恢复判断使用。
+ */
+export function isLockAlive(lockInfo: BatchLockInfo): boolean {
+  const pidAlive = isPidAlive(lockInfo.pid);
+  const expired = Date.now() > new Date(lockInfo.expiresAt).getTime();
+  return pidAlive && !expired;
+}
+
+/**
  * 获取 workspace 级批量任务锁。
  *
  * - 锁不存在 → 获取成功
@@ -85,6 +114,8 @@ export function acquireBatchLock(
   jobId: string,
   projectRoot: string,
 ): AcquireLockResult {
+  validateWorkspaceId(workspaceId);
+  validateJobId(jobId);
   const lockPath = batchLockPath(workspaceId, projectRoot);
   if (existsSync(lockPath)) {
     try {
@@ -117,15 +148,54 @@ export function acquireBatchLock(
 
 /**
  * 释放 workspace 级批量任务锁。
- * 锁不存在时静默成功（幂等）。
+ *
+ * P0-FIX-5：必须校验 jobId 匹配——防止旧任务 finally 块删除新任务的锁。
+ * 锁不存在或 jobId 不匹配时静默成功（幂等 + 安全）。
  */
-export function releaseBatchLock(workspaceId: string, projectRoot: string): void {
+export function releaseBatchLock(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+): void {
+  validateWorkspaceId(workspaceId);
+  validateJobId(jobId);
   const lockPath = batchLockPath(workspaceId, projectRoot);
-  if (existsSync(lockPath)) {
-    try {
-      unlinkSync(lockPath);
-    } catch {
-      // 幂等：忽略释放失败
-    }
+  if (!existsSync(lockPath)) return;
+  try {
+    const existing = JSON.parse(readFileSync(lockPath, "utf-8")) as BatchLockInfo;
+    // 只删除自己的锁——不删除其他 jobId 的锁
+    if (existing.jobId !== jobId) return;
+    unlinkSync(lockPath);
+  } catch {
+    // 锁损坏 → 安全删除
+    try { unlinkSync(lockPath); } catch { /* 幂等 */ }
+  }
+}
+
+/**
+ * 续租 workspace 级批量任务锁。
+ *
+ * P0-FIX-5：长任务（100+ 章）每章完成后调用，将 expiresAt 延长 LOCK_TIMEOUT_MS。
+ * 只续租自己的锁（jobId 匹配）；锁不存在或属于其他任务时静默跳过。
+ */
+export function renewBatchLock(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+): void {
+  validateWorkspaceId(workspaceId);
+  validateJobId(jobId);
+  const lockPath = batchLockPath(workspaceId, projectRoot);
+  if (!existsSync(lockPath)) return;
+  try {
+    const existing = JSON.parse(readFileSync(lockPath, "utf-8")) as BatchLockInfo;
+    if (existing.jobId !== jobId) return; // 不是自己的锁 → 不续租
+    const renewed: BatchLockInfo = {
+      ...existing,
+      expiresAt: new Date(Date.now() + LOCK_TIMEOUT_MS).toISOString(),
+    };
+    atomicSave(lockPath, JSON.stringify(renewed, null, 2));
+  } catch {
+    // 锁损坏或读取失败 → 不续租（下次 acquireBatchLock 会处理僵死锁）
   }
 }

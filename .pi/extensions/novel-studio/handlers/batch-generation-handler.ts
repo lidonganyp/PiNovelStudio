@@ -22,6 +22,8 @@ import {
   batchJobPath,
   loadBatchJobStore,
   saveBatchJobStore,
+  validateWorkspaceId,
+  validateJobId,
   DEFAULT_MAX_CHAPTERS,
   LARGE_BATCH_MAX_CHAPTERS,
   type BatchJobState,
@@ -29,7 +31,12 @@ import {
 } from "../v2/core/batch-generation-job-store.js";
 // 显式 import 以确保 orchestrator / lock 模块进入生产闭包（dist/）。
 import { runBatchGeneration } from "../v2/core/batch-generation-orchestrator.js";
-import { acquireBatchLock, releaseBatchLock } from "../v2/core/batch-generation-lock.js";
+import {
+  acquireBatchLock,
+  releaseBatchLock,
+  readBatchLock,
+  isLockAlive,
+} from "../v2/core/batch-generation-lock.js";
 
 // ============================================================================
 // 类型
@@ -86,6 +93,21 @@ export async function handleBatchGeneration(
   input: BatchGenerationInput,
 ): Promise<BatchGenerationResult> {
   const projectRoot = input._projectRoot || getProjectRoot();
+
+  // P0-FIX-1：入口校验 workspaceId（所有 action 都需要）
+  try {
+    validateWorkspaceId(input.workspaceId);
+  } catch (e: any) {
+    return errorResult(input, projectRoot, e?.message ?? "invalid workspaceId");
+  }
+  // P0-FIX-1：resume/status/cancel 还需校验 jobId
+  if ((input.action === "resume" || input.action === "status" || input.action === "cancel") && input.jobId) {
+    try {
+      validateJobId(input.jobId);
+    } catch (e: any) {
+      return errorResult(input, projectRoot, e?.message ?? "invalid jobId", input.jobId);
+    }
+  }
 
   switch (input.action) {
     case "start":
@@ -160,8 +182,13 @@ async function handleStart(
     }
   }
 
-  // 5. 生成 jobId
+  // 5. 生成 jobId（P0-FIX-1：校验用户自定义 jobId）
   const jobId = input.jobId || generateJobId();
+  try {
+    validateJobId(jobId);
+  } catch (e: any) {
+    return errorResult(input, projectRoot, e?.message ?? "invalid jobId");
+  }
 
   // 6. 获取 workspace 级锁（BATCH-P0-09）
   const lockResult = acquireBatchLock(workspaceId, jobId, projectRoot);
@@ -217,8 +244,8 @@ async function handleStart(
 
     return toResult(finalState, projectRoot);
   } finally {
-    // 9. 释放锁（无论成功/失败/暂停）
-    releaseBatchLock(workspaceId, projectRoot);
+    // 9. 释放锁（无论成功/失败/暂停）— P0-FIX-5：只删自己的锁
+    releaseBatchLock(workspaceId, jobId, projectRoot);
   }
 }
 
@@ -247,16 +274,38 @@ async function handleResume(
     return toResult(state, projectRoot);
   }
 
-  // 3. 只允许 paused 状态 resume（cancelled/error/running 拒绝）
-  if (state.status !== "paused") {
+  // 3. 状态校验
+  //    - paused：正常 resume
+  //    - cancelled / error：拒绝（需重新 start）
+  //    - running：P0-FIX-2 崩溃恢复 — 真实进程崩溃会留下 status=running，
+  //               需结合锁持有者存活状态判断。锁死亡或不存在 → 视为孤儿任务，
+  //               可 resume；锁仍存活 → 拒绝（任务可能仍在另一个进程中运行）。
+  if (state.status === "cancelled" || state.status === "error") {
     return errorResult(
       input, projectRoot,
-      `任务状态为 ${state.status}，只有 paused 状态才能 resume`,
+      `任务状态为 ${state.status}，cancelled/error 不可 resume，请重新 start`,
+      jobId,
+    );
+  }
+  if (state.status === "running") {
+    const lockInfo = readBatchLock(workspaceId, projectRoot);
+    if (lockInfo && isLockAlive(lockInfo)) {
+      return errorResult(
+        input, projectRoot,
+        `任务 ${jobId} 仍在运行中（pid=${lockInfo.pid} 存活且锁未过期）。如确认是僵死锁，请等待锁过期或手动清理 batch-jobs/.lock`,
+        jobId,
+      );
+    }
+    // 孤儿 running 任务 → 落到下方获取锁并 resume
+  } else if (state.status !== "paused") {
+    return errorResult(
+      input, projectRoot,
+      `任务状态为 ${state.status}，只有 paused 或可确认的孤儿 running 状态才能 resume`,
       jobId,
     );
   }
 
-  // 3. 获取锁
+  // 4. 获取锁（P0-FIX-2：孤儿 running 任务的僵死锁会被 acquireBatchLock 强制释放）
   const lockResult = acquireBatchLock(workspaceId, jobId, projectRoot);
   if (!lockResult.ok) {
     return {
@@ -272,12 +321,12 @@ async function handleResume(
   }
 
   try {
-    // 4. 设置 running，保存
+    // 5. 设置 running，保存（P1-FIX-6：orchestrator 会清理 failedChapter/summary）
     state.status = "running";
     state.updatedAt = new Date().toISOString();
     saveBatchJobStore(state, workspaceId, jobId, projectRoot);
 
-    // 5. 运行批量编排
+    // 6. 运行批量编排
     const { state: finalState } = await runBatchGeneration({
       state,
       projectRoot,
@@ -286,7 +335,7 @@ async function handleResume(
 
     return toResult(finalState, projectRoot);
   } finally {
-    releaseBatchLock(workspaceId, projectRoot);
+    releaseBatchLock(workspaceId, jobId, projectRoot);
   }
 }
 
@@ -384,9 +433,11 @@ function errorResult(
     completedChapters: 0,
     totalChapters: total,
     failedChapter: null,
-    checkpointPath: jobId
-      ? batchJobPath(input.workspaceId, jobId, projectRoot)
-      : "",
+    // P0-FIX-1：errorResult 常用于校验失败场景（jobId 可能非法），
+    // batchJobPath 内部会再次 validateJobId → 对非法 jobId 会抛出。
+    // 此处必须吞掉该异常，否则会逃逸 handler 的 catch 块，导致
+    // wrapLegacyTool 返回无 status 字段的 { details: { error } }。
+    checkpointPath: safeCheckpointPath(input.workspaceId, jobId, projectRoot),
     failureEnvelope: {
       stage: "batch_handler",
       severity: "error",
@@ -397,13 +448,32 @@ function errorResult(
 }
 
 /**
- * ChapterSeed 阻断检查（BATCH-P1-04）。
+ * 安全计算 checkpointPath：jobId 非法（路径穿越等）时返回空字符串而非抛出。
+ * errorResult / toResult 在 jobId 已通过校验的正常路径下仍返回完整路径；
+ * 仅在 errorResult 处理校验失败场景时可能传入非法 jobId。
+ */
+function safeCheckpointPath(
+  workspaceId: string,
+  jobId: string | undefined,
+  projectRoot: string,
+): string {
+  if (!jobId) return "";
+  try {
+    return batchJobPath(workspaceId, jobId, projectRoot);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * ChapterSeed 阻断检查（BATCH-P1-04，P0-FIX-3 修正）。
  *
- * 检查 workspace 是否有可用的章节种子来源：
- *   1. config.json 含非空 chapterSeeds
- *   2. series/ch{startChapter}-outline-explicit.md 存在
+ * ChapterSeedBuilder 真实消费的种子来源是 series/ch{startChapter}-outline-explicit.md
+ * （由 loadAuthorChapterContract 加载并 parseExplicitOutline 解析）。
+ * config.json 的 chapterSeeds 字段不被 ChapterSeedBuilder 消费，已移除该检查路径。
  *
- * 两者都不满足 → 阻断（不调用模型）。
+ * 检查 series/ch{startChapter}-outline-explicit.md 是否存在。
+ * 不存在 → 阻断（不调用模型）；workspace_or_planner 模式下触发规划阶段。
  */
 function checkChapterSeedAvailable(
   workspaceId: string,
@@ -412,24 +482,7 @@ function checkChapterSeedAvailable(
 ): { ok: true } | { ok: false; reason: string } {
   const workspacePath = join(projectRoot, "workspaces", workspaceId);
 
-  // 1. config.json 含 chapterSeeds
-  const configPath = join(workspacePath, "config.json");
-  if (existsSync(configPath)) {
-    try {
-      const config = JSON.parse(readFileSync(configPath, "utf-8"));
-      if (
-        config?.chapterSeeds &&
-        typeof config.chapterSeeds === "object" &&
-        Object.keys(config.chapterSeeds).length > 0
-      ) {
-        return { ok: true };
-      }
-    } catch {
-      // config 损坏 → 落到下一条检查
-    }
-  }
-
-  // 2. series/ch{startChapter}-outline-explicit.md 存在
+  // P0-FIX-3：ChapterSeedBuilder 真实读取 series/ch{N}-outline-explicit.md
   const explicitOutlinePath = join(
     workspacePath, "series", `ch${startChapter}-outline-explicit.md`,
   );
@@ -439,7 +492,7 @@ function checkChapterSeedAvailable(
 
   return {
     ok: false,
-    reason: `workspace ${workspaceId} 缺少 ChapterSeed 来源：config.json 无 chapterSeeds 且无 series/ch${startChapter}-outline-explicit.md。请补充种子源（不提示补章纲）。`,
+    reason: `workspace ${workspaceId} 缺少 ChapterSeed 来源：无 series/ch${startChapter}-outline-explicit.md。请补充种子源（不提示补章纲）。`,
   };
 }
 
@@ -532,27 +585,25 @@ function checkBatchPrerequisites(
 }
 
 // ============================================================================
-// P1-03：ChapterSeed 规划阶段
+// P1-03：ChapterSeed 规划阶段（P0-FIX-3：写入 series/ch{N}-outline-explicit.md）
 // ============================================================================
 
 /**
- * ChapterSeed 规划阶段（BATCH-P1-03）。
+ * ChapterSeed 规划阶段（BATCH-P1-03，P0-FIX-3 修正）。
  *
  * 当 seedSource="workspace_or_planner" 且 workspace 无 ChapterSeed 时，
- * 生成结构化种子文件（JSON，非正文）。
+ * 生成显式章纲文件 series/ch{N}-outline-explicit.md。
  *
- * 种子文件路径：workspaces/{id}/batch-jobs/planned-seeds/ch{N}.json
+ * P0-FIX-3 修正：旧实现写入 batch-jobs/planned-seeds/ch{N}.json，但
+ * ChapterSeedBuilder.loadAuthorChapterContract 只读取 series/ch{N}-outline-explicit.md，
+ * 导致规划内容从未进入真实生成上下文。现在直接写入 ChapterSeedBuilder 消费的路径。
  *
- * 种子内容（结构化，不含正文）：
- * - chapterNumber / chapterId
- * - chapterFunction（按位置推断：setup / escalation / payoff / climax）
- * - chapterTheme（从 outline.md 提取，无则占位）
- * - characters（从 config.json 提取）
- * - worldConstraint（从 config.json genre/subGenres 构造）
- * - intent（含 _source: "chapterSeed"）
- * - plannedAt
+ * 文件格式遵循 parseExplicitOutline 解析规范：
+ *   - `## 事件 N` 事件头（2-4 个 #）
+ *   - 事件块内字段：`- **字段名**：值`（markdown 加粗格式）
+ *   - 章级字段（事件块外）：`- **字段名**：值`
  *
- * 严禁输出正文（prose / text / body 字段）。
+ * 严禁输出正文（prose / text / body）。只输出结构化契约字段。
  */
 function planBatchChapterSeeds(
   workspaceId: string,
@@ -575,9 +626,6 @@ function planBatchChapterSeeds(
   }
 
   const genre = config?.genre ?? "未指定";
-  const subGenres: string[] = Array.isArray(config?.subGenres)
-    ? config.subGenres
-    : [];
   const characters: Array<{ id: string; name: string; role?: string }> =
     Array.isArray(config?.characters)
       ? config.characters.map((c: any) => ({
@@ -586,6 +634,9 @@ function planBatchChapterSeeds(
           role: c?.role,
         }))
       : [];
+  const characterNames = characters
+    .map((c) => c.name)
+    .filter((name) => name && name.length > 0);
 
   // 读取 outline.md（提取章节主题）
   const outlinePath = join(workspacePath, "series", "outline.md");
@@ -599,54 +650,93 @@ function planBatchChapterSeeds(
     }
   }
 
-  // 创建 planned-seeds 目录
-  const seedsDir = join(workspacePath, "batch-jobs", "planned-seeds");
+  // 确保 series 目录存在
+  const seriesDir = join(workspacePath, "series");
   try {
-    mkdirSync(seedsDir, { recursive: true });
+    mkdirSync(seriesDir, { recursive: true });
   } catch {
     return {
       ok: false,
-      reason: `无法创建 planned-seeds 目录: ${seedsDir}`,
+      reason: `无法创建 series 目录: ${seriesDir}`,
     };
   }
 
-  // 为每章生成结构化种子
+  // 为每章生成显式章纲文件
+  // P0-FIX-3：写入 series/ch{N}-outline-explicit.md，ChapterSeedBuilder 会读取此文件
   const total = endChapter - startChapter + 1;
   const now = new Date().toISOString();
   for (let i = 0; i < total; i++) {
     const chapterNumber = startChapter + i;
-    const chapterId = `ch${chapterNumber}`;
     const chapterFunction = inferChapterFunction(i, total);
     const chapterTheme =
       outlineThemes.get(chapterNumber) ?? `第${chapterNumber}章（待细化）`;
-    const seed = {
+    const outlineContent = buildExplicitOutlineMarkdown({
       chapterNumber,
-      chapterId,
       chapterFunction,
       chapterTheme,
-      characters,
-      worldConstraint: {
-        genre,
-        subGenres,
-      },
-      intent: {
-        primary: chapterTheme,
-        _source: "chapterSeed",
-      },
+      genre,
+      characterNames,
       plannedAt: now,
-    };
-    const seedPath = join(seedsDir, `${chapterId}.json`);
+    });
+    const outlineFilePath = join(
+      seriesDir, `ch${chapterNumber}-outline-explicit.md`,
+    );
     try {
-      writeFileSync(seedPath, JSON.stringify(seed, null, 2), "utf-8");
+      writeFileSync(outlineFilePath, outlineContent, "utf-8");
     } catch {
       return {
         ok: false,
-        reason: `无法写入种子文件: ${seedPath}`,
+        reason: `无法写入显式章纲文件: ${outlineFilePath}`,
       };
     }
   }
 
   return { ok: true };
+}
+
+/**
+ * 构建单章显式章纲 markdown 内容。
+ *
+ * 格式遵循 parseExplicitOutline 解析规范：
+ *   - 章级字段放在文件头（事件块外）
+ *   - 至少一个 `## 事件 N` 事件头（否则 parseExplicitOutline 返回 parseError）
+ *   - 事件块内字段用 `- **字段名**：值` 格式
+ *
+ * 严禁输出正文。只输出结构化契约字段。
+ */
+function buildExplicitOutlineMarkdown(params: {
+  chapterNumber: number;
+  chapterFunction: string;
+  chapterTheme: string;
+  genre: string;
+  characterNames: string[];
+  plannedAt: string;
+}): string {
+  const { chapterNumber, chapterFunction, chapterTheme, genre, characterNames, plannedAt } = params;
+  const lines: string[] = [];
+
+  // 章级字段（loadAuthorChapterContract 在事件块外提取这些字段）
+  lines.push(`# 第${chapterNumber}章 显式章纲（批量规划自动生成 ${plannedAt}）`);
+  lines.push("");
+  lines.push(`- **本章功能**：${chapterFunction}`);
+  lines.push(`- **目标读者体验**：${chapterTheme}`);
+  lines.push(`- **类型**：${genre}`);
+  if (characterNames.length > 0) {
+    lines.push(`- **参与角色**：${characterNames.join("、")}`);
+  }
+  lines.push("");
+
+  // 事件块（parseExplicitOutline 要求至少一个 `## 事件 N` 头）
+  lines.push(`## 事件 1：${chapterTheme}`);
+  lines.push("");
+  lines.push(`- **内容摘要**：${chapterTheme}`);
+  if (characterNames.length > 0) {
+    lines.push(`- **参与角色**：${characterNames.join("、")}`);
+  }
+  lines.push(`- **场景类型**：scene`);
+  lines.push(`- **章末目标**：${chapterTheme}`);
+
+  return lines.join("\n") + "\n";
 }
 
 /**

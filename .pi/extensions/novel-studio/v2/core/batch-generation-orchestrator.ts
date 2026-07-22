@@ -28,6 +28,7 @@ import {
   saveBatchJobStore,
   isChapterAlreadyCompleted,
 } from "./batch-generation-job-store.js";
+import { renewBatchLock } from "./batch-generation-lock.js";
 
 // ============================================================================
 // 类型
@@ -86,6 +87,10 @@ export async function runBatchGeneration(
   const { state, projectRoot, mockGenerateChapter } = input;
   const workspaceId = state.workspaceId;
   const jobId = state.jobId;
+
+  // P1-FIX-6: 清理上次 paused 阶段的瞬态失败状态（resume 场景下重算 summary）
+  state.failedChapter = null;
+  state.summary = undefined;
 
   while (state.frontier <= state.endChapter) {
     // 1. 重新加载 state 检查 cancelRequested（cancel action 可能在外部设置）
@@ -150,6 +155,17 @@ export async function runBatchGeneration(
       };
     }
 
+    // P0-FIX-4: 章节执行期间 cancel 可能被设置 → 保存前合并最新控制字段
+    // 防止旧内存状态覆盖磁盘上的 cancelRequested=true
+    const freshAfterChapter = loadBatchJobStore(workspaceId, jobId, projectRoot);
+    if (freshAfterChapter?.state.cancelRequested) {
+      state.cancelRequested = true;
+      state.status = "cancelled";
+      state.updatedAt = new Date().toISOString();
+      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      break;
+    }
+
     // 5. 成功判定：status=ok + 章节文件存在 + stateCommit 无错误
     const chapterFile = join(
       projectRoot, "workspaces", workspaceId, "chapters", `${state.frontier}.md`,
@@ -176,6 +192,8 @@ export async function runBatchGeneration(
       state.frontier++;
       state.updatedAt = new Date().toISOString();
       saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      // P0-FIX-5: 长任务续租锁 — 每章完成后延长 expiresAt，避免 100 章任务超过 30 分钟被误判过期
+      renewBatchLock(workspaceId, jobId, projectRoot);
     } else {
       // 6b. 失败：暂停（stopOnFailure 默认 true）—— 不继续下一章
       chapterResult.status = "failed";
@@ -198,10 +216,9 @@ export async function runBatchGeneration(
   if (state.frontier > state.endChapter && state.status === "running") {
     state.status = "completed";
   }
-  // BATCH-P1-02：任务结束（completed / paused / cancelled / error）时构建 summary
-  if (!state.summary) {
-    state.summary = buildSummary(state);
-  }
+  // BATCH-P1-02 + P1-FIX-6：任务结束（completed / paused / cancelled / error）时重算 summary
+  // 始终重算，防止 resume 后旧的 failed/summary 数据陈旧
+  state.summary = buildSummary(state);
   state.updatedAt = new Date().toISOString();
   saveBatchJobStore(state, workspaceId, jobId, projectRoot);
 

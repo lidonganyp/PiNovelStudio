@@ -1,8 +1,10 @@
 # 批量章节生成模式用户指南
 
-> 版本: P0 + P1 | 更新日期: 2026-07-22
+> 版本: P0 + P1 + P0-FIX | 更新日期: 2026-07-22
 >
 > 批量章节生成是 `novel_generate_chapter` 工具的 `mode: "batch"` 分支，支持按大纲连续生成第 N 章到第 M 章。批量能力作为该工具的内部分支，**不新增第二个正文生成工具**——每章仍逐章调用统一主链路（Preflight → ContextCompiler → NovelOS Agentic → 作者风格整章优化 → FactGuard → StoryPreservation → FinalFactRecheck → FinalStateCommit → AtomicSave）。
+>
+> **⚠️ 同步执行风险**: `start` / `resume` 同步阻塞直到全部章节完成。100 章任务可能持续数小时，容易超过工具连接生命周期。建议分段执行（如每次 10-20 章），或在大批量场景下结合外部调度（cron / CI）分段调用。
 
 ---
 
@@ -141,10 +143,13 @@
 ```
 
 **行为**:
-- 只允许 `status="paused"` 的任务 resume
+- 允许 `status="paused"` 的任务 resume
+- **崩溃恢复（P0-FIX-2）**: `status="running"` 的任务，如果锁持有者进程已死亡（PID 不存活）或锁已过期，视为孤儿任务，可 resume；如果锁仍存活则拒绝（任务可能仍在另一个进程中运行）
+- `status="cancelled"` / `status="error"` 的任务不可 resume，需重新 `start`
 - 已完成的章节**不会重复调用模型**（幂等性双校验：checkpoint 记录 + 章节文件 + state store entry）
 - 从 `frontier`（第一个未完成章节）继续执行
 - `status="completed"` 的任务 resume → 幂等返回 completed（不重复生成）
+- **summary 重算（P1-FIX-6）**: resume 时清理上次 paused 阶段的瞬态失败状态（`failedChapter` / 旧 `summary`），任务结束时重新计算 summary，确保反映最新状态
 
 ### 3.3 `action: "status"` — 查询进度（不获取锁、不执行生成）
 
@@ -176,7 +181,7 @@
 
 **行为**:
 - 设置 `cancelRequested: true`，原子保存
-- 运行中的任务在下一章开始前检测到 cancel 标志后停止
+- **运行中取消（P0-FIX-4）**: 运行中的任务在当前章节完成后、保存前会合并磁盘上最新的 `cancelRequested` 标志。如果检测到 cancel，立即标记为 `cancelled` 并停止，不会继续后续章节
 - `paused` 状态的任务直接升级为 `cancelled`
 - **不删除任何已完成章节文件**——cancel 不破坏已有成果
 
@@ -205,38 +210,35 @@
 | `workspace_or_planner`（默认） | 先检查 workspace 是否有 ChapterSeed；无则自动规划结构化种子 |
 | `workspace_only` | 只使用 workspace 已有种子；无种子直接阻断（不规划） |
 
-### 5.2 ChapterSeed 来源检查顺序
+### 5.2 ChapterSeed 来源检查
 
-1. `config.json` 含非空 `chapterSeeds` 对象
-2. `series/ch{startChapter}-outline-explicit.md` 存在
+ChapterSeedBuilder 真实消费的种子来源是 `series/ch{startChapter}-outline-explicit.md`（由 `loadAuthorChapterContract` 加载并 `parseExplicitOutline` 解析）。
 
-两者都不满足时：
-- `workspace_or_planner` → 触发规划阶段
-- `workspace_only` → 阻断
+- 存在 `series/ch{startChapter}-outline-explicit.md` → 种子可用，进入生成
+- 不存在时：
+  - `workspace_or_planner` → 触发规划阶段
+  - `workspace_only` → 阻断
+
+> **注意**: `config.json` 的 `chapterSeeds` 字段**不被** ChapterSeedBuilder 消费，不能作为种子来源。
 
 ### 5.3 规划阶段输出
 
-规划阶段在 `workspaces/{id}/batch-jobs/planned-seeds/ch{N}.json` 生成结构化种子文件：
+规划阶段为每章生成 `series/ch{N}-outline-explicit.md` 显式章纲文件（P0-FIX-3 修正）。该格式与作者手动维护的显式章纲完全一致，可被 `parseExplicitOutline` 正确解析并进入统一主链路的 ChapterSeed。
 
-```json
-{
-  "chapterNumber": 1,
-  "chapterId": "ch1",
-  "chapterFunction": "setup",
-  "chapterTheme": "故事开始",
-  "characters": [
-    { "id": "protagonist-1", "name": "叶尘", "role": "protagonist" }
-  ],
-  "worldConstraint": {
-    "genre": "玄幻",
-    "subGenres": ["东方玄幻"]
-  },
-  "intent": {
-    "primary": "故事开始",
-    "_source": "chapterSeed"
-  },
-  "plannedAt": "2026-07-22T15:30:00.000Z"
-}
+```markdown
+# 第1章 显式章纲（批量规划自动生成 2026-07-22T15:30:00.000Z）
+
+- **本章功能**：setup
+- **目标读者体验**：故事开始
+- **类型**：玄幻
+- **参与角色**：叶尘
+
+## 事件 1：故事开始
+
+- **内容摘要**：故事开始
+- **参与角色**：叶尘
+- **场景类型**：scene
+- **章末目标**：故事开始
 ```
 
 **chapterFunction 推断规则**（按章节在批量范围中的位置）:
@@ -249,7 +251,9 @@
 | 其余 | `escalation` |
 | 单章（total=1） | `payoff` |
 
-> **严禁正文**: 规划阶段只输出结构化 JSON，不包含 `prose` / `text` / `body` 等正文字段。正文由统一主链路逐章生成。
+> **严禁正文**: 规划阶段只输出结构化章纲字段（本章功能、事件、角色、场景类型、章末目标），不包含正文段落。正文由统一主链路逐章生成。
+>
+> **可覆盖**: 规划生成的 `series/ch{N}-outline-explicit.md` 可被作者手动编辑覆盖。如作者已提供该文件，规划阶段不会覆盖。
 
 ---
 
@@ -289,12 +293,18 @@ resume 时，已完成章节通过**双校验**确认不重复生成：
 
 两者都满足才跳过该章，否则重新生成。
 
-### 6.4 进程重启恢复
+### 6.4 进程崩溃恢复（P0-FIX-2）
 
 如果批量执行期间进程崩溃：
-1. 锁文件含 PID + 30 分钟超时
-2. 重启后 `action: "start"` 新任务时，旧锁若 PID 已死亡或超时 30 分钟则自动清除
-3. 对旧任务用 `action: "resume"` 继续执行
+1. checkpoint 状态会停留在 `status="running"`（崩溃前最后一次保存）
+2. 锁文件含 PID + 30 分钟超时
+3. 重启后对旧任务用 `action: "resume"` 恢复：
+   - 系统检查锁持有者 PID 是否存活 AND 锁是否未过期
+   - **PID 已死亡或锁已过期** → 视为孤儿任务，允许 resume（僵死锁被强制释放后重新获取）
+   - **PID 仍存活且锁未过期** → 拒绝 resume（任务可能仍在另一个进程中运行）
+4. resume 时清理上次 paused 阶段的瞬态失败状态（P1-FIX-6），summary 重新计算
+
+> **注意**: `cancelled` / `error` 状态的任务不可 resume，需重新 `start`。
 
 ---
 
@@ -348,14 +358,16 @@ workspaces/{workspaceId}/traces/batch-{jobId}-summary.json
 
 ---
 
-## 8. Workspace 级锁（BATCH-P0-09）
+## 8. Workspace 级锁（BATCH-P0-09 + P0-FIX-5）
 
 - 同一 workspace 同一时间只允许一个批量任务运行
 - 锁文件: `workspaces/{workspaceId}/batch-jobs/.lock`
 - 锁信息: `jobId` / `pid` / `acquiredAt` / `expiresAt`（30 分钟超时）
 - 锁判定: PID 存活（`process.kill(pid, 0)`）AND 未超时
-- 锁释放: 任务结束（无论成功/失败/暂停）后自动释放
+- **锁续租（P0-FIX-5）**: 每章成功保存后自动续租锁（延长 `expiresAt` 30 分钟），避免 100 章任务超过 30 分钟被误判过期
+- **锁释放安全（P0-FIX-5）**: 释放锁时校验 `jobId`，只删除自己的锁。旧任务结束后不会误删新任务的锁
 - 锁冲突: 新任务 `action: "start"` 遇到有效锁 → 返回 `error` + `failureEnvelope`
+- 僵死锁恢复: 新任务遇到 PID 已死亡的锁 → 强制释放并获取
 
 ---
 
@@ -371,6 +383,7 @@ workspaces/{workspaceId}/traces/batch-{jobId}-summary.json
 | 失败不跳章 | 第 N 章失败时不会自动生成第 N+1 章 |
 | 状态事务 | 长期状态只在最终正文经事实复检后提交；章节保存是原子操作 |
 | 单编排在限 | 批量编排模块不超过约 800 行 |
+| **路径穿越防护（P0-FIX-1）** | `workspaceId` / `jobId` 必须匹配 `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` 且不含 `..`；非法值在入口处阻断，不参与路径拼接 |
 
 ---
 
@@ -386,7 +399,7 @@ A: 设置 `confirmLargeBatch: true`，上限放宽到 1000 章。1000 章以上�
 
 ### Q: 没有 ChapterSeed 可以批量生成吗？
 
-A: 可以。默认 `seedSource: "workspace_or_planner"` 模式下，无种子时自动规划结构化种子（从 `outline.md` 提取章节主题 + 从 `config.json` 提取角色/世界观）。如需强制使用 workspace 已有种子，设 `seedSource: "workspace_only"`。
+A: 可以。默认 `seedSource: "workspace_or_planner"` 模式下，无种子时自动规划——为每章生成 `series/ch{N}-outline-explicit.md` 显式章纲文件（从 `outline.md` 提取章节主题 + 从 `config.json` 提取角色/世界观）。该格式被 ChapterSeedBuilder 真实消费。如需强制使用 workspace 已有种子，设 `seedSource: "workspace_only"`。
 
 ### Q: 如何查看某章为什么失败？
 
@@ -395,3 +408,11 @@ A: 用 `action: "status"` 查询 `failureEnvelope`，或查看 `traces/batch-{jo
 ### Q: 同一 workspace 能同时跑两个批量任务吗？
 
 A: 不能。workspace 级锁保证同一时间只有一个批量任务运行。第二个任务会收到锁冲突 error。如需并行，请使用不同 workspace。
+
+### Q: 进程崩溃了，批量任务卡在 running 怎么办？
+
+A: 直接用 `action: "resume"` 恢复（P0-FIX-2）。系统会检查锁持有者 PID 是否存活：PID 已死亡或锁已过期 → 视为孤儿任务，自动恢复；PID 仍存活 → 拒绝（任务可能还在运行）。`cancelled` / `error` 状态的任务不可 resume，需重新 `start`。
+
+### Q: 100 章任务会阻塞很久吗？
+
+A: 会。`start` / `resume` 同步阻塞直到全部章节完成。100 章可能持续数小时，容易超过工具连接生命周期。建议分段执行（每次 10-20 章），用 `action: "resume"` 续接。锁会在每章完成后自动续租（P0-FIX-5），不会因超时被误判过期。

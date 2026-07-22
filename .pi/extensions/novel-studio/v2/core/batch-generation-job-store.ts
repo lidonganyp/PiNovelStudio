@@ -33,6 +33,44 @@ export const DEFAULT_MAX_CHAPTERS = 100;
 export const LARGE_BATCH_MAX_CHAPTERS = 1000;
 
 // ============================================================================
+// 安全校验（P0-FIX-1：路径穿越防护）
+// ============================================================================
+
+/** workspaceId / jobId 合法字符集：字母数字开头，允许 - _ */
+const SAFE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
+/**
+ * 校验 workspaceId：拒绝路径穿越（.., /, \）和特殊字符。
+ * 抛出 Error 而非静默返回——路径穿越是安全阻断项，不应被吞掉。
+ */
+export function validateWorkspaceId(workspaceId: string): void {
+  if (
+    !workspaceId ||
+    typeof workspaceId !== "string" ||
+    !SAFE_ID_RE.test(workspaceId) ||
+    workspaceId.includes("..")
+  ) {
+    throw new Error(`Invalid workspaceId: "${workspaceId}" — must match ${SAFE_ID_RE} and contain no path traversal`);
+  }
+}
+
+/**
+ * 校验 jobId：同 workspaceId 规则。
+ * generateJobId() 产出 batch-{timestamp}-{rand} 格式，天然合法。
+ * 用户自定义 jobId 需通过同一校验。
+ */
+export function validateJobId(jobId: string): void {
+  if (
+    !jobId ||
+    typeof jobId !== "string" ||
+    !SAFE_ID_RE.test(jobId) ||
+    jobId.includes("..")
+  ) {
+    throw new Error(`Invalid jobId: "${jobId}" — must match ${SAFE_ID_RE} and contain no path traversal`);
+  }
+}
+
+// ============================================================================
 // 类型
 // ============================================================================
 
@@ -157,6 +195,8 @@ export class BatchGenerationJobStore {
  * workspaces/{workspaceId}/batch-jobs/{jobId}.json
  */
 export function batchJobPath(workspaceId: string, jobId: string, projectRoot: string): string {
+  validateWorkspaceId(workspaceId);
+  validateJobId(jobId);
   return join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR, `${jobId}${BATCH_JOB_FILE_EXT}`);
 }
 
@@ -222,6 +262,7 @@ export function isChapterAlreadyCompleted(
   chapterNumber: number,
   projectRoot: string,
 ): boolean {
+  validateWorkspaceId(workspaceId);
   const workspacePath = join(projectRoot, "workspaces", workspaceId);
   const chapterFile = join(workspacePath, "chapters", `${chapterNumber}.md`);
   if (!existsSync(chapterFile)) return false;
