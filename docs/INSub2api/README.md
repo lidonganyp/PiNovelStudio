@@ -66,13 +66,13 @@
 |---|---|---|---|
 | P0-1 真实工具适配（execute→invoke） | sub2api `4b96d63` | novel-runtime 88/88 测试通过 |
 | P0-2 真实 Token 计量 | PiNovelStudio `79bf692`（用户 WIP）+ `ac05f0c` | build:prod ✓、smoke 2/2 ✓、p0-2 test 2/2 ✓ |
-| P0-3 Sub2API 唯一模型出口 | PiNovelStudio `ac05f0c` | 同 P0-2 验证 |
+| P0-3 Sub2API 唯一模型出口 | PiNovelStudio `ac05f0c` + `c5dbc60`（fallback-manager 补丁） | 同 P0-2 验证 + 本机 PowerShell 等价冒烟通过 |
 | P0-4 生成请求补 chapterId | sub2api（与 P0-1 同期提交） | novel-runtime 单测覆盖 |
 | P0-5 API DTO 契约对齐 | sub2api（snake_case + title 派生 + 反馈字段） | go build/test ✓、frontend typecheck/build ✓ |
 | P0-6 安全门禁接入请求链路 | sub2api `2dcee2b` | go build/test ✓（CheckInput 前置 / CheckOutput 后置） |
 | P0-7 取消/预算中止信号传播 | sub2api `dfa6598`（JobCancelRegistry） + `99e2ece`（metering-binder break） | go test ✓、novel-runtime 88/88 ✓ |
 | P0-8 可启动部署配置 | sub2api `9443dff` | Dockerfile 多阶段 + compose env/healthcheck/tag 对齐（**待 Docker 真实构建验证**） |
-| P0-E2E 真实端到端测试 | sub2api `46f2f55`（real-extension-loading.test.ts） + `e9b02f1`（e2e-smoke.sh） | novel-runtime 90/90 测试通过；smoke 脚本待用户人工执行（需 build + curl） |
+| P0-E2E 真实端到端测试 | sub2api `46f2f55`（real-extension-loading.test.ts） + `e9b02f1`（e2e-smoke.sh） | novel-runtime 90/90 测试通过；**本机 PowerShell 等价冒烟通过**（runtime 启动 + 6 工具加载 + 客户端初始化）；bash 脚本可移植性可选 |
 | P0-9 PI 互动界面 | — | **用户已声明降级为 P1，不在本轮 P0 范围** |
 
 ### 仍待真实环境验证（非阻断代码问题）
