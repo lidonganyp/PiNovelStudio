@@ -553,9 +553,18 @@ export function getProviderDefaultConfig(
 
 /**
  * 获取 API Key（从环境变量）
+ *
+ * P0-3（第二轮 P0 修复）：若部署侧设置了 SUB2API_INTERNAL_LLM_API_KEY，
+ * 所有 provider 强制使用该密钥走 Sub2API 内部 LLM 计费网关，
+ * 不再直连 Gemini/Claude/GPT 等 Provider。满足冻结需求"所有 LLM 调用
+ * 必须经过 Sub2API 计费网关"。未设置时保持原 per-provider env 行为，
+ * 保证本地开发与测试不被破坏。
  */
 export function getApiKey(providerKey: string): string | null {
   loadProjectDotEnv();
+  // P0-3：全局网关密钥覆写——所有 provider 共用 Sub2API 网关密钥
+  const sub2apiKey = process.env.SUB2API_INTERNAL_LLM_API_KEY;
+  if (sub2apiKey) return sub2apiKey;
   const envKey = resolveProviderApiKeyEnv(providerKey);
   return envKey ? process.env[envKey] || null : null;
 }
@@ -569,8 +578,19 @@ function resolveProviderApiKeyEnv(providerKey: string): string | undefined {
   }
 }
 
+/**
+ * 获取 provider base URL。
+ *
+ * P0-3（第二轮 P0 修复）：若部署侧设置了 SUB2API_INTERNAL_LLM_BASE_URL，
+ * 所有 provider 强制走 Sub2API 内部 LLM 计费网关（OpenAI 兼容协议）。
+ * 未设置时保持原 per-provider env 行为（GLM_BASE_URL / CLAUDE_BASE_URL 等），
+ * 保证本地开发与测试不被破坏。
+ */
 export function getBaseUrl(providerKey: string, defaultBaseUrl: string): string {
   loadProjectDotEnv();
+  // P0-3：全局网关 URL 覆写——所有 provider 强制走 Sub2API 计费网关
+  const sub2apiGateway = process.env.SUB2API_INTERNAL_LLM_BASE_URL;
+  if (sub2apiGateway) return sub2apiGateway;
   const envKey = configMap[providerKey]?.baseUrlEnv;
   return (envKey && process.env[envKey]) || defaultBaseUrl;
 }

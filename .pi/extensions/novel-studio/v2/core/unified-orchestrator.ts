@@ -477,7 +477,13 @@ export class UnifiedOrchestrator {
             ts: start,
             ...(output.finishReason !== undefined ? { finishReason: output.finishReason } : {}),
             ...(output.maxTokens !== undefined ? { maxTokens: output.maxTokens } : {}),
-            tokenUsage: "unknown",
+            // P0-2（第二轮 P0 修复）：从 provider 响应抽取的真实 token 用量。
+            // legacy-model-route-adapter.extractTokenUsageFromFallbackResult 读取
+            // result.response.usage.{prompt_tokens, completion_tokens}；
+            // stub 路径返回 {in:100, out:200}。直连旧路径无 usage 时返回 "unknown"，
+            // 下游 metering-binder 按 0 估算但 settle 仍上报，保持账本完整。
+            // 改前：tokenUsage: "unknown"（硬编码）→ actualCharge 恒为 0。
+            tokenUsage: output.tokenUsage ?? "unknown",
             // REAL-QUALITY-1-PREFLIGHT：透传 provider/requestedRoute 证据（计划 §trace）。
             // 未锁定时 output.provider/requestedRoute 可省略，modelCallLog 字段为 undefined（向后兼容）。
             provider: output.provider,

@@ -80,6 +80,19 @@ export interface ModelGenerateOutput {
    * 仅在 wrap 锁定时由 wrap 层设置；未锁定时与 route 一致或省略。
    */
   requestedRoute?: string;
+  /**
+   * P0-2（第二轮 P0 修复）：真实 token 用量。
+   *
+   * 由 extractTokenUsageFromFallbackResult 从 provider 响应的 response.usage
+   * （prompt_tokens / completion_tokens）抽取。orchestrator 据此填充
+   * ModelCallEntry.tokenUsage，下游 metering-binder 据此计算实际计费；
+   * 不再硬编码 "unknown" 导致 actualCharge=0。
+   *
+   * - {in, out}：成功抽取的真实 token 用量
+   * - "unknown"：provider 响应未携带 usage 字段（直连旧路径或异常响应）
+   * - undefined：stub 路径未设置，orchestrator 兜底为 "unknown"
+   */
+  tokenUsage?: { in: number; out: number } | "unknown";
 }
 
 export type ModelGenerateFn = (input: ModelGenerateInput) => Promise<ModelGenerateOutput>;
@@ -143,6 +156,8 @@ export function createStubModelGenerateFn(): ModelGenerateFn {
       model,
       route: input.route,
       provider,
+      // P0-2：stub 路径返回测试用 token 用量，避免下游测试回退 "unknown" 导致 actualCharge=0
+      tokenUsage: { in: 100, out: 200 },
       durationMs: Date.now() - start,
     };
   };
@@ -427,6 +442,8 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
     );
     const text = extractTextFromFallbackResult(result);
     const finishReason = extractFinishReasonFromFallbackResult(result);
+    // P0-2：从 provider 响应抽取真实 token 用量，替代 orchestrator 硬编码 "unknown"
+    const tokenUsage = extractTokenUsageFromFallbackResult(result);
     return {
       text,
       model: result.usedModel ?? "unknown",
@@ -435,6 +452,7 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
       provider: result.usedProvider ?? undefined,
       ...(finishReason !== undefined ? { finishReason } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
+      tokenUsage,
       durationMs: Date.now() - start,
     };
   };
@@ -465,6 +483,55 @@ function extractFinishReasonFromFallbackResult(result: any): string | undefined 
   return typeof responseReason === "string" && responseReason.trim()
     ? responseReason
     : undefined;
+}
+
+/**
+ * P0-2（第二轮 P0 修复）：从 provider 响应抽取真实 token 用量。
+ *
+ * 三类 provider 响应形状都包含 usage 字段：
+ *   - GLMResponse (api/glm.ts): response.usage.{prompt_tokens, completion_tokens, total_tokens}
+ *   - GPTResponse (api/gpt.ts):  response.usage.{prompt_tokens, completion_tokens, total_tokens}
+ *   - ClaudeResponse (api/claude.ts): response.usage.{input_tokens, output_tokens}
+ *
+ * 抽取失败（响应不含 usage 或字段非数字）返回 "unknown"，让下游
+ * metering-binder 按 0 token 估算并继续上报 settle（保持计费账本完整）。
+ *
+ * 设计原则：失败不抛错——计费抽取失败不应阻断章节交付。
+ */
+function extractTokenUsageFromFallbackResult(result: any): { in: number; out: number } | "unknown" {
+  if (!result || typeof result !== "object") return "unknown";
+  const usage = result?.response?.usage;
+  if (!usage || typeof usage !== "object") return "unknown";
+
+  // OpenAI/GLM 协议：prompt_tokens / completion_tokens
+  const promptTokens =
+    typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
+  const completionTokens =
+    typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined;
+
+  if (promptTokens !== undefined && completionTokens !== undefined) {
+    return { in: promptTokens, out: completionTokens };
+  }
+
+  // Anthropic 协议：input_tokens / output_tokens
+  const inputTokens =
+    typeof usage.input_tokens === "number" ? usage.input_tokens : undefined;
+  const outputTokens =
+    typeof usage.output_tokens === "number" ? usage.output_tokens : undefined;
+
+  if (inputTokens !== undefined && outputTokens !== undefined) {
+    return { in: inputTokens, out: outputTokens };
+  }
+
+  // 部分字段缺失：用已知字段补 0，仍返回真实结构而非 "unknown"
+  const inT = promptTokens ?? inputTokens ?? 0;
+  const outT = completionTokens ?? outputTokens ?? 0;
+  if (promptTokens !== undefined || completionTokens !== undefined ||
+      inputTokens !== undefined || outputTokens !== undefined) {
+    return { in: inT, out: outT };
+  }
+
+  return "unknown";
 }
 
 // ============================================================================
