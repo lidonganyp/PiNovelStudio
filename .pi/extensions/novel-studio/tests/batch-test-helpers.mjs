@@ -6,6 +6,7 @@
  * - createBatchWorkspace：创建临时 workspace（config/characters/series/styles）
  * - createMockGenerateChapter：返回 mock 函数，模拟统一主链路写章节文件 + state store
  * - writeStateStoreEntry：向 narrative-state-store.json 追加 ch{N} 的 finalText-anchored entry
+ * - writeContinuitySnapshot：写 chapter-continuity/{N}.json 快照（模拟 commitAndSave P1-F）
  * - cleanupWorkspace：删除临时 workspace
  */
 
@@ -144,8 +145,51 @@ export function writeStateStoreEntry(workspacePath, chapterNumber, chapterText) 
   };
   store.canon.push(entry);
   store.workspaceId = store.workspaceId || "";
+  // P1-E：模拟真实 FinalStateCommit.commit() 设置 lastCommittedChapter
+  store.lastCommittedChapter = chapterId;
 
   writeFileSync(stateStorePath, JSON.stringify(store, null, 2), "utf-8");
+}
+
+/**
+ * 写 chapter-continuity/{N}.json 连续性快照（模拟 commitAndSave P1-F 的
+ * writeChapterContinuitySnapshot 调用）。
+ *
+ * 默认快照含空 openHooks/introducedCharacters/unresolvedTensions（匹配旧行为）。
+ * 测试可通过 snapshotOverride 注入特定钩子，用于验证跨章传递。
+ *
+ * @param {string} workspacePath
+ * @param {number} chapterNumber
+ * @param {string} chapterText - 用于计算 lastEventSummary 和 finalTextHash
+ * @param {object} [snapshotOverride] - 覆盖默认空数组（如 { openHooks: ["X"] }）
+ */
+export function writeContinuitySnapshot(workspacePath, chapterNumber, chapterText, snapshotOverride) {
+  const snapshotDir = join(workspacePath, "chapter-continuity");
+  if (!existsSync(snapshotDir)) {
+    mkdirSync(snapshotDir, { recursive: true });
+  }
+  const maxChars = 1200;
+  let lastEventSummary = chapterText.length > maxChars
+    ? chapterText.slice(-maxChars)
+    : chapterText;
+  if (chapterText.length > maxChars) {
+    const paragraphBreak = lastEventSummary.indexOf("\n\n");
+    if (paragraphBreak >= 0 && paragraphBreak < 320) {
+      lastEventSummary = lastEventSummary.slice(paragraphBreak + 2);
+    }
+  }
+  const snapshot = {
+    chapterNumber,
+    openHooks: snapshotOverride?.openHooks ?? [],
+    introducedCharacters: snapshotOverride?.introducedCharacters ?? [],
+    unresolvedTensions: snapshotOverride?.unresolvedTensions ?? [],
+    lastEventSummary,
+    finalTextHash: hash12(chapterText),
+    sourceRefs: snapshotOverride?.sourceRefs ?? [],
+    createdAt: new Date().toISOString(),
+  };
+  const snapshotPath = join(snapshotDir, `${chapterNumber}.json`);
+  writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), "utf-8");
 }
 
 /**
@@ -154,13 +198,17 @@ export function writeStateStoreEntry(workspacePath, chapterNumber, chapterText) 
  * 行为：
  * - 写 chapters/{N}.md 文件
  * - 写 narrative-state-store.json 的 ch{N} finalText-anchored entry
- * - 返回 {status: "ok", stageResults: {stateCommit: {ok: true}, modelCallCount: 1}}
+ * - 写 chapter-continuity/{N}.json 连续性快照（模拟 commitAndSave P1-F）
+ * - 返回 {status: "ok", stageResults: {stateCommit: {committed, rejected}, modelCallCount: 1}}
  *
  * @param {object} options
  * @param {string} options.workspacePath
  * @param {number[]} options.failOnChapters - 失败的章节号列表
  * @param {boolean} options.skipStateStore - 不写 state store（模拟 FinalStateCommit 失败）
  * @param {boolean} options.skipChapterFile - 不写章节文件（模拟 AtomicSave 失败）
+ * @param {boolean} options.skipContinuitySnapshot - 不写连续性快照（模拟 P1-F 写入失败）
+ * @param {Object.<number, object>} [options.chapterSnapshots] - 按章节号覆盖快照内容
+ *   （如 { 1: { openHooks: ["UNIQUE_HOOK"] } }）；未覆盖的章节写空快照
  * @returns {function} mock function with .calls array
  */
 export function createMockGenerateChapter(options = {}) {
@@ -169,6 +217,8 @@ export function createMockGenerateChapter(options = {}) {
     failOnChapters = [],
     skipStateStore = false,
     skipChapterFile = false,
+    skipContinuitySnapshot = false,
+    chapterSnapshots = {},
   } = options;
 
   const mock = async function mockGenerateChapter(input) {
@@ -204,20 +254,37 @@ export function createMockGenerateChapter(options = {}) {
       writeStateStoreEntry(workspacePath, chapterNumber, chapterText);
     }
 
+    // P1-F：写连续性快照（模拟 commitAndSave 的 writeChapterContinuitySnapshot 调用）
+    if (!skipContinuitySnapshot) {
+      writeContinuitySnapshot(
+        workspacePath,
+        chapterNumber,
+        chapterText,
+        chapterSnapshots[chapterNumber],
+      );
+    }
+
     return {
-      status: "ok",
-      workspaceId: input.workspaceId,
-      chapterId: String(chapterNumber),
-      chapterNumber,
-      text: chapterText,
-      stageResults: {
-        stateCommit: { ok: !skipStateStore },
-        stateCommitError: skipStateStore ? true : undefined,
-        modelCallCount: 1,
-        unifiedPipeline: true,
-        productionFlow: { mode: "agentic_style_full_pipeline", machineJudgeCalled: false },
-      },
-    };
+    status: "ok",
+    workspaceId: input.workspaceId,
+    chapterId: String(chapterNumber),
+    chapterNumber,
+    text: chapterText,
+    stageResults: {
+      // P1-E：与真实 commitAndSave 输出对齐——无 ok 字段，用 committed/rejected/error
+      stateCommit: skipStateStore
+        ? { error: "mock: state store not written", committed: 0, rejected: 0 }
+        : { committed: 1, rejected: 0 },
+      stateCommitError: skipStateStore ? true : undefined,
+      // P1-F：连续性快照写入标记
+      continuitySnapshot: skipContinuitySnapshot
+        ? { ok: false, error: "mock: snapshot not written" }
+        : { ok: true, advisoryCache: true },
+      modelCallCount: 1,
+      unifiedPipeline: true,
+      productionFlow: { mode: "agentic_style_full_pipeline", machineJudgeCalled: false },
+    },
+  };
   };
 
   mock.calls = [];

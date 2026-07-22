@@ -18,6 +18,7 @@ import {
   loadGenerateChapterTool,
   createBatchWorkspace,
   createMockGenerateChapter,
+  writeContinuitySnapshot,
   cleanupWorkspace,
   PROJECT_ROOT,
 } from "./batch-test-helpers.mjs";
@@ -360,7 +361,12 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
           content: `第${chapterNumber}章状态`,
           timestamp: new Date().toISOString(),
         });
+        // P1-E：模拟真实 FinalStateCommit.commit() 设置 lastCommittedChapter
+        store.lastCommittedChapter = `ch${chapterNumber}`;
         writeFileSync(stateStorePath, JSON.stringify(store, null, 2), "utf-8");
+
+        // P1-F：模拟 commitAndSave 写连续性快照
+        writeContinuitySnapshot(workspacePath, chapterNumber, chapterText);
 
         // 第 1 章完成后、第 2 章开始前，模拟用户调用 cancel
         if (chapterNumber === 1) {
@@ -381,7 +387,10 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
           chapterNumber,
           text: chapterText,
           stageResults: {
-            stateCommit: { ok: true },
+            // P1-E：与真实 commitAndSave 输出对齐——无 ok 字段
+            stateCommit: { committed: 1, rejected: 0 },
+            // P1-F：连续性快照写入标记
+            continuitySnapshot: { ok: true, advisoryCache: true },
             modelCallCount: 1,
           },
         };

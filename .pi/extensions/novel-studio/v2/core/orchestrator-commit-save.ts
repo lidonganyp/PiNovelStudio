@@ -27,6 +27,7 @@ import { createLanguageRiskLibrary } from "./language-risk-library.js";
 import { bridgeStateToSeriesFiles } from "./narrative-state-bridge.js";
 import { integrateClosureTracker } from "./closure-tracker-integration.js";
 import { persistChapterProgressionContract } from "./chapter-progression-contract.js";
+import { writeChapterContinuitySnapshot } from "../../craft/chapter-continuity-snapshot.js";
 import type { StructuralEvidence, ChapterQualityEvidence } from "./chapter-quality-evidence.js";
 // G7-Checkpoint：代理审批稿 pending 守护（计划 §6.3 / §12.2）
 // 用户最终确认前，FinalStateCommit 和正式章节原子保存均不得执行。
@@ -354,6 +355,35 @@ export function commitAndSave(
         warning: "bridge failed; advisory cache not written; rebuildable from state-store",
       };
     }
+  }
+
+  // ── 4. P1-F：写入章节连续性快照（advisory cache） ────────────────
+  // 下一章 ChapterSeedBuilder.loadPreviousChapterTextContinuation 会读取该快照，
+  // 把上一章实际产生的新事件/未结钩子/新登场角色结构化传入下一章模型上下文。
+  // 失败不阻断主链路（advisory cache，可从 narrative-state-store.json 重建）。
+  try {
+    writeChapterContinuitySnapshot(
+      workspacePath,
+      input.chapterNumber,
+      finalText,
+      reanchoredForBridge,
+      computeFinalTextHash(finalText),
+    );
+    stageResults.continuitySnapshot = {
+      ok: true,
+      advisoryCache: true,
+      rebuildableFrom: "narrative-state-store.json",
+      chapterNumber: input.chapterNumber,
+    };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    stageResults.continuitySnapshot = {
+      ok: false,
+      error: msg,
+      advisoryCache: true,
+      rebuildableFrom: "narrative-state-store.json",
+      chapterNumber: input.chapterNumber,
+    };
   }
 
   // 成功路径不会吞掉 stateCommit 异常；异常已在上方回滚并以 ok=false 返回。

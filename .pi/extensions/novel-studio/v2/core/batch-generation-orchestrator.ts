@@ -15,11 +15,15 @@
  * 章节成功判定（三者都满足才推进 frontier）：
  *   1. result.status === "ok"
  *   2. chapters/{N}.md 文件存在
- *   3. result.stageResults.stateCommit 无错误
- *      （回退：narrative-state-store.json 含 sourceChapter=ch{N} 的 finalText-anchored entry）
+ *   3. P1-E：verifyStateCommitted 严格校验状态提交
+ *      - stateCommit.error / stateCommit.blocked → 失败
+ *      - stateCommit.skipped → 可接受（无 stagedStateUpdate）
+ *      - 否则读磁盘 narrative-state-store.json 验证：
+ *        a) lastCommittedChapter === "ch{N}"
+ *        b) 存在至少一条 sourceRef 含 "ch{N}#finalText:" 的 entry（finalText 锚点）
  */
 
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "node:path";
 import { atomicSave } from "./orchestrator-commit-save.js";
 import type { BatchJobState, BatchJobSummary, BatchChapterResult } from "./batch-generation-job-store.js";
@@ -93,6 +97,61 @@ function startLockHeartbeat(
   // unref 让定时器不阻止进程退出
   if (typeof timer.unref === "function") timer.unref();
   return () => clearInterval(timer);
+}
+
+/**
+ * P1-E：严格验证本章状态已提交到 narrative-state-store.json。
+ *
+ * 旧检查 `(stateCommit as any)?.ok !== false` 永真（`ok` 字段在真实
+ * `commitAndSave` 输出中不存在——只有 mock 设了它），导致状态提交失败
+ * 或未执行时仍被判定为成功。
+ *
+ * 新检查逻辑：
+ * 1. stateCommit.error 或 stateCommit.blocked → 失败
+ * 2. stateCommit.skipped → 可接受（无 stagedStateUpdate，不验证磁盘）
+ * 3. 否则读磁盘 narrative-state-store.json 验证：
+ *    a) lastCommittedChapter === "ch{N}"
+ *    b) 存在至少一条 sourceRef 含 "ch{N}#finalText:" 的 entry（finalText 锚点）
+ *    c) committed=0（全部 rejected）时无 finalText 锚点 → 失败
+ */
+function verifyStateCommitted(
+  stateCommit: any,
+  workspaceId: string,
+  chapterNumber: number,
+  projectRoot: string,
+): boolean {
+  if (!stateCommit) return false;
+  // 错误/阻断 → 失败
+  if (stateCommit.error || stateCommit.blocked) return false;
+  // skipped（无 stagedStateUpdate）→ 可接受
+  if (stateCommit.skipped) return true;
+  // committed/rejected 结构 → 验证磁盘
+  const expectedChapter = `ch${chapterNumber}`;
+  const stateStorePath = join(
+    projectRoot, "workspaces", workspaceId, "narrative-state-store.json",
+  );
+  if (!existsSync(stateStorePath)) return false;
+  try {
+    const raw = readFileSync(stateStorePath, "utf-8");
+    const store = JSON.parse(raw);
+    // 1. lastCommittedChapter 必须等于 ch{N}
+    if (store.lastCommittedChapter !== expectedChapter) return false;
+    // 2. 存在至少一条本章 finalText 锚点的 entry（检查所有数组，含 eventLog）
+    const anchor = `${expectedChapter}#finalText:`;
+    const allEntries: any[] = [
+      ...(store.canon ?? []),
+      ...(store.character ?? []),
+      ...(store.promise ?? []),
+      ...(store.pattern ?? []),
+      ...(store.expectation ?? []),
+      ...(store.eventLog ?? []),
+    ];
+    return allEntries.some(
+      (e) => typeof e?.sourceRef === "string" && e.sourceRef.includes(anchor),
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -200,14 +259,17 @@ export async function runBatchGeneration(
       state.cancelRequested = true;
     }
 
-    // 6. 成功判定：status=ok + 章节文件存在 + stateCommit 无错误
+    // 6. 成功判定：status=ok + 章节文件存在 + P1-E 严格状态提交校验
     const chapterFile = join(
       projectRoot, "workspaces", workspaceId, "chapters", `${state.frontier}.md`,
     );
-    const stateCommitOk =
-      (result?.stageResults?.stateCommit as any)?.ok !== false &&
-      result?.stageResults?.stateCommitError !== true;
     const chapterFileExists = existsSync(chapterFile);
+    const stateCommitOk = verifyStateCommitted(
+      result?.stageResults?.stateCommit as any,
+      workspaceId,
+      state.frontier,
+      projectRoot,
+    );
     chapterSucceeded = result?.status === "ok" && chapterFileExists && stateCommitOk;
 
     // 7. 记录本章提交结果（P1-C：cancelRequested 已合并，save 不会覆盖 cancel 标志）

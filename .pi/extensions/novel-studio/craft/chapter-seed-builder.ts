@@ -19,6 +19,8 @@
 import { join } from "path";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { parseExplicitOutline, parseMandatoryElementTag } from "./explicit-outline-parser.js";
+// P1-F：章节连续性快照（commitAndSave 写入，前章承接加载）
+import { loadChapterContinuitySnapshot } from "./chapter-continuity-snapshot.js";
 import type {
   ChapterSeed,
   CharacterStateSummary,
@@ -528,6 +530,12 @@ function loadPreviousChapterTextContinuation(
   chapterNumber: number
 ): PreviousChapterContinuation | null {
   const previousNumber = chapterNumber - 1;
+
+  // P1-F：优先加载连续性快照——上一章 commitAndSave 时写入，含带 finalText span
+  // 证据的 openHooks / introducedCharacters / unresolvedTensions。快照缺失或损坏时
+  // 回退到仅正文尾部（保持旧行为），不阻断主链路。
+  const snapshot = loadChapterContinuitySnapshot(workspacePath, previousNumber);
+
   const fileNames = [...new Set([
     `${previousNumber}.md`,
     `chapter-${previousNumber}.md`,
@@ -546,16 +554,28 @@ function loadPreviousChapterTextContinuation(
         if (paragraphBreak >= 0 && paragraphBreak < 320) excerpt = excerpt.slice(paragraphBreak + 2);
       }
       const endsAtCompletedBoundary = /[。！？!?…）)”’」』】》]\s*$/u.test(text);
+
+      // P1-F：若快照存在，用快照的 lastEventSummary 覆盖（与正文尾部同源但带 hash 标记），
+      // 并把快照的结构化 hooks/characters/tensions 合入返回。快照的 openHooks 已经过
+      // finalText span 证据过滤，可安全进入下一章模型上下文。
+      // 若快照不存在，openHooks / introducedCharacters 维持空数组（旧行为），并用
+      // endsAtCompletedBoundary 推断 unresolvedTensions。
+      const sourceIds = [`chapters/${fileName}`];
+      if (snapshot) {
+        sourceIds.push(`chapter-continuity/${previousNumber}.json`);
+      }
       return {
         available: true,
         lastEventId: `chapter-text-tail:${previousNumber}`,
-        lastEventSummary: excerpt,
-        openHooks: [],
-        introducedCharacters: [],
-        unresolvedTensions: endsAtCompletedBoundary
-          ? []
-          : ["前章正文在进行中的事件处结束，必须先明确其结果再推进新时间/场景"],
-        sourceIds: [`chapters/${fileName}`],
+        lastEventSummary: snapshot?.lastEventSummary ?? excerpt,
+        openHooks: snapshot?.openHooks ?? [],
+        introducedCharacters: snapshot?.introducedCharacters ?? [],
+        unresolvedTensions: snapshot
+          ? snapshot.unresolvedTensions
+          : (endsAtCompletedBoundary
+            ? []
+            : ["前章正文在进行中的事件处结束，必须先明确其结果再推进新时间/场景"]),
+        sourceIds,
       };
     } catch {
       // Try the next accepted chapter-file convention.
