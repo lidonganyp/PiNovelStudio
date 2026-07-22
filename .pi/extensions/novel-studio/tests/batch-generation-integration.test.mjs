@@ -87,11 +87,13 @@ describe("BATCH 集成：锁 / ChapterSeed 阻断 / state commit 失败 / 工具
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // TDD #8：缺少 ChapterSeed 时不会调用模型
+  // TDD #8：缺少 ChapterSeed 时不会调用模型（workspace_only 模式）
   //
   // workspace 缺少 config.json 的 chapterSeeds → 批量启动前应阻断。
+  // P1-03 后：seedSource="workspace_or_planner" 会触发规划阶段，
+  // 因此本测试用 seedSource="workspace_only" 验证纯 workspace 模式阻断。
   // ──────────────────────────────────────────────────────────────────────
-  it("#8 缺少 ChapterSeed 时不会调用模型", async () => {
+  it("#8 缺少 ChapterSeed 时不会调用模型（workspace_only）", async () => {
     const wsId = "batch-no-seed-test";
     const workspacePath = join(PROJECT_ROOT, "workspaces", wsId);
     createBatchWorkspace(wsId);
@@ -113,6 +115,7 @@ describe("BATCH 集成：锁 / ChapterSeed 阻断 / state commit 失败 / 工具
         chapterNumber: 1,
         startChapter: 1,
         endChapter: 3,
+        seedSource: "workspace_only",
         _projectRoot: PROJECT_ROOT,
         _mockGenerateChapter: mock,
       },
