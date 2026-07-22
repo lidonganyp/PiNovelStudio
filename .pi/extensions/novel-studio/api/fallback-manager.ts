@@ -452,7 +452,12 @@ export class APIFallbackManager {
       if (!provider) continue;
 
       const routeEntry = typeof routing === "object" ? routing : undefined;
-      const apiKey = routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey);
+      // The internal Sub2API gateway is the only production egress. Route-level
+      // provider credentials must not bypass the gateway when it is configured.
+      const gatewayConfigured = Boolean(process.env.SUB2API_INTERNAL_LLM_BASE_URL);
+      const apiKey = gatewayConfigured
+        ? getApiKey(providerKey)
+        : (routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey));
       if (!apiKey) continue;
 
       if (isProviderUnhealthy(providerKey) || isChapterTimeoutUnhealthy(providerKey)) {
@@ -472,8 +477,12 @@ export class APIFallbackManager {
       }
 
       const modelToUse = this.resolveProviderModel(providerKey, provider, routing);
-      const baseUrl = normalizeProviderBaseUrl(providerKey, routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url));
-      const protocol = provider.protocol || this.inferProtocol(providerKey);
+      const baseUrl = normalizeProviderBaseUrl(providerKey, gatewayConfigured
+        ? process.env.SUB2API_INTERNAL_LLM_BASE_URL!
+        : (routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url)));
+      // Sub2API exposes one OpenAI-compatible chat-completions endpoint. Do not
+      // let Claude/Gemini provider metadata select a direct Anthropic/Google path.
+      const protocol = gatewayConfigured ? "openai" : (provider.protocol || this.inferProtocol(providerKey));
       const resolvedCallOptions: ChatCallOptions = {
         ...callOptions,
         temperature: callOptions?.temperature ?? provider.temperature?.[agentName],
