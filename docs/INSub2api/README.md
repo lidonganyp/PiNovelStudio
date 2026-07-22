@@ -45,42 +45,48 @@
 | Phase 9 | NovelSafetyService/NovelAdminService 单元测试 | ✅ 完成 | `468119f` |
 | Phase 10 | 部署配置与文档 | ✅ 完成 | `7806d1c` |
 
-### P0 阻断项修复（生产审计 28/100 → 全部修复）
+> **Phase 完成不等于可上线**：第二轮审计 22/100，9 项 P0 阻断仍在。详见下方「第二轮审计 P0 阻断」。
 
-生产审计发现 6 个 P0 阻断项，阻断上线。以下 6 个 commit 全部完成修复：
+## 第一轮 P0 修复（28/100 → 提交 6 个 commit，但二轮审计揭示根因未消除）
 
-| 编号 | 问题 | 修复 | 提交 |
+| 编号 | 问题 | 提交 | 第二轮审计结论 |
 |---|---|---|---|
-| P0-1 | 生成 API 缺失（估价/创建任务/状态/SSE/取消/内部结算） | 6 个端点全部实现 | `ec7e186` |
-| P0-2 | 模型与计费未接线（billingClient.settle() 只在测试中调用） | metering-binder 包装 invoke，事后结算每次模型调用 | `4ff52eb` |
-| P0-3 | 令牌授权不可信（前端可自行提交 project_id/job_id） | 签发前验证项目归属，GetJobStatus 按 userID 过滤 | `a21c023` |
-| P0-4 | 多租户 Workspace 未实现（临时 Workspace 配置未被消费） | workspace-manager 三阶段生命周期：物化/提交/清理 | `4d909f5` |
-| P0-5 | 部署配置无法启动（缺必填变量 + 注入禁止的模型厂商 Key） | 移除禁止 Key，补齐 SUB2API_INTERNAL_* 必填变量 | `9dae89c` |
-| P0-6 | 安全门禁未接入请求链路；安全事件/指标对所有登录用户开放 | 收敛至 admin-only 端点，移除公共路由 | `d02fcbf` |
+| P0-1 | 生成 API 缺失 | `ec7e186` | 端点存在但调用链断（execute≠invoke、缺 chapterId），实际无法生成 |
+| P0-2 | 模型与计费未接线 | `4ff52eb` | metering-binder 存在但 `tokenUsage="unknown"` 导致 `actualCharge=0` |
+| P0-3 | 令牌授权不可信 | `a21c023` | 仍然有效 |
+| P0-4 | 多租户 Workspace 未实现 | `4d909f5` | 仍然有效，但 chapterId 缺失导致 PiNovelStudio 拒绝输入 |
+| P0-5 | 部署配置无法启动 | `9dae89c` | 仅 env 层面，Dockerfile/compose 未配套 |
+| P0-6 | 安全事件/指标开放过宽 | `d02fcbf` | 仅路由收敛，CheckInput/CheckOutput 未接入请求链路 |
 
-### 架构关键事实
+## 第二轮审计 P0 阻断（22/100，9 项，待修复）
 
-- **统一模型出口**：PiNovelStudio 当前仍直连 Provider（保留架构兼容性）；`llmClient` 作为未来切换到 Sub2API 内部网关的占位基础设施。`metering-binder` 通过 `pricing-table` 估算 `actualCharge` 调用 `billingClient.settle()` 完成事后结算。
-- **多租户 Workspace 生命周期**：
-  - 物化（materialize）：Sub2API 后端从 DB 取项目文档+配置+前章 → 通过 invoke input 传给 Novel Runtime → Novel Runtime 在 `{tempWorkspaceRoot}/{jobId}/` 下创建临时 workspace 写入这些文档
-  - 提交（commit）：成功后从 invoke 返回 `result.text` 提取正文 → `dataService.SaveChapter` 到 DB（DB 生成的 chapter ID 覆盖 PiNovelStudio 返回值）
-  - 清理（cleanup）：Novel Runtime 在 `finally` 块删除临时 workspace（无论成功失败）
+按推荐修复顺序：
+
+1. **真实生成工具无法调用** — Novel Runtime 期望 `tool.invoke()`，PiNovelStudio 真实工具只有 `execute()` → `/v1/invoke` 返回 `TOOL_NOT_FOUND`。
+2. **计费实际为零** — PiNovelStudio 把 `tokenUsage` 固定为 `"unknown"` → in=0/out=0 → `actualCharge=0`。
+3. **所有 LLM 请求仍然直连厂商** — `llmClient` 未投入使用，PiNovelStudio 直连 Gemini/Claude/GPT，违反冻结决策 5。
+4. **生成请求缺少必填 chapterId** — Go 后端只传 `workspaceId + chapterNumber`，PiNovelStudio 要求 `workspaceId + chapterId + chapterNumber`。
+5. **前后端公共契约没有对齐** — snake_case/camelCase 不一致、`title` 必填但前端不传、`author_style_profile`/`style_profile` 不一致、反馈字段 `type/comment` vs `feedbackType/content`。
+6. **安全门禁没有进入真实请求链路** — `NovelSafetyService.CheckInput/CheckOutput` 仅单元测试和管理统计调用，未在生成 Handler 实际执行。
+7. **余额耗尽和取消不能停止正在进行的模型调用** — 后台用 `context.Background()`，取消只改 DB；Metering Binder 遇预算耗尽仍继续。
+8. **部署配置无法形成可运行系统** — Dockerfile 未含 novel-runtime；Compose 缺 `NOVEL_RUNTIME_HOST=0.0.0.0`；Overlay 缺 `NOVEL_RUNTIME_BASE_URL`/HMAC/结算 Key；健康检查只是 `process.exit(0)`；镜像用 `latest`。
+9. **PI 互动界面尚未实现** — 当前只有「资料/章节/生成/反馈」四标签，无 PI 对话/交互式大纲规划/受限小说助手界面。
+
+详细证据与修复顺序见 [plan202600722.md](./plan202600722.md) §进度快照。
+
+## 架构关键事实（仍有效）
+
 - **任务令牌**：使用 `jose` JWT (HS256)，issuer="sub2api-backend", audience="novel-runtime"。包含 userId/projectId/jobId/capabilities/maxCharge/issuedAt/expiresAt/nonce。内存 nonce 防重放（生产应换 Redis）。
 - **内部结算回调鉴权**：使用 `SUB2API_INTERNAL_LLM_API_KEY` 共享密钥 + `crypto/subtle.ConstantTimeCompare`，**不是 JWT**。
-- **6 个友好进度阶段**：`checking_materials | preparing_chapter | generating_text | optimizing_style | checking_continuity | saving_chapter`，固化在 `stageLabels.ts`。内部阶段名（agentic_raw/style_optimizer/fact_recheck/save_commit 等）严禁前端出现。
-- **PiNovelStudio 返回形态**：`result.text`（章节正文）、`result.chapterId`、`result.stageResults.modelCalls[]`（ModelCallEntry 数组，含 route/kind/ts/tokenUsage/failed/provider）、`result.stageResults.modelBudget`。
+- **6 个友好进度阶段**：`checking_materials | preparing_chapter | generating_text | optimizing_style | checking_continuity | saving_chapter`，固化在 `stageLabels.ts`。内部阶段名严禁前端出现。
+- **PiNovelStudio 返回形态**：`result.text`（章节正文）、`result.chapterId`、`result.stageResults.modelCalls[]`（ModelCallEntry 数组）、`result.stageResults.modelBudget`。
 - **`_projectRoot` 注入**：`input._projectRoot` 绕过 PiNovelStudio 的 `setProjectRoot`/`findProjectRoot` 标记文件校验，直接作为 pipeline 的 `projectRoot`。这是多租户隔离的注入点。
-- **DB 存储与文件系统解耦**：Sub2API 用 ent ORM 把章节/文档存为 DB 行（按 userID 租户隔离）；PiNovelStudio 的文件系统写入完全独立，无自动同步。`runGeneration` goroutine 显式调用 `SaveChapter` 把 PiNovelStudio 返回的正文持久化到 DB。
+- **DB 存储与文件系统解耦**：Sub2API 用 ent ORM 把章节/文档存为 DB 行（按 userID 租户隔离）；PiNovelStudio 的文件系统写入完全独立，无自动同步。
 
-### 当前测试基线
+## 第二轮验证结果
 
-- **Go 后端**：`go build ./...` 通过；`go vet ./internal/handler/...` 通过。
-- **Novel Runtime**：`npm test` 80/80 通过；`npm run build` 通过；`npm run typecheck` 通过。
-- **前端**：`npm run typecheck` 通过；`npm run build` 通过。
-
-### 已知事项
-
-- **预存 flaky 测试**：`TestContentModerationRuntimeSnapshotRefreshFailureKeepsStaleConfig` 在基线上 5/5 失败（与 P0 修复无关），需要独立治理。
-- **Nonce 防重放**：当前为内存 Set（max 100k 条目，LRU 驱逐），单实例。生产多实例部署需要换 Redis + TTL。
-- **PiNovelStudio 直连 Provider**：当前 `llmClient` 仅作为架构占位；PiNovelStudio 仍直连模型 Provider。生产部署若需统一出口审计，需后续切换 PiNovelStudio 模型路由配置到 `SUB2API_INTERNAL_LLM_BASE_URL`。
-- **后续可灰度上线**：所有 P0 阻断项已修复，可进入下一轮生产审计。
+- **Novel Runtime**：构建、typecheck 通过，80/80 单元测试通过；但测试全部使用伪造的 `invoke` 工具，未覆盖真实 PiNovelStudio 加载。
+- **前端**：typecheck、生产构建通过；全量测试有 2 项既有回滚 API 测试失败；小说功能没有任何前端测试。
+- **PiNovelStudio**：三套构建通过；关键生产流程测试 42 通过、1 跳过。全量测试未通过，主要因缺少 `workspaces/xinmo/chapters/chapter-17.md` 等真实验收素材。
+- **Go 与 Docker**：当前环境没有 Go/Docker，无法独立执行后端构建、数据库集成测试和 Compose 启动验证。
+- **Git 状态**：两个仓库保持原样；21 个 staged WIP、未跟踪 `tmp/` 均未处理。
