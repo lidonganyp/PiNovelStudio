@@ -37,8 +37,8 @@
 | Phase 1 | T1-1 novel-runtime 骨架 / T1-2 工具白名单 / T1-3 统一模型出口 / T2-2 令牌验证侧 | ✅ 完成 | `8fc7652` |
 | Phase 2 | T2-1 小说用户权限 / T2-2 任务令牌签发（Go 后端） | ✅ 完成 | `9fc8cf7` |
 | Phase 3 | T3-3 计费结算回调（Node 侧） | 🔄 Node 侧完成 / Go 侧阻塞 | `004132b` |
-| Phase 4 | 小说数据模型与临时 Workspace 适配 | ⬜ 待开始 | — |
-| Phase 5 | Sub2API Vue 前端 /novel 页面 | ⬜ 待开始 | — |
+| Phase 4 | 小说数据模型与临时 Workspace 适配 | ⬜ 待开始（Go 侧阻塞） | — |
+| Phase 5 | Sub2API Vue 前端 /novel 页面 (T5-1/T5-2/T5-3) | ✅ 完成 | `66ffd4e` |
 | Phase 6 | 内容安全与反向提取防护 | ⬜ 待开始 | — |
 | Phase 7 | 公共 API 与错误模型 | ⬜ 待开始 | — |
 | Phase 8 | 管理后台与可观测性 | ⬜ 待开始 | — |
@@ -49,4 +49,5 @@
 - **Go 工具链不可用**：当前环境无 `go` / `wire` 命令，Phase 2+ 的 Go 代码无法 `go build` / `go test` 编译验证。已写 Go 源码与测试作为验收规约，待工具链可用后执行。
 - **Phase 3 Go 侧账本阻塞**：T3-1（4 张账本表）/ T3-2（余额预占服务）需要 Ent schema 生成（`go generate ./ent`）与数据库迁移，待 Go 工具链可用后执行。
 - **跨系统契约已验证**：Phase 2 通过 Node 侧 `cross-system-go-contract.test.ts`（5 用例）可执行地证明 Go MapClaims 结构（含 nbf/jti/字符串 aud）能被 Novel Runtime `verifyTaskToken` 接受。
-- **Phase 5 Vue 前端可并行**：依据 plan §7 公共 API 契约构建，不强依赖 Phase 4 数据模型落地。
+- **Phase 5 Vue 前端已落地**：T5-1/T5-2/T5-3 已完成并提交（`66ffd4e`），`vue-tsc --noEmit` 与 `vite build` 通过。前端依据 plan §7 公共 API 契约构建，不强依赖 Phase 4 数据模型落地；待后端 Phase 4/6/7 接口落地后联调。
+- **Phase 5 前端阶段名铁律**：6 个用户可见阶段（checking_materials/preparing_chapter/generating_text/optimizing_style/checking_continuity/saving_chapter）已固化在 `stageLabels.ts`；内部阶段名（agentic_raw/style_optimizer/fact_recheck/save_commit 等）严禁前端出现。
