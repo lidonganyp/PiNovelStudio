@@ -21,6 +21,7 @@
 
 import { existsSync } from "fs";
 import { join } from "node:path";
+import { atomicSave } from "./orchestrator-commit-save.js";
 import type { BatchJobState, BatchJobSummary, BatchChapterResult } from "./batch-generation-job-store.js";
 import {
   loadBatchJobStore,
@@ -197,11 +198,15 @@ export async function runBatchGeneration(
   if (state.frontier > state.endChapter && state.status === "running") {
     state.status = "completed";
   }
-  if (state.status === "completed" && !state.summary) {
+  // BATCH-P1-02：任务结束（completed / paused / cancelled / error）时构建 summary
+  if (!state.summary) {
     state.summary = buildSummary(state);
   }
   state.updatedAt = new Date().toISOString();
   saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+
+  // BATCH-P1-02：写入批量 summary trace 文件
+  writeBatchSummaryTrace(state, projectRoot);
 
   return { state };
 }
@@ -238,4 +243,54 @@ export function buildSummary(state: BatchJobState): BatchJobSummary {
     totalModelCalls,
     failureEnvelopes,
   };
+}
+
+/**
+ * 写入批量 summary trace 文件（BATCH-P1-02）。
+ *
+ * 路径：workspaces/{id}/traces/batch-{jobId}-summary.json
+ *
+ * 内容：
+ * - jobId / workspaceId / status / startChapter / endChapter
+ * - summary（汇总统计）
+ * - chapters（每章耗时、模型调用、状态提交结果、失败 envelope、trace 路径）
+ * - createdAt / updatedAt
+ *
+ * 在 runBatchGeneration 结束时调用，无论任务状态如何都写入 trace。
+ */
+export function writeBatchSummaryTrace(state: BatchJobState, projectRoot: string): void {
+  const tracePath = join(
+    projectRoot,
+    "workspaces",
+    state.workspaceId,
+    "traces",
+    `batch-${state.jobId}-summary.json`,
+  );
+  const trace = {
+    jobId: state.jobId,
+    workspaceId: state.workspaceId,
+    status: state.status,
+    startChapter: state.startChapter,
+    endChapter: state.endChapter,
+    summary: state.summary,
+    chapters: state.chapters.map((ch) => ({
+      chapterNumber: ch.chapterNumber,
+      status: ch.status,
+      startedAt: ch.startedAt,
+      completedAt: ch.completedAt,
+      durationMs: ch.durationMs,
+      modelCalls: ch.modelCalls,
+      stateCommitResult: ch.stateCommitResult,
+      failureEnvelope: ch.failureEnvelope,
+      chapterFilePath: ch.chapterFilePath,
+      tracePath: ch.tracePath,
+    })),
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt,
+  };
+  try {
+    atomicSave(tracePath, JSON.stringify(trace, null, 2));
+  } catch {
+    // trace 写入失败不阻断主链路（advisory）
+  }
 }
