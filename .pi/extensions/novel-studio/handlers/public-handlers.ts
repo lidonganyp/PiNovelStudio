@@ -28,15 +28,20 @@ import {
 // 解除 workflow-tool-handlers.ts 顶部 architect/critic import 对生产闭包的拖累）
 export { handleWorkspaceManager } from "../tools/workspace-manager-handler.js";
 
+// BATCH-P0-01：批量章节生成入口 handler（与 handleWorkspaceManager 同模式，独立小模块 re-export）
+// 不新增第二个正文生成工具；批量能力作为 novel_generate_chapter 的 mode="batch" 分支，
+// 内部仍逐章调用 handleGenerateChapter（统一主链路）。
+export { handleBatchGeneration } from "./batch-generation-handler.js";
+
 // ============================================================================
 // novel_generate_chapter — 统一主链路唯一入口
 // ============================================================================
 
 /**
- * 始终调用统一编排器：raw → editorial → judge → select → commit
+ * 始终调用统一编排器：NovelOS Agentic → 作者风格优化 → 事实复检 → commit
  *
  * 生产入口不包含 __forceLegacyChain 检查（该标志仅由 legacy_test 工具设置）。
- * 失败由编排器内部降级（raw → hard block），不静默回退 legacy。
+ * 生产路径不调用机器文学裁判，也不把 one-shot raw 作为交付稿；Agentic/风格阶段失败即结构化阻断。
  */
 export async function handleGenerateChapter(input: {
   workspaceId: string;
@@ -125,7 +130,7 @@ export async function handleGenerateChapter(input: {
 
   // ============================================================================
   // 统一主链路 — 唯一生产路径（计划 §Phase 5/7）
-  // novel_generate_chapter 始终调用统一编排器：raw → editorial → judge → select → commit
+  // novel_generate_chapter 始终调用统一编排器：Agentic → 风格优化 → 复检 → commit
   // - 无 whitelist：所有 workspace/chapter 走统一入口
   // - 无 generationMode：不再有 legacy/v2 双模式
   // - 无 v2NotImplemented → legacy 回退：失败由编排器内部降级（raw → hard block）

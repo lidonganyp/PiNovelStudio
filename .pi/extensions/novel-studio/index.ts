@@ -26,6 +26,7 @@ import {
   handleStrategyPolicyView,
   handleStrategyFeedback,
   handleWorkspaceManager,
+  handleBatchGeneration,
 } from "./handlers/public-handlers.js";
 
 // ============================================================================
@@ -78,6 +79,7 @@ export default function (pi: ExtensionAPI) {
     handlePlanStoryOutline,
     handleStrategyPolicyView,
     handleStrategyFeedback,
+    handleBatchGeneration,
   });
   for (const tool of tools) {
     pi.registerTool(tool);

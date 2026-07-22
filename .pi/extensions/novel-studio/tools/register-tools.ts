@@ -94,6 +94,12 @@ export interface PublicToolHandlers {
   handlePlanStoryOutline(input: any): Promise<any>;
   handleStrategyPolicyView(input: any): Promise<any>;
   handleStrategyFeedback(input: any): Promise<any>;
+  /**
+   * BATCH-P0-01：批量章节生成入口。
+   * 由 novel_generate_chapter 工具在 mode === "batch" 时调用。
+   * 内部逐章调用 handleGenerateChapter（统一主链路），禁止直接调用模型。
+   */
+  handleBatchGeneration(input: any): Promise<any>;
 }
 
 /**
@@ -274,6 +280,49 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             },
             required: ["arm", "sampleIndex"],
           },
+          // ── BATCH-P0-01：批量章节生成模式 ──
+          // 不新增第二个正文生成工具；批量能力作为 novel_generate_chapter 的 mode="batch" 分支。
+          // 内部仍逐章调用统一主链路（handleGenerateChapter），禁止直接调用模型。
+          // 机器文学裁判 / pairwise judge / 旧 raw/editorial 双链路不得进入批量生产流程。
+          mode: {
+            type: "string",
+            enum: ["batch"],
+            description: "批量章节生成模式。传入 mode='batch' 时走批量分支，需同时传 action/startChapter/endChapter 等批量参数。不传 mode 时走单章生成（默认行为，向后兼容）。",
+          },
+          action: {
+            type: "string",
+            enum: ["start", "resume", "status", "cancel"],
+            description: "批量操作类型（mode='batch' 时必填）。start：创建并执行批量任务；resume：从 checkpoint 继续；status：查询进度；cancel：请求停止。",
+          },
+          startChapter: {
+            type: "number",
+            minimum: 1,
+            description: "批量起始章节号（action='start' 必填，≥1）。",
+          },
+          endChapter: {
+            type: "number",
+            minimum: 1,
+            description: "批量结束章节号（action='start' 必填，≥startChapter）。默认上限 100；confirmLargeBatch=true 放宽到 1000。",
+          },
+          seedSource: {
+            type: "string",
+            enum: ["workspace_or_planner", "workspace_only"],
+            description: "ChapterSeed 来源（action='start' 可选，默认 workspace_or_planner）。",
+          },
+          stopOnFailure: {
+            type: "boolean",
+            default: true,
+            description: "章节失败时是否暂停任务（默认 true；false 时失败转为 error 状态）。",
+          },
+          confirmLargeBatch: {
+            type: "boolean",
+            default: false,
+            description: "确认大批量任务。默认 false（上限 100 章）；传 true 放宽到 1000 章。",
+          },
+          jobId: {
+            type: "string",
+            description: "批量任务 ID（action='resume'/'status'/'cancel' 必填）。action='start' 时可选，未传则自动生成。",
+          },
         },
         required: ["workspaceId", "chapterId", "chapterNumber"],
       },
@@ -300,7 +349,27 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         fullPipelinePreview?: boolean;
         boundedBestOf3?: boolean;
         qualityExperiment?: { arm: "raw" | "scene" | "oracle_scene"; sampleIndex: number };
+        // BATCH-P0-01：批量章节生成模式字段
+        mode?: "batch";
+        action?: "start" | "resume" | "status" | "cancel";
+        startChapter?: number;
+        endChapter?: number;
+        seedSource?: "workspace_or_planner" | "workspace_only";
+        stopOnFailure?: boolean;
+        confirmLargeBatch?: boolean;
+        jobId?: string;
+        _projectRoot?: string;
+        _mockGenerateChapter?: (input: any) => Promise<any>;
       }) {
+        // =========================================================================
+        // BATCH-P0-01：批量章节生成分支
+        // mode === "batch" 时走批量分支，委托 handleBatchGeneration。
+        // 跳过单章快照保护（批量有自己的 checkpoint 保护与幂等性双校验）。
+        // 不新增第二个正文生成工具；批量内部仍逐章调用统一主链路。
+        // =========================================================================
+        if ((input as any).mode === "batch") {
+          return handlers.handleBatchGeneration(input);
+        }
         // =========================================================================
         // P24-续六 Fix6: model_timeout 章节级重试（调度层包裹）
         // 治理方案要求：model_timeout 不应作为整章 hard_block，需 stage-level retry 或模型 fallback。

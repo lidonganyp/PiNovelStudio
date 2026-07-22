@@ -407,3 +407,86 @@ describe("WORKSPACE-HANDLER-DECOUPLE-1：生产闭包不得含 architect/critic/
     assert.ok(size > 0, `dist/tools/workspace-manager-handler.js 应非空，实际 ${size} 字节`);
   });
 });
+
+/**
+ * BATCH-P0-01：批量章节生成模块生产闭包断言。
+ *
+ * 批量能力作为 novel_generate_chapter 的 mode="batch" 分支，不新增第二个正文生成工具。
+ * 4 个新模块通过 index.ts → public-handlers.ts → batch-generation-handler.ts →
+ * (orchestrator → job-store / lock) 链式 import 进入生产闭包。
+ *
+ * 本断言锁定：
+ *   1. 4 个 batch 模块都在 dist/ 中（证明进入生产闭包）
+ *   2. 模块非空（编译成功）
+ *   3. dist/index.js 含 mode === "batch" 分支（接线正确）
+ *   4. batch 模块不 import dist-eval / NovelBench / lab（零 eval-only 依赖）
+ */
+describe("BATCH-P0-01：批量章节生成模块进入生产闭包", () => {
+  const BATCH_PROD_PRODUCTS = [
+    "v2/core/batch-generation-job-store.js",
+    "v2/core/batch-generation-lock.js",
+    "v2/core/batch-generation-orchestrator.js",
+    "handlers/batch-generation-handler.js",
+  ];
+
+  it("dist/ 含全部 4 个 batch 生成模块（生产闭包接线正确）", () => {
+    assert.ok(existsSync(DIST_DIR), "dist/ 应存在（需先 npm run build）");
+    const missing = BATCH_PROD_PRODUCTS.filter((p) => !existsSync(join(DIST_DIR, p)));
+    assert.deepEqual(
+      missing,
+      [],
+      `dist/ 应含全部 4 个 batch 生成模块，但以下缺失：\n${missing.map((p) => `  - ${p}`).join("\n")}\n` +
+        "这表明 index.ts → public-handlers.ts → batch-generation-handler.ts 接线断裂，" +
+        "或 batch-generation-handler.ts 未 import orchestrator/lock/job-store。",
+    );
+  });
+
+  it("dist/ 中 4 个 batch 模块均非空（编译成功）", () => {
+    for (const p of BATCH_PROD_PRODUCTS) {
+      const full = join(DIST_DIR, p);
+      assert.ok(existsSync(full), `${p} 应存在`);
+      const size = statSync(full).size;
+      assert.ok(size > 0, `${p} 应非空，实际 ${size} 字节`);
+    }
+  });
+
+  it("dist/index.js 含 mode === \"batch\" 分支（register-tools 接线正确）", () => {
+    assert.ok(existsSync(DIST_INDEX), "dist/index.js 应存在");
+    // register-tools.ts 编译后，invoke 顶部应有 mode === "batch" 分支
+    // 编译产物中 batch 分支体现为对 handleBatchGeneration 的调用
+    const src = readFileSync(DIST_INDEX, "utf-8");
+    assert.ok(
+      src.includes("handleBatchGeneration"),
+      "dist/index.js 应含 handleBatchGeneration 调用（mode === \"batch\" 分支接线）",
+    );
+  });
+
+  it("dist/ 中 batch 模块不 import dist-eval / NovelBench / lab（零 eval-only 依赖）", () => {
+    const batchFiles = BATCH_PROD_PRODUCTS.map((p) => {
+      const full = join(DIST_DIR, p);
+      return {
+        relativePath: p,
+        content: existsSync(full) ? readFileSync(full, "utf-8") : "",
+      };
+    });
+    const violations = [];
+    for (const f of batchFiles) {
+      // 禁止 import dist-eval/ / dist-test/ / novelbench/ / lab/
+      if (f.content.includes("dist-eval/") || f.content.includes("dist-test/")) {
+        violations.push(`${f.relativePath}: import dist-eval/ 或 dist-test/`);
+      }
+      if (/from\s+["'][^"']*novelbench\//.test(f.content) || /import\(["'][^"']*novelbench\//.test(f.content)) {
+        violations.push(`${f.relativePath}: import novelbench/`);
+      }
+      if (/from\s+["'][^"']*(?:^|\/)lab\//.test(f.content) || /import\(["'][^"']*(?:^|\/)lab\//.test(f.content)) {
+        violations.push(`${f.relativePath}: import lab/`);
+      }
+    }
+    assert.deepEqual(
+      violations,
+      [],
+      `batch 模块不得 import dist-eval / dist-test / NovelBench / lab，违规：\n${violations.map((v) => `  - ${v}`).join("\n")}`,
+    );
+  });
+});
+
