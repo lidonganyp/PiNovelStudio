@@ -222,3 +222,65 @@ P0 修复仅保证**链路通畅**与**计费正确**，不评估 PiNovelStudio 
 3. **配置真实 LLM 网关 + DB + 余额账户，触发一次真实生成**，验证 P0-2/P0-3/P0-4/P0-7 联合行为（**仍待执行**，需用户提供测试账户与 LLM 网关）
 4. 第 3 项通过后，可声明「P0 阻断全部解除，可进入 P1 阶段」
 5. P1 阶段首要任务：P0-9 PI 互动界面设计与实现
+
+---
+
+## 七、部署包交付（2026-07-23 续）
+
+在 P0 代码修复完成后，按用户要求「生成部署文件，及部署的文档，我把文件拷贝到服务器进行部署」交付完整部署包。
+
+### 7.1 本次新增提交（Sub2API 仓库 `codex/sub2api-integration`）
+
+| Commit | 类型 | 说明 |
+|--------|------|------|
+| `8bf9491` | fix(p0-9) | PlanOutline 下限校验 + GetJobStatus 错误处理 |
+| `b3861bc` | docs(deploy) | DEPLOYMENT-NOVEL.md + deploy-novel.sh + .env.novel.example image pin |
+| `54ad40f` | test(p0-e2e) | e2e-smoke.sh 改为 Linux 部署后冒烟脚本（去 Windows 路径） |
+| `799b7e5` | feat(deploy) | package-deploy.sh 一键打包部署压缩包 + 文档同步 |
+
+### 7.2 部署文件清单（`D:\CODE\sub2api\deploy\`）
+
+| 文件 | 大小 | 用途 |
+|------|------|------|
+| `DEPLOYMENT-NOVEL.md` | 16933 B | 10+ 节中文部署指南（架构/前置/文件清单/一键部署/手动步骤/环境变量/运维/冒烟/排障/安全清单） |
+| `deploy-novel.sh` | 7757 B | 一键部署：前置检查→密钥生成→镜像构建→compose up→healthz→toolCount 校验 |
+| `package-deploy.sh` | 8936 B | 开发机打包脚本：生成单一 `novel-deploy.tar.gz` 供 scp |
+| `e2e-smoke.sh` | 5869 B | 部署后冒烟：容器健康 + /healthz toolCount=6 + sub2api 内网 reachability |
+| `.env.novel.example` | 2834 B | 环境变量模板（`NOVEL_RUNTIME_IMAGE=weishaw/novel-runtime:v0.1.0` 已 pin） |
+| `Dockerfile.novel` | 2507 B | 3 阶段构建（builder-pinovelstudio → builder-runtime → runtime） |
+| `docker-compose.novel.yml` | 6256 B | compose overlay：novel-runtime + minio + sub2api env 注入 |
+
+### 7.3 推荐部署流程
+
+```bash
+# 1. 开发机：打包（在 sub2api 仓库根目录）
+bash deploy/package-deploy.sh
+# → 产出 novel-deploy.tar.gz
+
+# 2. 上传到服务器
+scp novel-deploy.tar.gz user@server:/opt/
+
+# 3. 服务器：解压 + 部署
+ssh user@server
+cd /opt && tar xzf novel-deploy.tar.gz && cd sub2api-deploy
+cp deploy/.env.novel.example .env.novel
+vim .env.novel        # 填入 SUB2API_INTERNAL_LLM_API_KEY / NOVEL_TASK_TOKEN_HMAC_KEY / MINIO_ROOT_PASSWORD
+                         # （或直接运行 deploy-novel.sh 自动生成）
+bash deploy/deploy-novel.sh
+
+# 4. 验证
+bash deploy/e2e-smoke.sh
+```
+
+### 7.4 关键设计决策
+
+1. **镜像 tag pin 到 `v0.1.0`**：`.env.novel.example`、`docker-compose.novel.yml` 默认值、`deploy-novel.sh` 默认值均一致 pin 到 `weishaw/novel-runtime:v0.1.0`，避免 `latest` 漂移。
+2. **e2e-smoke.sh 重写为 Linux 后部署脚本**：原脚本写死 `D:/CODE/PiNovelStudio/...` Windows 路径无法在服务器运行；新版本假设 `deploy-novel.sh` 已完成，验证 live 容器（healthcheck + /healthz + sub2api → novel-runtime 内网可达）。
+3. **package-deploy.sh 提供单一压缩包**：用户明确表示「我把文件拷贝到服务器」，单一 tar.gz 比 rsync 多目录更友好；支持 `--skip-pinovelstudio`/`--skip-runtime` 在已 push 镜像场景下精简包体。
+4. **DEPLOYMENT-NOVEL.md 新增 §一·五快速打包章节**：将 `package-deploy.sh` 流程放在最显眼位置，作为推荐路径。
+
+### 7.5 未覆盖范围
+
+- 真实 Docker 构建仍需在 Linux 服务器执行（开发机无 Docker）
+- 真实生成链路（DB + task token + 余额预占 + LLM 网关）仍需用户配置后验证
+- `deploy-novel.sh` 与 `package-deploy.sh` 的 bash 语法在 Linux 上的可执行性需服务器实测（脚本已用 `set -euo pipefail`、POSIX 兼容写法、`command -v` 探测）
