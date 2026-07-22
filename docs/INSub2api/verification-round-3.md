@@ -22,16 +22,19 @@
 | 编号 | 问题 | 提交 | 内容 |
 |---|---|---|---|
 | P0-1 | 真实工具适配（execute→invoke） | `4b96d63` | novel-runtime 加 `extension-loader.ts`，对 PiNovelStudio 真实工具 `execute()` 包装 `invoke()` 适配层；`/v1/invoke` 不再返回 `TOOL_NOT_FOUND` |
-| P0-4 | 生成请求补 chapterId | `4b96d63`（runtime 透传）+ `ff48ab1`（backend 派生） | Go 后端 `CreateGenerationRequest` 加 `chapter_id`；`runGeneration` 在 invokeInput 派生 `chapterId=fmt.Sprintf("chapter-%d", ChapterNumber)` 传入 PiNovelStudio |
+| P0-4 | 生成请求补 chapterId | `4b96d63`（runtime 透传）+ `ff48ab1`（backend 派生）+ `f813fb2`（outline 工具物化扩展） | Go 后端 `CreateGenerationRequest` 加 `chapter_id`；`runGeneration` 在 invokeInput 派生 `chapterId=fmt.Sprintf("chapter-%d", ChapterNumber)` 传入 PiNovelStudio；`invoke.ts` 把 `novel_plan_story_outline` 也纳入 workspace 物化路径（与 `novel_generate_chapter` 共享 materializeWorkspace，但仅 generate 工具传 previousChapterText/Number） |
 | P0-5 | API DTO 契约对齐 | `73d3369`（backend）+ `352473b`（frontend enum）+ `8dfbe2a`（frontend types/api 后续） | `ProjectDTO`/`DocumentDTO`/`ChapterDTO`/`ChapterListItemDTO`/`FeedbackDTO` json tag 全部 snake_case；`ProjectDTO` 加 `chapter_count`；`SaveDocumentRequest.title` 去掉 required + 后端按 docType 派生默认标题；前端 `author_style_profile` → `style_profile`；前端 `long_term_state` → `narrative_state`；`NovelChapter.status` 加 `generated` 中间态；`getChapter` 签名 `chapterId: string` → `chapterNumber: number` |
 | P0-6 | 安全门禁接入请求链路 | `2dcee2b`（runGeneration）+ `ff48ab1`（EstimateGeneration 扩展） | `runGeneration` 在物化 workspace 后调 `safetyService.CheckInput`，在提取正文后调 `CheckOutput`；`EstimateGeneration` 在预占余额前也调 `CheckInput`，让违规内容在估价阶段就被拒 |
 | P0-7 | 取消/预算中止信号传播 | `dfa6598`（JobCancelRegistry）+ `99e2ece`（metering-binder break）+ `c4ad7dd`（AbortSignal 全链路） | 新增 `JobCancelRegistry` 单例跟踪运行中 `ctx.CancelFunc`；`runGeneration` 改用 `registry.Register(jobID)`；`CancelGeneration` 调 `registry.Cancel(jobID)`；metering-binder `budgetExhausted=true` 时 `break` settle 循环；AbortSignal 全链路：`PiTool.invoke` 加 `signal?`，`extension-loader` 透传到 `execute(signal)`，`routes/v1/invoke.ts` 创建 AbortController 监听 `req 'aborted'`，`meteringBinder.invokeWithMetering` 接收 signal 并传给 `tool.invoke` |
 | P0-8 | 可启动部署配置 | `9443dff` | Dockerfile 重写为 3 阶段（builder-pinovelstudio + builder-runtime + runtime）；Compose 加 `NOVEL_RUNTIME_HOST=0.0.0.0`/`NOVEL_STUDIO_DIST_PATH`/`SUB2API_INTERNAL_LLM_BASE_URL` 等环境变量；healthcheck 改 `/healthz` fetch；MinIO 镜像 pin `RELEASE.2024-12-13T22-00-00Z`；novel-runtime 镜像 pin `v0.1.0`；新增 sub2api backend overlay 注入 `NOVEL_RUNTIME_BASE_URL` + HMAC Key + 内部结算 Key |
 | P0-E2E | 真实端到端测试 | `46f2f55`（real-extension-loading.test.ts）+ `e9b02f1`（e2e-smoke.sh） | 集成测试加载真实 PiNovelStudio dist 验证 6 工具均暴露 `invoke` 函数；冒烟脚本 `deploy/e2e-smoke.sh` build 双端 + 启动 runtime + 轮询 `/healthz` 验证 toolCount=6 |
-| P0-9 | PI 互动界面 v1 | `abe652c` | **用户已声明降级为 P1**，但 v1 已实现：`NovelProjectView.vue` 新增 `assistant` tab，提供受限 PI 创作助手（仅大纲规划，无 Shell/代码/网络）；接收用户剧情想法 → `buildOutlineSuggestion` 拼装章节规划模板 → 用户编辑右侧大纲草稿 → `putDocument(story_outline)` 持久化。遵循「AI 不得直接撰写章节正文」铁律 |
+| P0-9 | PI 互动界面 v1 | `abe652c`（UI v1）+ `735f327`（PlanOutline 后端）+ `669b459`（前端接入 + bug 修复） | **用户已声明降级为 P1**，但 v1 已实现并接通后端：`NovelProjectView.vue` 新增 `assistant` tab → 调 `planOutline(projectId, {idea, total_chapters, max_charge})` → 后端 `POST /novel/projects/:id/outline/plan` 走完整链路（CheckInput + 预占 + TaskToken + InvokeGeneration(novel_plan_story_outline) + CheckOutput + SaveDocument(story_outline) + CompleteJob）。前端修两个 WIP bug：buildOutlineSuggestion 双 return 死代码、错误消息 GBK 乱码。遵循「AI 不得直接撰写章节正文」铁律 |
 
 > 完整 sub2api 提交历史：
 > ```
+> 669b459 feat(p0-9): PI 创作助手前端接入 PlanOutline 端点
+> 735f327 feat(p0-9): PlanOutline 后端——POST /novel/projects/:id/outline/plan
+> f813fb2 fix(p0-4): novel_plan_story_outline 也走 workspace 物化
 > abe652c feat(p0-9): PI 创作助手 v1——大纲规划 tab + chapterNumber 消费对齐
 > 8dfbe2a fix(p0-5): 前端 types 对齐 narrative_state + getChapter 改 chapterNumber
 > c4ad7dd fix(p0-7): AbortSignal 全链路传播——invoke 路由接入 req.abort 取消信号
