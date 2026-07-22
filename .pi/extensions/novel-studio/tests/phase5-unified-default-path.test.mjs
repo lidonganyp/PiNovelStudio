@@ -2,7 +2,7 @@
  * Phase 5/7：统一主链路默认路径验证（生产入口 smoke）
  *
  * Step 2 逻辑隔离后，本文件仅验证生产入口（dist/index.js）的统一主链路：
- *   novel_generate_chapter 始终走统一主链路（raw → editorial → judge → select → commit）
+ *   novel_generate_chapter 始终走统一主链路（Agentic → 作者风格优化 → 复检 → commit）
  *   （stageResults.unifiedPipeline === true，无 legacy Stage0-8 字段）
  *
  * legacy_test 工具的 Stage0-8 链路验证（原 phase5-legacy-test-tool.test.mjs）已在
@@ -25,6 +25,7 @@ const PROJECT_ROOT = resolve(__dirname, "..", "..", "..", "..");
 
 const PHASE5_WORKSPACE = join(PROJECT_ROOT, "workspaces", "phase5-unified-default");
 const originalStubFlag = process.env.V2_FORCE_STUB;
+const originalLegacyFlowFlag = process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW;
 
 /**
  * 通过 fake PI 注册工具，返回 novel_generate_chapter 工具实例。
@@ -48,6 +49,7 @@ function createMinimalWorkspace() {
   mkdirSync(join(PHASE5_WORKSPACE, "chapters"), { recursive: true });
   mkdirSync(join(PHASE5_WORKSPACE, "characters"), { recursive: true });
   mkdirSync(join(PHASE5_WORKSPACE, "series"), { recursive: true });
+  mkdirSync(join(PHASE5_WORKSPACE, "styles"), { recursive: true });
 
   const config = {
     name: "Phase5 默认路径验证",
@@ -55,6 +57,7 @@ function createMinimalWorkspace() {
     subGenres: ["东方玄幻"],
     totalChapters: 50,
     chapterType: "standard",
+    styleProfile: "phase5-author",
     serialFrequency: "daily",
     characters: [
       { id: "protagonist-1", name: "叶尘", role: "protagonist" },
@@ -83,6 +86,21 @@ function createMinimalWorkspace() {
     "# 叶尘\n主角，废物少年，偶得传承。\n",
     "utf-8",
   );
+  writeFileSync(
+    join(PHASE5_WORKSPACE, "styles", "profile.json"),
+    JSON.stringify({
+      id: "phase5-author",
+      usagePolicy: { fullChapterOptimization: "required" },
+      editorialGuidance: [
+        "人物压力优先通过动作、停顿和环境变化呈现。",
+        "章末停在仍有压力的动作或状态上，不替读者总结。",
+      ],
+      characterVoiceGuidance: {
+        叶尘: ["少年感保留现实处境，不写成老练谋士。"],
+      },
+    }, null, 2),
+    "utf-8",
+  );
 
   return PHASE5_WORKSPACE;
 }
@@ -99,15 +117,24 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
     } else {
       process.env.V2_FORCE_STUB = originalStubFlag;
     }
+    if (originalLegacyFlowFlag === undefined) {
+      delete process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW;
+    } else {
+      process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW = originalLegacyFlowFlag;
+    }
   });
 
   beforeEach(() => {
     // stub 模型（无真实 API 调用）
     process.env.V2_FORCE_STUB = "1";
+    delete process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW;
   });
 
   afterEach(() => {
     delete process.env.V2_FORCE_STUB;
+    if (originalLegacyFlowFlag !== undefined) {
+      process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW = originalLegacyFlowFlag;
+    }
   });
 
   it("novel_generate_chapter 始终走统一主链路，不走 legacy Stage0-8", async () => {
@@ -130,6 +157,7 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
 
     const details = result.details || result;
     const stageResults = details.stageResults || {};
+    assert.equal(details.status, "ok", JSON.stringify(details.failureEnvelope));
 
     // 统一主链路标记必须存在（unified-entry.ts 或 index.ts 错误兜底均设此字段）
     assert.equal(
@@ -157,16 +185,20 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
       "统一主链路不应返回 v2NotImplemented（无 legacy 回退）",
     );
 
-    // GEMINI-DEFAULT-WRITER-1：未传 writerModel 时，公开入口必须实际锁定 Gemini，
-    // 不能只在 model-routing.json 中声明默认值而继续调用 Claude 语义路由。
-    const rawModelCall = (stageResults.modelCalls ?? []).find(
-      (call) => call.kind === "raw_chapter" || call.route === "v2_rawstage2",
+    assert.equal(stageResults.productionFlow?.mode, "agentic_style_full_pipeline");
+    assert.equal(stageResults.productionFlow?.oneShotRawCalled, false);
+    assert.equal(stageResults.productionFlow?.machineJudgeCalled, false);
+    assert.equal(stageResults.novelos?.required, true);
+    assert.equal(stageResults.novelos?.shadowEnabled, false);
+    assert.equal(stageResults.authorStyleOptimization?.styleProfileLoaded, true);
+    assert.equal(stageResults.authorStyleOptimization?.styleGuidanceConsumed, true);
+    const styleModelCall = (stageResults.modelCalls ?? []).find(
+      (call) => call.kind === "author_style_optimization",
     );
-    assert.ok(rawModelCall, "默认路径必须记录 raw 模型调用遥测");
-    assert.equal(rawModelCall.requestedRoute, "v2_rawstage2_gemini31");
-    assert.equal(rawModelCall.expectedProvider, "gemini31");
-    assert.equal(rawModelCall.expectedModel, "gemini-3.1-pro-preview");
-    assert.equal(rawModelCall.promptProfile, "gemini_writer_v2");
+    assert.ok(styleModelCall, "默认路径必须记录作者风格整章优化调用");
+    assert.equal(styleModelCall.route, "v2_amplified_gemini31");
+    assert.equal(styleModelCall.expectedProvider, "gemini31");
+    assert.equal(styleModelCall.expectedModel, "gemini-3.1-pro-preview");
 
     // 固定场景候选源已退出生产；trace 必须明确记录退休状态。
     assert.ok(
@@ -205,6 +237,7 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
 
     const details = result.details || result;
     const stageResults = details.stageResults || {};
+    assert.equal(details.status, "ok", JSON.stringify(details.failureEnvelope));
 
     // 1. stageResults.tracePath 必须返回落盘路径
     const tracePath = stageResults.tracePath;
@@ -227,8 +260,8 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
     const gates = parsed.gates || [];
     const v2GateStages = gates.map((g) => g.stage).filter((s) => String(s).startsWith("v2_"));
     assert.ok(
-      v2GateStages.includes("v2_rawstage2_generated"),
-      `trace gates 应含 v2_rawstage2_generated，实际 gates: ${v2GateStages.join(", ")}`,
+      v2GateStages.includes("v2_novelos_agentic"),
+      `trace gates 应含 v2_novelos_agentic，实际 gates: ${v2GateStages.join(", ")}`,
     );
     assert.ok(
       v2GateStages.includes("v2_candidate_generated"),

@@ -94,14 +94,16 @@ test("XINMO-AUTHOR-STYLE-1 · 指纹来自第1-16章与80条修正并区分统�
   assert.equal(profile.statistics.paragraph.p75CnChars, 21);
   assert.equal(profile.statistics.dialogue.observedRatio, 0.335);
   assert.ok(profile.editorialGuidance.includes("情绪优先通过身体反应、静默或动作呈现，不直接替人物命名。"));
-  assert.equal(profile.usagePolicy.rawPrompt, "excluded");
-  assert.equal(profile.usagePolicy.editorialCandidate, "span_evidence_only");
+  assert.equal(profile.usagePolicy.rawPrompt, "not_applicable");
+  assert.equal(profile.usagePolicy.editorialCandidate, "full_chapter_required");
+  assert.equal(profile.usagePolicy.fullChapterOptimization, "required");
+  assert.equal(profile.usagePolicy.selectionAuthority, "user_feedback");
 
   const guidance = profile.editorialGuidance.join("\n");
   assert.doesNotMatch(guidance, /对白比例|对话比例|median_cn_chars|p75_cn_chars|\d+%/);
 });
 
-test("XINMO-AUTHOR-STYLE-1 · 仅 span-backed 自然度候选消费精炼作者风格", async () => {
+test("XINMO-AUTHOR-STYLE-1 · 历史 span 校准仍可复用精炼作者风格", async () => {
   const profile = readFileSync(PROFILE_PATH, "utf8");
   const rawText = "李一凡站在门外。他感到一阵难过。门内没有声音。";
   let capturedPrompt = "";

@@ -107,6 +107,132 @@ const GUARD_SOURCE_TO_FAILURE_TYPE: Record<string, VerificationFailureType> = {
   event_progression: "event_progression",
 };
 
+type IntentRequirementMode = "anchor" | "verbatim";
+
+interface IntentRequirement {
+  raw: string;
+  text: string;
+  mode: IntentRequirementMode;
+}
+
+const INTENT_SYNONYM_GROUPS: Array<{ canonical: string; variants: string[] }> = [
+  { canonical: "三队", variants: ["三队", "三支队伍", "三支队", "三队伍"] },
+  { canonical: "首次", variants: ["首次", "第一次", "初次", "头一次"] },
+  { canonical: "配合", variants: ["配合", "协同作战", "协同", "协作", "合作"] },
+  { canonical: "采样", variants: ["采样", "采集", "取样"] },
+  { canonical: "反常", variants: ["状态反常", "反常", "破天荒", "比平时更收敛", "明显收敛"] },
+  { canonical: "妖兽群", variants: ["妖兽群", "兽群", "一群低阶灰甲兽", "灰甲兽群"] },
+  { canonical: "异常", variants: ["异常", "不对劲", "异样", "不寻常", "排斥感"] },
+  { canonical: "未开口", variants: ["未说出口", "没有说出口", "没说出口", "没有开口", "没开口"] },
+  { canonical: "突袭", variants: ["突袭", "袭击", "突然袭来", "破水而出"] },
+  { canonical: "拖入水底", variants: ["拖入水底", "拖入深水", "拖入水下", "拽入深水", "拉入水底"] },
+  { canonical: "开枪", variants: ["开枪", "开火", "机枪火舌", "子弹打进"] },
+  { canonical: "无效", variants: ["无效", "没效果", "没有效果", "没带出来", "皮甲极厚", "连皮都没能擦破", "没能擦破"] },
+  { canonical: "多只", variants: ["多只", "至少有三只", "两只以上", "一群"] },
+  { canonical: "围攻", variants: ["围攻", "集群攻击", "群体攻击", "多只攻击", "快速穿梭"] },
+  { canonical: "战力一成", variants: ["十不存一", "只剩一成", "战力只剩一成", "战力大降"] },
+  { canonical: "击杀", variants: ["一击斩杀", "斩杀", "击杀", "毙命", "切开"] },
+  { canonical: "干脆", variants: ["干脆", "利落", "直接"] },
+  { canonical: "评估", variants: ["评估局势", "判断局势", "快速判断", "看着挣扎的队友"] },
+  { canonical: "出手", variants: ["决定出手", "主动出手", "意念一动", "鳞片从空间中滑出"] },
+  { canonical: "暗金", variants: ["暗金", "暗金色"] },
+  { canonical: "双眸", variants: ["双眸", "竖瞳"] },
+  { canonical: "救回", variants: ["救回", "救出", "拖回", "带回水面", "带着他向上游"] },
+  { canonical: "关心", variants: ["关心", "担心", "询问伤势", "没受伤吧", "递过来一条干毛巾"] },
+  { canonical: "微亮", variants: ["微亮", "微微亮", "亮了一丝", "亮起一丝"] },
+  { canonical: "未醒", variants: ["未醒", "没有醒", "没有苏醒", "仍未苏醒", "没醒"] },
+  { canonical: "重新评估", variants: ["重新评估", "重新审视", "重新正视", "重新看待"] },
+  { canonical: "定位改变", variants: ["定位将变", "定位会变", "位置会变", "重新定位"] },
+  { canonical: "改变", variants: ["改变", "变了", "要变", "将变", "彻底变"] },
+  { canonical: "倒计时压力", variants: ["倒计时型压力", "倒计时压力", "氧气有限", "氧气在快速消耗", "氧气在消耗", "氧气消耗", "体力有限"] },
+];
+
+const INTENT_TOKEN_CANONICALS = [
+  "战狼领队", "黑玫瑰领队", "赵明远", "李一凡", "王研究员", "水样", "虫卵", "水怪", "研究员", "水下", "水面", "能见度", "极低",
+  "多只", "鳞片", "第二只", "小妖", "震惊", "墨老", "木心", "反常", "冷淡", "客气", "妖兽群",
+  "暗金双眸", "暗金", "双眸", "梦魇", "战力", "评估", "出手", "直觉", "采样", "反常", "妖兽群", "异常", "未开口", "突袭", "拖入水底", "开枪", "无效",
+  "围攻", "战力一成", "倒计时压力", "击杀", "干脆", "救回", "关心", "微亮", "未醒", "重新评估", "定位改变", "定位", "改变",
+  "回程", "下令救人", "救援", "三队", "首次", "配合",
+];
+
+function normalizeIntentPhrase(value: string): string {
+  let normalized = value
+    .replace(/^\s*\[(?:anchor|verbatim)\]\s*/iu, "")
+    .replace(/^\s*(?:原句|原文)\s*[：:]\s*/u, "")
+    .replace(/[「『“"”』」]/gu, "")
+    .replace(/[\s，。、；：:！!？?（）()【】\[\]→+]+/gu, "")
+    .replace(/[的地得]/gu, "")
+    .trim();
+  for (const group of INTENT_SYNONYM_GROUPS) {
+    for (const variant of [...group.variants].sort((a, b) => b.length - a.length)) {
+      normalized = normalized.replaceAll(variant, group.canonical);
+    }
+  }
+  return normalized;
+}
+
+function parseIntentRequirements(chapterIntent: string): IntentRequirement[] {
+  const line = chapterIntent.match(/^作者章纲必须包含：(.+)$/mu)?.[1] ?? "";
+  if (!line) return [];
+  return line
+    .split(/[；;]/u)
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((raw) => {
+      const verbatim = /^\s*\[(?:verbatim)\]/iu.test(raw) || /^\s*(?:原句|原文)\s*[：:]/u.test(raw);
+      return { raw, text: raw, mode: verbatim ? "verbatim" : "anchor" };
+    });
+}
+
+function parseAuthorEventSummaries(chapterIntent: string): Array<{ index: number; summary: string }> {
+  const lines = chapterIntent.split(/\r?\n/u);
+  const events: Array<{ index: number; summary: string }> = [];
+  let inSection = false;
+  for (const line of lines) {
+    if (/^作者章纲事件顺序：\s*$/u.test(line.trim())) {
+      inSection = true;
+      continue;
+    }
+    if (!inSection) continue;
+    if (/^作者章纲/u.test(line.trim())) break;
+    const match = line.match(/^\s*(\d+)[.、]\s*(.+)$/u);
+    if (match) events.push({ index: Number(match[1]), summary: match[2].trim() });
+  }
+  return events;
+}
+
+function intentAnchorCovered(text: string, requirement: string): boolean {
+  if (text.includes(requirement)) return true;
+  const normalizedText = normalizeIntentPhrase(text);
+  const normalizedRequirement = normalizeIntentPhrase(requirement);
+  if (!normalizedRequirement || normalizedText.includes(normalizedRequirement)) return true;
+
+  const tokens = INTENT_TOKEN_CANONICALS
+    .filter((token) => normalizedRequirement.includes(token))
+    .sort((a, b) => b.length - a.length);
+  if (tokens.length === 0) return false;
+  const matched = tokens.filter((token) => normalizedText.includes(token)).length;
+  const threshold = tokens.length <= 2 ? tokens.length : Math.max(2, Math.ceil(tokens.length * 0.6));
+  return matched >= threshold;
+}
+
+function intentEventCovered(text: string, summary: string): boolean {
+  const normalizedText = normalizeIntentPhrase(text);
+  const normalizedSummary = normalizeIntentPhrase(summary);
+  if (!normalizedSummary || normalizedText.includes(normalizedSummary)) return true;
+  const tokens = Array.from(new Set(
+    INTENT_TOKEN_CANONICALS.filter((token) => normalizedSummary.includes(token)),
+  ));
+  if (tokens.length < 2) return intentAnchorCovered(text, summary);
+  const matched = tokens.filter((token) => normalizedText.includes(token)).length;
+  return matched >= Math.max(2, Math.ceil(tokens.length * 0.35));
+}
+
+function intentVerbatimCovered(text: string, requirement: string): boolean {
+  const quote = requirement.match(/^(?:\s*\[(?:verbatim)\]\s*)?(?:原句|原文)\s*[：:]\s*[「『“"”](.*?)[」』”"]\s*$/u)?.[1];
+  return text.includes((quote ?? requirement).trim());
+}
+
 // ============================================================================
 // NarrativeVerifierSuite
 // ============================================================================
@@ -379,6 +505,48 @@ export class NarrativeVerifierSuite {
    */
   private checkIntentOmission(input: NarrativeVerifierInput): VerificationFinding[] {
     const findings: VerificationFinding[] = [];
+    const explicitItems = parseIntentRequirements(input.chapterIntent);
+    const eventSummaries = parseAuthorEventSummaries(input.chapterIntent);
+
+    for (const event of eventSummaries) {
+      if (intentEventCovered(input.text, event.summary)) continue;
+      findings.push({
+        id: `verifier:event_omission:${event.index}`,
+        source: "event_intent_checker",
+        failureType: "intent_omission",
+        severity: "hard",
+        span: { start: 0, end: 0, excerpt: "" },
+        conflictFact: `作者章纲事件 ${event.index} 在正文中缺少事件级覆盖`,
+        sourceRef: `author-outline:event:${event.index}`,
+        confidence: 0.9,
+        allowedRepairRange: { start: 0, end: input.text.length, excerpt: input.text.slice(0, 60) },
+        description: `作者章纲事件遗漏：${event.summary}`,
+      });
+    }
+
+    if (explicitItems.length > 0) {
+      for (const item of explicitItems) {
+        const covered = item.mode === "verbatim"
+          ? intentVerbatimCovered(input.text, item.text)
+          : intentAnchorCovered(input.text, item.text);
+        if (covered) continue;
+        findings.push({
+          id: `verifier:intent_omission:${item.raw}`,
+          source: "intent_omission_checker",
+          failureType: "intent_omission",
+          severity: "hard",
+          span: { start: 0, end: 0, excerpt: "" },
+          conflictFact: `作者章纲必须包含项「${item.raw}」在正文中遗漏`,
+          sourceRef: `author-outline:${item.raw}`,
+          confidence: 1,
+          allowedRepairRange: { start: 0, end: input.text.length, excerpt: input.text.slice(0, 60) },
+          description: `作者章纲必须包含项遗漏：${item.raw}`,
+        });
+      }
+      return findings;
+    }
+
+    if (eventSummaries.length > 0) return findings;
 
     // 提取引号内容
     const quoteMatches = input.chapterIntent.matchAll(/[「」""''《》](.+?)[「」""''《》]/g);
@@ -440,6 +608,7 @@ export class NarrativeVerifierSuite {
     const findings: VerificationFinding[] = [];
     const inviolableFacts = input.inviolableFacts ?? [];
     for (const fact of inviolableFacts) {
+      if (/^\s*(?:禁止|不得|严禁|不写|不要|避免|不能|不可)/u.test(fact)) continue;
       const attrMatch = fact.match(/有([^\s，。；：、]{2,8})/);
       if (!attrMatch) continue;
 

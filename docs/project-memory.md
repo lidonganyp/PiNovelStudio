@@ -1,15 +1,15 @@
 # PiNovelStudio 项目记忆
 
 **快照日期**：2026-07-21  
-**代码基线**：`3faa47a`（已包含 opportunity judge 流式稳定性修复与逐章质量赢家选择策略）
+**代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
 
 ## 当前架构
 
-- 章节生成只有 `novel_generate_chapter` 一个公开入口，运行时只有统一主链路：`raw → editorial opportunity → 0-2 candidates → heterogeneous pairwise judge → selection → final recheck → state commit → atomic save`。
+- 章节生成只有 `novel_generate_chapter` 一个公开入口，生产运行时统一主链路为：`Preflight → ContextCompiler → ChapterIntent → NovelOS Agentic → FactGuard → 作者风格整章优化 → StoryPreservation → FinalFactRecheck → Completeness → StateCommit → AtomicSave`。
 - legacy Stage0-8 正文编排已经物理删除；生产 `dist/`、评测 `dist-eval/`、测试 `dist-test/` 由三个 tsconfig 隔离。
 - 生产严格保留 6 个公开工具。代理审批定稿通过 `novel_workspace_manager` 的 `proxy_finalization` action 消费，不新增第 7 个公开工具。
-- raw 是内部基线与安全回退。Gemini 自由生成 raw；只有存在 raw span 证据的编辑机会时才生成 0-2 个 candidate。固定场景搜索不进入生产。逐章匿名比较有效且明确时选择质量赢家；504、schema 失败、证据无效、tie 或复判冲突时保留 raw，并标记为比较不可用/不确定，而不是宣称 raw 更优。长期叙事状态只允许依据最终选定正文提交。
+- one-shot raw 不再是生产交付稿；仅在隔离评测中保留。生产 Agentic 失败或作者风格优化失败直接结构化阻断，不静默退回纯模型正文。最终文学评价由用户正文反馈和修改稿承担。
 
 ## 2026-07-17 已完成变更
 
@@ -26,11 +26,11 @@
 
 ## 当前模型职责
 
-`config/model-routing.json` v4.30.0 是唯一运行时真相源：
+`config/model-routing.json` v4.31.0 是唯一运行时真相源：
 
-- Gemini 3.1 Pro Preview：默认 raw 正文与普通 editorial candidate 主写；未传 `writerModel` 时使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`。`fallback=[]`，失败 hard block，不静默切换 Claude 或其他正文模型。
+- Gemini 3.1 Pro Preview：NovelOS Agentic 与作者风格整章优化主写；未传 `writerModel` 时分别使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`。`fallback=[]`，失败 hard block，不静默切换 Claude 或其他正文模型。
 - Claude Opus 4.6：通过显式 `writerModel=claude` 使用独立 raw/editorial 路由；继续负责正式 StyleShaper、Stage 8 final gate 与 character_agent，不是 Gemini 的自动 fallback。
-- 默认切换依据：2026-07-20 自然人直接对比明确选择 Gemini，认为其中文感、小说语感、场景沉浸明显高于 Claude。同一保存样本的 GPT 5.6 正反复判误选 Claude；加入读者体验主判后仍未对齐；隔离 Gemini reader judge 也误选 Claude。因此两个 AI judge 都未通过当前自然人金标，文学输出只作事实、结构、span 和风险证据，不能自动覆盖 Gemini raw。自动双写和跨模型候选位仍未准入。
+- 生产决策：不再让 AI judge 替用户决定文学质量。GPT judge、opportunity judge、reverse review 仅保留在隔离评测与回放，不进入 `novel_generate_chapter`。
 - `AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1`：第 18-20 章的一次序列偏好仅保留为历史实验，不再外推为全局生产策略。固定写前场景解法与 `boundedBestOf3` 已退出生产；普通 raw 是默认基线，候选必须逐章与 raw 比较。
 - `METHODOLOGY-STORY-CONTEXT-1`：方法论权限已分为作者/已接受正文/方法论/启发式四类来源与 generation/hard/candidate/review/excluded 五种执行位置。CreativeConstitution 的作品身份、长期承诺、核心冲突和主题问题进入 ChapterContract，`aestheticDirection` 与感官/句式/对白/段落执行规则不进入 raw；无章纲时相关角色按主角与本章叙事信号保守选择，不再灌入全部存量角色。每章 trace 记录 methodology policy 与 raw prompt constraint audit。
 - `NARRATIVE-FOCUS-STRATEGIES-1`：post-raw `CraftPhenomenonReport` 增加 `narrative_focus_and_spatial_staging` 第 11 工艺域；只在 opportunityType、craftDomain 与 raw span 兼容时允许 `transition_compression` / `spatial_relationship_staging` / `focal_attention_shift` 三种 candidate-only 策略。它们不进入 raw、不按景别或句长控制正文、不授权候选或 winner。

@@ -1,13 +1,12 @@
 /**
  * NovelOS Agentic Raw Candidate Source（OPT-8.13/8.14，Step 5）
  *
- * 把 NovelOS session 包装成候选源：编排器在 raw 候选生成后调用本源，
- * 产出 agentic_raw Candidate（shadow 模式下只进 trace，不影响正式交付）。
+ * 把 NovelOS session 包装成正式生产候选源，产出 agentic_raw Candidate。
  *
  * M1 设计（计划 §Step 5）：
- * - shadow 默认 OFF（env PINOVEL_NOVELOS_SHADOW=1 门控）
- * - agentic_raw 与 one_shot_raw 同跑，但 selectedSource 强制 "raw"
- * - agentic 失败 → 返回 null（编排器回退 one_shot_raw，不 hard block）
+ * - 正式生产由统一入口强制启用，不依赖 shadow 环境变量
+ * - Agentic 初稿必须经过作者风格整章优化后才能交付
+ * - agentic 失败 → 返回 null，由生产编排器结构化阻断
  * - 模型调用经传入的 modelGenerate（已被编排器 wrapModelFn 包装）计入章节 SOFT/HARD
  * - NovelOS 自主管理 sessionId，不依赖 PI Host session
  *
@@ -74,7 +73,7 @@ export interface AgenticRawSourceInput {
 
 /**
  * Agentic Raw 候选源结果。
- * candidate=null 表示 agentic 失败，编排器回退 one_shot_raw。
+ * candidate=null 表示 agentic 失败，生产编排器将结构化阻断。
  */
 export interface AgenticRawSourceResult {
   /** agentic_raw 候选（null = 失败，回退 one_shot_raw） */
@@ -391,8 +390,12 @@ function makeFallbackResult(
 /**
  * 把 ChapterIntent 序列化为 agent loop 可读的字符串。
  */
-function buildChapterIntentString(intent: ChapterIntent): string {
+export function buildChapterIntentString(intent: ChapterIntent): string {
   const parts: string[] = [];
+  const authorEventSummaries = intent.authorEventSummaries ?? [];
+  const authorMustInclude = intent.authorMustInclude ?? [];
+  const authorStateChanges = intent.authorStateChanges ?? [];
+  const endingTarget = intent.endingTarget ?? [];
   if (intent.chapterFunction) {
     parts.push(`本章功能：${intent.chapterFunction}`);
   }
@@ -416,6 +419,18 @@ function buildChapterIntentString(intent: ChapterIntent): string {
   }
   if (intent.inviolableFacts.length > 0) {
     parts.push(`不可破坏的事实：${intent.inviolableFacts.join("；")}`);
+  }
+  if (authorEventSummaries.length > 0) {
+    parts.push(`作者章纲事件顺序：\n${authorEventSummaries.map((event, index) => `  ${index + 1}. ${event}`).join("\n")}`);
+  }
+  if (authorMustInclude.length > 0) {
+    parts.push(`作者章纲必须包含：${authorMustInclude.join("；")}`);
+  }
+  if (authorStateChanges.length > 0) {
+    parts.push(`作者章纲状态变化：${authorStateChanges.join("；")}`);
+  }
+  if (endingTarget.length > 0) {
+    parts.push(`作者章纲章末目标：${endingTarget.join("；")}`);
   }
   return parts.join("\n") || "（无明确章节意图）";
 }

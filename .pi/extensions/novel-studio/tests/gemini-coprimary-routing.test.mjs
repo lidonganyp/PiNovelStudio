@@ -22,19 +22,23 @@ const routing = JSON.parse(
   readFileSync(resolve(process.cwd(), "../../../config/model-routing.json"), "utf8"),
 );
 
-test("routing records calibration evidence while enabling chapter quality-winner selection", () => {
-  assert.equal(routing._version, "4.30.0");
+test("routing keeps judge calibration evidence while production authority belongs to user feedback", () => {
+  assert.equal(routing._version, "4.31.0");
   assert.deepEqual(routing.model_strategy.literary_judge_admission.evidence_paths, [
     "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
     "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority-gemini31-reader.json",
   ]);
   assert.match(
     routing.agent_routing.v2_literary_judge.note,
-    /valid decisive verdict selects its winner/i,
+    /隔离评测.*最终文学评价权归用户/,
   );
   assert.equal(
     routing.model_strategy.literary_judge_admission.automatic_literary_selection_enabled,
-    true,
+    false,
+  );
+  assert.equal(
+    routing.model_strategy.literary_judge_admission.runtime_mode,
+    "evaluation_only_user_feedback_authority",
   );
 });
 

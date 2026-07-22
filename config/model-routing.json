@@ -1,10 +1,10 @@
 {
   "_comment": "PiNovelStudio AI Model Routing",
-  "_version": "4.30.0",
+  "_version": "4.31.0",
   "_updated": "2026-07-21",
   "disabled_providers": ["qwen", "ernie"],
   "_migration_notes": [
-    "v4.30.0 (QUALITY-WINNER-SELECTION-1): Production selection is source-neutral. Raw remains the baseline and the safety fallback when opportunity/literary judging is unavailable, evidence is invalid, the verdict is tied, or reverse review conflicts. A valid decisive chapter-specific anonymous pairwise verdict now selects its winner whether that winner is raw or editorial. Natural-human gold remains calibration and monitoring evidence, not a global switch that forces every chapter back to raw. Pairwise selection trace distinguishes decisive_winner, judge_unavailable, comparison_inconclusive, and advisory_only; opportunity failure remains visible through editorialOpportunity.llmFallbackReason and model-call evidence. Provider fallback remains disabled for judge routes; a 504 means comparison unavailable, not that raw was judged better.",
+    "v4.31.0 (AGENTIC-AUTHOR-STYLE-PRODUCTION-1): 正式 novel_generate_chapter 改为 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 状态提交/原子保存。生产不调用 opportunity judge、pairwise judge、reverse review 或 SelectionPolicy，不把 one-shot raw 作为交付稿；GPT judge 与旧 raw/editorial 选择链仅保留在隔离评测/回放。最终文学评价权归用户，用户修改稿与反馈作为后续学习信号。",
     "v4.29.0 (AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1): Retires the global GEMINI-SCENE-PRIMARY-1 extrapolation. The chapter writer receives author-owned plot direction, chapter function, prior state, character motivations, foreshadowing/promises, causality, inviolable facts, and ending target; sensory choices, diction, syntax, rhetoric, dialogue, paragraph rhythm, and concrete scene expression remain model-owned. Fixed scene-solution search and boundedBestOf3 are removed from production. A chapter candidate may replace raw only after chapter-specific comparison and a human-aligned selection authority; current machine literary judges remain advisory, so production preserves raw when no human-authoritative choice is available.",
     "v4.28.0 (GEMINI-SCENE-PRIMARY-1): The natural-human blind review of the continuous chapter 18-20 sequences clearly selected sequence B, privately mapped to shared ChapterSeed + pre-writing scene-solution search + Gemini raw. The default single-candidate Gemini production path now treats the first scene-search draft as the human-admitted primary after FactGuard, story-preservation, completeness, and final fact recheck. Ordinary Gemini raw remains the untouched baseline and fallback. GPT-5.6-sol literary output remains advisory and cannot decide the winner. Explicit Claude, modelTestRoute, qualityExperiment, and boundedBestOf3 paths are excluded from this admission.",
     "v4.27.0 (GEMINI-HUMAN-ALIGNED-ADMISSION-1): Gemini 3.1 Pro Preview remains the production default through the gemini_writer_v2 route family. The saved natural-human gold selected Gemini for native Chinese feel, novel voice, and scene immersion, while both GPT-5.6-sol and the isolated Gemini reader judge selected Claude; neither AI judge is aligned. Literary judging is therefore advisory only and cannot automatically replace Gemini raw until the natural-human alignment gate passes. Gemini same-model bounded best-of-3 produced four attempts and two controlled three-candidate cases; raw won both, the second candidate won zero, and final-gate vetoes were zero, so boundedBestOf3 remains disabled by default and explicit_opt_in_unadmitted.",
@@ -252,7 +252,7 @@
         ]
       }
     },
-    "narrator_reason": "GEMINI-QUALITY-AMPLIFIER-V2-1: 用户直接对比后明确选择 Gemini 3.1 Pro Preview 为 raw 正文与普通 editorial candidate 默认主写，理由是中文感、小说语感和场景沉浸明显更强。默认调用使用 v2_rawstage2_gemini31 / v2_amplified_gemini31 与 gemini_writer_v2；fallback=[]，失败 hard block，不静默切换 Claude 或其他正文模型。Claude Opus 4.6 保留为显式 writerModel=claude 备选。",
+    "narrator_reason": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: 用户要求正式章节必须走全流程。Gemini 3.1 Pro Preview 通过 v2_rawstage2_gemini31 服务 NovelOS Agentic，通过 v2_amplified_gemini31 执行作者风格整章优化；fallback=[]，任一阶段失败 hard block，不静默交付 one-shot raw。Claude Opus 4.6 仅为显式 writerModel=claude 备选。",
     "narrator_backup": null,
     "narrator_backup_reason": "Gemini 3.1 Pro 是默认正文主写，但没有自动备援；raw 失败由 v2_rawstage2_gemini31.fallback=[] hard block。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
     "narrator_candidate": null,
@@ -264,13 +264,13 @@
       "natural_human_alignment": "failed",
       "gpt56_aligned_with_human_gold": false,
       "gemini31_reader_aligned_with_human_gold": false,
-      "automatic_literary_selection_enabled": true,
-      "runtime_mode": "chapter_specific_quality_winner",
+      "automatic_literary_selection_enabled": false,
+      "runtime_mode": "evaluation_only_user_feedback_authority",
       "evidence_paths": [
         "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
         "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority-gemini31-reader.json"
       ],
-      "policy": "A valid decisive anonymous chapter-specific verdict selects its winner; natural-human gold calibrates the judge and global writer recommendations but does not force a raw-source preference"
+      "policy": "Production does not call machine literary judges. User feedback and revised manuscripts are the only literary authority; judge routes remain evaluation-only."
     },
     "stage2_loopback_policy": "disabled",
     "stage2_loopback_policy_reason": "ERNIE 已停用；对白回环不再调用 ERNIE，避免无余额 provider 被触发。",
@@ -1005,7 +1005,7 @@
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
       "fallback": [],
-      "note": "GEMINI-DEFAULT-WRITER-1: Default production raw writer route. No silent switch to Claude or another prose model."
+      "note": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: Production NovelOS Agentic generation route. It does not create a deliverable one-shot raw fallback; failure hard-blocks."
     },
     "v2_amplified_gemini31": {
       "provider": "gemini31",
@@ -1014,7 +1014,7 @@
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
       "fallback": [],
-      "note": "GEMINI-DEFAULT-WRITER-1: Default production editorial writer route. Candidate creation remains opportunity-driven and GPT-judged."
+      "note": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: Required full-chapter author-style optimization after NovelOS Agentic. The optimized text is fact/story/completeness checked and then delivered for user evaluation; no GPT judge is called."
     },
     "v2_reader_experience_judge_gemini31": {
       "provider": "gemini31",
@@ -1039,7 +1039,7 @@
       "api_key_env": "NOVELOS_JUDGE_API_KEY",
       "model_env": "NOVELOS_JUDGE_MODEL",
       "fallback": [],
-      "note": "MODEL-ROUTING-CLAUDE46-1A/1E-fix + QUALITY-WINNER-SELECTION-1: V2 编辑机会 LLM 裁判路由（opportunity judge）。异源 judge：不得由 Claude 或 Doubao 自审其生成的编辑机会。模型从 gpt-5.5 切到 gpt-5.6-sol（与 novel_quality_judge 一致的第三方兼容端点，model/base_url/api_key 全部从 NOVELOS_JUDGE_* env 读取，不进生产 fallback 链；gpt-5.6-sol 非官方 OpenAI model ID）。fallback=[] 保证失败时不回退 Claude/Doubao/GLM；失败表示机会比较不可用并保留 raw，不表示 raw 质量胜出。provider allowlist: 只允许 gpt。"
+      "note": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: 历史 opportunity judge 路由，仅用于隔离评测/回放；novel_generate_chapter 生产路径调用数必须为 0。"
     },
     "v2_literary_judge": {
       "provider": "gpt",
@@ -1048,7 +1048,7 @@
       "api_key_env": "NOVELOS_JUDGE_API_KEY",
       "model_env": "NOVELOS_JUDGE_MODEL",
       "fallback": [],
-      "note": "QUALITY-WINNER-SELECTION-1: V2 pairwise literary judge route (pairwise judge + reverse review). Anonymous A/B, reader-experience-first comparison, reverse review, and span evidence produce a chapter-specific auditable decision. A valid decisive verdict selects its winner whether raw or editorial; unavailable, invalid, tied, or conflicting comparison preserves raw as a safety fallback. Natural-human gold calibrates and monitors the judge but is not a global raw preference. No historical scene-solution preference controls production selection. The route uses gpt-5.6-sol through NOVELOS_JUDGE_* and fallback=[]; provider allowlist permits only gpt."
+      "note": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: 历史 pairwise/reverse-review 文学裁判路由，仅用于隔离评测/回放；novel_generate_chapter 生产路径调用数必须为 0，最终文学评价权归用户。"
     },
     "v2_editorial_planner": {
       "provider": "gpt",

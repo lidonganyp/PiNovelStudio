@@ -103,6 +103,8 @@ export interface UnifiedOrchestratorInput {
   workspaceId: string;
   chapterId: string;
   chapterNumber: number;
+  /** 正式生产流程：NovelOS Agentic 初稿 → 作者风格整章优化 → 用户评价。 */
+  productionFlow?: "agentic_style";
   /**
    * @deprecated 历史短路径开关（FactGuard 后直接返回 raw）。被 fullPipelinePreview 取代，
    * 保留为向后兼容别名：入口处 normalize 为 fullPipelinePreview（同一行为）。
@@ -111,10 +113,8 @@ export interface UnifiedOrchestratorInput {
   /**
    * FULL-PIPELINE-PREVIEW-1：完整链路只读预览模式。
    *
-   * 与旧的 previewOnly 短路不同——本模式执行完整主链路：
-   * Preflight → ContextCompiler → ChapterIntent → Raw → FactGuard →
-   * EditorialOpportunity → EditorialCandidate (0-2) → 中文校准候选（如机会命中）→
-   * PairwiseJudge → SelectionPolicy → SpanRepair → FinalFactRecheck → FinalStateCommit
+   * 正式生产执行 Agentic + 作者风格整章优化；evalMode B0-B4 仍保留旧消融链路。
+   * 本字段表示同一生产流程的只读预览：执行到 FinalFactRecheck，但跳过保存与状态提交。
    *
    * 但跳过所有副作用：
    * - 不写章节文件（chapterFilePath=null）

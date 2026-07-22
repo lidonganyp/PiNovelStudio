@@ -6,14 +6,14 @@
 
 ## 项目概述
 
-PiNovelStudio 是一个基于 PI (AI Coding Agent) 的**中文长篇小说章节生成系统**。它以 PI 为编排大脑，以统一主链路（raw → editorial → judge → select）为生成内核，并消费仓库中保留的风格、Few-Shot、对比蒸馏和运行时规则资产。原始 `corpus/` 已从仓库删除；生产章节生成不依赖原始语料，离线重建数据时需由使用者提供外部语料。
+PiNovelStudio 是一个基于 PI (AI Coding Agent) 的**中文长篇小说章节生成系统**。它以 PI 为编排大脑，以 `NovelOS Agentic → 作者风格整章优化 → 事实复检 → 状态提交/原子保存` 为生产内核。原始 `corpus/` 已从仓库删除；生产章节生成不依赖原始语料。
 
 ## 核心特性
 
-- **统一主链路生成内核**: `novel_generate_chapter` 唯一公开入口；raw 基线 → 机会驱动 editorial candidate（0-2 个）→ 匿名 pairwise judge 证据 → 人工对齐闸门 → selection policy → span repair → 原子保存
+- **统一主链路生成内核**: `novel_generate_chapter` 唯一公开入口；NovelOS Agentic 检索/验证初稿 → 作者风格整章优化 → StoryPreservation/FactGuard/Completeness → 原子保存
 - **6 个公开工具**: `novel_generate_chapter` / `novel_preflight_workspace` / `novel_workspace_manager` / `novel_plan_story_outline` / `novel_strategy_policy_view` / `novel_strategy_feedback`
-- **机会驱动候选**: 每章先生成 raw，仅当存在可引用正文 span 证明的编辑机会时才生成 0-2 个 editorial candidate；禁止固定多候选
-- **人工对齐优先的文学选择**: 匿名 A/B、span 约束和反向复判继续提供事实、结构与风险证据；当前 GPT/Gemini judge 均未通过自然人金标，自动文学选择关闭，候选不能覆盖 Gemini raw
+- **作者风格正式消费**: 每章强制读取 workspace 风格档案中的定性指导做整章优化，历史统计不转成机械配额
+- **用户文学裁决**: 生产不调用 opportunity/pairwise/reverse judge；最终正文由用户评价，修改稿作为后续学习信号
 - **四类长期叙事状态**: CanonState / CharacterState / PromiseLedger / PatternMemory；状态只在最终正文选定后提交
 - **三 tsconfig 构建隔离**: `dist/`（生产入口）+ `dist-eval/`（NovelBench 评测）+ `dist-test/`（测试专用模块）；生产闭包零 legacy 依赖
 - **模型请求超时保护**: 所有模型 API 请求使用 bounded timeout，默认 300000ms，可通过 `PINOVEL_MODEL_REQUEST_TIMEOUT_MS` 覆盖
@@ -24,16 +24,15 @@ PiNovelStudio 是一个基于 PI (AI Coding Agent) 的**中文长篇小说章节
 ```
 PI Agent（编排大脑）
 └── 统一主链路（v2/core/unified-orchestrator.ts）:
-    Preflight → ContextCompiler → ChapterIntent → Raw candidate
-    → FactGuard → EditorialOpportunity → EditorialCandidate (0-2)
-    → PairwiseJudge (匿名 A/B, span 约束, 可反向复判)
-    → SelectionPolicy → SpanRepair → FinalFactRecheck → FinalStateCommit → AtomicSave + Trace
+    Preflight → ContextCompiler → ChapterIntent → NovelOS Agentic
+    → Agentic FactGuard → 作者风格整章优化 → StoryPreservation
+    → FinalFactRecheck → Completeness → FinalStateCommit → AtomicSave + Trace
 
-AI 路由策略（真相源: config/model-routing.json v4.30.0）:
-├── Gemini 3.1 Pro: 默认 raw 正文 + 普通 editorial candidate，使用 Gemini 专用路由与 Prompt；fallback=[]
+AI 路由策略（真相源: config/model-routing.json v4.31.0）:
+├── Gemini 3.1 Pro: 默认 NovelOS Agentic + 作者风格整章优化；fallback=[]
 ├── Claude Opus 4.6: 显式 `writerModel=claude` 正文备选，并继续负责风格塑形、终审与角色节点；不作为静默 fallback
 ├── 同模型 bounded best-of-3: 显式 `boundedBestOf3=true` 时由当前主写生成 raw + 最多 2 个场景解法候选；Gemini 4 次尝试中 2 次受控且均由 raw 胜出，默认关闭
-├── gpt-5.6-sol: opportunity/pairwise/reverse 异源 judge（有效明确的逐章比较选质量赢家；不可用/tie/冲突时 raw 回退）
+├── gpt-5.6-sol: 仅隔离评测/回放使用，生产调用数为 0
 ├── GPT 5.5: 结构化节点（类型路由/依赖检查/Anti-AI 检测等）
 ├── Doubao Seed 2.1 Pro: 受限 span 驱动中文校准候选（1C COMPLETE_L0）
 ├── GLM 5.2: 显式开发验证 / NovelBench lab route，生产默认禁用
@@ -161,7 +160,7 @@ PINOVEL_MODEL_REQUEST_TIMEOUT_MS=300000
 ### 统一主链路迁移 [已完成]
 
 - [x] legacy Stage0-8 编排入口物理删除（`LEGACY-RUNTIME-REMOVAL-1`）
-- [x] 统一主链路（raw → editorial → judge → select）成为唯一公开生成路径
+- [x] 统一主链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 保存）成为唯一公开生成路径
 - [x] 三 tsconfig 构建隔离（dist/ + dist-eval/ + dist-test/）
 - [x] 6 公开工具收敛；~40 诊断工具由环境变量门控
 - [x] legacy 正收益资产迁移到统一主链路（中文自然度/连续性/状态管理/伏笔追踪等）

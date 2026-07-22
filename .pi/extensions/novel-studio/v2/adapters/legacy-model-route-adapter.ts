@@ -284,6 +284,8 @@ function buildStubTextByKind(kind: string, route: string, userPrompt: string): s
       return STUB_OPPORTUNITY_VERDICT;
     case "editorial_amplified":
       return STUB_EDITORIAL_TEXT;
+    case "author_style_optimization":
+      return STUB_EDITORIAL_TEXT;
     case "literary_judge":
       return STUB_PAIRWISE_VERDICT;
     default:

@@ -85,6 +85,12 @@ export const ALL_NARRATIVE_TOOLS = [
  */
 function extractMustVerifyItems(chapterIntent: string, seedContext: string): string[] {
   const items = new Set<string>();
+  const explicitMustInclude = chapterIntent.match(/^作者章纲必须包含：(.+)$/mu)?.[1] ?? "";
+  for (const item of explicitMustInclude.split(/[；;]/u)) {
+    const normalized = item.trim();
+    if (normalized) items.add(normalized);
+  }
+  if (items.size > 0) return [...items].slice(0, 8);
 
   // 从 intent 提取引号内容
   const quoteMatches = chapterIntent.matchAll(/[「」""''《》](.+?)[「」""''《》]/g);

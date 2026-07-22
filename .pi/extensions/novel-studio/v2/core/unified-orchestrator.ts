@@ -1,20 +1,17 @@
 /**
  * UnifiedOrchestrator — 统一主链路编排器（Phase 5，计划 §3 + §Phase 5）
  *
- * 单一生成主链路：raw → editorial → judge → select → commit
+ * 正式生产主链路：NovelOS Agentic → 作者风格整章优化 → 事实复检 → commit
  *
  * 设计原则（计划 §Phase 5）：
  * - 无 whitelist：所有 workspace/chapter 走统一入口
  * - 无 generationMode：不再有 legacy/v2 双模式切换
- * - 无 v2NotImplemented → legacy 回退：V2 内部失败按 raw → hard block 降级
- * - raw 有效但编辑/裁判失败时交付 raw 并记录 warning
- * - raw 失败结构化阻断（hard block），不静默回退 legacy
+ * - 无 v2NotImplemented → legacy 回退
+ * - Agentic 或风格优化失败时结构化阻断，不静默交付 one-shot raw
+ * - 机器文学裁判不进入生产；用户反馈是文学评价权威
  * - 最终正文选定后统一执行状态提交和原子保存
  *
- * 降级链（计划 §Phase 5）：
- *   editorial_success → raw（编辑胜出则交付 editorial）
- *   editorial_fail/judge_fail → raw + warning（raw 有效则交付 raw）
- *   raw_fail → hard_block（raw 无效则结构化阻断）
+ * 旧 raw/editorial/judge 代码仅保留给 evalMode B0-B4 与历史回放。
  *
  * 替换关系（计划 §Phase 4 + §Phase 5）：
  * - 旧 CandidateComparator（机械总分 winner）→ 不再使用
@@ -42,6 +39,7 @@ import type { EditorialHypothesis } from "./editorial-hypothesis.js";
 import {
   createEditorialCandidateGenerator,
 } from "./editorial-candidate-generator.js";
+import { createAuthorStyleOptimizer } from "./author-style-optimizer.js";
 import {
   createEditorialStrategyRegistry,
   type EditorialStrategyRegistry,
@@ -667,6 +665,333 @@ export class UnifiedOrchestrator {
     stageResults.identityContract = rawPrompt.identityContract;
     // WORLD-ONTOLOGY-1：raw prompt 与 FactGuard 共用同一 ontology contract。
     stageResults.ontologyContract = rawPrompt.ontologyContract;
+
+    if (input.productionFlow === "agentic_style" && !input.evalMode) {
+      stageResults.productionFlow = {
+        mode: "agentic_style_full_pipeline",
+        literaryAuthority: "user_feedback",
+        oneShotRawCalled: false,
+        machineJudgeCalled: false,
+      };
+      stageResults.positiveGainCandidates = {
+        status: "retired_from_production",
+        failureReason: "global_scene_candidate_admission_retired",
+      };
+      stageResults.qualitySelectionPolicy = {
+        mode: "user_feedback",
+        automaticQualityWinnerSelectionEnabled: false,
+        rawRole: "not_deliverable",
+      };
+      stageResults.judgeAlignmentGate = {
+        automaticLiterarySelectionEnabled: false,
+        mode: "disabled_by_user_decision",
+      };
+      stageResults.judgeArbitration = {
+        skipped: true,
+        reason: "机器文学裁判已退出生产；最终章节由用户评价反馈",
+      };
+
+      if (!input.agenticCandidateSource) {
+        return this.hardBlock(
+          input,
+          "novelos_agentic_missing",
+          "正式生产流程要求 NovelOS Agentic，但入口未提供 agenticCandidateSource",
+          stageResults,
+        );
+      }
+
+      let agenticResult;
+      try {
+        agenticResult = await timeAsync("stage1_novelosAgentic", () =>
+          input.agenticCandidateSource!.generate({
+            workspaceId,
+            chapterId,
+            chapterNumber,
+            projectRoot,
+            intent,
+            context,
+            characterNames,
+            modelGenerate: wrappedModelGenerate!,
+            route: RAW_ROUTE,
+            timeoutMs: input.timeoutMs,
+            evalPrefix: input.evalPrefix,
+          }),
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        stageResults.novelos = { shadowEnabled: false, required: true, error: message };
+        return this.hardBlock(input, "novelos_agentic_generation", `NovelOS Agentic 生成异常：${message}`, stageResults);
+      }
+
+      stageResults.novelos = {
+        shadowEnabled: false,
+        required: true,
+        sessionId: agenticResult.sessionId,
+        trajectoryPath: agenticResult.trajectoryPath,
+        candidateId: agenticResult.candidate?.id ?? null,
+        candidateLength: agenticResult.candidate?.text.length ?? 0,
+        stopReason: agenticResult.stopReason,
+        failureReason: agenticResult.failureReason ?? null,
+        budgetSnapshot: agenticResult.budgetSnapshot,
+        sourceRefs: agenticResult.sourceRefs,
+        toolCalls: agenticResult.toolCalls,
+        verifierCleared: agenticResult.verifierCleared,
+        repairRounds: agenticResult.repairRounds,
+      };
+      const agenticCandidate = agenticResult.candidate;
+      if (!agenticCandidate) {
+        return this.hardBlock(
+          input,
+          "novelos_agentic_generation",
+          `NovelOS Agentic 未产出有效正文：${agenticResult.failureReason ?? agenticResult.stopReason}`,
+          stageResults,
+        );
+      }
+      if (agenticResult.verifierCleared !== true) {
+        return this.hardBlock(
+          input,
+          "novelos_agentic_verification",
+          `NovelOS Agentic 未通过章节验证：${agenticResult.failureReason ?? `仍有 ${agenticResult.repairRounds ?? 0} 轮修复未清零`}`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: agenticCandidate.id,
+            selectedSource: "raw",
+            finalText: agenticCandidate.text,
+          },
+        );
+      }
+      candidates.push(agenticCandidate);
+
+      const agenticCompleteness = scanFinalTextCompleteness(agenticCandidate.text, {
+        finishReason: agenticCandidate.finishReason,
+        chapterNumber,
+      });
+      stageResults.agenticCompleteness = agenticCompleteness;
+      if (!agenticCompleteness.passed) {
+        return this.hardBlock(
+          input,
+          "agentic_completeness",
+          agenticCompleteness.findings[0]?.reason ?? "NovelOS Agentic 初稿疑似截断",
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: agenticCandidate.id,
+            selectedSource: "raw",
+            finalText: agenticCandidate.text,
+          },
+        );
+      }
+
+      const agenticFactGuard = timeSync("stage2_agenticFactGuard", () =>
+        checkCandidateFactGuard(agenticCandidate.text, input),
+      );
+      stageResults.agenticFactGuard = agenticFactGuard;
+      if (!agenticFactGuard.ok) {
+        return this.hardBlock(
+          input,
+          "agentic_fact_guard",
+          `NovelOS Agentic 初稿事实硬伤：${agenticFactGuard.errors.join("; ")}`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            factGuardErrors: agenticFactGuard.errors,
+            candidateId: agenticCandidate.id,
+            selectedSource: "raw",
+            finalText: agenticCandidate.text,
+          },
+        );
+      }
+
+      const styleResult = await timeAsync("stage3_authorStyleOptimization", () =>
+        createAuthorStyleOptimizer().optimize({
+          sourceCandidate: agenticCandidate,
+          chapterNumber,
+          intent,
+          context,
+          constitution,
+          writerPromptProfile: input.rawPromptProfile,
+          modelGenerate: wrappedModelGenerate!,
+          timeoutMs: input.timeoutMs,
+        }),
+      );
+      stageResults.authorStyleOptimization = {
+        styleProfileLoaded: styleResult.styleProfileLoaded,
+        styleGuidanceConsumed: styleResult.styleGuidanceConsumed,
+        styleReferenceIds: styleResult.styleReferenceIds,
+        guidanceCount: styleResult.guidanceCount,
+        candidateId: styleResult.candidate?.id ?? null,
+        failureReason: styleResult.failureReason,
+      };
+      const styledCandidate = styleResult.candidate;
+      if (!styledCandidate) {
+        return this.hardBlock(
+          input,
+          "author_style_optimization",
+          `作者风格整章优化失败：${styleResult.failureReason ?? "未产出候选"}`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: agenticCandidate.id,
+            selectedSource: "raw",
+            finalText: agenticCandidate.text,
+          },
+        );
+      }
+      candidates.push(styledCandidate);
+
+      const preservation = timeSync("stage4_storyPreservation", () =>
+        checkEditorialStoryPreservation({
+          rawText: agenticCandidate.text,
+          editorialText: styledCandidate.text,
+          knownEntities: characterNames,
+          entityCoverage: "characters_only",
+        }),
+      );
+      stageResults.storyPreservation = preservation;
+      if (!preservation.preserved) {
+        return this.hardBlock(
+          input,
+          "author_style_story_preservation",
+          `作者风格优化未通过故事保持检查：${preservation.reason}`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: styledCandidate.id,
+            selectedSource: "editorial",
+            finalText: styledCandidate.text,
+          },
+        );
+      }
+
+      const finalFactRecheck = timeSync("stage5_finalFactRecheck", () =>
+        checkCandidateFactGuard(styledCandidate.text, input, agenticCandidate.text),
+      );
+      stageResults.finalFactRecheck = finalFactRecheck;
+      if (!finalFactRecheck.ok) {
+        return this.hardBlock(
+          input,
+          "final_fact_recheck",
+          `作者风格优化稿事实复检失败：${finalFactRecheck.errors.join("; ")}`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            factGuardErrors: finalFactRecheck.errors,
+            candidateId: styledCandidate.id,
+            selectedSource: "editorial",
+            finalText: styledCandidate.text,
+          },
+        );
+      }
+
+      const finalCompleteness = scanFinalTextCompleteness(styledCandidate.text, {
+        finishReason: styledCandidate.finishReason,
+        chapterNumber,
+      });
+      stageResults.finalTextCompleteness = {
+        ...finalCompleteness,
+        selectedSource: "editorial",
+        selectedCandidateId: styledCandidate.id,
+      };
+      if (!finalCompleteness.passed) {
+        return this.hardBlock(
+          input,
+          "final_text_completeness",
+          finalCompleteness.findings[0]?.reason ?? "作者风格优化稿疑似截断",
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: styledCandidate.id,
+            selectedSource: "editorial",
+            finalText: styledCandidate.text,
+          },
+        );
+      }
+
+      stageResults.finalSelection = {
+        selectedSource: "editorial",
+        selectedCandidateId: styledCandidate.id,
+        finalTextLength: styledCandidate.text.length,
+        selectionAuthority: "user_feedback",
+        machineSelection: false,
+      };
+      runLanguageRiskAnalysis(candidates, characterNames, stageResults, warnings);
+      runStructuralEvidenceScan(styledCandidate.text, styledCandidate.id, input, stageResults, warnings);
+      runInformationReleaseScan(styledCandidate.text, styledCandidate.id, input, stageResults, warnings);
+      runEndingCraftScan(styledCandidate.text, styledCandidate.id, input, stageResults, warnings);
+      runCraftEvidenceEnvelope(styledCandidate.text, styledCandidate.id, stageResults, warnings);
+      stageResults.strategyOutcomes = {
+        skipped: true,
+        reason: "机器裁判已移除；等待用户修改稿与评价反馈后学习",
+      };
+
+      let commitOutcome: { ok: boolean; error?: string; stateCommit: { committed: number; rejected: number } | null };
+      if (input.fullPipelinePreview) {
+        commitOutcome = { ok: true, stateCommit: null };
+        stageResults.commitAndSave = { skipped: true, reason: "fullPipelinePreview" };
+      } else {
+        const statePermission = this.authorizeCapability(controlPlane, controlTrace, "state.commit", "agentic style final state commit");
+        const savePermission = this.authorizeCapability(controlPlane, controlTrace, "chapter.save", "agentic style atomic chapter save");
+        if (!statePermission.allowed || !savePermission.allowed) {
+          return this.hardBlock(input, "control_plane_commit", "Agentic 风格流程保存权限被拒绝", stageResults);
+        }
+        commitOutcome = timeSync("stage6_commitAndSave", () =>
+          commitAndSave(input, styledCandidate.id, styledCandidate.text, stageResults),
+        );
+      }
+      if (!commitOutcome.ok) {
+        return this.hardBlock(input, "atomic_save", `正文原子保存失败：${commitOutcome.error}`, stageResults);
+      }
+
+      return {
+        status: "ok",
+        workspaceId,
+        chapterId,
+        chapterNumber,
+        text: styledCandidate.text,
+        selectedSource: "editorial",
+        selectedCandidateId: styledCandidate.id,
+        candidates,
+        judgeResult: null,
+        allArbitrationResults: [],
+        hypotheses: [],
+        warnings,
+        failureEnvelope: null,
+        stageResults,
+        stateCommit: commitOutcome.stateCommit,
+        chapterFilePath: input.fullPipelinePreview ? null : chapterFilePath(input),
+        isPreviewRun: Boolean(input.fullPipelinePreview),
+        isUnderSpecified: Boolean(intent.underSpecifiedFields?.length),
+      };
+    }
 
     // ── INTENT-COMPLETENESS-1：质量评测模式（B3/B4）+ under-specified 关键字段 → 阻断 ──
     // 任务规格（delete/任务列表/项目优化20260718.md P1-1）：

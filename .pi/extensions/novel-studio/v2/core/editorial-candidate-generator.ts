@@ -135,7 +135,9 @@ function buildAuthorStyleReferenceBlock(
       !usagePolicy
       || typeof usagePolicy !== "object"
       || Array.isArray(usagePolicy)
-      || (usagePolicy as Record<string, unknown>).editorialCandidate !== "span_evidence_only"
+      || !["span_evidence_only", "full_chapter_required"].includes(
+        String((usagePolicy as Record<string, unknown>).editorialCandidate ?? ""),
+      )
     ) {
       continue;
     }

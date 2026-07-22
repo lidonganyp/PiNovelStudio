@@ -24,3 +24,8 @@ process.env.NOVEL_TEST_TOOLS = "1";
 // 生产路径不设置此变量；G6 专项测试（evolution-release-governance-g6-*.test.mjs）
 // 会在用例内显式 clearDevMode() 以验证门禁阻断行为。
 process.env.PINOVEL_DEV_MODE = "1";
+
+// 大量历史单元/评测夹具断言 B0-B4 raw/judge 语义，且没有 workspace 作者风格档案。
+// 仅测试总套件默认保留旧评测编排；真实生产环境不设置此变量。
+// 新生产链路专项测试会显式删除该变量，验证 Agentic + 作者风格正式行为。
+process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW = "1";

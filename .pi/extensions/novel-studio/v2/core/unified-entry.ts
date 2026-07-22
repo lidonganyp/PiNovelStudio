@@ -800,8 +800,9 @@ function buildTraceRecordsFromOrchResult(
     candidates.find((c) => c.kind === "context_enhanced") ?? candidates[0];
   const rawCandidateId = rawCandidate?.id ?? `candidate:raw:${orchResult.chapterId}`;
 
-  // 1. rawstage2_generated — raw 基线候选
-  if (rawCandidate) {
+  const productionFlow = orchResult.stageResults.productionFlow as { mode?: string } | undefined;
+  // 1. rawstage2_generated — 仅旧评测/兼容路径记录 one-shot raw
+  if (rawCandidate && productionFlow?.mode !== "agentic_style_full_pipeline") {
     records.push({
       stage: "rawstage2_generated",
       timestamp: now,
@@ -809,6 +810,24 @@ function buildTraceRecordsFromOrchResult(
       rawStage2TextLength: rawCandidate.text.length,
       contextHash,
     });
+  }
+
+  if (productionFlow?.mode === "agentic_style_full_pipeline") {
+    const agentic = candidates.find((candidate) => candidate.kind === "agentic_raw");
+    if (agentic) {
+      records.push({
+        stage: "novelos_agentic",
+        timestamp: now,
+        novelos: {
+          ...(orchResult.stageResults.novelos as Record<string, unknown> ?? {}),
+          shadowEnabled: false,
+          required: true,
+          candidateId: agentic.id,
+          candidateLength: agentic.text.length,
+        },
+        contextHash,
+      });
+    }
   }
 
   // 2. candidate_generated — 全部候选（raw + editorial）
@@ -829,7 +848,7 @@ function buildTraceRecordsFromOrchResult(
   //   每轮匿名映射 / verdict / evidence spans / 证据校验，供回放/审计复现裁判过程。
   // B4：当存在多个 editorial 候选裁判时，持久化全部候选的完整 judge 证据
   //   （allJudgeEvidence），不只最终选中的那一个。
-  if (orchResult.judgeResult) {
+  if (orchResult.judgeResult && productionFlow?.mode !== "agentic_style_full_pipeline") {
     const jr = orchResult.judgeResult;
     const winnerId = jr.finalSelectedCandidateId ?? rawCandidateId;
     const loserIds = candidates.filter((c) => c.id !== winnerId).map((c) => c.id);
@@ -859,8 +878,9 @@ function buildTraceRecordsFromOrchResult(
   }
 
   // 4. final_selected — 最终选择（含状态提交结果，供回放审计）
-  const selectedSource: FinalSelectedSource =
-    orchResult.selectedSource === "editorial" ? "v2_amplified" : "rawStage2";
+  const selectedSource: FinalSelectedSource = productionFlow?.mode === "agentic_style_full_pipeline"
+    ? "v2_amplified"
+    : orchResult.selectedSource === "editorial" ? "v2_amplified" : "rawStage2";
   const projectGain: ProjectGain =
     orchResult.selectedSource === "editorial" ? "positive" : "neutral";
   const finalSelection: FinalSelectionReport = {
@@ -868,8 +888,9 @@ function buildTraceRecordsFromOrchResult(
     selectedSource,
     projectGain,
     whySelected: [
-      orchResult.judgeResult?.auditSummary ??
-        "无编辑机会或编辑未胜出，交付 raw 基线",
+      productionFlow?.mode === "agentic_style_full_pipeline"
+        ? "NovelOS Agentic 初稿经作者风格整章优化后交付，文学评价权归用户"
+        : orchResult.judgeResult?.auditSummary ?? "无编辑机会或编辑未胜出，交付 raw 基线",
     ],
     whyRejected: orchResult.warnings,
     acceptedRepairs: [],
@@ -921,7 +942,7 @@ function buildTraceRecordsFromOrchResult(
         error?: string;
       }
     | undefined;
-  if (novelosData) {
+  if (novelosData && productionFlow?.mode !== "agentic_style_full_pipeline") {
     records.push({
       stage: "novelos_agentic",
       timestamp: now,
@@ -1439,18 +1460,20 @@ export async function runUnifiedPipeline(
   const policyStore = loadStrategyPolicyStore(workspaceId, projectRoot);
   const strategySelector = createContextualStrategySelector();
   const outcomeRecorder = createStrategyOutcomeRecorder();
-  // Step 5：NovelOS agentic_raw 候选源（shadow 模式，PINOVEL_NOVELOS_SHADOW=1 时启用）
-  // shadow OFF 时不构造，编排器走原有 raw → editorial → judge → select 主链路，零行为变化。
-  const agenticCandidateSource =
-    process.env.PINOVEL_NOVELOS_SHADOW === "1"
-      ? createAgenticRawCandidateSource()
-      : undefined;
+  // 正式生产固定启用 NovelOS Agentic；不再使用 shadow 开关或 one-shot raw 回退。
+  const agenticCandidateSource = createAgenticRawCandidateSource();
+  const productionFlow = process.env.NOVEL_TEST_TOOLS === "1"
+    && process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW === "1"
+    || qualityExperiment
+    ? undefined
+    : "agentic_style" as const;
   const orchestrator = new UnifiedOrchestrator();
   const orchResult = await orchestrator.orchestrate({
     workspaceId,
     chapterId,
     chapterNumber,
     projectRoot,
+    productionFlow,
     intent: contextSafety.workingIntent,
     context: contextSafety.workingContext,
     constitution: context.constitution ?? null,
@@ -1571,14 +1594,15 @@ export async function runUnifiedPipeline(
     tracePath: tracePath ?? null,
     // G6：发行治理门禁决策摘要（releaseId/environmentFingerprint/approvalRef/devMode）
     releaseGovernance: releaseGovernanceTrace,
-    judgeArbitration: orchResult.judgeResult
-      ? {
+    judgeArbitration: orchResult.stageResults.judgeArbitration
+      ?? (orchResult.judgeResult
+        ? {
           reverseReviewed: orchResult.judgeResult.reverseReviewed,
           arbitrationTriggered: orchResult.judgeResult.arbitrationTriggered,
           conflicted: orchResult.judgeResult.conflicted,
           finalSelectedCandidateId: orchResult.judgeResult.finalSelectedCandidateId,
         }
-      : null,
+        : null),
   };
 
   if (orchResult.status === "blocked") {

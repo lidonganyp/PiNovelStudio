@@ -183,6 +183,8 @@ export interface V2TraceRecord {
    */
   novelos?: {
     shadowEnabled: boolean;
+    /** 正式生产必经阶段；false/省略表示历史 shadow/评测记录。 */
+    required?: boolean;
     sessionId?: string;
     trajectoryPath?: string;
     candidateId?: string | null;
