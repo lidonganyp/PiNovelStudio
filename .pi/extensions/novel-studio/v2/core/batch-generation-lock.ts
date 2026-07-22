@@ -47,7 +47,7 @@ export type AcquireLockResult =
   | { ok: false; reason: string; existingLock?: BatchLockInfo };
 
 // ============================================================================
-// 锁函数（stub — RED 阶段 throw not implemented）
+// 锁函数
 // ============================================================================
 
 /**
@@ -56,6 +56,19 @@ export type AcquireLockResult =
  */
 export function batchLockPath(workspaceId: string, projectRoot: string): string {
   return join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR, LOCK_FILE_NAME);
+}
+
+/**
+ * 检查 PID 是否存活。
+ * 使用 process.kill(pid, 0) 探测：不发送信号，只检查进程是否存在。
+ */
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -72,7 +85,34 @@ export function acquireBatchLock(
   jobId: string,
   projectRoot: string,
 ): AcquireLockResult {
-  throw new Error("not implemented: acquireBatchLock (RED stub)");
+  const lockPath = batchLockPath(workspaceId, projectRoot);
+  if (existsSync(lockPath)) {
+    try {
+      const existing = JSON.parse(readFileSync(lockPath, "utf-8")) as BatchLockInfo;
+      const pidAlive = isPidAlive(existing.pid);
+      const expired = Date.now() > new Date(existing.expiresAt).getTime();
+      if (pidAlive && !expired) {
+        return {
+          ok: false,
+          reason: `workspace ${workspaceId} 已有运行中的批量任务 ${existing.jobId}（pid=${existing.pid}）`,
+          existingLock: existing,
+        };
+      }
+      // 僵死锁（PID 死亡或已超时）→ 落到下方覆盖写入
+    } catch {
+      // 锁文件损坏 → 落到下方覆盖写入
+    }
+  }
+  const now = new Date();
+  const lockInfo: BatchLockInfo = {
+    workspaceId,
+    jobId,
+    pid: process.pid,
+    acquiredAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + LOCK_TIMEOUT_MS).toISOString(),
+  };
+  atomicSave(lockPath, JSON.stringify(lockInfo, null, 2));
+  return { ok: true };
 }
 
 /**
@@ -80,13 +120,12 @@ export function acquireBatchLock(
  * 锁不存在时静默成功（幂等）。
  */
 export function releaseBatchLock(workspaceId: string, projectRoot: string): void {
-  throw new Error("not implemented: releaseBatchLock (RED stub)");
-}
-
-/**
- * 检查 PID 是否存活。
- * 使用 process.kill(pid, 0) 探测：不发送信号，只检查进程是否存在。
- */
-export function isPidAlive(pid: number): boolean {
-  throw new Error("not implemented: isPidAlive (RED stub)");
+  const lockPath = batchLockPath(workspaceId, projectRoot);
+  if (existsSync(lockPath)) {
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // 幂等：忽略释放失败
+    }
+  }
 }

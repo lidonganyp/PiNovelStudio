@@ -134,13 +134,22 @@ export class BatchGenerationJobStore {
     return this.data;
   }
 
+  /** 直接更新内部 state（用于编排器原地修改后同步） */
+  syncFromState(state: BatchJobState): void {
+    this.data = { ...state };
+  }
+
   toJSON(): BatchJobState {
-    return { ...this.data, chapters: [...this.data.chapters], completedChapters: [...this.data.completedChapters] };
+    return {
+      ...this.data,
+      chapters: [...this.data.chapters],
+      completedChapters: [...this.data.completedChapters],
+    };
   }
 }
 
 // ============================================================================
-// 持久化函数（stub — RED 阶段 throw not implemented）
+// 持久化函数
 // ============================================================================
 
 /**
@@ -159,11 +168,32 @@ export function loadBatchJobStore(
   jobId: string,
   projectRoot: string,
 ): BatchGenerationJobStore | null {
-  throw new Error("not implemented: loadBatchJobStore (RED stub)");
+  const path = batchJobPath(workspaceId, jobId, projectRoot);
+  if (!existsSync(path)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8"));
+    // 确保 chapters 数组长度覆盖 startChapter..endChapter 范围
+    const totalSlots = raw.endChapter - raw.startChapter + 1;
+    if (!Array.isArray(raw.chapters) || raw.chapters.length < totalSlots) {
+      const chapters: BatchChapterResult[] = [];
+      for (let i = 0; i < totalSlots; i++) {
+        chapters[i] = raw.chapters?.[i] ?? {
+          chapterNumber: raw.startChapter + i,
+          chapterId: String(raw.startChapter + i),
+          status: "pending" as const,
+        };
+      }
+      raw.chapters = chapters;
+    }
+    return new BatchGenerationJobStore(workspaceId, raw);
+  } catch {
+    return null;
+  }
 }
 
 /**
  * 原子保存批量任务状态。
+ * 接受 Store 实例或裸 BatchJobState。
  */
 export function saveBatchJobStore(
   store: BatchGenerationJobStore | BatchJobState,
@@ -171,7 +201,9 @@ export function saveBatchJobStore(
   jobId: string,
   projectRoot: string,
 ): void {
-  throw new Error("not implemented: saveBatchJobStore (RED stub)");
+  const state = store instanceof BatchGenerationJobStore ? store.toJSON() : store;
+  const path = batchJobPath(workspaceId, jobId, projectRoot);
+  atomicSave(path, JSON.stringify(state, null, 2));
 }
 
 /**
@@ -190,7 +222,33 @@ export function isChapterAlreadyCompleted(
   chapterNumber: number,
   projectRoot: string,
 ): boolean {
-  throw new Error("not implemented: isChapterAlreadyCompleted (RED stub)");
+  const workspacePath = join(projectRoot, "workspaces", workspaceId);
+  const chapterFile = join(workspacePath, "chapters", `${chapterNumber}.md`);
+  if (!existsSync(chapterFile)) return false;
+
+  const stateStorePath = join(workspacePath, "narrative-state-store.json");
+  if (!existsSync(stateStorePath)) return false;
+  try {
+    const store = JSON.parse(readFileSync(stateStorePath, "utf-8"));
+    const allEntries: any[] = [
+      ...(Array.isArray(store.canon) ? store.canon : []),
+      ...(Array.isArray(store.character) ? store.character : []),
+      ...(Array.isArray(store.promise) ? store.promise : []),
+      ...(Array.isArray(store.pattern) ? store.pattern : []),
+      ...(Array.isArray(store.expectation) ? store.expectation : []),
+    ];
+    const chapterId = `ch${chapterNumber}`;
+    return allEntries.some(
+      (e: any) =>
+        e &&
+        typeof e === "object" &&
+        e.sourceChapter === chapterId &&
+        typeof e.sourceRef === "string" &&
+        e.sourceRef.includes("#finalText:"),
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**

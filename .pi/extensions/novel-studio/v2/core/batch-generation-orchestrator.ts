@@ -59,7 +59,7 @@ export interface BatchOrchestratorOutput {
 }
 
 // ============================================================================
-// 核心编排函数（stub — RED 阶段 throw not implemented）
+// 核心编排函数
 // ============================================================================
 
 /**
@@ -82,7 +82,128 @@ export interface BatchOrchestratorOutput {
 export async function runBatchGeneration(
   input: BatchOrchestratorInput,
 ): Promise<BatchOrchestratorOutput> {
-  throw new Error("not implemented: runBatchGeneration (RED stub)");
+  const { state, projectRoot, mockGenerateChapter } = input;
+  const workspaceId = state.workspaceId;
+  const jobId = state.jobId;
+
+  while (state.frontier <= state.endChapter) {
+    // 1. 重新加载 state 检查 cancelRequested（cancel action 可能在外部设置）
+    const fresh = loadBatchJobStore(workspaceId, jobId, projectRoot);
+    if (fresh?.state.cancelRequested) {
+      state.status = "cancelled";
+      state.cancelRequested = true;
+      state.updatedAt = new Date().toISOString();
+      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      break;
+    }
+
+    // 2. 幂等性检查：已完成章节跳过（防重复 resume）
+    if (isChapterAlreadyCompleted(workspaceId, state.frontier, projectRoot)) {
+      if (!state.completedChapters.includes(state.frontier)) {
+        state.completedChapters.push(state.frontier);
+      }
+      state.frontier++;
+      state.updatedAt = new Date().toISOString();
+      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      continue;
+    }
+
+    // 3. 标记当前章节 running
+    const slotIndex = state.frontier - state.startChapter;
+    const chapterResult: BatchChapterResult = {
+      chapterNumber: state.frontier,
+      chapterId: String(state.frontier),
+      status: "running",
+      startedAt: new Date().toISOString(),
+    };
+    state.chapters[slotIndex] = chapterResult;
+    state.updatedAt = new Date().toISOString();
+    saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+
+    // 4. 调用统一主链路（mock 或 handleGenerateChapter）
+    const chapterInput = {
+      workspaceId,
+      chapterId: String(state.frontier),
+      chapterNumber: state.frontier,
+      _projectRoot: projectRoot,
+    };
+    let result: any;
+    try {
+      if (mockGenerateChapter) {
+        result = await mockGenerateChapter(chapterInput);
+      } else {
+        // 动态 import 避免循环依赖：
+        // public-handlers → batch-generation-handler → batch-generation-orchestrator → public-handlers
+        const { handleGenerateChapter } = await import("../../handlers/public-handlers.js");
+        result = await handleGenerateChapter(chapterInput);
+      }
+    } catch (e: any) {
+      result = {
+        status: "error",
+        failureEnvelope: {
+          stage: "batch_invoke",
+          severity: "error",
+          reason: e?.message ?? String(e),
+          recoverable: false,
+        },
+      };
+    }
+
+    // 5. 成功判定：status=ok + 章节文件存在 + stateCommit 无错误
+    const chapterFile = join(
+      projectRoot, "workspaces", workspaceId, "chapters", `${state.frontier}.md`,
+    );
+    const stateCommitOk =
+      (result?.stageResults?.stateCommit as any)?.ok !== false &&
+      result?.stageResults?.stateCommitError !== true;
+    const chapterFileExists = existsSync(chapterFile);
+
+    if (result?.status === "ok" && chapterFileExists && stateCommitOk) {
+      // 6a. 成功：推进 frontier
+      chapterResult.status = "completed";
+      chapterResult.completedAt = new Date().toISOString();
+      chapterResult.durationMs = Date.now() - new Date(chapterResult.startedAt!).getTime();
+      chapterResult.modelCalls = (result?.stageResults?.modelCallCount as number) ?? undefined;
+      chapterResult.stateCommitResult = { ok: true };
+      chapterResult.chapterFilePath = chapterFile;
+      chapterResult.tracePath = join(
+        projectRoot, "workspaces", workspaceId, "traces", `${state.frontier}-quality-trace.json`,
+      );
+      if (!state.completedChapters.includes(state.frontier)) {
+        state.completedChapters.push(state.frontier);
+      }
+      state.frontier++;
+      state.updatedAt = new Date().toISOString();
+      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+    } else {
+      // 6b. 失败：暂停（stopOnFailure 默认 true）—— 不继续下一章
+      chapterResult.status = "failed";
+      chapterResult.completedAt = new Date().toISOString();
+      chapterResult.failureEnvelope = result?.failureEnvelope ?? {
+        stage: "batch_chapter",
+        severity: "error",
+        reason: `chapter ${state.frontier} did not reach status=ok (status=${result?.status}, fileExists=${chapterFileExists}, stateCommitOk=${stateCommitOk})`,
+        recoverable: false,
+      };
+      state.failedChapter = state.frontier;
+      state.status = state.stopOnFailure ? "paused" : "error";
+      state.updatedAt = new Date().toISOString();
+      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      break;
+    }
+  }
+
+  // 7. 循环结束：检查是否全部完成
+  if (state.frontier > state.endChapter && state.status === "running") {
+    state.status = "completed";
+  }
+  if (state.status === "completed" && !state.summary) {
+    state.summary = buildSummary(state);
+  }
+  state.updatedAt = new Date().toISOString();
+  saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+
+  return { state };
 }
 
 /**
@@ -90,5 +211,31 @@ export async function runBatchGeneration(
  * 汇总总章节数、完成数、失败数、总耗时、总模型调用、失败 envelope 列表。
  */
 export function buildSummary(state: BatchJobState): BatchJobSummary {
-  throw new Error("not implemented: buildSummary (RED stub)");
+  const totalChapters = state.endChapter - state.startChapter + 1;
+  let completedChapters = 0;
+  let failedChapters = 0;
+  let totalDurationMs = 0;
+  let totalModelCalls = 0;
+  const failureEnvelopes: unknown[] = [];
+
+  for (const ch of state.chapters) {
+    if (!ch) continue;
+    if (ch.status === "completed") {
+      completedChapters++;
+      if (typeof ch.durationMs === "number") totalDurationMs += ch.durationMs;
+      if (typeof ch.modelCalls === "number") totalModelCalls += ch.modelCalls;
+    } else if (ch.status === "failed") {
+      failedChapters++;
+      if (ch.failureEnvelope) failureEnvelopes.push(ch.failureEnvelope);
+    }
+  }
+
+  return {
+    totalChapters,
+    completedChapters,
+    failedChapters,
+    totalDurationMs,
+    totalModelCalls,
+    failureEnvelopes,
+  };
 }
