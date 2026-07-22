@@ -610,7 +610,7 @@ function planBatchChapterSeeds(
   startChapter: number,
   endChapter: number,
   projectRoot: string,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true; generated: number; skipped: number } | { ok: false; reason: string } {
   const workspacePath = join(projectRoot, "workspaces", workspaceId);
 
   // 读取 config.json（genre/subGenres/characters）
@@ -663,10 +663,21 @@ function planBatchChapterSeeds(
 
   // 为每章生成显式章纲文件
   // P0-FIX-3：写入 series/ch{N}-outline-explicit.md，ChapterSeedBuilder 会读取此文件
+  // P0-A：逐章跳过已有作者章纲文件——不得覆盖作者手动维护的内容
   const total = endChapter - startChapter + 1;
   const now = new Date().toISOString();
+  let generated = 0;
+  let skipped = 0;
   for (let i = 0; i < total; i++) {
     const chapterNumber = startChapter + i;
+    const outlineFilePath = join(
+      seriesDir, `ch${chapterNumber}-outline-explicit.md`,
+    );
+    // 作者已提供该章章纲 → 跳过，不覆盖
+    if (existsSync(outlineFilePath)) {
+      skipped++;
+      continue;
+    }
     const chapterFunction = inferChapterFunction(i, total);
     const chapterTheme =
       outlineThemes.get(chapterNumber) ?? `第${chapterNumber}章（待细化）`;
@@ -678,11 +689,9 @@ function planBatchChapterSeeds(
       characterNames,
       plannedAt: now,
     });
-    const outlineFilePath = join(
-      seriesDir, `ch${chapterNumber}-outline-explicit.md`,
-    );
     try {
       writeFileSync(outlineFilePath, outlineContent, "utf-8");
+      generated++;
     } catch {
       return {
         ok: false,
@@ -691,7 +700,7 @@ function planBatchChapterSeeds(
     }
   }
 
-  return { ok: true };
+  return { ok: true, generated, skipped };
 }
 
 /**

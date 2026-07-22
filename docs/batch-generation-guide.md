@@ -1,6 +1,6 @@
 # 批量章节生成模式用户指南
 
-> 版本: P0 + P1 + P0-FIX | 更新日期: 2026-07-22
+> 版本: P0 + P1 + P0-FIX + P0-ABC | 更新日期: 2026-07-22
 >
 > 批量章节生成是 `novel_generate_chapter` 工具的 `mode: "batch"` 分支，支持按大纲连续生成第 N 章到第 M 章。批量能力作为该工具的内部分支，**不新增第二个正文生成工具**——每章仍逐章调用统一主链路（Preflight → ContextCompiler → NovelOS Agentic → 作者风格整章优化 → FactGuard → StoryPreservation → FinalFactRecheck → FinalStateCommit → AtomicSave）。
 >
@@ -181,7 +181,7 @@
 
 **行为**:
 - 设置 `cancelRequested: true`，原子保存
-- **运行中取消（P0-FIX-4）**: 运行中的任务在当前章节完成后、保存前会合并磁盘上最新的 `cancelRequested` 标志。如果检测到 cancel，立即标记为 `cancelled` 并停止，不会继续后续章节
+- **运行中取消（P0-FIX-4 + P1-C）**: 运行中的任务在当前章节完成后，先从磁盘合并最新 `cancelRequested` 标志，再记录章节结果（完成或失败），最后检查 cancel。如果 cancel 被设置：已提交的章节会被正确记录为 completed（checkpoint 一致），任务状态标记为 `cancelled` 并停止，不会继续后续章节
 - `paused` 状态的任务直接升级为 `cancelled`
 - **不删除任何已完成章节文件**——cancel 不破坏已有成果
 
@@ -253,7 +253,7 @@ ChapterSeedBuilder 真实消费的种子来源是 `series/ch{startChapter}-outli
 
 > **严禁正文**: 规划阶段只输出结构化章纲字段（本章功能、事件、角色、场景类型、章末目标），不包含正文段落。正文由统一主链路逐章生成。
 >
-> **可覆盖**: 规划生成的 `series/ch{N}-outline-explicit.md` 可被作者手动编辑覆盖。如作者已提供该文件，规划阶段不会覆盖。
+> **不覆盖作者章纲（P0-A）**: 规划器逐章检查 `series/ch{N}-outline-explicit.md` 是否已存在。**已有作者章纲文件不会被覆盖**——规划器只为缺失的章节生成。作者可在批量生成前手动编写任意章节的章纲，规划器会跳过这些章节。
 
 ---
 
@@ -365,6 +365,7 @@ workspaces/{workspaceId}/traces/batch-{jobId}-summary.json
 - 锁信息: `jobId` / `pid` / `acquiredAt` / `expiresAt`（30 分钟超时）
 - 锁判定: PID 存活（`process.kill(pid, 0)`）AND 未超时
 - **锁续租（P0-FIX-5）**: 每章成功保存后自动续租锁（延长 `expiresAt` 30 分钟），避免 100 章任务超过 30 分钟被误判过期
+- **锁心跳（P0-B）**: 章节执行期间启动定时心跳（每 10 分钟续租一次），防止单章 Agentic + 风格优化超过 30 分钟导致锁过期被抢占。章节调用结束后心跳自动停止
 - **锁释放安全（P0-FIX-5）**: 释放锁时校验 `jobId`，只删除自己的锁。旧任务结束后不会误删新任务的锁
 - 锁冲突: 新任务 `action: "start"` 遇到有效锁 → 返回 `error` + `failureEnvelope`
 - 僵死锁恢复: 新任务遇到 PID 已死亡的锁 → 强制释放并获取

@@ -28,7 +28,7 @@ import {
   saveBatchJobStore,
   isChapterAlreadyCompleted,
 } from "./batch-generation-job-store.js";
-import { renewBatchLock } from "./batch-generation-lock.js";
+import { renewBatchLock, LOCK_TIMEOUT_MS } from "./batch-generation-lock.js";
 
 // ============================================================================
 // 类型
@@ -63,6 +63,37 @@ export interface BatchOrchestratorOutput {
 // ============================================================================
 // 核心编排函数
 // ============================================================================
+
+/**
+ * 锁心跳间隔：LOCK_TIMEOUT_MS / 3 = 10 分钟。
+ *
+ * P0-B：单章 Agentic + 风格优化可能超过 30 分钟，锁会在章节执行中到期，
+ * 第二任务可抢占同一 workspace。心跳在章节执行期间定时续租，确保锁不过期。
+ */
+const LOCK_HEARTBEAT_INTERVAL_MS = Math.floor(LOCK_TIMEOUT_MS / 3);
+
+/**
+ * 启动锁心跳：在章节执行期间定时续租锁。
+ *
+ * 返回 stop 函数——章节调用结束后必须调用以清除定时器。
+ * 心跳续租失败不阻断主链路（锁过期由 acquireBatchLock 僵死锁恢复处理）。
+ */
+function startLockHeartbeat(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+): () => void {
+  const timer = setInterval(() => {
+    try {
+      renewBatchLock(workspaceId, jobId, projectRoot);
+    } catch {
+      // 心跳续租失败不阻断主链路
+    }
+  }, LOCK_HEARTBEAT_INTERVAL_MS);
+  // unref 让定时器不阻止进程退出
+  if (typeof timer.unref === "function") timer.unref();
+  return () => clearInterval(timer);
+}
 
 /**
  * 运行批量章节生成。
@@ -127,13 +158,16 @@ export async function runBatchGeneration(
     saveBatchJobStore(state, workspaceId, jobId, projectRoot);
 
     // 4. 调用统一主链路（mock 或 handleGenerateChapter）
+    // P0-B：章节执行期间启动锁心跳，防止单章超过 30 分钟锁过期被抢占
     const chapterInput = {
       workspaceId,
       chapterId: String(state.frontier),
       chapterNumber: state.frontier,
       _projectRoot: projectRoot,
     };
+    const stopHeartbeat = startLockHeartbeat(workspaceId, jobId, projectRoot);
     let result: any;
+    let chapterSucceeded = false;
     try {
       if (mockGenerateChapter) {
         result = await mockGenerateChapter(chapterInput);
@@ -153,20 +187,20 @@ export async function runBatchGeneration(
           recoverable: false,
         },
       };
+    } finally {
+      stopHeartbeat();
     }
 
-    // P0-FIX-4: 章节执行期间 cancel 可能被设置 → 保存前合并最新控制字段
-    // 防止旧内存状态覆盖磁盘上的 cancelRequested=true
+    // 5. P0-FIX-4 + P1-C：先从磁盘合并最新 cancelRequested
+    //    章节执行期间 cancel action 可能被外部设置到磁盘。
+    //    必须在记录章节结果之前合并，防止后续 save 用旧内存 cancelRequested=false
+    //    覆盖磁盘上的 cancelRequested=true。
     const freshAfterChapter = loadBatchJobStore(workspaceId, jobId, projectRoot);
     if (freshAfterChapter?.state.cancelRequested) {
       state.cancelRequested = true;
-      state.status = "cancelled";
-      state.updatedAt = new Date().toISOString();
-      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
-      break;
     }
 
-    // 5. 成功判定：status=ok + 章节文件存在 + stateCommit 无错误
+    // 6. 成功判定：status=ok + 章节文件存在 + stateCommit 无错误
     const chapterFile = join(
       projectRoot, "workspaces", workspaceId, "chapters", `${state.frontier}.md`,
     );
@@ -174,9 +208,12 @@ export async function runBatchGeneration(
       (result?.stageResults?.stateCommit as any)?.ok !== false &&
       result?.stageResults?.stateCommitError !== true;
     const chapterFileExists = existsSync(chapterFile);
+    chapterSucceeded = result?.status === "ok" && chapterFileExists && stateCommitOk;
 
-    if (result?.status === "ok" && chapterFileExists && stateCommitOk) {
-      // 6a. 成功：推进 frontier
+    // 7. 记录本章提交结果（P1-C：cancelRequested 已合并，save 不会覆盖 cancel 标志）
+    //    先记录完成/失败，再检查 cancel——防止 cancel 漏记已提交章节
+    if (chapterSucceeded) {
+      // 7a. 成功：推进 frontier
       chapterResult.status = "completed";
       chapterResult.completedAt = new Date().toISOString();
       chapterResult.durationMs = Date.now() - new Date(chapterResult.startedAt!).getTime();
@@ -195,7 +232,7 @@ export async function runBatchGeneration(
       // P0-FIX-5: 长任务续租锁 — 每章完成后延长 expiresAt，避免 100 章任务超过 30 分钟被误判过期
       renewBatchLock(workspaceId, jobId, projectRoot);
     } else {
-      // 6b. 失败：暂停（stopOnFailure 默认 true）—— 不继续下一章
+      // 7b. 失败：记录失败结果（但不立即设置 status 或 break——先检查 cancel）
       chapterResult.status = "failed";
       chapterResult.completedAt = new Date().toISOString();
       chapterResult.failureEnvelope = result?.failureEnvelope ?? {
@@ -205,6 +242,21 @@ export async function runBatchGeneration(
         recoverable: false,
       };
       state.failedChapter = state.frontier;
+      state.updatedAt = new Date().toISOString();
+      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+    }
+
+    // 8. P0-FIX-4 + P1-C：章节结果已记录后，检查 cancel
+    //    cancelRequested 已在步骤 5 合并到内存；cancel 优先于 paused/error
+    if (state.cancelRequested) {
+      state.status = "cancelled";
+      state.updatedAt = new Date().toISOString();
+      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      break;
+    }
+
+    // 9. 章节失败且未 cancel → 按 stopOnFailure 处理
+    if (!chapterSucceeded) {
       state.status = state.stopOnFailure ? "paused" : "error";
       state.updatedAt = new Date().toISOString();
       saveBatchJobStore(state, workspaceId, jobId, projectRoot);

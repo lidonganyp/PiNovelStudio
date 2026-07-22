@@ -422,6 +422,80 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
       assert.equal(finalStore.state.status, "cancelled", "磁盘 state 应为 cancelled");
       assert.equal(finalStore.state.cancelRequested, true, "cancelRequested 应为 true");
 
+      // P1-C：cancel 前已提交的章节必须被正确记录（checkpoint 一致性）
+      // 第 1 章正文和状态已提交 → 应标记为 completed，frontier 应推进到 2
+      assert.equal(finalStore.state.frontier, 2, "frontier 应推进到 2（第 1 章已完成）");
+      assert.ok(
+        finalStore.state.completedChapters.includes(1),
+        "completedChapters 应包含第 1 章",
+      );
+      const ch1Slot = finalStore.state.chapters[0];
+      assert.ok(ch1Slot, "第 1 章 slot 应存在");
+      assert.equal(ch1Slot.status, "completed", "第 1 章应标记为 completed（cancel 不漏记已提交章节）");
+
+      cleanupWorkspace(wsId);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // P0-A：作者已有章纲不被覆盖
+  //
+  // startChapter 缺少章纲时，规划器只应为缺失章节生成；
+  // 已有作者章纲文件必须跳过，不覆盖。
+  // ──────────────────────────────────────────────────────────────────────
+  describe("P0-A：作者已有章纲不被覆盖", () => {
+    it("规划器跳过已有作者章纲文件，只为缺失章节生成", async () => {
+      const wsId = "batch-p0fix-author-outline";
+      const workspacePath = join(PROJECT_ROOT, "workspaces", wsId);
+      createBatchWorkspace(wsId);
+
+      // 作者已为第 2 章手写章纲
+      const seriesDir = join(workspacePath, "series");
+      mkdirSync(seriesDir, { recursive: true });
+      const authorOutlinePath = join(seriesDir, "ch2-outline-explicit.md");
+      const authorContent = "# 第2章 作者手写章纲\n\n## 事件 1：作者专属内容\n\n- **内容摘要**：这是作者精心设计的内容，不应被覆盖\n";
+      writeFileSync(authorOutlinePath, authorContent, "utf-8");
+
+      // 删除第 1 章章纲（如果 createBatchWorkspace 创建了），确保规划器被触发
+      const ch1OutlinePath = join(seriesDir, "ch1-outline-explicit.md");
+      if (existsSync(ch1OutlinePath)) rmSync(ch1OutlinePath);
+
+      // start：第 1 章无章纲 → 触发规划；第 2 章有作者章纲 → 应跳过
+      const mock = createMockGenerateChapter({ workspacePath });
+      const result = await tool.execute(
+        "test-p0fix-author-outline",
+        {
+          mode: "batch",
+          action: "start",
+          workspaceId: wsId,
+          chapterId: "1",
+          chapterNumber: 1,
+          startChapter: 1,
+          endChapter: 2,
+          seedSource: "workspace_or_planner",
+          _projectRoot: PROJECT_ROOT,
+          _mockGenerateChapter: mock,
+        },
+        undefined,
+        undefined,
+        { cwd: PROJECT_ROOT },
+      );
+
+      // 作者章纲不应被覆盖
+      const afterAuthorContent = readFileSync(authorOutlinePath, "utf-8");
+      assert.equal(
+        afterAuthorContent,
+        authorContent,
+        "作者已有章纲文件不应被规划器覆盖",
+      );
+      assert.ok(
+        afterAuthorContent.includes("作者手写章纲"),
+        "作者内容应完好保留",
+      );
+
+      // 第 1 章章纲应被规划器生成
+      assert.ok(existsSync(ch1OutlinePath), "第 1 章章纲应被规划器生成");
+
       cleanupWorkspace(wsId);
     });
   });
@@ -465,18 +539,23 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
 
       // job1 获取锁
       acquireBatchLock(wsId, jobId1, PROJECT_ROOT);
-      const lockBefore = readBatchLock(wsId, PROJECT_ROOT);
-      const expiresBefore = lockBefore.expiresAt;
 
-      // 等一小段时间
-      const futureTime = new Date(Date.now() + 1000).toISOString();
+      // P1-D：写入受控旧 expiresAt（10 分钟前），避免同毫秒续租导致 expiresAt 不严格增加
+      const lockPath = batchLockPath(wsId, PROJECT_ROOT);
+      const acquiredLock = readBatchLock(wsId, PROJECT_ROOT);
+      const controlledOld = {
+        ...acquiredLock,
+        expiresAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // 10 分钟前
+      };
+      writeFileSync(lockPath, JSON.stringify(controlledOld, null, 2), "utf-8");
+      const expiresBefore = controlledOld.expiresAt;
 
       // job1 续租
       renewBatchLock(wsId, jobId1, PROJECT_ROOT);
       const lockAfter = readBatchLock(wsId, PROJECT_ROOT);
       assert.ok(lockAfter, "续租后锁应存在");
       assert.equal(lockAfter.jobId, jobId1, "锁应属于 job1");
-      // expiresAt 应被延长（新的 > 旧的）
+      // expiresAt 应被延长（新的 now+30min > 旧的 now-10min，严格增加）
       assert.ok(
         new Date(lockAfter.expiresAt).getTime() > new Date(expiresBefore).getTime(),
         "续租后 expiresAt 应延长",
