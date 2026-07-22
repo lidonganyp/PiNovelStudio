@@ -28,3 +28,23 @@
 3. PiNovelStudio [AGENTS.md](../../AGENTS.md)（统一主链路约束，与 Sub2API 集成不冲突时继续生效）
 
 如本目录与 PiNovelStudio 主项目 AGENTS.md 冲突，集成场景以本目录为准；PiNovelStudio 单机生成行为仍以 AGENTS.md 为准。
+
+## 进度跟踪
+
+| Phase | 任务 | 状态 | Sub2API 提交 |
+|---|---|---|---|
+| Phase 0 | T0-1 基线+分支 / T0-2 治理文档 | ✅ 完成 | PiNovelStudio `04d8b67` |
+| Phase 1 | T1-1 novel-runtime 骨架 / T1-2 工具白名单 / T1-3 统一模型出口 / T2-2 令牌验证侧 | ✅ 完成 | `8fc7652` |
+| Phase 2 | T2-1 小说用户权限 / T2-2 任务令牌签发（Go 后端） | ✅ 完成 | 本次提交 |
+| Phase 3 | 余额预占与逐次计费账本 | ⬜ 待开始 | — |
+| Phase 4 | 小说数据模型与临时 Workspace 适配 | ⬜ 待开始 | — |
+| Phase 5 | Sub2API Vue 前端 /novel 页面 | ⬜ 待开始 | — |
+| Phase 6 | 内容安全与反向提取防护 | ⬜ 待开始 | — |
+| Phase 7 | 公共 API 与错误模型 | ⬜ 待开始 | — |
+| Phase 8 | 管理后台与可观测性 | ⬜ 待开始 | — |
+| Phase 9-10 | 测试验收与部署发布 | ⬜ 待开始 | — |
+
+### 已知阻塞
+
+- **Go 工具链不可用**：当前环境无 `go` / `wire` 命令，Phase 2+ 的 Go 代码无法 `go build` / `go test` 编译验证。已写 Go 源码与测试作为验收规约，待工具链可用后执行。
+- **跨系统契约已验证**：Phase 2 通过 Node 侧 `cross-system-go-contract.test.ts`（5 用例）可执行地证明 Go MapClaims 结构（含 nbf/jti/字符串 aud）能被 Novel Runtime `verifyTaskToken` 接受。
