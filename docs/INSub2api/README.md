@@ -45,7 +45,7 @@
 | Phase 9 | NovelSafetyService/NovelAdminService 单元测试 | ✅ 完成 | `468119f` |
 | Phase 10 | 部署配置与文档 | ✅ 完成 | `7806d1c` |
 
-> **Phase 完成不等于可上线**：第二轮审计 22/100，9 项 P0 阻断仍在。详见下方「第二轮审计 P0 阻断」。
+> **Phase 完成不等于可上线**：第二轮审计 22/100 标记 9 项 P0 阻断；第三轮已修复 P0-1 ~ P0-8 与 P0-E2E 代码层（详见下方「第二轮审计 P0 阻断（22/100，9 项）与第三轮修复状态」），P0-9 PI 互动界面用户已降级为 P1。仍需 Docker 真实构建、e2e-smoke.sh 人工冒烟与真实生成链路验证。
 
 ## 第一轮 P0 修复（28/100 → 提交 6 个 commit，但二轮审计揭示根因未消除）
 
@@ -58,21 +58,30 @@
 | P0-5 | 部署配置无法启动 | `9dae89c` | 仅 env 层面，Dockerfile/compose 未配套 |
 | P0-6 | 安全事件/指标开放过宽 | `d02fcbf` | 仅路由收敛，CheckInput/CheckOutput 未接入请求链路 |
 
-## 第二轮审计 P0 阻断（22/100，9 项，待修复）
+## 第二轮审计 P0 阻断（22/100，9 项）与第三轮修复状态
 
-按推荐修复顺序：
+### 修复完成情况（2026-07-23）
 
-1. **真实生成工具无法调用** — Novel Runtime 期望 `tool.invoke()`，PiNovelStudio 真实工具只有 `execute()` → `/v1/invoke` 返回 `TOOL_NOT_FOUND`。
-2. **计费实际为零** — PiNovelStudio 把 `tokenUsage` 固定为 `"unknown"` → in=0/out=0 → `actualCharge=0`。
-3. **所有 LLM 请求仍然直连厂商** — `llmClient` 未投入使用，PiNovelStudio 直连 Gemini/Claude/GPT，违反冻结决策 5。
-4. **生成请求缺少必填 chapterId** — Go 后端只传 `workspaceId + chapterNumber`，PiNovelStudio 要求 `workspaceId + chapterId + chapterNumber`。
-5. **前后端公共契约没有对齐** — snake_case/camelCase 不一致、`title` 必填但前端不传、`author_style_profile`/`style_profile` 不一致、反馈字段 `type/comment` vs `feedbackType/content`。
-6. **安全门禁没有进入真实请求链路** — `NovelSafetyService.CheckInput/CheckOutput` 仅单元测试和管理统计调用，未在生成 Handler 实际执行。
-7. **余额耗尽和取消不能停止正在进行的模型调用** — 后台用 `context.Background()`，取消只改 DB；Metering Binder 遇预算耗尽仍继续。
-8. **部署配置无法形成可运行系统** — Dockerfile 未含 novel-runtime；Compose 缺 `NOVEL_RUNTIME_HOST=0.0.0.0`；Overlay 缺 `NOVEL_RUNTIME_BASE_URL`/HMAC/结算 Key；健康检查只是 `process.exit(0)`；镜像用 `latest`。
-9. **PI 互动界面尚未实现** — 当前只有「资料/章节/生成/反馈」四标签，无 PI 对话/交互式大纲规划/受限小说助手界面。
+| 编号 | 问题 | 修复提交 | 验证 |
+|---|---|---|---|
+| P0-1 真实工具适配（execute→invoke） | sub2api `4b96d63` | novel-runtime 88/88 测试通过 |
+| P0-2 真实 Token 计量 | PiNovelStudio `79bf692`（用户 WIP）+ `ac05f0c` | build:prod ✓、smoke 2/2 ✓、p0-2 test 2/2 ✓ |
+| P0-3 Sub2API 唯一模型出口 | PiNovelStudio `ac05f0c` | 同 P0-2 验证 |
+| P0-4 生成请求补 chapterId | sub2api（与 P0-1 同期提交） | novel-runtime 单测覆盖 |
+| P0-5 API DTO 契约对齐 | sub2api（snake_case + title 派生 + 反馈字段） | go build/test ✓、frontend typecheck/build ✓ |
+| P0-6 安全门禁接入请求链路 | sub2api `2dcee2b` | go build/test ✓（CheckInput 前置 / CheckOutput 后置） |
+| P0-7 取消/预算中止信号传播 | sub2api `dfa6598`（JobCancelRegistry） + `99e2ece`（metering-binder break） | go test ✓、novel-runtime 88/88 ✓ |
+| P0-8 可启动部署配置 | sub2api `9443dff` | Dockerfile 多阶段 + compose env/healthcheck/tag 对齐（**待 Docker 真实构建验证**） |
+| P0-E2E 真实端到端测试 | sub2api `46f2f55`（real-extension-loading.test.ts） + `e9b02f1`（e2e-smoke.sh） | novel-runtime 90/90 测试通过；smoke 脚本待用户人工执行（需 build + curl） |
+| P0-9 PI 互动界面 | — | **用户已声明降级为 P1，不在本轮 P0 范围** |
 
-详细证据与修复顺序见 [plan202600722.md](./plan202600722.md) §进度快照。
+### 仍待真实环境验证（非阻断代码问题）
+
+1. **Docker 真实构建与 Compose 启动**：当前开发机无 Docker，需用户执行 `docker build -f deploy/Dockerfile.novel -t weishaw/novel-runtime:v0.1.0 .` 与 `docker-compose -f docker-compose.yml -f docker-compose.novel.yml up -d`。
+2. **e2e-smoke.sh 端到端冒烟**：需用户在 Linux/WSL 环境执行 `bash deploy/e2e-smoke.sh`（依赖 curl + python）。
+3. **真实生成链路验证**：需 DB + task token + 余额预占完整环境，调用 `/api/v1/novel/projects/{id}/generate` 触发真实 PiNovelStudio 章节生成并验证扣费。
+
+详细修复证据与验证结论见 [verification-round-3.md](./verification-round-3.md)。原始 P0 问题清单与冻结决策见 [plan202600722.md](./plan202600722.md)。
 
 ## 架构关键事实（仍有效）
 
