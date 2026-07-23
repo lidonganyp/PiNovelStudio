@@ -291,10 +291,16 @@ function deriveLongTermState(
     ...(seed.previousChapterContinuation?.introducedCharacters ?? []),
     ...evidenceMatchedCharacters,
   ])];
+  const totalStateEntries =
+    store.canon.length + store.character.length + store.promise.length
+    + store.pattern.length + (store.expectation?.length ?? 0);
   const retrieval = retrieveNarrativeContext({
     chapterNumber,
     relevantCharacters,
     selectedPromiseIds: (seed.currentPressure?.pendingForeshadowing ?? []).map((entry) => entry.id),
+    // P3 H2：当前选中伏笔同时强制保留——它们既要高分（+120）也要免 itemLimit 强制纳入，
+    // 避免 100+ 章积累大量高分条目时把本章应推进的关键伏笔挤出 workingSet。
+    forcedRecallIds: (seed.currentPressure?.pendingForeshadowing ?? []).map((entry) => entry.id),
     keywords: [
       seed.intent?.primary ?? "",
       seed.intent?.chapterTheme ?? "",
@@ -302,7 +308,7 @@ function deriveLongTermState(
       ...(seed.currentPressure?.openArcs ?? []).map((entry) => entry.name),
     ].filter(Boolean),
     state: store,
-    maxItems: 24,
+    maxItems: computeMaxItems(totalStateEntries),
   });
   return {
     canon: retrieval.workingSet.canon.map((e) => ({
@@ -393,6 +399,21 @@ function buildSourceMap(seed: ChapterSeed, stylePath?: string, rulesPath?: strin
     }
   }
   return entries;
+}
+
+/**
+ * P3 H2 修复（2026-07-23）：按状态总量动态缩放 maxItems，不再硬编码 24。
+ *
+ * 100+ 章小说积累数百条状态时，固定 24 上限会丢失关键远章伏笔/角色状态。
+ * 公式：Math.min(48, Math.max(24, floor(total / 4)))
+ * - 下限 24：小 state 保留原行为，避免 token 浪费
+ * - 上限 48：500+ 条状态本应放大到 125，封顶控制 token 成本（≈2x 原 24）
+ *
+ * 导出供 unit test 验证公式边界（tests/context-retrieval-must-recall.test.mjs）。
+ */
+export function computeMaxItems(totalEntries: number): number {
+  const safeTotal = Math.max(0, Math.floor(totalEntries));
+  return Math.min(48, Math.max(24, Math.floor(safeTotal / 4)));
 }
 
 function computeContextHash(context: CompiledContext): string {

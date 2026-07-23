@@ -39,6 +39,19 @@ export interface ContextRetrievalInput {
   keywords: string[];
   state: RetrievalState;
   maxItems: number;
+  /**
+   * P3 H2 修复（2026-07-23）：必须纳入 workingSet 的条目 id 集合，不受 maxItems 约束。
+   *
+   * selectedPromiseIds 虽给必需 promise +120 加分，但仍受 itemLimit 约束——
+   * 当 30+ 个更高分条目先填满 slot 时，必需 promise 会被挤出 workingSet，
+   * 此前只在 recall.missingRequiredIds 中报告但不回填。forcedRecallIds 保证
+   * 通过 FUTURE-STATE-ISOLATION-1 过滤（即存在于 eligible）的必需条目无论如何
+   * 都被纳入 workingSet，并记入 report.forcedRecallAdded 供 trace 审计。
+   *
+   * force 通道只从 eligible（已过滤未来状态）中选取，不得绕过 future 过滤。
+   * 条目匹配按 entry.id / promiseId / expectationId（kind 守卫）。
+   */
+  forcedRecallIds?: string[];
 }
 
 /**
@@ -74,6 +87,12 @@ export interface ContextRetrievalReport {
    * 检测到未来状态时不静默忽略，必须在此数组中记录来源。
    */
   futureStateExcluded: FutureStateExcludedEntry[];
+  /**
+   * P3 H2 修复：被 forcedRecallIds 强制纳入 workingSet 的条目 id 列表。
+   * 这些条目绕过 itemLimit 但仍遵守 FUTURE-STATE-ISOLATION-1。
+   * 仅供 trace 审计，不参与评分。空数组表示无强制纳入。
+   */
+  forcedRecallAdded: string[];
 }
 
 export interface ContextRetrievalResult {
@@ -149,7 +168,31 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
     if (selectedIdSet.size >= itemLimit) break;
     selectedIdSet.add(item.entry.id);
   }
-  const selected = passingScore.filter((item) => selectedIdSet.has(item.entry.id));
+
+  // P3 H2：forcedRecallIds 强制通道——必需 promise 虽 +120 加分但可能被更高分
+  // 条目挤出 itemLimit。此处把通过 FUTURE-STATE-ISOLATION-1（已存在于 eligible）
+  // 的 forced 条目强制纳入 selectedIdSet，不受 itemLimit 约束。force 通道只从
+  // eligible 选取，未来条目已在上方被排除，不得绕过 future 过滤。
+  const forcedIdSet = new Set(input.forcedRecallIds ?? []);
+  const forcedEligible = forcedIdSet.size > 0
+    ? eligible.filter((entry) => isForcedEntry(entry, forcedIdSet))
+    : [];
+  const forcedAdded: string[] = [];
+  for (const entry of forcedEligible) {
+    if (!selectedIdSet.has(entry.id)) {
+      selectedIdSet.add(entry.id);
+      forcedAdded.push(entry.id);
+    }
+  }
+  // selected 包含 (a) passingScore 中被选中的，与 (b) 不在 passingScore（score<10）
+  // 但被强制纳入的条目（score=0, reasons=["forced_recall"]）。
+  const forcedNotInPassing = forcedEligible.filter(
+    (entry) => !passingScore.some((item) => item.entry.id === entry.id),
+  );
+  const selected = [
+    ...passingScore.filter((item) => selectedIdSet.has(item.entry.id)),
+    ...forcedNotInPassing.map((entry) => ({ entry, score: 0, reasons: ["forced_recall"] })),
+  ];
   const selectedIds = new Set(selected.map((item) => item.entry.id));
 
   // recall：必需 promise 的可达性（仅在 eligible 集合内检索）
@@ -200,6 +243,7 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
         missingRequiredIds,
       },
       futureStateExcluded,
+      forcedRecallAdded: forcedAdded,
     },
   };
 }
@@ -226,6 +270,18 @@ function scoreEntry(entry: AnyEntry, input: ContextRetrievalInput): { entry: Any
   if (distance <= 3) reasons.push("recent_chapter");
   if (entry.kind === "promise") score += Math.min(10, entry.currentHeat * 2);
   return { entry, score, reasons };
+}
+
+/**
+ * P3 H2：判断条目是否被 forcedRecallIds 命中。
+ * 匹配 entry.id；promise 额外匹配 promiseId；expectation 额外匹配 expectationId。
+ * kind 守卫保证类型窄化安全（AnyEntry 是联合类型，promiseId/expectationId 只在对应 kind 存在）。
+ */
+function isForcedEntry(entry: AnyEntry, forcedIdSet: Set<string>): boolean {
+  if (forcedIdSet.has(entry.id)) return true;
+  if (entry.kind === "promise") return forcedIdSet.has(entry.promiseId);
+  if (entry.kind === "expectation") return forcedIdSet.has(entry.expectationId);
+  return false;
 }
 
 function summarize(entry: AnyEntry): string {
