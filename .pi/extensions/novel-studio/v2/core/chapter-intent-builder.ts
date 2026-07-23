@@ -15,6 +15,10 @@
 
 import type { CreativeConstitution } from "./creative-constitution.js";
 import type { NarrativeStateStore } from "./final-state-commit.js";
+// P4 M3 修复（2026-07-23）：type-only import，编译期擦除，无运行时耦合。
+// ChapterIntent.overduePressure 与 ChapterIntentInput.overdueAlerts 复用 post-raw
+// 通道的 OverdueAlertEntry 形状，供 pre-write 把逾期期待 pass-through 给 writer。
+import type { OverdueAlertEntry } from "./methodology-diagnostic-derived.js";
 
 // ============================================================================
 // 类型定义
@@ -71,6 +75,12 @@ export interface ChapterIntent {
   factAndCharacterKnowledgeForbiddenZones?: string[];
   /** INTENT-1：每字段的来源追溯（字段名 → sourceRef 列表），供 trace 审计 */
   fieldSourceRefs?: Record<string, string[]>;
+  /**
+   * P4 M3 修复（2026-07-23）：写前逾期压力（来自 LongTermStateSnapshot.overdueAlerts）。
+   * 告知 writer 模型哪些读者期待已逾期或临近逾期，引导本章推进/升级/检视。
+   * 仅作写前提示，不强制改文、不阻断生成（事实硬门 / 文学软诊断原则）。
+   */
+  overduePressure?: OverdueAlertEntry[];
   /**
    * INTENT-COMPLETENESS-1：标记当前为空的关键字段名（focusCharacterGoals /
    * choicesAndCosts / expectedIrreversibleChange / selectedPromisesToAdvance /
@@ -135,6 +145,11 @@ export interface ChapterIntentInput {
   };
   overallPlotDirection?: string[];
   previousState?: string[];
+  /**
+   * P4 M3：写前 overdue alerts（来自 CompiledContext.longTermState.overdueAlerts）。
+   * builder 直接 pass-through 到 intent.overduePressure，不重新计算。
+   */
+  overdueAlerts?: OverdueAlertEntry[];
 }
 
 export interface ChapterIntentBuildResult {
@@ -627,6 +642,8 @@ export class ChapterIntentBuilder {
       factAndCharacterKnowledgeForbiddenZones,
       fieldSourceRefs,
       underSpecifiedFields,
+      // P4 M3：pass-through 写前 overdue alerts（不重新计算，避免双重计算与潜在不一致）。
+      overduePressure: input.overdueAlerts ?? [],
     };
 
     return { intent, warnings };

@@ -355,6 +355,8 @@ function deriveLongTermState(
     sourceIds: ["narrative-state-store.json"],
     retrievalReport: retrieval.report,
     promptItems: retrieval.promptItems,
+    // P4 M3：pre-write overdue alerts，由 retrieveNarrativeContext 从 eligible 派生。
+    overdueAlerts: retrieval.overdueAlerts,
   };
 }
 

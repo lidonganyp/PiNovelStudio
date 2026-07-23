@@ -13,6 +13,10 @@
 
 import type { SceneSolutionCard } from "./scene-solution-search.js";
 import type { PortableCraftGene } from "./portable-craft-gene.js";
+// P4 M3 修复（2026-07-23）：type-only import，编译期擦除，无运行时耦合。
+// LongTermStateSnapshot.overdueAlerts 复用 post-raw 通道的 OverdueAlertEntry 形状，
+// 供 pre-write 链路把逾期期待暴露给 writer 模型。
+import type { OverdueAlertEntry } from "./methodology-diagnostic-derived.js";
 
 // ============================================================================
 // P1 CompiledContext — 上下文编译器输出
@@ -138,6 +142,12 @@ export interface LongTermStateSnapshot {
   sourceIds: string[];
   retrievalReport?: unknown;
   promptItems?: Array<{ id: string; kind: string; summary: string; sourceRef: string }>;
+  /**
+   * P4 M3 修复（2026-07-23）：pre-write overdue alerts，从 retrieval eligible 派生。
+   * 经 CompiledContext.longTermState.overdueAlerts → ChapterIntentInput.overdueAlerts
+   * → ChapterIntent.overduePressure 暴露给 writer 模型。空数组表示无逾期期待。
+   */
+  overdueAlerts?: OverdueAlertEntry[];
 }
 
 export interface CompiledContext {

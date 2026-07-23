@@ -19,6 +19,9 @@ import type {
   PatternEntry,
   PromiseEntry,
 } from "./final-state-commit.js";
+// P4 M3 修复（2026-07-23）：type-only import，编译期擦除，无运行时耦合。
+// OverdueAlertEntry 形状与 post-raw buildOverdueAlerts 对齐，供 pre-write 通道复用。
+import type { OverdueAlertEntry } from "./methodology-diagnostic-derived.js";
 
 export interface RetrievalState {
   canon: CanonEntry[];
@@ -99,6 +102,18 @@ export interface ContextRetrievalResult {
   workingSet: RetrievalState;
   promptItems: Array<{ id: string; kind: string; summary: string; sourceRef: string }>;
   report: ContextRetrievalReport;
+  /**
+   * P4 M3 修复（2026-07-23）：pre-write overdue alerts，从 eligible（已过
+   * FUTURE-STATE-ISOLATION-1）派生。低相关度（score<10）的 overdue 期待不在
+   * workingSet，但仍逾期；writer 模型写前应被告知。由 deriveLongTermState
+   * 读取到 LongTermStateSnapshot.overdueAlerts，再经 ChapterIntentInput.overdueAlerts
+   * → ChapterIntent.overduePressure 暴露给 raw prompt。
+   *
+   * 与 post-raw buildOverdueAlerts 区别：此处只覆盖 ExpectationEntry
+   * （PromiseEntry 无 overdueWindow 与 escalated/delayed 状态），且数据源是
+   * eligible 而非 SerialDiagnosticState。
+   */
+  overdueAlerts: OverdueAlertEntry[];
 }
 
 type AnyEntry = CanonEntry | CharacterStateEntry | PromiseEntry | PatternEntry | ExpectationEntry;
@@ -146,6 +161,17 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
     }
     eligible.push(entry);
   }
+
+  // P4 M3：从 eligible（已过 FUTURE-STATE-ISOLATION-1）派生 pre-write overdue alerts。
+  // 只取 expectation kind（PromiseEntry 无 overdueWindow，buildOverdueAlerts 的
+  // promise 分支在 RetrievalState 上恒为空）。
+  const eligibleExpectations = eligible.filter(
+    (entry): entry is ExpectationEntry => entry.kind === "expectation",
+  );
+  const overdueAlerts = computeOverdueAlertsFromRetrievalState(
+    { canon: [], character: [], promise: [], pattern: [], expectation: eligibleExpectations },
+    input.chapterNumber,
+  );
 
   // 仅对 eligible 条目评分排序
   const scored = eligible
@@ -245,7 +271,79 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
       futureStateExcluded,
       forcedRecallAdded: forcedAdded,
     },
+    overdueAlerts,
   };
+}
+
+/**
+ * P4 M3 修复（2026-07-23）：从 RetrievalState 派生 pre-write overdue alerts。
+ *
+ * 与 post-raw buildOverdueAlerts 的差异：
+ * - 数据源是 RetrievalState（来自 eligible，已过 FUTURE-STATE-ISOLATION-1）
+ *   而非 SerialDiagnosticState；
+ * - 只覆盖 ExpectationEntry（PromiseEntry 无 overdueWindow 与 escalated/delayed
+ *   状态，buildOverdueAlerts 中的 promise 分支在 RetrievalState 上恒为空）；
+ * - sourceRef 用 ExpectationEntry.sourceRef（单数）兜底 sourceRefs?.[0]，
+ *   而非 SerialDiagnosticState.expectation.sourceRefs[0]。
+ *
+ * YELLOW_WINDOW=2 与 buildOverdueAlerts 对齐：red = chapter > latest；
+ * yellow = chapter >= latest - 2 且 chapter <= latest。fulfilled 一律排除。
+ */
+export function computeOverdueAlertsFromRetrievalState(
+  state: RetrievalState,
+  chapterNumber: number,
+): OverdueAlertEntry[] {
+  const alerts: OverdueAlertEntry[] = [];
+  const YELLOW_WINDOW = 2;
+  for (const expectation of state.expectation ?? []) {
+    if (expectation.status === "fulfilled") continue;
+    const latest = expectation.overdueWindow?.latest ?? null;
+    const sourceRef = expectation.sourceRef ?? expectation.sourceRefs?.[0] ?? "";
+    if (latest !== null) {
+      if (chapterNumber > latest) {
+        alerts.push({
+          itemId: expectation.expectationId,
+          itemType: "expectation",
+          severity: "red",
+          description: expectation.description,
+          expectedLatest: latest,
+          chaptersOverdue: chapterNumber - latest,
+          sourceRef,
+        });
+      } else if (chapterNumber >= latest - YELLOW_WINDOW) {
+        alerts.push({
+          itemId: expectation.expectationId,
+          itemType: "expectation",
+          severity: "yellow",
+          description: expectation.description,
+          expectedLatest: latest,
+          chaptersOverdue: null,
+          sourceRef,
+        });
+      }
+    } else if (expectation.status === "escalated") {
+      alerts.push({
+        itemId: expectation.expectationId,
+        itemType: "expectation",
+        severity: "red",
+        description: expectation.description,
+        expectedLatest: null,
+        chaptersOverdue: null,
+        sourceRef,
+      });
+    } else if (expectation.status === "delayed") {
+      alerts.push({
+        itemId: expectation.expectationId,
+        itemType: "expectation",
+        severity: "yellow",
+        description: expectation.description,
+        expectedLatest: null,
+        chaptersOverdue: null,
+        sourceRef,
+      });
+    }
+  }
+  return alerts;
 }
 
 function scoreEntry(entry: AnyEntry, input: ContextRetrievalInput): { entry: AnyEntry; score: number; reasons: string[] } {

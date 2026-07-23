@@ -1180,6 +1180,9 @@ export async function runUnifiedPipeline(
       ...(seed.previousChapterContinuation?.openHooks ?? []),
       ...(seed.previousChapterContinuation?.unresolvedTensions ?? []),
     ].filter((value): value is string => Boolean(value?.trim())),
+    // P4 M3：把 LongTermStateSnapshot.overdueAlerts 接入 ChapterIntentInput，
+    // 由 ChapterIntentBuilder pass-through 到 intent.overduePressure。
+    overdueAlerts: context.longTermState?.overdueAlerts ?? [],
   };
 
   const intentBuilder = createChapterIntentBuilder();
