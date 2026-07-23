@@ -39,6 +39,12 @@ import { checkCandidateFactGuard } from "../core/orchestrator-factguard.js";
 import { commitAndSave } from "../core/orchestrator-commit-save.js";
 import type { UnifiedOrchestratorInput } from "../core/orchestrator-types.js";
 import type { StagedStateUpdate } from "../core/final-state-commit.js";
+// P2 H1 修复（2026-07-23）：从 ChapterSeed 重生成 staged state，避免 G7 定稿路径
+// 在 orchestratorInput.stagedStateUpdate 和 pendingDraft.stagedStateUpdate 均缺失时
+// 退化为空 fallback（只提交 PatternMemory，丢失 Canon/Character/Promise/Expectation）。
+// buildStagedStateUpdate 抽到 staged-state-builder.ts 以同时进入 dist/ 和 dist-test/。
+import { buildStagedStateUpdate } from "../core/staged-state-builder.js";
+import type { ChapterSeed } from "../../craft/chapter-seed-types.js";
 import {
   captureUserRevisionDelta,
   saveUserRevisionDelta,
@@ -88,6 +94,26 @@ export interface FinalizationEntryOptions {
   commitAndSaveFn?: typeof commitAndSave;
   /** 用户对修改 span 的可选原因/维度标注；未提供时保存为 unclassified。 */
   revisionAnnotations?: RevisionSpanAnnotation[];
+  /**
+   * P2 H1 修复（2026-07-23）：可选 ChapterSeed，用于 staged state 重生成。
+   *
+   * 当 orchestratorInput.stagedStateUpdate 和 pendingDraft.stagedStateUpdate 均为
+   * undefined 时（legacy checkpoint 或 caller 未传递 staged 状态），runFinalization
+   * 会调用 buildStagedStateUpdate(seed, chapterNumber, ontologyLevels) 从 seed 重新
+   * 派生 Canon/Character/Promise/Expectation entries，避免长篇连续生成 50+ 章后
+   * 代理审批改写正文造成状态漂移。
+   *
+   * 由 PI host / proxy_finalization tool 调用方传入（其已从 workspace 加载
+   * ChapterSeed 用于 ContextCompiler/ChapterIntentBuilder）。不提供时保留当前
+   * 空 fallback 行为（legacy 兼容，仅提交 PatternMemory）。
+   */
+  seed?: ChapterSeed;
+  /**
+   * P2 H1 修复：可选 ontology levels，用于境界迁移类 CharacterState 派生。
+   * 调用方可传 workspace.config.json 的 worldKeyTerms.levels 以启用境界更新 staging。
+   * 不提供时 buildStagedStateUpdate 跳过境界派生（保守策略）。
+   */
+  ontologyLevels?: string[];
 }
 
 /** 定稿入口结果 */
@@ -242,13 +268,27 @@ export function runFinalization(options: FinalizationEntryOptions): Finalization
   // ── 从最终稿重建四类长期状态输入（计划 §12.2） ──
   // 显式重派生结果优先；否则恢复 pending checkpoint 中与候选绑定的暂存状态。
   // commitAndSave 会用用户最终稿重新锚定 Canon/Character/Promise，并扫描 PatternMemory。
-  // 旧 checkpoint 没有 stagedStateUpdate 时保留空 update 兼容路径。
+  //
+  // P2 H1 修复（2026-07-23）：当上述两者均缺失时，若调用方提供 ChapterSeed，
+  // 调用 buildStagedStateUpdate(seed, chapterNumber, ontologyLevels) 从 seed 重生成
+  // staged state（Canon/Character/Promise/Expectation），避免长篇连续生成 50+ 章后
+  // 代理审批改写正文造成状态漂移（H1 audit gap）。不提供 seed 时保留空 update
+  // 兼容路径（legacy，仅由 commitAndSave 从 finalText 扫描 PatternMemory）。
   const recoveredStateUpdate =
     orchestratorInput.stagedStateUpdate ?? pendingDraft?.stagedStateUpdate;
+  const regeneratedFromSeed: StagedStateUpdate | null =
+    recoveredStateUpdate === undefined && options.seed !== undefined
+      ? buildStagedStateUpdate(
+          options.seed,
+          orchestratorInput.chapterNumber,
+          options.ontologyLevels ?? [],
+        )
+      : null;
   const effectiveInput: UnifiedOrchestratorInput = {
     ...orchestratorInput,
     stagedStateUpdate:
       recoveredStateUpdate ??
+      regeneratedFromSeed ??
       ({
         additions: [],
         invalidations: [],
