@@ -962,3 +962,285 @@ test("inc-5 #23：heuristic 零宽 finding 仍被过滤（不进入修复链路�
   assert.equal(heuristicSelected.length, 0,
     "selectRepairFindings 应过滤 heuristic 零宽 finding");
 });
+
+// ============================================================================
+// inc-6：author_input_conflict 不进入正文补丁链（交叉回归）
+// 验证 author_input_conflict finding 在三层过滤点都被拦截：
+//   verification-feedback-compiler → narrative-repair-selector → candidate-patch-service
+// 这类 finding 必须走 ChapterSeed 修订路径，不消耗模型修复轮次，不生成正文补丁。
+// 同时验证零宽放行条件收紧为 intent_omission + deterministic（其他 deterministic
+// failureType 即使零宽也不放行），且非零宽 deterministic finding 不被误伤。
+// ============================================================================
+
+test("inc-6 #24：author_input_conflict（deterministic + 零宽）被 compileFeedback 过滤", () => {
+  // 构造一个 author_input_conflict finding：deterministic + 零宽范围
+  // 模拟 inviolableFacts 内部矛盾产生的 finding
+  const conflictFinding = {
+    id: "verifier:author_input_conflict:1",
+    source: "inviolable_facts_conflict_checker",
+    failureType: "author_input_conflict",
+    severity: "hard",
+    span: { start: 0, end: 0, excerpt: "" },
+    conflictFact: "inviolableFacts 内部矛盾：李一凡在场 vs 李一凡不在场",
+    sourceRef: "chapter-seed:inviolableFacts[0],chapter-seed:inviolableFacts[1]",
+    confidence: 1,
+    certainty: "deterministic",
+    coverageStatus: "missing",
+    allowedRepairRange: { start: 0, end: 0, excerpt: "" }, // 零宽
+    description: "作者输入自相矛盾",
+  };
+  const report = {
+    findings: [conflictFinding],
+    hardFindings: [conflictFinding],
+    softFindings: [],
+  };
+
+  // compileFeedback 应过滤掉 author_input_conflict（即使 deterministic + 零宽）
+  const feedbacks = compileFeedback(report);
+  const conflictFeedbacks = feedbacks.filter(
+    (fb) => fb.failureType === "author_input_conflict",
+  );
+  assert.equal(conflictFeedbacks.length, 0,
+    `author_input_conflict 不应编译为 feedback（必须走 ChapterSeed 修订），实际：${JSON.stringify(conflictFeedbacks)}`);
+  assert.equal(feedbacks.length, 0,
+    `仅含 author_input_conflict 的 report 编译后 feedbacks 应为空，实际：${feedbacks.length}`);
+});
+
+test("inc-6 #25：author_input_conflict 被 selectRepairFindings 过滤", () => {
+  // 即使 author_input_conflict finding 误入 hardFindings，selector 也应过滤
+  const conflictFinding = {
+    id: "verifier:author_input_conflict:2",
+    source: "inviolable_facts_conflict_checker",
+    failureType: "author_input_conflict",
+    severity: "hard",
+    span: { start: 0, end: 0, excerpt: "" },
+    conflictFact: "inviolableFacts 内部矛盾",
+    sourceRef: "chapter-seed:inviolableFacts[0]",
+    confidence: 1,
+    certainty: "deterministic",
+    coverageStatus: "missing",
+    allowedRepairRange: { start: 5, end: 15, excerpt: "" }, // 非零宽也必须过滤
+    description: "作者输入自相矛盾",
+  };
+
+  const selected = selectRepairFindings([conflictFinding]);
+  assert.equal(selected.length, 0,
+    `selectRepairFindings 应过滤 author_input_conflict（无论范围），实际：${JSON.stringify(selected)}`);
+});
+
+test("inc-6 #26：author_input_conflict 被 proposePatches 过滤", () => {
+  // 即使 feedback 误传入 patchService，filter 也应拦截
+  const conflictFeedback = {
+    findingId: "verifier:author_input_conflict:3",
+    span: { start: 0, end: 0, excerpt: "" },
+    conflictFact: "inviolableFacts 内部矛盾",
+    sourceRef: "chapter-seed:inviolableFacts[0]",
+    failureType: "author_input_conflict",
+    confidence: 1,
+    allowedRepairRange: { start: 0, end: 0, excerpt: "" }, // 零宽
+    repairSuggestion: "（作者输入矛盾，无法通过正文修复）请修订 ChapterSeed",
+    certainty: "deterministic",
+    coverageStatus: "missing",
+  };
+  const draft = "李一凡站在岸边。";
+
+  const patchService = createCandidatePatchService();
+  const proposals = patchService.proposePatches(draft, [conflictFeedback]);
+  assert.equal(proposals.length, 0,
+    `proposePatches 应过滤 author_input_conflict（不生成正文补丁），实际：${JSON.stringify(proposals)}`);
+});
+
+test("inc-6 #27：真实 inviolableFacts 冲突场景 → 整链不产出正文补丁", () => {
+  // 端到端：真实 inviolableFacts 内部矛盾 → verifier 产出 author_input_conflict
+  // → compileFeedback 返回空 → proposePatches 不产出任何 proposal
+  const verifier = createNarrativeVerifierSuite();
+  const draft = "李一凡站在青鱼嘴水域岸边。";
+  const report = verifier.verify({
+    text: draft,
+    context: EMPTY_CONTEXT,
+    chapterIntent: "本章功能：调查",
+    knownCharacterNames: ["李一凡"],
+    inviolableFacts: [
+      "李一凡在场",
+      "李一凡不在场",
+    ],
+  });
+
+  // verifier 应产出 author_input_conflict finding
+  const conflictFindings = report.findings.filter(
+    (f) => f.failureType === "author_input_conflict",
+  );
+  assert.ok(conflictFindings.length > 0,
+    `inviolableFacts 直接否定应产出 author_input_conflict，实际：${JSON.stringify(report.findings)}`);
+
+  // 链路 1：compileFeedback 应过滤掉所有 author_input_conflict
+  const feedbacks = compileFeedback(report);
+  const conflictFeedbacks = feedbacks.filter(
+    (fb) => fb.failureType === "author_input_conflict",
+  );
+  assert.equal(conflictFeedbacks.length, 0,
+    `compileFeedback 不应为 author_input_conflict 产出 feedback，实际：${JSON.stringify(conflictFeedbacks)}`);
+
+  // 链路 2：selectRepairFindings 应过滤掉所有 author_input_conflict
+  const selected = selectRepairFindings(report.hardFindings);
+  const conflictSelected = selected.filter(
+    (f) => f.failureType === "author_input_conflict",
+  );
+  assert.equal(conflictSelected.length, 0,
+    `selectRepairFindings 不应保留 author_input_conflict，实际：${JSON.stringify(conflictSelected)}`);
+
+  // 链路 3：proposePatches 应不产出任何 proposal（针对 author_input_conflict）
+  const patchService = createCandidatePatchService();
+  const loopFeedbacks = selected.map(findingToFeedback);
+  const proposals = patchService.proposePatches(draft, loopFeedbacks);
+  const conflictProposals = proposals.filter(
+    (p) => {
+      // 通过 findingId 反查原 finding 的 failureType
+      const orig = report.findings.find((f) => f.id === p.findingId);
+      return orig?.failureType === "author_input_conflict";
+    },
+  );
+  assert.equal(conflictProposals.length, 0,
+    `proposePatches 不应为 author_input_conflict 产出 proposal，实际：${JSON.stringify(conflictProposals)}`);
+});
+
+test("inc-6 #28：零宽放行仅限 intent_omission + deterministic（其他 deterministic 零宽不放行）", () => {
+  // 构造 fact_contradiction（deterministic + 零宽）→ 应被过滤
+  // 这是 inc-5 收紧零宽放行条件的核心回归点
+  const factContradictionFinding = {
+    id: "verifier:fact_contradiction:zero-width",
+    source: "fact_contradiction_checker",
+    failureType: "fact_contradiction",
+    severity: "hard",
+    span: { start: 0, end: 0, excerpt: "" },
+    conflictFact: "属性矛盾：color=red vs color=blue",
+    sourceRef: "canon:character.color",
+    confidence: 1,
+    certainty: "deterministic",
+    coverageStatus: "missing",
+    allowedRepairRange: { start: 0, end: 0, excerpt: "" }, // 零宽
+    description: "确定性事实矛盾（零宽）",
+  };
+  const report = {
+    findings: [factContradictionFinding],
+    hardFindings: [factContradictionFinding],
+    softFindings: [],
+  };
+
+  // compileFeedback：零宽 + deterministic + 非 intent_omission → 过滤
+  const feedbacks = compileFeedback(report);
+  assert.equal(feedbacks.length, 0,
+    `零宽 deterministic 非 intent_omission 不应编译为 feedback，实际：${JSON.stringify(feedbacks)}`);
+
+  // selectRepairFindings：同样过滤
+  const selected = selectRepairFindings([factContradictionFinding]);
+  assert.equal(selected.length, 0,
+    `零宽 deterministic 非 intent_omission 不应进入修复批次，实际：${JSON.stringify(selected)}`);
+
+  // proposePatches：同样过滤
+  const conflictFeedback = {
+    findingId: factContradictionFinding.id,
+    span: { start: 0, end: 0, excerpt: "" },
+    conflictFact: factContradictionFinding.conflictFact,
+    sourceRef: factContradictionFinding.sourceRef,
+    failureType: "fact_contradiction",
+    confidence: 1,
+    allowedRepairRange: { start: 0, end: 0, excerpt: "" },
+    repairSuggestion: "修正属性矛盾",
+    certainty: "deterministic",
+    coverageStatus: "missing",
+  };
+  const patchService = createCandidatePatchService();
+  const proposals = patchService.proposePatches("test", [conflictFeedback]);
+  assert.equal(proposals.length, 0,
+    `零宽 deterministic 非 intent_omission 不应产出 proposal，实际：${JSON.stringify(proposals)}`);
+});
+
+test("inc-6 #29：非零宽 deterministic finding 不被误伤（避免过度过滤回归）", () => {
+  // 回归保护：收紧零宽放行条件后，非零宽 deterministic finding 仍应正常进入补丁链
+  // 构造一个 format_error（deterministic + 非零宽范围）→ 应通过所有三层过滤
+  const formatErrorFinding = {
+    id: "verifier:format_error:1",
+    source: "format_checker",
+    failureType: "format_error",
+    severity: "hard",
+    span: { start: 10, end: 20, excerpt: "损坏片段" },
+    conflictFact: "正文存在未闭合引号",
+    sourceRef: "format:unclosed_quote",
+    confidence: 1,
+    certainty: "deterministic",
+    coverageStatus: "missing",
+    allowedRepairRange: { start: 10, end: 20, excerpt: "" }, // 非零宽
+    description: "格式损坏",
+  };
+  const report = {
+    findings: [formatErrorFinding],
+    hardFindings: [formatErrorFinding],
+    softFindings: [],
+  };
+
+  // 链路 1：compileFeedback 应保留
+  const feedbacks = compileFeedback(report);
+  assert.equal(feedbacks.length, 1,
+    `非零宽 deterministic format_error 应编译为 feedback，实际：${feedbacks.length}`);
+  assert.equal(feedbacks[0].failureType, "format_error",
+    "feedback failureType 应为 format_error");
+
+  // 链路 2：selectRepairFindings 应保留
+  const selected = selectRepairFindings([formatErrorFinding]);
+  assert.equal(selected.length, 1,
+    `非零宽 deterministic format_error 应进入修复批次，实际：${selected.length}`);
+
+  // 链路 3：proposePatches 应产出 proposal
+  const patchService = createCandidatePatchService();
+  const loopFeedbacks = selected.map(findingToFeedback);
+  const proposals = patchService.proposePatches("0123456789损坏片段正文", loopFeedbacks);
+  assert.equal(proposals.length, 1,
+    `非零宽 deterministic format_error 应产出 proposal，实际：${proposals.length}`);
+  assert.equal(proposals[0].type, "sentence_patch",
+    "format_error 应映射为 sentence_patch");
+});
+
+test("inc-6 #30：verbatim 原句缺失仍正常进入补丁链（核心能力不被误伤）", () => {
+  // 核心回归：inc-3/inc-5 已验证的零宽 verbatim 插入能力，在 inc-5 收紧后必须仍然有效
+  const verifier = createNarrativeVerifierSuite();
+  const chapterIntent = [
+    '作者章纲必须包含：[verbatim] 原句：「章末必须保留这一句」',
+  ].join("\n");
+  const draft = "正文段落，但没有包含 verbatim 原句。";
+  const report = verifier.verify({
+    text: draft,
+    context: EMPTY_CONTEXT,
+    chapterIntent,
+    knownCharacterNames: [],
+    inviolableFacts: [],
+  });
+
+  // 链路 1：compileFeedback 应保留零宽 verbatim finding
+  const feedbacks = compileFeedback(report);
+  const verbatimFeedbacks = feedbacks.filter(
+    (fb) => fb.failureType === "intent_omission" && fb.certainty === "deterministic",
+  );
+  assert.ok(verbatimFeedbacks.length > 0,
+    `零宽 verbatim intent_omission 应编译为 feedback，实际：${JSON.stringify(feedbacks)}`);
+
+  // 链路 2：selectRepairFindings 应保留
+  const selected = selectRepairFindings(report.hardFindings);
+  const verbatimSelected = selected.filter(
+    (f) => f.failureType === "intent_omission" && f.certainty === "deterministic",
+  );
+  assert.ok(verbatimSelected.length > 0,
+    `零宽 verbatim intent_omission 应进入修复批次，实际：${JSON.stringify(selected)}`);
+
+  // 链路 3：proposePatches 应产出 proposal
+  const patchService = createCandidatePatchService();
+  const loopFeedbacks = selected.map(findingToFeedback);
+  const proposals = patchService.proposePatches(draft, loopFeedbacks);
+  assert.ok(proposals.length > 0,
+    `零宽 verbatim intent_omission 应产出 proposal，实际：${proposals.length}`);
+  const textLen = draft.length;
+  assert.equal(proposals[0].targetSpan.start, textLen,
+    `proposal 应使用零宽插入点 [textLen, textLen] = [${textLen}, ${textLen}]`);
+  assert.equal(proposals[0].targetSpan.end, textLen,
+    `proposal 应使用零宽插入点 [textLen, textLen] = [${textLen}, ${textLen}]`);
+});
