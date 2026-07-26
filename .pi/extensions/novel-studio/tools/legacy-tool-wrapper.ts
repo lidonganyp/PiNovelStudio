@@ -64,7 +64,16 @@ export function wrapLegacyTool(raw: any): any {
     parameters,
     async execute(toolCallId: string, params: any, _signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
       try {
-        const projectRoot = resolveProjectRoot(ctx?.cwd || getProjectRoot());
+        // Respect _projectRoot passed by the caller (e.g., novel-runtime's invoke.js sets it
+        // to a per-job temp workspace root like /app/.tmp/workspaces/{jobId}). Without this,
+        // resolveProjectRoot walks UP the tree looking for PiNovelStudio marker files
+        // (.pi/extensions/novel-studio + docs/top-tier-chinese-novel-system-development-plan.md),
+        // which don't exist in the temp directory, so it falls back to process.cwd() (/app),
+        // causing loadWorkspace/loadStyleProfile to look at /app/workspaces/{id} instead of
+        // the materialized temp path — and "作者风格档案缺失" blocks generation.
+        const projectRoot = params?._projectRoot
+          ? params._projectRoot
+          : resolveProjectRoot(ctx?.cwd || getProjectRoot());
         setProjectRoot(projectRoot);
         const paramsWithRoot: Record<string, unknown> = { ...params, _projectRoot: projectRoot };
         if (typeof _onUpdate === "function") {
