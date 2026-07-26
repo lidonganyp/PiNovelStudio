@@ -34,9 +34,10 @@ import type { CompiledContext } from "../../v2/core/types.js";
 import type {
   NarrativeVerifierSuite,
   NarrativeVerifierReport,
+  VerificationFinding,
 } from "../verification/narrative-verifier-suite.js";
 import type { CandidatePatchService, PatchProposal } from "./candidate-patch-service.js";
-import { compileFeedback } from "../verification/verification-feedback-compiler.js";
+import { findingToFeedback } from "../verification/verification-feedback-compiler.js";
 import {
   createEvidencePlan,
   type EvidencePlan,
@@ -140,6 +141,49 @@ interface VerifyPatchResult {
   repairRounds: number;
   verifierCleared: boolean;
   hardFindingCount: number;
+  stopReason?: AgentLoopStopReason;
+}
+
+const DEFAULT_REPAIR_BATCH_SIZE = 4;
+const MAX_STAGNANT_REPAIR_ROUNDS = 2;
+
+function isVerbatimIntentFinding(finding: VerificationFinding): boolean {
+  return /(?:原句|原文|\[verbatim\])/iu.test(`${finding.conflictFact}\n${finding.sourceRef}`);
+}
+
+function repairPriority(finding: VerificationFinding): number {
+  if (finding.failureType !== "intent_omission") return 0;
+  if (isVerbatimIntentFinding(finding)) return 1;
+  if (finding.source === "event_intent_checker") return 3;
+  return 2;
+}
+
+/**
+ * Select a bounded repair batch. Specific must-include findings suppress broad
+ * event-summary findings until the concrete obligations have been addressed.
+ */
+export function selectRepairFindings(
+  findings: VerificationFinding[],
+  limit = DEFAULT_REPAIR_BATCH_SIZE,
+): VerificationFinding[] {
+  const unique = [...new Map(findings.map((finding) => [finding.id, finding])).values()];
+  const hasSpecificIntentFinding = unique.some(
+    (finding) => finding.failureType === "intent_omission" && finding.source !== "event_intent_checker",
+  );
+  const eligible = hasSpecificIntentFinding
+    ? unique.filter((finding) => finding.source !== "event_intent_checker")
+    : unique;
+
+  return eligible
+    .map((finding, index) => ({ finding, index }))
+    .sort((left, right) =>
+      repairPriority(left.finding) - repairPriority(right.finding) || left.index - right.index)
+    .slice(0, Math.max(1, limit))
+    .map(({ finding }) => finding);
+}
+
+function findingIds(findings: VerificationFinding[]): Set<string> {
+  return new Set(findings.map((finding) => finding.id));
 }
 
 export class NarrativeAgentLoop {
@@ -237,6 +281,7 @@ export class NarrativeAgentLoop {
     let repairRounds = 0;
     let verifierCleared = false;
     let hardFindingCount = 0;
+    let repairStopReason: AgentLoopStopReason | undefined;
 
     if (this.verifier && this.patchService) {
       try {
@@ -247,6 +292,7 @@ export class NarrativeAgentLoop {
         repairRounds = vp.repairRounds;
         verifierCleared = vp.verifierCleared;
         hardFindingCount = vp.hardFindingCount;
+        repairStopReason = vp.stopReason;
         // 若 patch 修改了正文，更新 draft.md
         if (finalText !== turns.draftText) {
           this.candidateWorkspace.writeDraft(finalText);
@@ -269,7 +315,7 @@ export class NarrativeAgentLoop {
     // ── 5. 记录 lineage + output ────────────────────────────────────────
     const stopReason: AgentLoopStopReason = verifierCleared
       ? "verifier_cleared"
-      : turns.stopReason;
+      : repairStopReason ?? turns.stopReason;
 
     const lineage: AgentLoopLineage = {
       evidencePlan: plan,
@@ -409,14 +455,14 @@ export class NarrativeAgentLoop {
    * 流程：
    * 1. verifier.verify(draftText) → save verifier-report.json + trajectory
    * 2. 无硬失败 → 返回原 draft（verifierCleared=true, repairRounds=0）
-   * 3. compileFeedback → patchService.proposePatches → save patch-proposals.json
+   * 3. 选择有限且有优先级的 finding 批次 → patchService.proposePatches
    * 4. 修复循环（maxRepairRounds，每轮前检查预算）：
    *    - generatePatchedText → evaluatePatch（退化则 rejected 跳过）
    *    - 有 accepted → reverify；清零则用 patchedText 返回
    *    - 仍有硬失败 → 更新 feedbacks/proposals 进入下轮
-   * 5. 循环结束仍有硬失败 → 返回原 draft（verifierCleared=false）
+   * 5. 连续两轮无收敛则停止；仍有硬失败时返回最后已接受候选
    *
-   * 失败/退化不触发 fallback，只保留原 draft。
+   * 未清零不触发 fallback，也不会进入生产保存；候选只用于 trace 和诊断。
    */
   private async verifyAndPatch(
     draftText: string,
@@ -448,14 +494,17 @@ export class NarrativeAgentLoop {
       };
     }
 
-    // 3. compileFeedback → proposePatches
-    let feedbacks = compileFeedback(report);
+    // 3. 每轮只修有限批次，避免把整章所有约束一次性压给模型。
+    let selectedFindings = selectRepairFindings(report.hardFindings);
+    let feedbacks = selectedFindings.map(findingToFeedback);
     let proposals = patchService.proposePatches(draftText, feedbacks);
     this.candidateWorkspace.savePatchProposals(proposals);
     for (const p of proposals) this.trajectory.recordPatchProposal(p);
 
     let currentText = draftText;
     let repairRounds = 0;
+    let stagnantRounds = 0;
+    let stopReason: AgentLoopStopReason | undefined;
 
     // 4. 修复循环
     while (repairRounds < this.maxRepairRounds) {
@@ -463,16 +512,15 @@ export class NarrativeAgentLoop {
       if (proposals.filter((p) => !p.rejected).length === 0) break;
 
       repairRounds++;
-      this.trajectory.recordRepairRound({
-        round: repairRounds,
-        hardFindings: report.hardFindings.length,
-        proposals: proposals.length,
-      });
-
       // 生成 patched text
       let patchedText: string;
       try {
-        patchedText = await this.generatePatchedText(currentText, proposals, input);
+        patchedText = await this.generatePatchedText(
+          currentText,
+          proposals,
+          selectedFindings,
+          input,
+        );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         this.trajectory.recordFailure({
@@ -504,6 +552,8 @@ export class NarrativeAgentLoop {
         break;
       }
 
+      const previousFindingIds = findingIds(report.hardFindings);
+
       // reverify patchedText
       report = verifier.verify({
         text: patchedText,
@@ -514,6 +564,22 @@ export class NarrativeAgentLoop {
       });
       this.candidateWorkspace.saveVerifierReport(report);
       this.trajectory.recordVerifierReport(report);
+      currentText = patchedText;
+
+      const nextFindingIds = findingIds(report.hardFindings);
+      const resolvedFindingIds = [...previousFindingIds].filter((id) => !nextFindingIds.has(id));
+      const remainingFindingIds = [...nextFindingIds];
+      const madeProgress = nextFindingIds.size < previousFindingIds.size;
+      stagnantRounds = madeProgress ? 0 : stagnantRounds + 1;
+      this.trajectory.recordRepairRound({
+        round: repairRounds,
+        hardFindingsBefore: previousFindingIds.size,
+        hardFindingsAfter: nextFindingIds.size,
+        selectedFindingIds: selectedFindings.map((finding) => finding.id),
+        resolvedFindingIds,
+        remainingFindingIds,
+        stagnantRounds,
+      });
 
       if (!report.hasHardFailure) {
         // 清零 → 用 patchedText 替换
@@ -527,21 +593,28 @@ export class NarrativeAgentLoop {
         };
       }
 
-      // 仍有硬失败 → 更新 feedbacks/proposals 进入下轮
-      currentText = patchedText;
-      feedbacks = compileFeedback(report);
+      if (stagnantRounds >= MAX_STAGNANT_REPAIR_ROUNDS) {
+        stopReason = "stagnant";
+        break;
+      }
+
+      // 仍有硬失败 → 选择下一有限批次进入下轮
+      selectedFindings = selectRepairFindings(report.hardFindings);
+      feedbacks = selectedFindings.map(findingToFeedback);
       proposals = patchService.proposePatches(currentText, feedbacks);
       for (const p of proposals) this.trajectory.recordPatchProposal(p);
     }
 
-    // 5. 循环结束仍有硬失败 → 保留原 draft
+    // 5. 循环结束仍有硬失败 → 保留最后一个通过退化检查的候选供诊断。
+    // 上层仍以 verifierCleared=false hard block，候选不会保存为正式章节。
     return {
-      text: draftText,
+      text: currentText,
       verifierReport: report,
       patchProposals: proposals,
       repairRounds,
       verifierCleared: false,
       hardFindingCount: report.hardFindings.length,
+      ...(stopReason ? { stopReason } : {}),
     };
   }
 
@@ -553,11 +626,23 @@ export class NarrativeAgentLoop {
   private async generatePatchedText(
     originalDraft: string,
     proposals: PatchProposal[],
+    findings: VerificationFinding[],
     input: AgentLoopInput,
   ): Promise<string> {
     const activeProposals = proposals.filter((p) => !p.rejected);
+    const findingById = new Map(findings.map((finding) => [finding.id, finding]));
     const patchInstructions = activeProposals
-      .map((p, i) => `[修复${i + 1}] 范围 [${p.targetSpan.start}, ${p.targetSpan.end}]\n方向：${p.repairDirection}\n建议：${p.suggestion}`)
+      .map((p, i) => {
+        const finding = findingById.get(p.findingId);
+        return [
+          `[修复${i + 1}] findingId=${p.findingId}`,
+          `证据来源：${finding?.sourceRef ?? "unknown"}`,
+          `必须解决：${finding?.conflictFact ?? p.suggestion}`,
+          `允许范围：[${p.targetSpan.start}, ${p.targetSpan.end}]`,
+          `方向：${p.repairDirection}`,
+          `建议：${p.suggestion}`,
+        ].join("\n");
+      })
       .join("\n");
 
     const userPrompt = [
