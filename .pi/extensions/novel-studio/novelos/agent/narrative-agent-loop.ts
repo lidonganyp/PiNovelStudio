@@ -22,16 +22,19 @@
  * fallback 边界（Task B.2）：
  * - 只有 runAgentTurns 模型失败才返回 fallback 标记；生产编排据此 hard block，不回退 one-shot raw；
  * - verify/patch 未清零时保留最后已接受候选供诊断（fallback=false, verifierCleared=false）。
+ *
+ * 文件拆分历史（simplicity-gate 800 行限制）：
+ * - 2026-07-26：将类型定义、修复选择器、patch 合并/prompt 构造拆分到独立模块，
+ *   主文件只保留 NarrativeAgentLoop 类核心编排逻辑。
  */
 
 import type { NovelOSRuntime } from "../runtime/runtime.js";
-import type { BudgetPolicy, BudgetSnapshot } from "../runtime/budget-policy.js";
+import type { BudgetPolicy } from "../runtime/budget-policy.js";
 import type { TrajectoryStore } from "../trajectory/trajectory-store.js";
 import type { NarrativeToolRegistry } from "./narrative-tool-registry.js";
 import type { NarrativeSearchService } from "./narrative-search-service.js";
 import type { CandidateWorkspace } from "./candidate-workspace.js";
 import type { PermissionPolicy } from "../security/permission-policy.js";
-import type { CompiledContext } from "../../v2/core/types.js";
 import type {
   NarrativeVerifierSuite,
   NarrativeVerifierReport,
@@ -44,179 +47,41 @@ import {
   type EvidencePlan,
 } from "./evidence-plan.js";
 
-// ============================================================================
-// 类型
-// ============================================================================
+// 公共 API：从拆分模块 re-export 类型，保持下游 import 路径稳定
+export type {
+  AgentLoopInput,
+  AgentLoopStopReason,
+  AgentLoopLineage,
+  AgentLoopResult,
+  NarrativeAgentLoopOptions,
+} from "./narrative-agent-loop-types.js";
 
-export interface AgentLoopInput {
-  /** 本章意图摘要 */
-  chapterIntent: string;
-  /** 种子上下文（CompiledContext 摘要或 ChapterSeed 文本） */
-  seedContext: string;
-  /** 编译后的上下文（供 verifier 使用，Task B.2） */
-  context: CompiledContext;
-  /** 已知角色名（含 aliases，用于实体幻觉检测） */
-  knownCharacterNames?: string[];
-  /** M1.1：本章不可违反的必需事实（来自 ChapterIntent.inviolableFacts） */
-  inviolableFacts?: string[];
-  /**
-   * R6 修复：前文（eval 模式续写用）。
-   * eval 模式下由编排器传入 evalPrefix（reference chapter 的前文），
-   * 注入 agent userPrompt 的【前文】段，确保 agentic 生成续写同一故事，
-   * 而非从 scratch 生成不同故事。生产模式（非 eval）不传，行为不变。
-   */
-  evalPrefix?: string;
-}
-
-export type AgentLoopStopReason =
-  | "model_declares_sufficient"
-  | "budget_exhausted"
-  | "stagnant"
-  | "verifier_cleared"
-  | "model_error"
-  | "tool_error";
-
-export interface AgentLoopLineage {
-  evidencePlan: EvidencePlan;
-  toolCalls: number;
-  sourceRefs: string[];
-  stopReason: AgentLoopStopReason;
-  budgetSnapshot: BudgetSnapshot;
-  /** 收集的证据事实文本 */
-  evidenceFacts: string[];
-  /** verifier 是否清零（无硬失败或 patch 后清零） */
-  verifierCleared: boolean;
-  /** 硬失败数量（最终） */
-  hardFindingCount: number;
-}
-
-export interface AgentLoopResult {
-  /** agentic_raw 正文（fallback 时为空字符串） */
-  text: string;
-  /** lineage（写入 candidate-workspace/lineage.json） */
-  lineage: AgentLoopLineage;
-  /** 是否需要回退 one_shot_raw */
-  fallback: boolean;
-  /** verifier 验证报告（Task B.2） */
-  verifierReport?: NarrativeVerifierReport;
-  /** patch proposals（Task B.2） */
-  patchProposals?: PatchProposal[];
-  /** 修复轮次（Task B.2） */
-  repairRounds: number;
-}
+// 内部辅助模块
+import type {
+  AgentLoopInput,
+  AgentLoopStopReason,
+  AgentLoopLineage,
+  AgentLoopResult,
+  NarrativeAgentLoopOptions,
+  AgentTurnsResult,
+  VerifyPatchResult,
+} from "./narrative-agent-loop-types.js";
+import {
+  DEFAULT_REPAIR_BATCH_SIZE,
+  MAX_STAGNANT_REPAIR_ROUNDS,
+  isSemanticFinding,
+  selectRepairFindings,
+  findingIds,
+} from "./narrative-repair-selector.js";
+import {
+  applyLocalReplacements,
+  buildLocalReplacementPrompt,
+  buildFullRewritePrompt,
+} from "./narrative-patch-merger.js";
 
 // ============================================================================
 // NarrativeAgentLoop
 // ============================================================================
-
-export interface NarrativeAgentLoopOptions {
-  runtime: NovelOSRuntime;
-  registry: NarrativeToolRegistry;
-  searchService: NarrativeSearchService;
-  candidateWorkspace: CandidateWorkspace;
-  permissionPolicy: PermissionPolicy;
-  budget: BudgetPolicy;
-  trajectory: TrajectoryStore;
-  /** verifier（Task B.2）；不提供则跳过 verify/patch */
-  verifier?: NarrativeVerifierSuite;
-  /** patch service（Task B.2）；不提供则跳过 patch */
-  patchService?: CandidatePatchService;
-  /** 最大修复轮次（默认 env PINOVEL_NOVELOS_MAX_REPAIR_ROUNDS 或 2） */
-  maxRepairRounds?: number;
-}
-
-/** runAgentTurns 返回 */
-interface AgentTurnsResult {
-  draftText: string;
-  sourceRefs: string[];
-  evidenceFacts: string[];
-  toolCalls: number;
-  stopReason: AgentLoopStopReason;
-}
-
-/** verifyAndPatch 返回 */
-interface VerifyPatchResult {
-  text: string;
-  verifierReport: NarrativeVerifierReport;
-  patchProposals: PatchProposal[];
-  repairRounds: number;
-  verifierCleared: boolean;
-  hardFindingCount: number;
-  stopReason?: AgentLoopStopReason;
-}
-
-const DEFAULT_REPAIR_BATCH_SIZE = 4;
-const MAX_STAGNANT_REPAIR_ROUNDS = 2;
-/** P0-3：语义类 finding（intent_omission）最多自动修复1轮 */
-const MAX_SEMANTIC_REPAIR_ROUNDS = 1;
-/** P0-3：确定性 finding（format/fact/canon 等）可按现有预算执行最多2轮 */
-const MAX_DETERMINISTIC_REPAIR_ROUNDS = 2;
-
-function isVerbatimIntentFinding(finding: VerificationFinding): boolean {
-  return /(?:原句|原文|\[verbatim\])/iu.test(`${finding.conflictFact}\n${finding.sourceRef}`);
-}
-
-function isSemanticFinding(finding: VerificationFinding): boolean {
-  // P0-3 修复：只有 heuristic intent_omission 才算语义遗漏（受1轮预算约束）。
-  // - deterministic intent_omission（如 verbatim 原句缺失）→ 确定性遗漏，按现有预算2轮
-  // - corroborated intent_omission → 多源印证遗漏，按现有预算2轮
-  // - 无 certainty 字段的旧 finding（向后兼容）→ 不算语义，按现有预算2轮
-  // 这样保证 verbatim 原句缺失等确定性问题仍可修复2轮，只有启发式误判受1轮约束。
-  return finding.failureType === "intent_omission" && finding.certainty === "heuristic";
-}
-
-function repairPriority(finding: VerificationFinding): number {
-  if (finding.failureType !== "intent_omission") return 0;
-  if (isVerbatimIntentFinding(finding)) return 1;
-  if (finding.source === "event_intent_checker") return 3;
-  return 2;
-}
-
-/**
- * Select a bounded repair batch. Specific must-include findings suppress broad
- * event-summary findings until the concrete obligations have been addressed.
- *
- * P0-3 修复：
- * - 过滤掉空范围 finding（allowedRepairRange.start === end）→ 诊断 only，不进入修复批次
- * - 过滤掉已达 semantic 修复预算上限的 finding（由 semanticRepairTracker 追踪）
- */
-export function selectRepairFindings(
-  findings: VerificationFinding[],
-  limit = DEFAULT_REPAIR_BATCH_SIZE,
-  semanticRepairTracker?: Map<string, number>,
-): VerificationFinding[] {
-  const unique = [...new Map(findings.map((finding) => [finding.id, finding])).values()];
-  // P0-3：过滤空范围 finding（诊断 only，不触发改写）
-  const nonEmptyRange = unique.filter(
-    (finding) => finding.allowedRepairRange.end > finding.allowedRepairRange.start,
-  );
-  // P0-3：过滤已达 semantic 修复预算的 finding
-  const budgetEligible = semanticRepairTracker
-    ? nonEmptyRange.filter((finding) => {
-        if (!isSemanticFinding(finding)) return true;
-        const repaired = semanticRepairTracker.get(finding.id) ?? 0;
-        return repaired < MAX_SEMANTIC_REPAIR_ROUNDS;
-      })
-    : nonEmptyRange;
-
-  const hasSpecificIntentFinding = budgetEligible.some(
-    (finding) => finding.failureType === "intent_omission" && finding.source !== "event_intent_checker",
-  );
-  const eligible = hasSpecificIntentFinding
-    ? budgetEligible.filter((finding) => finding.source !== "event_intent_checker")
-    : budgetEligible;
-
-  return eligible
-    .map((finding, index) => ({ finding, index }))
-    .sort((left, right) =>
-      repairPriority(left.finding) - repairPriority(right.finding) || left.index - right.index)
-    .slice(0, Math.max(1, limit))
-    .map(({ finding }) => finding);
-}
-
-function findingIds(findings: VerificationFinding[]): Set<string> {
-  return new Set(findings.map((finding) => finding.id));
-}
 
 export class NarrativeAgentLoop {
   private readonly runtime: NovelOSRuntime;
@@ -237,15 +102,15 @@ export class NarrativeAgentLoop {
   private readonly semanticRepairTracker: Map<string, number> = new Map();
 
   constructor(options: NarrativeAgentLoopOptions) {
-    this.runtime = options.runtime;
-    this.registry = options.registry;
-    this.searchService = options.searchService;
-    this.candidateWorkspace = options.candidateWorkspace;
-    this.permissionPolicy = options.permissionPolicy;
+    this.runtime = options.runtime as NovelOSRuntime;
+    this.registry = options.registry as NarrativeToolRegistry;
+    this.searchService = options.searchService as NarrativeSearchService;
+    this.candidateWorkspace = options.candidateWorkspace as CandidateWorkspace;
+    this.permissionPolicy = options.permissionPolicy as PermissionPolicy;
     this.budget = options.budget;
-    this.trajectory = options.trajectory;
-    this.verifier = options.verifier;
-    this.patchService = options.patchService;
+    this.trajectory = options.trajectory as TrajectoryStore;
+    this.verifier = options.verifier as NarrativeVerifierSuite | undefined;
+    this.patchService = options.patchService as CandidatePatchService | undefined;
     const envRounds = Number(process.env.PINOVEL_NOVELOS_MAX_REPAIR_ROUNDS);
     this.maxRepairRounds = options.maxRepairRounds ?? (Number.isFinite(envRounds) && envRounds >= 0 ? envRounds : 2);
 
@@ -383,15 +248,9 @@ export class NarrativeAgentLoop {
   /**
    * 触发 Agent 原生 loop：构建 userPrompt → runtime.prompt() → waitForIdle()
    * → 从 agent.state.messages 提取 draft + sourceRefs。
-   *
-   * Agent 原生 loop（pi-agent-core）：
-   * - streamFn 解析模型输出的 `<tool_call>` 指令 → emit toolCall 块 + stopReason="toolUse"
-   * - Agent dispatch 工具 → 追加 toolResult 消息 → 再调 streamFn（回灌证据到 userPrompt）
-   * - 直到 stopReason="stop"（模型输出正文）或 afterToolCall terminate（预算耗尽）
    */
   private async runAgentTurns(input: AgentLoopInput): Promise<AgentTurnsResult> {
     // R6 修复：eval 模式下注入【前文】段，确保 agentic 生成续写同一故事。
-    // 前文置于 prompt 最前，让 agent 在检索证据 + 生成正文时始终锚定正确的故事上下文。
     const promptParts: string[] = [];
     if (input.evalPrefix && input.evalPrefix.trim().length > 0) {
       promptParts.push("【前文】", input.evalPrefix, "");
@@ -499,8 +358,6 @@ export class NarrativeAgentLoop {
    *    - 有 accepted → reverify；清零则用 patchedText 返回
    *    - 仍有硬失败 → 更新 feedbacks/proposals 进入下轮
    * 5. 连续两轮无收敛则停止；仍有硬失败时返回最后已接受候选
-   *
-   * 未清零不触发 fallback，也不会进入生产保存；候选只用于 trace 和诊断。
    */
   private async verifyAndPatch(
     draftText: string,
@@ -688,79 +545,19 @@ export class NarrativeAgentLoop {
     findings: VerificationFinding[],
   ): Promise<string> {
     const activeProposals = proposals.filter((p) => !p.rejected);
-    const findingById = new Map(findings.map((finding) => [finding.id, finding]));
 
     // P0-3：判断是否使用局部 replacement 模式
     const allLocalReplacement = activeProposals.length > 0
       && activeProposals.every((p) => p.localReplacement === true);
 
-    const patchInstructions = activeProposals
-      .map((p, i) => {
-        const finding = findingById.get(p.findingId);
-        const spanStart = p.targetSpan.start;
-        const spanEnd = p.targetSpan.end;
-        const originalExcerpt = originalDraft.slice(spanStart, Math.min(spanEnd + 20, originalDraft.length));
-        return [
-          `[修复${i + 1}] findingId=${p.findingId}`,
-          `确定性等级：${p.certainty ?? "unknown"}`,
-          `语义类：${p.isSemantic ? "是（受1轮预算约束）" : "否"}`,
-          `证据来源：${finding?.sourceRef ?? "unknown"}`,
-          `必须解决：${finding?.conflictFact ?? p.suggestion}`,
-          `具体要求：${finding?.description ?? p.suggestion}`,
-          `允许范围：[${spanStart}, ${spanEnd}]`,
-          `原片段：${originalExcerpt}`,
-          `方向：${p.repairDirection}`,
-          `建议：${p.suggestion}`,
-        ].join("\n");
-      })
-      .join("\n");
-
     let userPrompt: string;
     if (allLocalReplacement) {
-      // P0-3：局部 replacement 模式 — 只输出 span 内替换文本
-      const replacementSpecs = activeProposals.map((p, i) => {
-        const finding = findingById.get(p.findingId);
-        const spanStart = p.targetSpan.start;
-        const spanEnd = p.targetSpan.end;
-        const originalExcerpt = originalDraft.slice(spanStart, spanEnd);
-        return [
-          `[替换${i + 1}]`,
-          `范围：[${spanStart}, ${spanEnd}]`,
-          `原片段：「${originalExcerpt}」`,
-          `问题：${finding?.conflictFact ?? p.suggestion}`,
-          `要求：${finding?.description ?? p.suggestion}`,
-          `建议：${p.suggestion}`,
-        ].join("\n");
-      }).join("\n\n");
-
-      userPrompt = [
-        "以下正文存在若干局部硬伤，请只输出每个标记范围的替换文本，不要重写整章。",
-        "不要调用工具，按以下格式输出：",
-        "```",
-        "[替换1]",
-        "<只输出范围 [start, end] 内的替换文本>",
-        "[替换2]",
-        "<只输出范围 [start, end] 内的替换文本>",
-        "```",
-        "",
-        "原始正文：",
-        originalDraft,
-        "",
-        "需要替换的范围与要求：",
-        replacementSpecs,
-      ].join("\n");
+      // P1-4 修复：局部 replacement 模式 — 只输出 span 内替换文本
+      // prompt 构造委托给 narrative-patch-merger.ts
+      userPrompt = buildLocalReplacementPrompt(originalDraft, activeProposals, findings);
     } else {
       // 完整正文模式（含整章范围或混合场景）
-      userPrompt = [
-        "以下正文存在若干硬伤，请在标记范围内修复，保持其余内容不变，输出完整正文。",
-        "不要调用工具，直接输出修复后的完整正文。",
-        "",
-        "原始正文：",
-        originalDraft,
-        "",
-        "修复范围与方向：",
-        patchInstructions,
-      ].join("\n");
+      userPrompt = buildFullRewritePrompt(originalDraft, activeProposals, findings);
     }
 
     await this.runtime.prompt(userPrompt);
@@ -787,72 +584,21 @@ export class NarrativeAgentLoop {
       throw new Error("patch 模型未返回有效文本");
     }
 
-    // P0-3：局部 replacement 模式 → 解析替换文本并合并到原 draft
+    // P1-4 修复：局部 replacement 模式 → 解析替换文本并合并到原 draft
+    // **解析失败时不返回模型原始输出**：模型被要求只输出 span 内替换文本，
+    // 若解析失败说明输出格式不符，直接返回会把局部片段当完整正文保存，污染章节。
+    // 改为抛错，由上层 verifyAndPatch 的 catch 兜底（保留上一候选，verifierCleared=false）。
     if (allLocalReplacement) {
-      const merged = this.applyLocalReplacements(originalDraft, activeProposals, modelOutput);
+      const merged = applyLocalReplacements(originalDraft, activeProposals, modelOutput);
       if (merged === null) {
-        // 解析失败 → 回退到模型原始输出（让退化检查兜底）
-        return modelOutput;
+        throw new Error(
+          `局部替换解析失败：模型输出未包含 [替换N] 块或格式不符，丢弃本次输出保留原 draft`,
+        );
       }
       return merged;
     }
 
     return modelOutput;
-  }
-
-  /**
-   * P0-3：解析模型输出的局部替换文本，合并到原 draft。
-   *
-   * 期望格式：
-   * ```
-   * [替换1]
-   * <替换文本>
-   * [替换2]
-   * <替换文本>
-   * ```
-   *
-   * 合并规则：按 span 范围逆序替换（避免偏移），span 外文本逐字保留。
-   * 解析失败返回 null（调用方回退到模型原始输出）。
-   */
-  private applyLocalReplacements(
-    originalDraft: string,
-    proposals: PatchProposal[],
-    modelOutput: string,
-  ): string | null {
-    // 解析 [替换N] 块
-    const replacements: Array<{ index: number; text: string }> = [];
-    const blockPattern = /\[替换(\d+)\]\s*([\s\S]*?)(?=\[替换\d+\]|$)/gu;
-    let match: RegExpExecArray | null;
-    while ((match = blockPattern.exec(modelOutput)) !== null) {
-      const index = parseInt(match[1], 10);
-      const text = match[2].trim();
-      replacements.push({ index, text });
-    }
-
-    if (replacements.length === 0) return null;
-    replacements.sort((a, b) => a.index - b.index);
-
-    // 按 span 范围逆序替换（避免偏移）
-    let result = originalDraft;
-    const sortedProposals = [...proposals].sort(
-      (a, b) => b.targetSpan.start - a.targetSpan.start,
-    );
-
-    for (let i = 0; i < sortedProposals.length; i++) {
-      const proposal = sortedProposals[i];
-      const replacement = replacements.find((r) => {
-        // 匹配 proposal 在原列表中的 1-based 索引
-        const originalIndex = proposals.indexOf(proposal) + 1;
-        return r.index === originalIndex;
-      });
-      if (!replacement) continue;
-
-      const before = result.slice(0, proposal.targetSpan.start);
-      const after = result.slice(proposal.targetSpan.end);
-      result = before + replacement.text + after;
-    }
-
-    return result;
   }
 
   // ── 内部：构造 fallback 结果 ──────────────────────────────────────────

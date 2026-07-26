@@ -898,9 +898,16 @@ export class UnifiedOrchestrator {
       stageResults.storyPreservation = preservation;
 
       // P1 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：unverifiable 与明确故事漂移分开处理。
+      // P0-1 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
       // - 明确漂移（missing_event/replaced_event/order_violation）→ 阻断，保留 raw 初稿
       // - unverifiable（事件抽取失败/空文本/无实体）→ 用缩减风格指导重试一次，
-      //   不要求用户修改章纲；重试仍 unverifiable 则保守回退 raw 初稿（不阻断章节生成）
+      //   不要求用户修改章纲；重试仍 unverifiable → **硬阻断**（不交付未优化 Agentic 初稿）
+      //
+      // 之前的实现把 styledCandidate 替换为 agenticCandidate 后继续保存，
+      // 违反"Agentic 初稿不直接交付"铁律。修复后改为 hardBlock：
+      // - agenticCandidate.text 只作为 rawText 证据保留在 trace
+      // - 阻断候选不保存为正式章节（blocked_evidence_only）
+      // - 用户动作：系统重试，无需修改 ChapterSeed
       if (!preservation.preserved && preservation.unverifiable) {
         const retryStyleResult = await timeAsync("stage4a_authorStyleRetryUnverifiable", () =>
           createAuthorStyleOptimizer().optimize({
@@ -981,29 +988,102 @@ export class UnifiedOrchestrator {
               },
             );
           }
-          // 重试仍 unverifiable → 保守回退 raw 初稿（不阻断，但记录降级）
+          // P0-1 修复：重试仍 unverifiable → 硬阻断（不再静默回退 agenticCandidate）
+          // 之前的实现把 styledCandidate 替换为 agenticCandidate 并继续保存，
+          // 违反"Agentic 初稿不直接交付"铁律。改为 hardBlock 阻断章节生成，
+          // agenticCandidate.text 只作为 rawText 证据保留在 trace。
           if (!retryPreservation.preserved && retryPreservation.unverifiable) {
-            stageResults.authorStyleOptimizationDegradedToRaw = {
-              reason: "风格优化重试仍 unverifiable，保守回退 NovelOS Agentic 初稿",
+            stageResults.authorStyleOptimizationBlockedUnverifiable = {
+              reason: "风格优化重试仍 unverifiable，硬阻断（不交付未优化 Agentic 初稿）",
               rawCandidateId: agenticCandidate.id,
               styledCandidateId: retryCandidate.id,
+              firstUnverifiableReason: preservation.reason,
+              retryUnverifiableReason: retryPreservation.reason,
             };
-            // 从 candidates 移除 unverifiable 的风格优化稿，只保留 agentic 初稿
+            // 从 candidates 移除 unverifiable 的风格优化稿（不保留为可选候选）
             const staleIdx = candidates.findIndex((c) => c.id === retryCandidate.id);
             if (staleIdx >= 0) candidates.splice(staleIdx, 1);
-            // 跳过后续事实复检/完整性检查对 styledCandidate 的依赖：直接用 agenticCandidate
-            styledCandidate = agenticCandidate;
+            return this.hardBlock(
+              input,
+              "author_style_story_preservation",
+              `作者风格优化重试仍未通过故事保持检查（unverifiable）：${retryPreservation.reason}`,
+              stageResults,
+              {
+                rawText: agenticCandidate.text,
+                rawFinishReason: agenticCandidate.finishReason ?? null,
+                rawMaxTokens: agenticCandidate.maxTokens ?? null,
+                rawModel: agenticCandidate.model,
+                modelVersion: detectModelVersion(agenticCandidate.model),
+                candidateId: retryCandidate.id,
+                selectedSource: "editorial",
+                finalText: retryCandidate.text,
+              },
+              {
+                recoverable: true,
+                candidateDisposition: "blocked_evidence_only",
+                blockCategory: "system_verifier_uncertain",
+                userActionRequired: [
+                  `查看 stageResults.authorStyleOptimizationBlockedUnverifiable 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化重试的 unverifiable 证据`,
+                  `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
+                  `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+                ],
+                prohibitedActions: [
+                  "accept_or_deliver_blocked_candidate",
+                  "save_blocked_candidate_as_chapter",
+                  "skip_to_next_chapter",
+                ],
+                retryPlan: {
+                  strategy: "revise_inputs_and_retry_same_chapter",
+                  maxAttempts: 1,
+                },
+              },
+            );
           }
         } else {
-          // 重试未产出候选 → 保守回退 raw 初稿
-          stageResults.authorStyleOptimizationDegradedToRaw = {
-            reason: `风格优化重试未产出候选：${retryStyleResult.failureReason ?? "未产出"}，保守回退 NovelOS Agentic 初稿`,
+          // P0-1 修复：重试未产出候选 → 硬阻断（不再静默回退 agenticCandidate）
+          // 之前的实现把 styledCandidate 替换为 agenticCandidate 并继续保存，
+          // 违反"Agentic 初稿不直接交付"铁律。改为 hardBlock 阻断章节生成。
+          stageResults.authorStyleOptimizationBlockedNoCandidate = {
+            reason: `风格优化重试未产出候选：${retryStyleResult.failureReason ?? "未产出"}，硬阻断`,
             rawCandidateId: agenticCandidate.id,
-            styledCandidateId: null,
+            firstUnverifiableReason: preservation.reason,
+            retryFailureReason: retryStyleResult.failureReason ?? null,
           };
-          const staleIdx = candidates.findIndex((c) => c.id === styledCandidate!.id);
-          if (staleIdx >= 0) candidates.splice(staleIdx, 1);
-          styledCandidate = agenticCandidate;
+          return this.hardBlock(
+            input,
+            "author_style_optimization",
+            `作者风格优化重试未产出候选：${retryStyleResult.failureReason ?? "未产出"}`,
+            stageResults,
+            {
+              rawText: agenticCandidate.text,
+              rawFinishReason: agenticCandidate.finishReason ?? null,
+              rawMaxTokens: agenticCandidate.maxTokens ?? null,
+              rawModel: agenticCandidate.model,
+              modelVersion: detectModelVersion(agenticCandidate.model),
+              candidateId: styledCandidate!.id,
+              selectedSource: "editorial",
+              finalText: styledCandidate!.text,
+            },
+            {
+              recoverable: true,
+              candidateDisposition: "blocked_evidence_only",
+              blockCategory: "system_verifier_uncertain",
+              userActionRequired: [
+                `查看 stageResults.authorStyleOptimizationBlockedNoCandidate 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化重试的失败原因`,
+                `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
+                `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+              ],
+              prohibitedActions: [
+                "accept_or_deliver_blocked_candidate",
+                "save_blocked_candidate_as_chapter",
+                "skip_to_next_chapter",
+              ],
+              retryPlan: {
+                strategy: "revise_inputs_and_retry_same_chapter",
+                maxAttempts: 1,
+              },
+            },
+          );
         }
       } else if (!preservation.preserved) {
         // 明确故事漂移（非 unverifiable）→ 阻断，保留 raw 初稿
@@ -3472,15 +3552,25 @@ interface UnresolvedAgenticFinding {
  *
  * - `system_verifier_uncertain`：heuristic finding 误入 hard 或 coverageStatus=
  *   uncertain。verifier 不确定或疑似误报，恢复责任归系统，不提示用户简化章纲。
- * - `author_input_conflict`：ChapterSeed/章纲存在真实矛盾、缺失或不可执行要求
- *   （fact_contradiction / canon 硬冲突 / 同时要求互斥状态）。用户必须修订输入。
- * - `confirmed_content_omission`：deterministic/corroborated 的真实内容遗漏
- *   （verbatim 缺失、必需事实遗漏、事件锚点整体缺失）。系统应重新生成或 patch，
+ * - `author_input_conflict`：ChapterSeed/章纲本身存在自相矛盾或不可执行要求
+ *   （如 inviolableFacts 内部互相排斥、ChapterSeed 要求与已确立 canon 直接冲突）。
+ *   **当前 verifier 未产出此类 finding**（所有 fact_contradiction/canon_violation
+ *   都是模型正文与 canon 冲突，属模型错误而非作者输入错误）。此分支保留为未来
+ *   新增作者侧矛盾检测的扩展点。
+ * - `confirmed_content_omission`：deterministic/corroborated 的真实内容遗漏或冲突
+ *   （verbatim 缺失、必需事实遗漏、事件锚点整体缺失、fact_contradiction、
+ *   canon_violation、inviolable_fact_conflict）。系统应重新生成或 patch，
  *   不要求用户改章纲。
  *
+ * P1-3 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
+ * 之前把 fact_contradiction / canon_violation / inviolable_fact_conflict 归为
+ * author_input_conflict，要求用户修订 ChapterSeed。这是错误的：这些 finding 表示
+ * **模型生成的正文与 canon 事实冲突**（如 canon 说面罩是蓝色，模型写成红色），
+ * 是模型正文错误，应归为 confirmed_content_omission，由系统重写或 patch，
+ * 不要求用户改 ChapterSeed。
+ *
  * 归类优先级：author_input_conflict > system_verifier_uncertain >
- * confirmed_content_omission。即只要有一项指向作者输入自相矛盾，就归到用户责任；
- * 否则只要有一项 heuristic 误判，就归到系统责任；其余归到内容遗漏（系统重试）。
+ * confirmed_content_omission。
  */
 export function classifyAgenticVerificationBlock(
   unresolvedFindings: UnresolvedAgenticFinding[],
@@ -3510,15 +3600,15 @@ export function classifyAgenticVerificationBlock(
   const diagnosticHint =
     `查看 stageResults.novelos.unresolvedFindings 与 trajectoryPath，确认第 ${chapterNumber} 章仍未满足的约束`;
 
-  // 1. 检测 author_input_conflict：作者输入自相矛盾
-  //    - fact_contradiction：正文与结构化事实冲突（如颜色/身份/状态矛盾）
-  //    - canon 相关硬冲突
-  //    - 同一 finding 同时声明两个互斥事实
+  // 1. 检测 author_input_conflict：作者输入自相矛盾（ChapterSeed/章纲本身不可执行）
+  //    inc-4 修复：verifier 现在产出 failureType="author_input_conflict" finding，
+  //    检测 inviolableFacts 内部互斥（如"X在场"与"X不在场"同时出现）。
+  //    sourceRef 指向 chapter-seed:inviolableFacts[...]，证明是作者输入侧矛盾。
+  //    这类矛盾无法通过模型重写解决，必须用户修订 ChapterSeed。
   const authorConflictFindings = unresolvedFindings.filter((finding) => {
-    if (finding.failureType === "fact_contradiction") return true;
-    if (finding.failureType === "canon_violation") return true;
-    // inviolableFacts 内部自相矛盾（如同时要求"角色在场"与"角色已死亡"）
-    if (finding.failureType === "inviolable_fact_conflict") return true;
+    if (finding.failureType === "author_input_conflict") return true;
+    // 兼容：sourceRef 指向 chapter-seed:inviolableFacts 的也归入此类别
+    if (finding.sourceRef?.includes("chapter-seed:inviolableFacts")) return true;
     return false;
   });
   if (authorConflictFindings.length > 0) {
@@ -3558,15 +3648,16 @@ export function classifyAgenticVerificationBlock(
     };
   }
 
-  // 3. 其余归到 confirmed_content_omission：deterministic/corroborated 的真实遗漏
-  //    系统应重新生成或局部 patch，不要求用户改章纲
+  // 3. 其余归到 confirmed_content_omission：deterministic/corroborated 的真实遗漏或冲突
+  //    P1-3 修复：fact_contradiction / canon_violation / inviolable_fact_conflict
+  //    现在归入此类别（模型正文错误，系统应重写或 patch，不要求用户改 ChapterSeed）
   return {
     recoverable: true,
     candidateDisposition,
     blockCategory: "confirmed_content_omission",
     userActionRequired: [
       diagnosticHint,
-      `第 ${chapterNumber} 章候选正文存在确定性遗漏或冲突（deterministic / corroborated）；系统应重新生成或局部 patch，无需用户修订章纲`,
+      `第 ${chapterNumber} 章候选正文存在确定性遗漏或冲突（deterministic / corroborated，含 fact_contradiction / canon_violation）；系统应重新生成或局部 patch，无需用户修订章纲`,
       `通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
     ],
     prohibitedActions,

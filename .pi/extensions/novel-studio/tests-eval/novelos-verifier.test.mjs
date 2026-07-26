@@ -215,12 +215,13 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
     });
 
     // P0-2 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：
-    // 引号/关于X 关键词遗漏降为 review + heuristic + 空范围（诊断 only，不触发 hard block）。
+    // 引号/关于X 关键词遗漏降为 review + heuristic + uncertain + 空范围（诊断 only，不触发 hard block）。
     // 真实遗漏仍被检出，但作为诊断证据（report.findings）而非硬阻断（hardFindings）。
+    // inc-2 修复：heuristic 遗漏的 coverageStatus 从 missing 改为 uncertain（三态语义统一）。
     const omissionFindings = report.findings.filter(
       (f) => f.failureType === "intent_omission"
         && f.certainty === "heuristic"
-        && f.coverageStatus === "missing",
+        && f.coverageStatus === "uncertain",
     );
     assert.ok(
       omissionFindings.length >= 1,

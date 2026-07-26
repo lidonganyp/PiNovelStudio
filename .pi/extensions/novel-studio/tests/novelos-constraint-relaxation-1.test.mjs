@@ -12,12 +12,21 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { buildChapterIntentString } from "../dist/novelos/agent/agentic-raw-candidate-source.js";
 import { createNarrativeVerifierSuite } from "../dist/novelos/verification/narrative-verifier-suite.js";
 import { createCandidatePatchService } from "../dist/novelos/agent/candidate-patch-service.js";
 import { NarrativeAgentLoop } from "../dist/novelos/agent/narrative-agent-loop.js";
 import { classifyAgenticVerificationBlock } from "../dist/v2/core/unified-orchestrator.js";
+import { compileFeedback, findingToFeedback } from "../dist/novelos/verification/verification-feedback-compiler.js";
+import { selectRepairFindings } from "../dist/novelos/agent/narrative-repair-selector.js";
+import { applyLocalReplacements, buildLocalReplacementPrompt } from "../dist/novelos/agent/narrative-patch-merger.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const EMPTY_CONTEXT = {
   facts: [],
@@ -130,6 +139,8 @@ test("P0-2 #3：自然等价表达通过，真实遗漏仍被检出", () => {
     `自然等价表达应通过，实际 findings: ${JSON.stringify(coveredOmissions)}`);
 
   // 真实遗漏：完全没有"三队"语义
+  // inc-2：anchor 模式 heuristic 遗漏现在标为 uncertain（不是 missing）
+  // missing 仅用于 deterministic verbatim 原句缺失
   const missingText = "李一凡独自走向青鱼嘴，水面平静。";
   const missingReport = verifier.verify({
     text: missingText,
@@ -139,13 +150,13 @@ test("P0-2 #3：自然等价表达通过，真实遗漏仍被检出", () => {
     inviolableFacts: [],
   });
   const missingOmissions = missingReport.findings.filter(
-    (f) => f.failureType === "intent_omission" && f.coverageStatus === "missing",
+    (f) => f.failureType === "intent_omission" && f.coverageStatus === "uncertain",
   );
   assert.ok(missingOmissions.length > 0,
-    `真实遗漏应被检出（coverageStatus=missing），实际 findings: ${JSON.stringify(missingReport.findings)}`);
+    `真实遗漏应被检出（coverageStatus=uncertain for heuristic anchor），实际 findings: ${JSON.stringify(missingReport.findings)}`);
 });
 
-test("P0-2 #4：[verbatim] 原句缺失继续 hard block + certainty=deterministic", () => {
+test("P0-2 #4：[verbatim] 原句缺失继续 hard block + certainty=deterministic + 零宽插入点", () => {
   const verifier = createNarrativeVerifierSuite();
   const chapterIntent = [
     '作者章纲必须包含：[verbatim] 原句：「青鱼嘴采样箱少了一只」',
@@ -168,6 +179,16 @@ test("P0-2 #4：[verbatim] 原句缺失继续 hard block + certainty=determinist
   assert.equal(f.severity, "hard", "verbatim 缺失必须 hard block");
   assert.equal(f.certainty, "deterministic", "verbatim 缺失 certainty=deterministic");
   assert.equal(f.coverageStatus, "missing", "verbatim 缺失 coverageStatus=missing");
+
+  // inc-3 修复：allowedRepairRange 必须是零宽插入点 [textLen, textLen]，
+  // 不使用 [0, text.length] 整章范围，也不使用 [textLen-80, textLen] 覆盖原结尾。
+  const textLen = text.length;
+  assert.equal(f.allowedRepairRange.start, textLen,
+    `verbatim 缺失 allowedRepairRange.start 必须是 textLen（零宽插入点），实际：${f.allowedRepairRange.start}`);
+  assert.equal(f.allowedRepairRange.end, textLen,
+    `verbatim 缺失 allowedRepairRange.end 必须是 textLen（零宽插入点），实际：${f.allowedRepairRange.end}`);
+  assert.equal(f.allowedRepairRange.start, f.allowedRepairRange.end,
+    "verbatim 零宽插入点：start === end");
 });
 
 test("P0-2 #5：[anchor] 词表无法确定时返回 review 不触发改写 + 空范围", () => {
@@ -194,8 +215,9 @@ test("P0-2 #5：[anchor] 词表无法确定时返回 review 不触发改写 + �
   for (const f of anchorFindings) {
     assert.equal(f.severity, "review",
       `anchor heuristic 缺失应 review，实际 ${f.severity}：${JSON.stringify(f)}`);
-    assert.equal(f.coverageStatus, "missing",
-      `anchor 缺失 coverageStatus=missing：${JSON.stringify(f)}`);
+    // inc-2：heuristic 无法判定 → uncertain（不是 missing）
+    assert.equal(f.coverageStatus, "uncertain",
+      `anchor 缺失 coverageStatus=uncertain：${JSON.stringify(f)}`);
     // 空 allowedRepairRange（start === end）= 诊断 only，不触发改写
     assert.equal(f.allowedRepairRange.end, f.allowedRepairRange.start,
       `anchor heuristic 应空范围（诊断 only），实际：${JSON.stringify(f.allowedRepairRange)}`);
@@ -461,39 +483,73 @@ test("P0-3 #10：同一语义 finding 最多触发1次局部修复", async () =>
 });
 
 // ============================================================================
-// P0-2 #11：第17章真实候选重放 hardCount=0
+// P0-2 #11：第17章真实候选完整回放 hardCount=0
 // ============================================================================
 
-test("P0-2 #11：第17章真实候选重放 hardCount=0（heuristic 不再阻断）", () => {
+test("P0-2 #11：第17章真实候选完整回放 hardCount=0（heuristic 不再阻断）", () => {
+  // inc-5 修复：使用真实 NovelOS 会话的完整 chapterIntent（4041 字符）替换 271 字符压缩版。
+  // fixture 来源：workspaces/xinmo/novelos-sessions/novelos-17-f97db599/
+  //   - draft.md（2607 字符，NovelOS Agentic 生成的真实初稿）
+  //   - trajectory.jsonl 中提取的完整 chapterIntent（4041 字符，包含本章功能/读者体验目标/
+  //     作者章纲必须包含/作者章纲状态变化/作者章纲章末目标 五个结构化字段）
+  // 该会话在旧 verifier 下产生 8 个 hard intent_omission findings（误报），
+  // 修复后所有 heuristic findings 应为 review + uncertain，不触发 hard block。
+  const draftPath = path.resolve(__dirname, "fixtures", "chapter-17-real-draft.md");
+  const intentPath = path.resolve(__dirname, "fixtures", "chapter-17-real-chapter-intent.txt");
+
+  // inc-5 修复：fixture 文件必须存在，不存在则测试失败（不静默通过）
+  assert.ok(fs.existsSync(draftPath),
+    `fixture 文件必须存在：${draftPath}（请确认 tests/fixtures/ 已提交）`);
+  assert.ok(fs.existsSync(intentPath),
+    `fixture 文件必须存在：${intentPath}（请确认 tests/fixtures/ 已提交）`);
+
+  const text = fs.readFileSync(draftPath, "utf8");
+  const chapterIntent = fs.readFileSync(intentPath, "utf8");
+
+  // 验证 fixture 数据完整性：draft=2607, intent=4041
+  assert.equal(text.length, 2607,
+    `真实 draft 应为 2607 字符，实际：${text.length}`);
+  assert.equal(chapterIntent.length, 4041,
+    `真实 chapterIntent 应为 4041 字符，实际：${chapterIntent.length}`);
+  assert.ok(chapterIntent.includes("作者章纲必须包含"),
+    `真实 chapterIntent 应包含"作者章纲必须包含"`);
+  assert.ok(chapterIntent.includes("作者章纲状态变化"),
+    `真实 chapterIntent 应包含"作者章纲状态变化"（完整 4041 字符 fixture）`);
+  assert.ok(chapterIntent.includes("作者章纲章末目标"),
+    `真实 chapterIntent 应包含"作者章纲章末目标"（完整 4041 字符 fixture）`);
+
   const verifier = createNarrativeVerifierSuite();
-  // 第17章 fixture：多个 anchor 要求，正文用自然等价表达覆盖；
-  // verbatim 原句已出现；无真实事实冲突。
-  const chapterIntent = [
-    "作者章纲必须包含：三队首次配合；战狼开枪无效；鳞片一击斩杀水怪；多只水怪围攻；倒计时型压力；暗金双眸一闪而过；章末预判定位将变",
-    '作者章纲必须包含：[verbatim] 原句：「青鱼嘴采样箱少了一只」',
-  ].join("\n");
-
-  const text = [
-    "三支队伍第一次协同作战，护住了研究员。",
-    "战狼的机枪瞬间开火，子弹打在水怪鳞片上溅起火星，连皮都没擦破。",
-    "浑浊中亮起两双猩红的眼睛。不止一只。水怪黑影从四面逼近。",
-    "鳞片破开水怪的鳞甲，将它当场斩杀。",
-    "氧气在快速消耗，倒计时型压力压上心头。",
-    "暗金色的竖瞳一闪而过。",
-    "李一凡清楚，自己在镇夜司和战队里的定位，再也回不到从前了。",
-    "青鱼嘴采样箱少了一只。",
-  ].join("\n");
-
   const report = verifier.verify({
     text,
     context: EMPTY_CONTEXT,
     chapterIntent,
-    knownCharacterNames: ["李一凡"],
+    knownCharacterNames: ["李一凡", "赵明远", "小妖", "王研究员", "战狼", "黑玫瑰"],
     inviolableFacts: [],
   });
 
+  // 核心断言：heuristic findings 不再 hard block
   assert.equal(report.hardFindings.length, 0,
-    `第17章自然等价表达不应 hard block，实际 hard findings：${JSON.stringify(report.hardFindings)}`);
+    `第17章真实正文完整回放不应 hard block，实际 hard findings：${JSON.stringify(report.hardFindings)}`);
+
+  // 补充断言：应产生 intent_covered（正向证据）
+  const coveredFindings = report.findings.filter(
+    (f) => f.failureType === "intent_covered",
+  );
+  assert.ok(coveredFindings.length > 0,
+    `应产生 intent_covered 正向证据，实际：${coveredFindings.length}`);
+
+  // 验证所有 intent_omission findings 都是 heuristic + uncertain（不是 deterministic + missing）
+  const allOmissions = report.findings.filter(
+    (f) => f.failureType === "intent_omission",
+  );
+  for (const f of allOmissions) {
+    assert.equal(f.certainty, "heuristic",
+      `intent_omission 应为 heuristic，实际 ${f.certainty}：${JSON.stringify(f)}`);
+    assert.equal(f.coverageStatus, "uncertain",
+      `intent_omission 应为 uncertain，实际 ${f.coverageStatus}：${JSON.stringify(f)}`);
+    assert.equal(f.severity, "review",
+      `intent_omission 应为 review，实际 ${f.severity}：${JSON.stringify(f)}`);
+  }
 });
 
 // ============================================================================
@@ -593,7 +649,7 @@ test("P0-4 #13：heuristic finding 误入 hard 时归 system_verifier_uncertain�
   assert.ok(guidance.prohibitedActions?.includes("skip_to_next_chapter"));
 });
 
-test("P0-4 #14：fact_contradiction 归 author_input_conflict，要求用户修订输入", () => {
+test("P0-4 #14：fact_contradiction 归 confirmed_content_omission，不要求用户改章纲（P1-3 修复）", () => {
   const findings = [
     {
       id: "f2",
@@ -606,13 +662,15 @@ test("P0-4 #14：fact_contradiction 归 author_input_conflict，要求用户修�
     },
   ];
   const guidance = classifyAgenticVerificationBlock(findings, 17);
-  assert.equal(guidance.blockCategory, "author_input_conflict",
-    `fact_contradiction 应归 author_input_conflict，实际：${guidance.blockCategory}`);
+  // P1-3 修复：fact_contradiction 是模型正文错误（模型写成红色，canon 是蓝色），
+  // 不是作者输入错误。应归 confirmed_content_omission，由系统重写或 patch。
+  assert.equal(guidance.blockCategory, "confirmed_content_omission",
+    `fact_contradiction 应归 confirmed_content_omission（模型正文错误），实际：${guidance.blockCategory}`);
   const userActions = guidance.userActionRequired ?? [];
   const asksUserToReviseInput = userActions.some((a) =>
     /修订第.*章.*输入|修订.*ChapterSeed|修订.*作者章纲/u.test(a));
-  assert.ok(asksUserToReviseInput,
-    `author_input_conflict 应要求用户修订输入，实际 userActionRequired：${JSON.stringify(userActions)}`);
+  assert.equal(asksUserToReviseInput, false,
+    `confirmed_content_omission 不应要求用户改章纲，实际 userActionRequired：${JSON.stringify(userActions)}`);
 });
 
 test("P0-4 #15：deterministic verbatim 缺失归 confirmed_content_omission，不要求用户改章纲", () => {
@@ -637,7 +695,7 @@ test("P0-4 #15：deterministic verbatim 缺失归 confirmed_content_omission，�
     `confirmed_content_omission 不应要求用户改章纲，实际 userActionRequired：${JSON.stringify(userActions)}`);
 });
 
-test("P0-4 #16：author_input_conflict 优先级高于 system_verifier_uncertain（混合 finding）", () => {
+test("P0-4 #16：混合 heuristic + fact_contradiction 归 system_verifier_uncertain（P1-3 修复）", () => {
   const findings = [
     {
       id: "f4",
@@ -659,6 +717,248 @@ test("P0-4 #16：author_input_conflict 优先级高于 system_verifier_uncertain
     },
   ];
   const guidance = classifyAgenticVerificationBlock(findings, 17);
+  // P1-3 修复：fact_contradiction 不再归 author_input_conflict，
+  // 混合 finding 时 heuristic 主导 → system_verifier_uncertain
+  // 优先级：author_input_conflict（无）> system_verifier_uncertain（有 heuristic）> confirmed_content_omission
+  assert.equal(guidance.blockCategory, "system_verifier_uncertain",
+    `混合 heuristic + fact_contradiction 应归 system_verifier_uncertain（heuristic 优先于 content_omission），实际：${guidance.blockCategory}`);
+});
+
+// ============================================================================
+// inc-4：author_input_conflict 检测（inviolableFacts 内部矛盾）
+// ============================================================================
+
+test("inc-4 #17：inviolableFacts 直接否定冲突 → author_input_conflict hard finding", () => {
+  const verifier = createNarrativeVerifierSuite();
+  const report = verifier.verify({
+    text: "李一凡站在岸边。",
+    context: EMPTY_CONTEXT,
+    chapterIntent: "本章功能：调查",
+    knownCharacterNames: ["李一凡"],
+    inviolableFacts: [
+      "李一凡在场",
+      "李一凡不在场",
+    ],
+  });
+  const conflictFindings = report.findings.filter(
+    (f) => f.failureType === "author_input_conflict",
+  );
+  assert.ok(conflictFindings.length > 0,
+    `inviolableFacts 直接否定应产生 author_input_conflict finding，实际：${JSON.stringify(report.findings)}`);
+  const f = conflictFindings[0];
+  assert.equal(f.severity, "hard", "author_input_conflict 必须 hard");
+  assert.equal(f.certainty, "deterministic", "author_input_conflict certainty=deterministic");
+  assert.ok(f.sourceRef.includes("chapter-seed:inviolableFacts"),
+    `sourceRef 应指向 chapter-seed:inviolableFacts，实际：${f.sourceRef}`);
+});
+
+test("inc-4 #18：inviolableFacts 必须/禁止互斥 → author_input_conflict", () => {
+  const verifier = createNarrativeVerifierSuite();
+  const report = verifier.verify({
+    text: "队伍出发了。",
+    context: EMPTY_CONTEXT,
+    chapterIntent: "本章功能：行军",
+    knownCharacterNames: [],
+    inviolableFacts: [
+      "必须单独行动",
+      "禁止单独行动",
+    ],
+  });
+  const conflictFindings = report.findings.filter(
+    (f) => f.failureType === "author_input_conflict",
+  );
+  assert.ok(conflictFindings.length > 0,
+    `必须/禁止互斥应产生 author_input_conflict finding，实际：${JSON.stringify(report.findings)}`);
+});
+
+test("inc-4 #19：inviolableFacts 相同主体冲突属性 → author_input_conflict", () => {
+  const verifier = createNarrativeVerifierSuite();
+  const report = verifier.verify({
+    text: "赵明远站在那里。",
+    context: EMPTY_CONTEXT,
+    chapterIntent: "本章功能：对话",
+    knownCharacterNames: ["赵明远"],
+    inviolableFacts: [
+      "赵明远是冷静",
+      "赵明远是暴躁",
+    ],
+  });
+  const conflictFindings = report.findings.filter(
+    (f) => f.failureType === "author_input_conflict",
+  );
+  assert.ok(conflictFindings.length > 0,
+    `相同主体冲突属性应产生 author_input_conflict finding，实际：${JSON.stringify(report.findings)}`);
+});
+
+test("inc-4 #20：无冲突的 inviolableFacts 不产生 author_input_conflict", () => {
+  const verifier = createNarrativeVerifierSuite();
+  const report = verifier.verify({
+    text: "李一凡站在岸边观察水面。赵明远在旁边。",
+    context: EMPTY_CONTEXT,
+    chapterIntent: "本章功能：调查",
+    knownCharacterNames: ["李一凡", "赵明远"],
+    inviolableFacts: [
+      "李一凡在场",
+      "赵明远在场",
+      "时间是白天",
+      "地点是青鱼嘴",
+    ],
+  });
+  const conflictFindings = report.findings.filter(
+    (f) => f.failureType === "author_input_conflict",
+  );
+  assert.equal(conflictFindings.length, 0,
+    `无冲突的 inviolableFacts 不应产生 author_input_conflict，实际：${JSON.stringify(conflictFindings)}`);
+});
+
+test("inc-4 #21：author_input_conflict finding → classifyAgenticVerificationBlock 归 author_input_conflict", () => {
+  const findings = [
+    {
+      id: "f-conflict-1",
+      failureType: "author_input_conflict",
+      sourceRef: "chapter-seed:inviolableFacts[0],chapter-seed:inviolableFacts[1]",
+      description: "作者输入自相矛盾：主体「李一凡」同时被赋予冲突属性",
+      conflictFact: "inviolableFacts 内部矛盾：事实[0]「李一凡在场」与事实[1]「李一凡不在场」对主体「李一凡」给出冲突属性",
+      certainty: "deterministic",
+      coverageStatus: "missing",
+    },
+  ];
+  const guidance = classifyAgenticVerificationBlock(findings, 17);
   assert.equal(guidance.blockCategory, "author_input_conflict",
-    `混合 finding 时 author_input_conflict 应优先，实际：${guidance.blockCategory}`);
+    `author_input_conflict finding 应归 author_input_conflict，实际：${guidance.blockCategory}`);
+  // 应要求用户修订 ChapterSeed
+  const userActions = guidance.userActionRequired ?? [];
+  const asksUserToReviseInput = userActions.some((a) =>
+    /修订第.*章.*输入|ChapterSeed|章纲/u.test(a));
+  assert.equal(asksUserToReviseInput, true,
+    `author_input_conflict 应要求用户修订输入，实际 userActionRequired：${JSON.stringify(userActions)}`);
+});
+
+// ============================================================================
+// inc-5：零宽 verbatim 插入完整链路测试
+// checker → feedback → selector → proposal → merger
+// 验证 [textLen, textLen] 零宽插入点在所有过滤层都贯通
+// ============================================================================
+
+test("inc-5 #22：零宽 verbatim 插入完整链路 checker→feedback→selector→proposal→merger", () => {
+  // 1. Checker：构造 verbatim 原句缺失场景
+  const verifier = createNarrativeVerifierSuite();
+  const chapterIntent = [
+    '作者章纲必须包含：[verbatim] 原句：「这条原句必须被插入到章末」',
+  ].join("\n");
+  const draft = "这是一段正文，但不包含 verbatim 原句。";
+  const report = verifier.verify({
+    text: draft,
+    context: EMPTY_CONTEXT,
+    chapterIntent,
+    knownCharacterNames: [],
+    inviolableFacts: [],
+  });
+
+  // 验证 checker 产出 verbatim hard finding + 零宽插入点
+  const verbatimFindings = report.hardFindings.filter(
+    (f) => f.failureType === "intent_omission" && f.certainty === "deterministic",
+  );
+  assert.ok(verbatimFindings.length > 0, "checker 应产出 verbatim hard finding");
+  const vf = verbatimFindings[0];
+  const textLen = draft.length;
+  assert.equal(vf.allowedRepairRange.start, textLen,
+    `checker 应产出零宽插入点 start=textLen=${textLen}，实际：${vf.allowedRepairRange.start}`);
+  assert.equal(vf.allowedRepairRange.end, textLen,
+    `checker 应产出零宽插入点 end=textLen=${textLen}，实际：${vf.allowedRepairRange.end}`);
+
+  // 2. Feedback：compileFeedback 应保留零宽 deterministic finding
+  const feedbacks = compileFeedback(report);
+  assert.ok(feedbacks.length > 0,
+    `compileFeedback 应保留零宽 deterministic finding，实际：${feedbacks.length}`);
+  assert.equal(feedbacks[0].certainty, "deterministic",
+    "feedback 应传播 certainty=deterministic");
+
+  // 3. Selector：selectRepairFindings 应保留零宽 deterministic finding
+  const selected = selectRepairFindings(report.hardFindings);
+  assert.ok(selected.length > 0,
+    `selectRepairFindings 应保留零宽 deterministic finding，实际：${selected.length}`);
+
+  // 3b. findingToFeedback 传播（agent loop 实际使用的路径）
+  const loopFeedbacks = selected.map(findingToFeedback);
+  assert.ok(loopFeedbacks.length > 0,
+    `findingToFeedback 应传播零宽 finding，实际：${loopFeedbacks.length}`);
+
+  // 4. Proposal：patchService.proposePatches 应产出 proposal
+  const patchService = createCandidatePatchService();
+  const proposals = patchService.proposePatches(draft, loopFeedbacks);
+  assert.ok(proposals.length > 0,
+    `proposePatches 应为零宽 deterministic finding 产出 proposal，实际：${proposals.length}`);
+  const proposal = proposals[0];
+  assert.equal(proposal.targetSpan.start, textLen,
+    `proposal targetSpan.start 应为 textLen=${textLen}，实际：${proposal.targetSpan.start}`);
+  assert.equal(proposal.targetSpan.end, textLen,
+    `proposal targetSpan.end 应为 textLen=${textLen}，实际：${proposal.targetSpan.end}`);
+  assert.equal(proposal.localReplacement, true,
+    "零宽插入应使用 localReplacement 模式");
+
+  // 5. Merger：applyLocalReplacements 应在章末插入原句，不删除原文
+  const insertText = "这条原句必须被插入到章末";
+  // 构造模型输出（模拟 [替换1] 格式）
+  const modelOutput = `[替换1]\n${insertText}`;
+  const merged = applyLocalReplacements(draft, proposals, modelOutput);
+  assert.notEqual(merged, null,
+    "applyLocalReplacements 不应返回 null（格式应匹配）");
+  assert.ok(merged.includes(draft),
+    "合并后正文应包含原 draft 全文（零宽插入不删除原文）");
+  assert.ok(merged.includes(insertText),
+    "合并后正文应包含插入的原句");
+  assert.ok(merged.endsWith(insertText),
+    "插入的原句应在章末（最后出现）");
+  assert.equal(merged.length, draft.length + insertText.length,
+    `合并后长度应为 draft+插入=${draft.length + insertText.length}，实际：${merged.length}`);
+
+  // 6. Span 不变性验证：evaluatePatch 应通过
+  const evalResult = patchService.evaluatePatch(draft, merged, proposal);
+  assert.equal(evalResult.accepted, true,
+    `零宽插入应通过退化检查（span 外不变），实际：${evalResult.reason}`);
+  assert.equal(evalResult.metrics.spanImmutabilityPassed, true,
+    "零宽插入的 span 外不变性应通过");
+});
+
+test("inc-5 #23：heuristic 零宽 finding 仍被过滤（不进入修复链路）", () => {
+  // 验证 heuristic finding 的零宽范围仍被过滤（诊断 only）
+  const verifier = createNarrativeVerifierSuite();
+  const chapterIntent = "作者章纲必须包含：定位改变；倒计时压力";
+  const draft = "李一凡坐在车内，看着窗外风景。";
+  const report = verifier.verify({
+    text: draft,
+    context: EMPTY_CONTEXT,
+    chapterIntent,
+    knownCharacterNames: [],
+    inviolableFacts: [],
+  });
+
+  // heuristic findings 应有零宽范围
+  const heuristicFindings = report.findings.filter(
+    (f) => f.failureType === "intent_omission" && f.certainty === "heuristic",
+  );
+  assert.ok(heuristicFindings.length > 0, "应产出 heuristic finding");
+  for (const f of heuristicFindings) {
+    assert.equal(f.allowedRepairRange.start, f.allowedRepairRange.end,
+      "heuristic finding 应有零宽范围（诊断 only）");
+  }
+
+  // compileFeedback 应过滤掉 heuristic 零宽 finding
+  const feedbacks = compileFeedback(report);
+  const heuristicFeedbacks = feedbacks.filter(
+    (fb) => fb.certainty === "heuristic" && fb.allowedRepairRange.start === fb.allowedRepairRange.end,
+  );
+  assert.equal(heuristicFeedbacks.length, 0,
+    "compileFeedback 应过滤 heuristic 零宽 finding");
+
+  // selectRepairFindings 应过滤掉 heuristic 零宽 finding
+  const selected = selectRepairFindings(report.hardFindings);
+  // heuristic findings 是 review，不在 hardFindings 中，所以 selected 应为空
+  // 但即使误入 hardFindings，零宽 heuristic 也应被过滤
+  const heuristicSelected = selected.filter(
+    (f) => f.certainty === "heuristic" && f.allowedRepairRange.start === f.allowedRepairRange.end,
+  );
+  assert.equal(heuristicSelected.length, 0,
+    "selectRepairFindings 应过滤 heuristic 零宽 finding");
 });

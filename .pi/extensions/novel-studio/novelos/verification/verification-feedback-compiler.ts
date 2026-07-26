@@ -72,6 +72,10 @@ const REPAIR_SUGGESTIONS: Record<VerificationFailureType, string> = {
   timeline_inconsistency: "修正时间回退，确保本章时间不早于已记录的最新时间",
   location_discontinuity: "补充空间过门词，消除无过门的位置跳转",
   fact_contradiction: "修正属性矛盾，使正文与 canon 声明的属性（如颜色）一致",
+  // inc-2 新增：正向覆盖证据（severity=info，不触发 patch）
+  intent_covered: "（正向证据，无需修复）章纲要求已被正文覆盖",
+  // inc-4 新增：作者输入自相矛盾（无法通过模型重写解决，必须用户修订 ChapterSeed）
+  author_input_conflict: "（作者输入矛盾，无法通过正文修复）请修订 ChapterSeed/inviolableFacts 中互斥的条目",
 };
 
 // ============================================================================
@@ -79,10 +83,26 @@ const REPAIR_SUGGESTIONS: Record<VerificationFailureType, string> = {
 // ============================================================================
 
 /**
+ * 判断 finding 的 allowedRepairRange 是否代表可修复范围。
+ *
+ * - 非空范围（end > start）→ 可修复
+ * - 零宽范围（start === end）+ deterministic → 插入点（inc-3 修复：verbatim 原句在章末插入）
+ * - 零宽范围（start === end）+ heuristic → 诊断 only，不触发 patch
+ */
+function hasRepairableRange(finding: VerificationFinding): boolean {
+  const range = finding.allowedRepairRange;
+  if (range.end > range.start) return true;
+  // inc-3：零宽插入点对 deterministic finding 有效（verbatim 原句在 [textLen, textLen] 插入）
+  if (range.start === range.end && finding.certainty === "deterministic") return true;
+  return false;
+}
+
+/**
  * 把 verifier report 编译成结构化 feedback list。
  *
- * P0-2 修复：只编译 hard findings 且 allowedRepairRange 非空（start < end）→ 触发 patch candidate。
- * - hard findings 且空范围（start === end）→ 诊断 only，不触发 patch（避免启发式误判触发整章改写）
+ * P0-2 修复：只编译 hard findings 且 allowedRepairRange 有效 → 触发 patch candidate。
+ * - hard findings 且空范围（start === end）+ heuristic → 诊断 only，不触发 patch
+ * - hard findings 且零宽范围（start === end）+ deterministic → 插入点，触发 patch（inc-3）
  * - 软意见（review/info）不编译，不触发 patch
  *
  * @param report NarrativeVerifierSuite.verify() 的返回
@@ -92,7 +112,7 @@ export function compileFeedback(
   report: NarrativeVerifierReport,
 ): VerificationFeedback[] {
   return report.hardFindings
-    .filter((finding) => finding.allowedRepairRange.end > finding.allowedRepairRange.start)
+    .filter(hasRepairableRange)
     .map((finding) => findingToFeedback(finding));
 }
 

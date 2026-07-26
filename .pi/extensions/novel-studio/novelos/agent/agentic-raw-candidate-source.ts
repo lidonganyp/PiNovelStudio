@@ -421,11 +421,17 @@ function makeFallbackResult(
 /**
  * 把 ChapterIntent 序列化为 agent loop 可读的字符串。
  *
- * P0-1 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：
+ * P0-2 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
  * - 使用 selectedPromisesToAdvance（≤3）替代全量 promisesToAdvance，避免上下文过载。
  *   全量开放伏笔继续留在状态存储和检索层，按需回源，不直接进入初始 prompt。
- * - 章末输入优先使用本章 causalEndPressure，不再注入全部 thematicQuestions（possibleEndPressure）。
- *   只有当 causalEndPressure 为空时才回退到 possibleEndPressure。
+ * - **移除全量回退路径**：selectedPromisesToAdvance 为空时不再回退到 promisesToAdvance。
+ *   调用方必须显式选中本章要推进的伏笔；未选中 = 本章不推进任何伏笔（不灌入全量）。
+ * - 章末输入只使用 causalEndPressure（本章因果性章末压力）。
+ * - **移除 possibleEndPressure 回退路径**：causalEndPressure 为空时不再回退到 possibleEndPressure。
+ *   调用方必须显式提供本章因果性章末压力；未提供 = 本章不注入章末压力（不灌入全量主题问题）。
+ *
+ * 这两条回退路径是上下文过载的根因：60 条开放伏笔 + 6 条主题问题曾被直接灌入 prompt。
+ * 移除后，未选中即不注入，由上游 ChapterIntentBuilder 负责正确的选择。
  */
 export function buildChapterIntentString(intent: ChapterIntent): string {
   const parts: string[] = [];
@@ -445,26 +451,20 @@ export function buildChapterIntentString(intent: ChapterIntent): string {
   if (intent.meaningfulChoices.length > 0) {
     parts.push(`有意义的选择：${intent.meaningfulChoices.join("；")}`);
   }
-  // P0-1：使用 selectedPromisesToAdvance（≤3）替代全量 promisesToAdvance
+  // P0-2：只注入 selectedPromisesToAdvance（≤3），不回退全量 promisesToAdvance
+  // 未选中 = 本章不推进任何伏笔（全量伏笔留在状态层按需回源）
   const selectedPromises = intent.selectedPromisesToAdvance ?? [];
   if (selectedPromises.length > 0) {
-    // 选中 ≤3 条 selectedPromisesToAdvance，避免 60 条全量伏笔灌入 prompt
     const promiseLines = selectedPromises
       .slice(0, 3)
       .map((p) => `${p.promiseId}：${p.description}`);
     parts.push(`本章推进的伏笔：${promiseLines.join("；")}`);
-  } else if (intent.promisesToAdvance.length > 0) {
-    // 回退：selectedPromisesToAdvance 未提供时，使用原 promisesToAdvance（向后兼容）
-    parts.push(`需推进的伏笔：${intent.promisesToAdvance.join("；")}`);
   }
-  // P0-1：章末输入优先使用 causalEndPressure，不再注入全部 thematicQuestions
+  // P0-2：只注入 causalEndPressure（本章因果性章末压力），不回退全量 possibleEndPressure
+  // 未提供 = 本章不注入章末压力（全量主题问题不进入初始 prompt）
   const causalEndPressure = intent.causalEndPressure ?? [];
   if (causalEndPressure.length > 0) {
-    // 优先使用本章因果性章末压力（有因果链，非随机钩子）
     parts.push(`章末因果压力：${causalEndPressure.join("；")}`);
-  } else if (intent.possibleEndPressure.length > 0) {
-    // 回退：causalEndPressure 为空时才使用 possibleEndPressure（向后兼容）
-    parts.push(`章末压力：${intent.possibleEndPressure.join("；")}`);
   }
   if (intent.relevantCharacters.length > 0) {
     parts.push(`相关角色：${intent.relevantCharacters.join("、")}`);

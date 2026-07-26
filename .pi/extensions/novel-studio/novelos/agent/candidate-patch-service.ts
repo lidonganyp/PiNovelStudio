@@ -101,7 +101,13 @@ export class CandidatePatchService {
     feedbacks: VerificationFeedback[],
   ): PatchProposal[] {
     return feedbacks
-      .filter((fb) => fb.allowedRepairRange.end > fb.allowedRepairRange.start)
+      // inc-3 修复：零宽范围 [textLen, textLen] + deterministic = 插入点，不过滤
+      .filter((fb) => {
+        const range = fb.allowedRepairRange;
+        if (range.end > range.start) return true;
+        if (range.start === range.end && fb.certainty === "deterministic") return true;
+        return false;
+      })
       .map((fb) => this.proposePatch(draft, fb));
   }
 
@@ -275,17 +281,20 @@ export class CandidatePatchService {
     repairRanges: TextSpan[],
   ): { passed: boolean; detail?: string } {
     // 1. 范围校验：拒绝非法/重叠/越界（不再静默合并）
+    // inc-3 修复：零宽 span [n, n] 是合法插入点，不过滤、不拒绝（仅拒绝 start > end 倒置）
     const sortedRanges = [...repairRanges]
-      .filter((r) => r.end > r.start)
+      .filter((r) => r.end >= r.start)  // 允许零宽（start === end），仅过滤倒置
       .sort((a, b) => a.start - b.start);
     for (let i = 0; i < sortedRanges.length; i++) {
       const r = sortedRanges[i];
-      if (r.start < 0 || r.end > originalDraft.length || r.start >= r.end) {
+      if (r.start < 0 || r.end > originalDraft.length || r.start > r.end) {
         return {
           passed: false,
           detail: `非法 span [${r.start}, ${r.end}]（越界或倒置，原文长度=${originalDraft.length}）`,
         };
       }
+      // 零宽插入点不参与重叠检查（start === end 的 span 不与相邻 span 重叠）
+      if (r.start === r.end) continue;
       if (i > 0 && r.start < sortedRanges[i - 1].end) {
         return {
           passed: false,

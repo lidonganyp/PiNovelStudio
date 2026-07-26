@@ -126,9 +126,12 @@ test("NovelOS 章纲事件摘要按事件覆盖而不是整句匹配", () => {
   });
   // P0-2 修复：事件摘要遗漏现在是 review + heuristic（不再 hard block）。
   // 真实遗漏仍被检出，但作为诊断证据（report.findings）而非硬阻断（hardFindings）。
+  // inc-2 修复：已覆盖事件现在产出 intent_covered finding（severity=info），
+  // 因此过滤时必须限定 failureType === "intent_omission" 才能拿到真实遗漏。
   const eventOmissions = report.findings.filter(
     (finding) => finding.source === "event_intent_checker"
-      && finding.certainty === "heuristic",
+      && finding.certainty === "heuristic"
+      && finding.failureType === "intent_omission",
   );
   assert.equal(eventOmissions.length, 1, JSON.stringify(eventOmissions));
   assert.equal(eventOmissions[0].sourceRef, "author-outline:event:3");
