@@ -76,7 +76,7 @@ export interface AgenticRawSourceInput {
  * candidate=null 表示 agentic 失败，生产编排器将结构化阻断。
  */
 export interface AgenticRawSourceResult {
-  /** agentic_raw 候选（null = 失败，回退 one_shot_raw） */
+  /** agentic_raw 候选（null = 失败；生产编排器结构化阻断） */
   candidate: Candidate | null;
   /** NovelOS session ID（供 trace 关联） */
   sessionId: string;
@@ -96,6 +96,16 @@ export interface AgenticRawSourceResult {
   verifierCleared?: boolean;
   /** 修复轮次（verify/patch 闭环执行了几轮） */
   repairRounds?: number;
+  /** verifier 最终剩余的硬失败数量 */
+  hardFindingCount?: number;
+  /** verifier 最终剩余的硬失败摘要（不含正文） */
+  unresolvedFindings?: Array<{
+    id: string;
+    failureType: string;
+    sourceRef: string;
+    description: string;
+    conflictFact: string;
+  }>;
 }
 
 /**
@@ -354,6 +364,14 @@ export function createAgenticRawCandidateSource(
         toolCalls: loopResult.lineage.toolCalls,
         verifierCleared: loopResult.lineage.verifierCleared,
         repairRounds: loopResult.repairRounds,
+        hardFindingCount: loopResult.lineage.hardFindingCount,
+        unresolvedFindings: (loopResult.verifierReport?.hardFindings ?? []).map((finding) => ({
+          id: finding.id,
+          failureType: finding.failureType,
+          sourceRef: finding.sourceRef,
+          description: finding.description,
+          conflictFact: finding.conflictFact,
+        })),
       };
     },
   };
@@ -384,6 +402,8 @@ function makeFallbackResult(
     toolCalls: 0,
     verifierCleared: false,
     repairRounds: 0,
+    hardFindingCount: 0,
+    unresolvedFindings: [],
   };
 }
 

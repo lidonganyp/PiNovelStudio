@@ -743,6 +743,8 @@ export class UnifiedOrchestrator {
         toolCalls: agenticResult.toolCalls,
         verifierCleared: agenticResult.verifierCleared,
         repairRounds: agenticResult.repairRounds,
+        hardFindingCount: agenticResult.hardFindingCount ?? null,
+        unresolvedFindings: agenticResult.unresolvedFindings ?? [],
       };
       const agenticCandidate = agenticResult.candidate;
       if (!agenticCandidate) {
@@ -754,10 +756,22 @@ export class UnifiedOrchestrator {
         );
       }
       if (agenticResult.verifierCleared !== true) {
+        const hardFindingCount = agenticResult.hardFindingCount
+          ?? agenticResult.unresolvedFindings?.length
+          ?? 0;
+        const repairRounds = agenticResult.repairRounds ?? 0;
+        stageResults.pipelineProgress = {
+          lastCompletedStage: "novelos_agentic_draft",
+          blockedAt: "novelos_agentic_verification",
+          authorStyleOptimizationExecuted: false,
+          finalFactRecheckExecuted: false,
+          stateCommitExecuted: false,
+          chapterSaveExecuted: false,
+        };
         return this.hardBlock(
           input,
           "novelos_agentic_verification",
-          `NovelOS Agentic 未通过章节验证：${agenticResult.failureReason ?? `仍有 ${agenticResult.repairRounds ?? 0} 轮修复未清零`}`,
+          `NovelOS Agentic 在 ${repairRounds} 轮修复后仍有 ${hardFindingCount} 个硬失败；候选仅作为阻断证据，不可交付或保存`,
           stageResults,
           {
             rawText: agenticCandidate.text,
@@ -768,6 +782,24 @@ export class UnifiedOrchestrator {
             candidateId: agenticCandidate.id,
             selectedSource: "raw",
             finalText: agenticCandidate.text,
+          },
+          {
+            recoverable: true,
+            candidateDisposition: "blocked_evidence_only",
+            userActionRequired: [
+              "查看 stageResults.novelos.unresolvedFindings 与 trajectoryPath，确认仍未满足的当前章约束",
+              `修订第 ${chapterNumber} 章的 ChapterSeed 或作者章纲，解决冲突、重复或非必要的必须项`,
+              `通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+            ],
+            prohibitedActions: [
+              "accept_or_deliver_blocked_candidate",
+              "save_blocked_candidate_as_chapter",
+              "skip_to_next_chapter",
+            ],
+            retryPlan: {
+              strategy: "revise_inputs_and_retry_same_chapter",
+              maxAttempts: 1,
+            },
           },
         );
       }
@@ -2843,7 +2875,15 @@ export class UnifiedOrchestrator {
       candidateId?: string | null;
       selectedSource?: "raw" | "editorial" | null;
       finalText?: string | null;
-    }
+    },
+    guidance?: Pick<
+      UnifiedFailureEnvelope,
+      | "recoverable"
+      | "candidateDisposition"
+      | "userActionRequired"
+      | "prohibitedActions"
+      | "retryPlan"
+    >,
   ): UnifiedOrchestratorOutput {
     // hardBlock 不接收调用方 warnings（阻断路径独立维护局部 warnings，
     // 仅供 QUALITY-16 导出失败等局部 warning 使用，不与主链路 warnings 合并）。
@@ -2852,8 +2892,18 @@ export class UnifiedOrchestrator {
       stage,
       severity: stage === "raw_generation" ? "fatal" : "hard",
       reason,
-      recoverable: false,
+      recoverable: guidance?.recoverable ?? false,
       degradedTo: "hard_block",
+      ...(guidance?.candidateDisposition
+        ? { candidateDisposition: guidance.candidateDisposition }
+        : {}),
+      ...(guidance?.userActionRequired
+        ? { userActionRequired: guidance.userActionRequired }
+        : {}),
+      ...(guidance?.prohibitedActions
+        ? { prohibitedActions: guidance.prohibitedActions }
+        : {}),
+      ...(guidance?.retryPlan ? { retryPlan: guidance.retryPlan } : {}),
     };
     stageResults.failureEnvelope = envelope;
     // ── QUALITY-3：hardBlock 路径跳过结构证据扫描，但写清 skipped reason ──

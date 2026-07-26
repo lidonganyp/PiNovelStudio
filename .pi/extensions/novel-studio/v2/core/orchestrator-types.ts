@@ -411,6 +411,21 @@ export interface UnifiedFailureEnvelope {
   recoverable: boolean;
   /** raw 失败 -> hard_block（无 legacy 回退） */
   degradedTo: "hard_block";
+  /** 阻断候选只能作为审计证据，不是可交付正文。 */
+  candidateDisposition?: "blocked_evidence_only";
+  /** 用户可执行的恢复动作。 */
+  userActionRequired?: string[];
+  /** 上层交互不得向用户提供的动作。 */
+  prohibitedActions?: Array<
+    | "accept_or_deliver_blocked_candidate"
+    | "save_blocked_candidate_as_chapter"
+    | "skip_to_next_chapter"
+  >;
+  /** 结构化恢复计划；不会自动绕过 verifier。 */
+  retryPlan?: {
+    strategy: "revise_inputs_and_retry_same_chapter";
+    maxAttempts: number;
+  };
 }
 
 export interface ControlPlaneTrace {
