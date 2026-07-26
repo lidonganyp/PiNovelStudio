@@ -519,7 +519,6 @@ export class NarrativeAgentLoop {
           currentText,
           proposals,
           selectedFindings,
-          input,
         );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -627,7 +626,6 @@ export class NarrativeAgentLoop {
     originalDraft: string,
     proposals: PatchProposal[],
     findings: VerificationFinding[],
-    input: AgentLoopInput,
   ): Promise<string> {
     const activeProposals = proposals.filter((p) => !p.rejected);
     const findingById = new Map(findings.map((finding) => [finding.id, finding]));
@@ -638,6 +636,7 @@ export class NarrativeAgentLoop {
           `[修复${i + 1}] findingId=${p.findingId}`,
           `证据来源：${finding?.sourceRef ?? "unknown"}`,
           `必须解决：${finding?.conflictFact ?? p.suggestion}`,
+          `具体要求：${finding?.description ?? p.suggestion}`,
           `允许范围：[${p.targetSpan.start}, ${p.targetSpan.end}]`,
           `方向：${p.repairDirection}`,
           `建议：${p.suggestion}`,
