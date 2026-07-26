@@ -250,6 +250,23 @@ test("NovelOS 验证未清零时生产流程阻断且不保存", async () => {
             toolCalls: 2,
             verifierCleared: false,
             repairRounds: 2,
+            hardFindingCount: 2,
+            unresolvedFindings: [
+              {
+                id: "verifier:intent_omission:anchor-1",
+                failureType: "intent_omission",
+                sourceRef: "author-outline:anchor-1",
+                description: "作者章纲必须包含项遗漏：anchor-1",
+                conflictFact: "作者章纲必须包含项 anchor-1 在正文中遗漏",
+              },
+              {
+                id: "verifier:event_omission:5",
+                failureType: "intent_omission",
+                sourceRef: "author-outline:event:5",
+                description: "作者章纲事件遗漏：回程时木心微亮但墨老仍未醒",
+                conflictFact: "作者章纲事件 5 在正文中缺少事件级覆盖",
+              },
+            ],
           };
         },
       },
@@ -257,6 +274,23 @@ test("NovelOS 验证未清零时生产流程阻断且不保存", async () => {
 
     assert.equal(result.status, "blocked");
     assert.equal(result.failureEnvelope?.stage, "novelos_agentic_verification");
+    assert.equal(result.failureEnvelope?.recoverable, true);
+    assert.equal(result.failureEnvelope?.candidateDisposition, "blocked_evidence_only");
+    assert.deepEqual(result.failureEnvelope?.prohibitedActions, [
+      "accept_or_deliver_blocked_candidate",
+      "save_blocked_candidate_as_chapter",
+      "skip_to_next_chapter",
+    ]);
+    assert.match(result.failureEnvelope?.userActionRequired?.join("\n") ?? "", /重试当前第 17 章/);
+    assert.match(result.failureEnvelope?.reason ?? "", /2 个硬失败/);
+    assert.match(result.failureEnvelope?.reason ?? "", /2 轮修复/);
+    assert.equal(result.stageResults.pipelineProgress.authorStyleOptimizationExecuted, false);
+    assert.equal(result.stageResults.pipelineProgress.finalFactRecheckExecuted, false);
+    assert.equal(result.stageResults.pipelineProgress.chapterSaveExecuted, false);
+    assert.equal(result.stageResults.novelos.hardFindingCount, 2);
+    assert.equal(result.stageResults.novelos.unresolvedFindings.length, 2);
+    assert.equal(result.text, "");
+    assert.deepEqual(result.candidates, []);
     assert.equal(downstreamCalls, 0);
     assert.equal(result.chapterFilePath, null);
   } finally {
