@@ -102,10 +102,17 @@ export class CandidatePatchService {
   ): PatchProposal[] {
     return feedbacks
       // inc-3 修复：零宽范围 [textLen, textLen] + deterministic = 插入点，不过滤
+      // inc-5 修复：author_input_conflict 必须走 ChapterSeed 修订，不进入正文补丁链；
+      //            零宽插入点仅对 intent_omission + deterministic（verbatim 原句缺失）放行
       .filter((fb) => {
+        if (fb.failureType === "author_input_conflict") return false;
         const range = fb.allowedRepairRange;
         if (range.end > range.start) return true;
-        if (range.start === range.end && fb.certainty === "deterministic") return true;
+        if (
+          range.start === range.end
+          && fb.certainty === "deterministic"
+          && fb.failureType === "intent_omission"
+        ) return true;
         return false;
       })
       .map((fb) => this.proposePatch(draft, fb));

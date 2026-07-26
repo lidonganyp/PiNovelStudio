@@ -85,15 +85,28 @@ const REPAIR_SUGGESTIONS: Record<VerificationFailureType, string> = {
 /**
  * 判断 finding 的 allowedRepairRange 是否代表可修复范围。
  *
- * - 非空范围（end > start）→ 可修复
- * - 零宽范围（start === end）+ deterministic → 插入点（inc-3 修复：verbatim 原句在章末插入）
+ * - 非空范围（end > start）→ 可修复（仍需通过 failureType 白名单）
+ * - 零宽范围（start === end）+ intent_omission + deterministic → 插入点（inc-3 修复：verbatim 原句在章末插入）
+ * - 零宽范围（start === end）+ 其他 deterministic（如 author_input_conflict）→ 不放行
  * - 零宽范围（start === end）+ heuristic → 诊断 only，不触发 patch
+ *
+ * inc-5 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：
+ * - `author_input_conflict` 是作者输入自相矛盾，无法通过正文修复，必须走 ChapterSeed 修订路径；
+ *   无论范围和确定性如何，都不编译为 feedback，不消耗模型修复轮次。
+ * - 零宽插入点仅对 `intent_omission + deterministic`（verbatim 原句缺失）放行；
+ *   其他 deterministic failureType 即使零宽也不应进入正文补丁链。
  */
 function hasRepairableRange(finding: VerificationFinding): boolean {
+  // inc-5：author_input_conflict 不进入正文补丁链（必须走 ChapterSeed 修订）
+  if (finding.failureType === "author_input_conflict") return false;
   const range = finding.allowedRepairRange;
   if (range.end > range.start) return true;
-  // inc-3：零宽插入点对 deterministic finding 有效（verbatim 原句在 [textLen, textLen] 插入）
-  if (range.start === range.end && finding.certainty === "deterministic") return true;
+  // inc-3 + inc-5：零宽插入点仅对 intent_omission + deterministic 放行（verbatim 原句在 [textLen, textLen] 插入）
+  if (
+    range.start === range.end
+    && finding.certainty === "deterministic"
+    && finding.failureType === "intent_omission"
+  ) return true;
   return false;
 }
 

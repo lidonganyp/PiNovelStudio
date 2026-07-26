@@ -67,10 +67,17 @@ export function selectRepairFindings(
   const unique = [...new Map(findings.map((finding) => [finding.id, finding])).values()];
   // P0-3：过滤空范围 finding（诊断 only，不触发改写）
   // inc-3 修复：零宽范围 [textLen, textLen] + deterministic = 插入点，不过滤
+  // inc-5 修复：author_input_conflict 必须走 ChapterSeed 修订，不进入正文补丁链；
+  //            零宽插入点仅对 intent_omission + deterministic（verbatim 原句缺失）放行
   const nonEmptyRange = unique.filter((finding) => {
+    if (finding.failureType === "author_input_conflict") return false;
     const range = finding.allowedRepairRange;
     if (range.end > range.start) return true;
-    if (range.start === range.end && finding.certainty === "deterministic") return true;
+    if (
+      range.start === range.end
+      && finding.certainty === "deterministic"
+      && finding.failureType === "intent_omission"
+    ) return true;
     return false;
   });
   // P0-3：过滤已达 semantic 修复预算的 finding
