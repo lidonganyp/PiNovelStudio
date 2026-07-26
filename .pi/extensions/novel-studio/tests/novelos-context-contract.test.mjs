@@ -68,6 +68,39 @@ test("NovelOS 章纲普通锚点允许自然改写但原句项仍需精确出现
   assert.equal(omissions.length, 0, JSON.stringify(omissions));
 });
 
+test("NovelOS 章纲锚点识别叙事动作表达而不要求正文复述标签", () => {
+  const text = [
+    "赵明远眉头锁得很紧，眼神阴沉。小妖压低声音说，队长今天状态不对。",
+    "战狼的机枪瞬间开火，子弹打在水怪鳞片上溅起火星，连皮都没擦破。",
+    "浑浊中亮起两双猩红的眼睛。不止一只。水怪黑影从四面逼近。",
+    "小妖在水中愣住了，瞪大眼睛看着李一凡，甚至忘了踩水。",
+    "上岸后，小妖递给他一条毛巾，低声问：你没事吧。",
+    "李一凡清楚，自己在镇夜司和战队里的定位，再也回不到从前了。",
+  ].join("\n");
+  const chapterIntent = "作者章纲必须包含：赵明远状态反常；战狼开枪无效；多只水怪围攻；小妖震惊；小妖关心确认；章末预判定位将变";
+  const verifier = createNarrativeVerifierSuite();
+
+  const coveredReport = verifier.verify({
+    text,
+    context: { facts: [], characterStates: [], openLoops: [], worldRules: [], styleReferences: [], sourceMap: [] },
+    chapterIntent,
+    knownCharacterNames: [],
+    inviolableFacts: [],
+  });
+  const coveredOmissions = coveredReport.hardFindings.filter((finding) => finding.failureType === "intent_omission");
+  assert.equal(coveredOmissions.length, 0, JSON.stringify(coveredOmissions));
+
+  const missingReport = verifier.verify({
+    text: text.replace("李一凡清楚，自己在镇夜司和战队里的定位，再也回不到从前了。", "汽车驶入城区，李一凡看着窗外。"),
+    context: { facts: [], characterStates: [], openLoops: [], worldRules: [], styleReferences: [], sourceMap: [] },
+    chapterIntent,
+    knownCharacterNames: [],
+    inviolableFacts: [],
+  });
+  const missingOmissions = missingReport.hardFindings.filter((finding) => finding.failureType === "intent_omission");
+  assert.deepEqual(missingOmissions.map((finding) => finding.sourceRef), ["author-outline:章末预判定位将变"]);
+});
+
 test("NovelOS 章纲事件摘要按事件覆盖而不是整句匹配", () => {
   const report = createNarrativeVerifierSuite().verify({
     text: "三支队伍第一次协同作战，护住了研究员。水怪突然破水而出，王研究员被拖向深处，赵明远立即下令救援。",
