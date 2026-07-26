@@ -9,18 +9,19 @@
  *   pi-agent-core Agent 原生派发工具、追加 toolResult 消息、再调 streamFn（回灌证据），
  *   直到模型输出无指令的正文（stopReason="stop"）或预算耗尽（afterToolCall terminate）。
  * - draft 生成后进入 verify/patch/reverify 闭环（Task B.2）：
- *   verifier 硬检查 → compileFeedback → patchService.proposePatches → generatePatchedText
- *   → evaluatePatch（退化则保留原稿）→ reverify → 清零则用 patchedText 替换 draft。
+ *   verifier 硬检查 → 有限批次调度 → patchService.proposePatches → generatePatchedText
+ *   → evaluatePatch（退化则保留上一候选）→ reverify → 清零则用 patchedText 替换 draft。
  *
  * 停止条件：
  * 1. 模型声明证据充分（stopReason="stop" 且有 text draft）
  * 2. 预算耗尽（budget.isExhausted() → afterToolCall terminate）
- * 3. 模型异常 → one_shot_raw fallback 信号
- * 4. verifier 清零（verify/patch 闭环完成）
+ * 3. 连续两轮 verifier finding 不减少（stagnant）
+ * 4. 模型异常 → 结构化失败信号
+ * 5. verifier 清零（verify/patch 闭环完成）
  *
  * fallback 边界（Task B.2）：
- * - 只有 runAgentTurns 模型失败才 fallback（回退 one_shot_raw）；
- * - verify/patch 失败或退化只保留原 draft（fallback=false, verifierCleared=false）。
+ * - 只有 runAgentTurns 模型失败才返回 fallback 标记；生产编排据此 hard block，不回退 one-shot raw；
+ * - verify/patch 未清零时保留最后已接受候选供诊断（fallback=false, verifierCleared=false）。
  */
 
 import type { NovelOSRuntime } from "../runtime/runtime.js";
@@ -305,7 +306,7 @@ export class NarrativeAgentLoop {
           severity: "soft",
           reason: `verify/patch 失败，保留原 draft：${errMsg}`,
           recoverable: true,
-          retryPlan: "保留原 draft，verifierCleared=false",
+          retryPlan: "保留最后已接受候选，verifierCleared=false",
         });
       }
     }
@@ -547,7 +548,7 @@ export class NarrativeAgentLoop {
       this.candidateWorkspace.savePatchProposals(proposals);
 
       if (!hasAccepted) {
-        // 所有 patch 退化 → 保留原 draft
+        // 所有 patch 退化 → 保留上一候选
         break;
       }
 
@@ -620,7 +621,7 @@ export class NarrativeAgentLoop {
   /**
    * 生成 patched text：构建 patch prompt → runtime.prompt() → 提取 patched text。
    *
-   * 失败抛错由 verifyAndPatch catch（保留原 draft）。
+   * 失败抛错由 verifyAndPatch catch（保留最后已接受候选）。
    */
   private async generatePatchedText(
     originalDraft: string,
