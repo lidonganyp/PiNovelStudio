@@ -22,6 +22,7 @@ function makeFinding({
   failureType = "intent_omission",
   conflictFact = `missing ${id}`,
   sourceRef = `author-outline:${id}`,
+  description = conflictFact,
 }) {
   return {
     id,
@@ -33,7 +34,7 @@ function makeFinding({
     sourceRef,
     confidence: 1,
     allowedRepairRange: { start: 0, end: 100, excerpt: "" },
-    description: conflictFact,
+    description,
   };
 }
 
@@ -188,6 +189,27 @@ test("连续两轮 hard finding 无减少时停止，不耗尽全部修复预算
   assert.equal(result.lineage.stopReason, "stagnant");
   assert.equal(result.lineage.verifierCleared, false);
   assert.equal(result.text, "第二轮已接受候选。人物进入现场，继续调查并回望线索。");
+});
+
+test("事件级遗漏进入修复批次时携带完整事件摘要", async () => {
+  const eventFinding = makeFinding({
+    id: "event-5",
+    source: "event_intent_checker",
+    conflictFact: "作者章纲事件 5 在正文中缺少事件级覆盖",
+    sourceRef: "author-outline:event:5",
+    description: "作者章纲事件遗漏：回程时木心微亮，但墨老仍未醒",
+  });
+  const report = makeReport([eventFinding]);
+  const { loop, prompts } = makeHarness({
+    reports: [report, makeReport([])],
+    patchedTexts: ["修复候选。回程时木心微亮，但墨老仍未醒。"],
+    maxRepairRounds: 1,
+  });
+
+  const result = await runLoop(loop);
+
+  assert.match(prompts[1], /回程时木心微亮，但墨老仍未醒/);
+  assert.equal(result.lineage.verifierCleared, true);
 });
 
 test("hard finding 持续减少时继续下一批并在清零后通过", async () => {
