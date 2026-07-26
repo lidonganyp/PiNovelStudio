@@ -17,6 +17,7 @@ import { buildChapterIntentString } from "../dist/novelos/agent/agentic-raw-cand
 import { createNarrativeVerifierSuite } from "../dist/novelos/verification/narrative-verifier-suite.js";
 import { createCandidatePatchService } from "../dist/novelos/agent/candidate-patch-service.js";
 import { NarrativeAgentLoop } from "../dist/novelos/agent/narrative-agent-loop.js";
+import { classifyAgenticVerificationBlock } from "../dist/v2/core/unified-orchestrator.js";
 
 const EMPTY_CONTEXT = {
   facts: [],
@@ -558,4 +559,106 @@ test("P0-2 #12：真正事实冲突/截断/格式损坏回归仍 hard", () => {
   );
   assert.ok(factOmissionHard.length > 0,
     `必需事实「有暗流」遗漏应 hard，实际：${JSON.stringify(factOmissionReport.hardFindings)}`);
+});
+
+// ============================================================================
+// P0-4：阻断恢复建议归类（system/author/content 三类）
+// ============================================================================
+
+test("P0-4 #13：heuristic finding 误入 hard 时归 system_verifier_uncertain，不要求用户改章纲", () => {
+  const findings = [
+    {
+      id: "f1",
+      failureType: "intent_omission",
+      sourceRef: "author-outline:anchor",
+      description: "锚点遗漏",
+      conflictFact: "锚点遗漏",
+      certainty: "heuristic",
+      coverageStatus: "missing",
+    },
+  ];
+  const guidance = classifyAgenticVerificationBlock(findings, 17);
+  assert.equal(guidance.blockCategory, "system_verifier_uncertain",
+    `heuristic finding 应归 system_verifier_uncertain，实际：${guidance.blockCategory}`);
+  // 不应出现"修订 ChapterSeed 或作者章纲"等正向要求用户改输入的提示
+  // （"无需用户修订章纲" 是反向声明，不算要求用户改章纲）
+  const userActions = guidance.userActionRequired ?? [];
+  const asksUserToReviseInput = userActions.some((a) =>
+    /修订第.*章.*输入|修订.*ChapterSeed|修订.*作者章纲/u.test(a));
+  assert.equal(asksUserToReviseInput, false,
+    `system_verifier_uncertain 不应要求用户改章纲，实际 userActionRequired：${JSON.stringify(userActions)}`);
+  // 禁止动作仍保留：阻断候选不可交付/保存/跳章
+  assert.ok(guidance.prohibitedActions?.includes("accept_or_deliver_blocked_candidate"));
+  assert.ok(guidance.prohibitedActions?.includes("save_blocked_candidate_as_chapter"));
+  assert.ok(guidance.prohibitedActions?.includes("skip_to_next_chapter"));
+});
+
+test("P0-4 #14：fact_contradiction 归 author_input_conflict，要求用户修订输入", () => {
+  const findings = [
+    {
+      id: "f2",
+      failureType: "fact_contradiction",
+      sourceRef: "canon:color",
+      description: "颜色矛盾",
+      conflictFact: "老周面罩颜色矛盾（蓝 vs 红）",
+      certainty: "corroborated",
+      coverageStatus: "missing",
+    },
+  ];
+  const guidance = classifyAgenticVerificationBlock(findings, 17);
+  assert.equal(guidance.blockCategory, "author_input_conflict",
+    `fact_contradiction 应归 author_input_conflict，实际：${guidance.blockCategory}`);
+  const userActions = guidance.userActionRequired ?? [];
+  const asksUserToReviseInput = userActions.some((a) =>
+    /修订第.*章.*输入|修订.*ChapterSeed|修订.*作者章纲/u.test(a));
+  assert.ok(asksUserToReviseInput,
+    `author_input_conflict 应要求用户修订输入，实际 userActionRequired：${JSON.stringify(userActions)}`);
+});
+
+test("P0-4 #15：deterministic verbatim 缺失归 confirmed_content_omission，不要求用户改章纲", () => {
+  const findings = [
+    {
+      id: "f3",
+      failureType: "intent_omission",
+      sourceRef: "author-outline:原句：测试",
+      description: "verbatim 原句缺失",
+      conflictFact: "原句缺失",
+      certainty: "deterministic",
+      coverageStatus: "missing",
+    },
+  ];
+  const guidance = classifyAgenticVerificationBlock(findings, 17);
+  assert.equal(guidance.blockCategory, "confirmed_content_omission",
+    `deterministic verbatim 缺失应归 confirmed_content_omission，实际：${guidance.blockCategory}`);
+  const userActions = guidance.userActionRequired ?? [];
+  const asksUserToReviseInput = userActions.some((a) =>
+    /修订第.*章.*输入|修订.*ChapterSeed|修订.*作者章纲/u.test(a));
+  assert.equal(asksUserToReviseInput, false,
+    `confirmed_content_omission 不应要求用户改章纲，实际 userActionRequired：${JSON.stringify(userActions)}`);
+});
+
+test("P0-4 #16：author_input_conflict 优先级高于 system_verifier_uncertain（混合 finding）", () => {
+  const findings = [
+    {
+      id: "f4",
+      failureType: "intent_omission",
+      sourceRef: "author-outline:anchor",
+      description: "锚点遗漏",
+      conflictFact: "锚点遗漏",
+      certainty: "heuristic",
+      coverageStatus: "missing",
+    },
+    {
+      id: "f5",
+      failureType: "fact_contradiction",
+      sourceRef: "canon:color",
+      description: "颜色矛盾",
+      conflictFact: "颜色矛盾",
+      certainty: "corroborated",
+      coverageStatus: "missing",
+    },
+  ];
+  const guidance = classifyAgenticVerificationBlock(findings, 17);
+  assert.equal(guidance.blockCategory, "author_input_conflict",
+    `混合 finding 时 author_input_conflict 应优先，实际：${guidance.blockCategory}`);
 });

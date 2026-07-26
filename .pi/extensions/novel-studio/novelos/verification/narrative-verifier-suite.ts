@@ -47,6 +47,18 @@ export type VerificationFailureType =
   | "location_discontinuity" // 空间跳转/位置冲突
   | "fact_contradiction";    // 属性型 canon 事实矛盾（如颜色）
 
+/** P0-2：确定性等级 */
+export type VerificationCertainty =
+  | "deterministic" // 确定性：原句缺失、canon 矛盾、截断、格式损坏
+  | "corroborated"  // 多源印证：结构化事实与正文存在确定冲突
+  | "heuristic";    // 启发式：单一关键词/词表/相似度命中
+
+/** P0-2：覆盖状态 */
+export type VerificationCoverageStatus =
+  | "covered"   // 已覆盖（自然等价表达或原句命中）
+  | "uncertain" // 不确定（启发式无法判定）
+  | "missing";  // 缺失（确定性或结构化证据证明缺失）
+
 export interface VerificationFinding {
   /** 唯一 id */
   id: string;
@@ -64,10 +76,14 @@ export interface VerificationFinding {
   sourceRef: string;
   /** 置信度 0-1（M1 启发式：硬验证 1.0，软验证 0.5） */
   confidence: number;
-  /** 允许修改范围（span 级，默认等于 span） */
+  /** 允许修改范围（span 级，默认等于 span；空范围 start===end 表示诊断 only） */
   allowedRepairRange: TextSpan;
   /** 人类可读描述 */
   description: string;
+  /** P0-2：确定性等级 */
+  certainty: VerificationCertainty;
+  /** P0-2：覆盖状态 */
+  coverageStatus: VerificationCoverageStatus;
 }
 
 export interface NarrativeVerifierInput {
@@ -345,10 +361,29 @@ export class NarrativeVerifierSuite {
       excerpt: "",
     };
     const failureType =
-      overrideFailureType ??
-      GUARD_SOURCE_TO_FAILURE_TYPE[diagnostic.source] ??
-      "language_risk";
+      overrideFailureType ?? GUARD_SOURCE_TO_FAILURE_TYPE[diagnostic.source] ?? "language_risk";
     const isHard = diagnostic.severity === "hard" || diagnostic.severity === "fatal";
+
+    // P0-2：根据 failureType 推断默认确定性等级
+    // - format_error / duplicate_pollution / entity_hallucination：deterministic（事实硬伤）
+    // - scene_continuity / skeleton_inconsistency / event_progression：corroborated（结构化事实冲突）
+    // - language_risk：heuristic（启发式软意见）
+    const deterministicTypes: ReadonlySet<string> = new Set([
+      "format_error",
+      "duplicate_pollution",
+      "entity_hallucination",
+    ]);
+    const corroboratedTypes: ReadonlySet<string> = new Set([
+      "scene_continuity",
+      "skeleton_inconsistency",
+      "event_progression",
+    ]);
+    const certainty: VerificationCertainty = deterministicTypes.has(failureType)
+      ? "deterministic"
+      : corroboratedTypes.has(failureType)
+      ? "corroborated"
+      : "heuristic";
+    const coverageStatus: VerificationCoverageStatus = isHard ? "missing" : "uncertain";
 
     return {
       id: diagnostic.id,
@@ -361,6 +396,8 @@ export class NarrativeVerifierSuite {
       confidence: isHard ? 1.0 : 0.5,
       allowedRepairRange: span,
       description: diagnostic.evidence,
+      certainty,
+      coverageStatus,
     };
   }
 
@@ -369,9 +406,14 @@ export class NarrativeVerifierSuite {
   /**
    * 检查角色是否提到不该知道的信息。
    *
+   * P0-2 修复：知识边界必须绑定具体角色的具体话语或视角，不得用"关键词附近出现任意角色名"判定。
+   * - 关键词在目标角色的直接引语内（"X说：'...关键词...'"）→ hard
+   * - 关键词在目标角色的 POV 内心叙述中（"X想到/知道/意识到...关键词..."）→ hard
+   * - 关键词在其他角色的引语或旁白中 → 不触发（不算目标角色违规）
+   * - 关键词在无归属叙述中 → 不触发 hard（启发式无法判定归属）
+   *
    * M1 启发式：基于 CharacterStateFact.state 中的 `forbiddenKnowledge` 字段
-   * （string[]，角色此刻不该知道的信息关键词）。正文中若角色对话/内心提到
-   * 这些关键词，标记为 knowledge_boundary 硬失败。
+   * （string[]，角色此刻不该知道的信息关键词）。
    */
   private checkKnowledgeBoundary(
     input: NarrativeVerifierInput,
@@ -385,37 +427,49 @@ export class NarrativeVerifierSuite {
 
       for (const keyword of forbidden as string[]) {
         if (!keyword || keyword.length < 2) continue;
-        // 在正文搜索关键词
-        const pos = input.text.indexOf(keyword);
-        if (pos < 0) continue;
+        // 在正文搜索关键词（遍历所有出现位置）
+        let pos = input.text.indexOf(keyword);
+        while (pos >= 0) {
+          const attribution = this.attributeKnowledgeStatement(
+            input.text,
+            pos,
+            keyword,
+            charState.name,
+            charNames,
+          );
 
-        // 检查关键词是否在角色对话/内心附近（简单启发式：前后 50 字符内出现角色名）
-        const windowStart = Math.max(0, pos - 50);
-        const windowEnd = Math.min(input.text.length, pos + keyword.length + 50);
-        const window = input.text.slice(windowStart, windowEnd);
-        const nearCharacter = charNames.some((name) => window.includes(name));
+          if (attribution === "self_speech" || attribution === "self_pov") {
+            // P0-2：只有目标角色自己说出/想到关键词才算违规
+            const spanEnd = pos + keyword.length;
+            const windowStart = Math.max(0, pos - 50);
+            const windowEnd = Math.min(input.text.length, spanEnd + 50);
+            const window = input.text.slice(windowStart, windowEnd);
+            findings.push({
+              id: `verifier:knowledge_boundary:${charState.characterId}:${keyword}:${pos}`,
+              source: "knowledge_boundary_checker",
+              failureType: "knowledge_boundary",
+              severity: "hard",
+              span: {
+                start: pos,
+                end: spanEnd,
+                excerpt: input.text.slice(pos, spanEnd),
+              },
+              conflictFact: `角色 "${charState.name}" 不该知道 "${keyword}"，但正文中由该角色${attribution === "self_speech" ? "直接说出" : "内心提及"}`,
+              sourceRef: `character:${charState.characterId}:forbiddenKnowledge`,
+              confidence: 0.9,
+              allowedRepairRange: {
+                start: windowStart,
+                end: windowEnd,
+                excerpt: window.slice(0, 60),
+              },
+              description: `人物知识边界违规：${charState.name} 不该知道「${keyword}」`,
+              certainty: "corroborated",
+              coverageStatus: "missing",
+            });
+          }
+          // attribution === "other_character" | "unattributed" → 不触发
 
-        if (nearCharacter) {
-          findings.push({
-            id: `verifier:knowledge_boundary:${charState.characterId}:${keyword}`,
-            source: "knowledge_boundary_checker",
-            failureType: "knowledge_boundary",
-            severity: "hard",
-            span: {
-              start: pos,
-              end: pos + keyword.length,
-              excerpt: input.text.slice(pos, pos + keyword.length),
-            },
-            conflictFact: `角色 "${charState.name}" 不该知道 "${keyword}"，但正文中出现在角色附近`,
-            sourceRef: `character:${charState.characterId}:forbiddenKnowledge`,
-            confidence: 0.8,
-            allowedRepairRange: {
-              start: windowStart,
-              end: windowEnd,
-              excerpt: window.slice(0, 60),
-            },
-            description: `人物知识边界违规：${charState.name} 不该知道「${keyword}」`,
-          });
+          pos = input.text.indexOf(keyword, pos + keyword.length);
         }
       }
     }
@@ -423,13 +477,177 @@ export class NarrativeVerifierSuite {
     return findings;
   }
 
+  /**
+   * P0-2：把关键词出现位置归属到具体角色的话语或视角。
+   *
+   * 归属规则（按优先级）：
+   * 1. self_speech：关键词在引号内，引号前 N 字符内出现 "X说/道/低声说/对Y说" 等指向 self
+   * 2. self_pov：关键词在叙述中，前 N 字符内出现 "X想/觉得/知道/意识到/清楚/明白" 指向 self
+   * 3. other_character：关键词在引号内，但说话人是其他角色（X 说，X ≠ self）
+   * 4. unattributed：无法判定归属（旁白、无明确说话人的引号、无 POV 标记）
+   *
+   * 引号支持：「」/ 『』/ ""/ ''/ （）
+   */
+  private attributeKnowledgeStatement(
+    text: string,
+    keywordPos: number,
+    keyword: string,
+    selfName: string,
+    allNames: string[],
+  ): "self_speech" | "self_pov" | "other_character" | "unattributed" {
+    // 1. 检查关键词是否在引号内
+    const quoteRange = this.findEnclosingQuote(text, keywordPos);
+    if (quoteRange) {
+      // 找到引号 → 查找说话人
+      const speaker = this.findSpeakerBeforeQuote(text, quoteRange.start, allNames);
+      if (speaker === selfName) return "self_speech";
+      if (speaker && speaker !== selfName) return "other_character";
+      // 引号内但无明确说话人 → 仍归 unattributed（保守不触发）
+      return "unattributed";
+    }
+
+    // 2. 不在引号内 → 检查 POV 标记（"X想/觉得/知道/意识到/清楚/明白"）
+    const lookbackStart = Math.max(0, keywordPos - 80);
+    const lookback = text.slice(lookbackStart, keywordPos);
+    // 找最后一个 POV 动词，并检查其主语
+    // P0-2 修复：matchAll 要求 g 标志
+    const povPattern = /([^\s，。；：！？、]{2,4})\s*(?:想(?:到|起)?|觉得|知道|意识到|清楚|明白|记得|忘记|意识到|注意到|心想)/gu;
+    const povMatches = Array.from(lookback.matchAll(povPattern));
+    if (povMatches.length > 0) {
+      const lastMatch = povMatches[povMatches.length - 1];
+      const subject = lastMatch[1];
+      if (subject === selfName) return "self_pov";
+      if (allNames.includes(subject) && subject !== selfName) return "other_character";
+      // P0-2 修复：subject 不在 allNames 中（如"心中"），但 lookback 中可能包含已知角色名。
+      // 这种情况下，POV 动词的实际主语是 lookback 中最近的角色名
+      // （如"林默看着前方，心中想着..."→ 实际主语是"林默"）。
+      // 仅当 lookback 中只有一个已知角色名时才推断，避免多角色歧义。
+      const inferredSubject = this.inferSubjectFromLookback(lookback, allNames);
+      if (inferredSubject === selfName) return "self_pov";
+      if (inferredSubject && inferredSubject !== selfName) return "other_character";
+    } else {
+      // P0-2 修复：严格模式未匹配时（如"苏婉看着青鱼嘴的水面，心想：..."
+      // 中"心想"前有标点"，"），检查 lookback 是否含 POV 动词且只有一个已知角色名。
+      const hasPovVerb = /(?:想(?:到|起)?|觉得|知道|意识到|清楚|明白|记得|忘记|注意到|心想)/u.test(lookback);
+      if (hasPovVerb) {
+        const inferredSubject = this.inferSubjectFromLookback(lookback, allNames);
+        if (inferredSubject === selfName) return "self_pov";
+        if (inferredSubject && inferredSubject !== selfName) return "other_character";
+      }
+    }
+
+    // 3. 检查直接归属："X说/道/低声说/提到/写道" 后跟关键词（无引号）
+    // P0-2 修复：matchAll 要求 g 标志
+    const speechPattern = /([^\s，。；：！？、]{2,4})\s*(?:说|道|提到|写道|低声说|轻声说|喊道|问道|答道)(?:[：:])?\s*([^\s，。；！？]{0,40})$/gu;
+    const speechMatches = Array.from(lookback.matchAll(speechPattern));
+    if (speechMatches.length > 0) {
+      const lastMatch = speechMatches[speechMatches.length - 1];
+      const subject = lastMatch[1];
+      // subject 后跟的内容包含 keyword → self 直接提及
+      const tail = lastMatch[2];
+      if (subject === selfName && tail.includes(keyword)) return "self_speech";
+      if (subject !== selfName && allNames.includes(subject)) return "other_character";
+      // P0-2 修复：subject 不在 allNames 中时，从 lookback 推断实际说话人
+      const inferredSubject = this.inferSubjectFromLookback(lookback, allNames);
+      if (inferredSubject === selfName && tail.includes(keyword)) return "self_speech";
+      if (inferredSubject && inferredSubject !== selfName) return "other_character";
+    }
+
+    return "unattributed";
+  }
+
+  /**
+   * P0-2：从 lookback 中推断实际主语。
+   *
+   * 当 POV/言语动词的紧邻主语不是已知角色名（如"心中"、"她"等代词或副词）时，
+   * 检查 lookback 中是否出现已知角色名。仅当 lookback 中只有一个已知角色名时才推断，
+   * 避免多角色歧义。
+   *
+   * 返回推断的角色名，或 null（无法确定）。
+   */
+  private inferSubjectFromLookback(
+    lookback: string,
+    allNames: string[],
+  ): string | null {
+    const namesInLookback = allNames.filter((name) => name.length >= 2 && lookback.includes(name));
+    if (namesInLookback.length === 1) return namesInLookback[0];
+    return null;
+  }
+
+  /**
+   * 查找包含 position 的引号对，返回 {start, end} 或 null。
+   * 支持中文/英文引号：「」/『』/""/''/（）。
+   */
+  private findEnclosingQuote(
+    text: string,
+    position: number,
+  ): { start: number; end: number } | null {
+    const quotePairs: Array<[string, string]> = [
+      ["「", "」"],
+      ["『", "』"],
+      ["“", "”"],
+      ["'", "'"],
+      ["（", "）"],
+    ];
+    for (const [open, close] of quotePairs) {
+      // 找 position 之前最近的 open
+      let openPos = -1;
+      let searchPos = position;
+      while (searchPos > 0) {
+        const idx = text.lastIndexOf(open, searchPos);
+        if (idx < 0) break;
+        // 检查 open 和 position 之间没有 close（否则该引号已闭合）
+        const between = text.slice(idx + 1, position);
+        if (!between.includes(close)) {
+          openPos = idx;
+          break;
+        }
+        searchPos = idx - 1;
+      }
+      if (openPos < 0) continue;
+      // 找 position 之后最近的 close
+      const closePos = text.indexOf(close, position);
+      if (closePos < 0) continue;
+      // 确认 open 和 close 之间没有其他 open（嵌套引号保守跳过）
+      const inner = text.slice(openPos + 1, closePos);
+      if (inner.includes(open)) continue;
+      return { start: openPos, end: closePos };
+    }
+    return null;
+  }
+
+  /**
+   * 从引号开始位置向前查找说话人。
+   * 匹配 "X说："/"X道："/"X低声说"/"X对Y说" 等模式，X 必须是已知角色名。
+   */
+  private findSpeakerBeforeQuote(
+    text: string,
+    quoteStart: number,
+    allNames: string[],
+  ): string | null {
+    const lookback = text.slice(Math.max(0, quoteStart - 60), quoteStart);
+    // 匹配 "X 说/道/低声说/对Y说/问/答" 末尾可能跟 ：
+    const pattern = /([^\s，。；！？、]{2,4})\s*(?:对[^\s，。；！？、]{2,4})?\s*(?:低声|轻声|高声|冷声|小声)?\s*(?:说|道|问|答|喊|笑|骂|喝道|说道|问道|答道|喊道|笑道|低声道|轻声道|高声道|冷声道|小声道)(?:[：:]?)\s*$/u;
+    const match = lookback.match(pattern);
+    if (match) {
+      const subject = match[1];
+      if (allNames.includes(subject)) return subject;
+    }
+    return null;
+  }
+
   // ── 内部：canon/promise 冲突检查 ────────────────────────────────────
 
   /**
    * 检查正文是否与 canon 事实或 promise 冲突。
    *
+   * P0-2 修复：promise 冲突必须识别明确的兑现声明，不得仅凭关键词附近出现"完成/结束"判定。
+   * - 必须出现 "X 已解决/已完结/已了结/已结束" 或 "解决了/完结了/了结了 X" 等明确兑现声明
+   * - "完成了记录" 中的 "完成" 修饰 "记录"（非 promise）→ 不触发
+   * - "暗流来源已解决" 中的 "解决" 直接修饰 "暗流来源"（promise）→ 触发
+   *
    * M1 启发式：
-   * - facts 中 kind="canon" 的事实，若 content 含"不能"/"禁止"/"必须"约束，
+   * - facts 中 kind="canon" 的事实，若 content 含"不能"/"禁止"/"必须不"约束，
    *   检查正文是否违反（简单关键词反转匹配）。
    * - openLoops 中已标记 resolved=false 的 promise，若正文声称已解决，
    *   标记为 promise_conflict。
@@ -466,47 +684,100 @@ export class NarrativeVerifierSuite {
               excerpt: input.text.slice(pos, pos + Math.min(forbiddenTerm.length + 20, 40)),
             },
             description: `canon 冲突：${fact.content}`,
+            certainty: "corroborated",
+            coverageStatus: "missing",
           });
         }
       }
     }
 
     // promise 冲突检查（openLoops 中的都是未解决的 promise，若正文声称解决则冲突）
+    // P0-2：必须识别明确的兑现声明，不得仅凭关键词附近出现"完成/结束"判定
     for (const loop of input.context.openLoops) {
-      // openLoops 中的都是未解决的 promise，无需额外检查 resolved
-      // 简单启发式：正文含 loop.description 的关键词 + "解决"/"完成"/"结束"
-      const descKeywords = loop.description.split(/[\s，。；：、]+/).filter((k) => k.length >= 2);
+      // P0-2：keyword 提取兼容中英文标点（英文逗号/句号/分号/冒号）
+      const descKeywords = loop.description
+        .split(/[\s,，。；;：:、!?！？]+/)
+        .map((k) => k.trim())
+        .filter((k) => k.length >= 2);
+      let loopAlreadyReported = false;
       for (const keyword of descKeywords) {
-        const pos = input.text.indexOf(keyword);
-        if (pos < 0) continue;
-        const window = input.text.slice(pos, Math.min(input.text.length, pos + keyword.length + 20));
-        if (/解决|完成|结束|了结/.test(window)) {
-          findings.push({
-            id: `verifier:promise_conflict:${loop.id}:${keyword}`,
-            source: "promise_conflict_checker",
-            failureType: "promise_conflict",
-            severity: "hard",
-            span: {
-              start: pos,
-              end: pos + keyword.length,
-              excerpt: input.text.slice(pos, pos + keyword.length),
-            },
-            conflictFact: `未兑现 promise「${loop.description}」被正文声称解决`,
-            sourceRef: `openLoop:${loop.id}`,
-            confidence: 0.7,
-            allowedRepairRange: {
-              start: pos,
-              end: Math.min(input.text.length, pos + keyword.length + 20),
-              excerpt: window.slice(0, 60),
-            },
-            description: `promise 冲突：${loop.description}`,
-          });
-          break; // 每个 loop 只报一次
+        let pos = input.text.indexOf(keyword);
+        while (pos >= 0 && !loopAlreadyReported) {
+          // P0-2：必须识别明确的兑现声明
+          if (this.isExplicitPromiseFulfillment(input.text, pos, keyword)) {
+            findings.push({
+              id: `verifier:promise_conflict:${loop.id}:${keyword}:${pos}`,
+              source: "promise_conflict_checker",
+              failureType: "promise_conflict",
+              severity: "hard",
+              span: {
+                start: pos,
+                end: pos + keyword.length,
+                excerpt: input.text.slice(pos, pos + keyword.length),
+              },
+              conflictFact: `未兑现 promise「${loop.description}」被正文声称解决`,
+              sourceRef: `openLoop:${loop.id}`,
+              confidence: 0.85,
+              allowedRepairRange: {
+                start: pos,
+                end: Math.min(input.text.length, pos + keyword.length + 20),
+                excerpt: input.text.slice(pos, pos + Math.min(keyword.length + 20, 60)),
+              },
+              description: `promise 冲突：${loop.description}`,
+              certainty: "corroborated",
+              coverageStatus: "missing",
+            });
+            loopAlreadyReported = true;
+          }
+          pos = input.text.indexOf(keyword, pos + keyword.length);
         }
+        if (loopAlreadyReported) break;
       }
     }
 
     return findings;
+  }
+
+  /**
+   * P0-2：识别明确的 promise 兑现声明。
+   *
+   * 必须满足以下之一才算"明确兑现声明"：
+   * 1. keyword 后紧跟 "已解决/已完结/已了结/已结束/已破/已消散/已破除/被解决/被完结"
+   *    例："暗流来源已解决"
+   * 2. keyword 前紧跟 "解决了/完结了/了结了/结束了/破除了/消散了" + keyword
+   *    例："解决了暗流来源"
+   * 3. keyword 后 30 字符内出现 "X 已解决/已完结/已了结/已结束" 且 X 是 keyword 本身
+   *    （处理 "暗流来源，这个问题已解决" 等带插入语的形式）
+   *
+   * 不算"明确兑现声明"：
+   * - "完成了记录"（"完成" 修饰 "记录"，不是 keyword）
+   * - "解决了另一个问题"（"解决" 修饰其他对象）
+   * - "他完成了任务"（无 keyword 上下文）
+   */
+  private isExplicitPromiseFulfillment(
+    text: string,
+    keywordPos: number,
+    keyword: string,
+  ): boolean {
+    const keywordEnd = keywordPos + keyword.length;
+
+    // 模式 1：keyword 后紧跟 "已解决/已完结/已了结/已结束/已破/已消散/已破除/被解决/被完结"
+    const afterKeyword = text.slice(keywordEnd, Math.min(text.length, keywordEnd + 20));
+    const afterPattern = /^(?:[，,。；;]?\s*(?:已|已经|被)?(?:解决|完结|了结|结束|破除|消散|破|散))/u;
+    if (afterPattern.test(afterKeyword)) return true;
+
+    // 模式 2：keyword 前紧跟 "解决了/完结了/了结了/结束了/破除了/消散了" + keyword
+    const beforeKeyword = text.slice(Math.max(0, keywordPos - 20), keywordPos);
+    const beforePattern = /(?:解决|完结|了结|结束|破除|消散|破|散)了$/u;
+    if (beforePattern.test(beforeKeyword)) return true;
+
+    // 模式 3：keyword 后 30 字符内出现 "X 已解决/已完结/已了结/已结束" 且 X 指代 keyword
+    // 仅当上下文明确指代 keyword 时触发（保守判断：紧邻指代词"这/此/该"）
+    const extendedAfter = text.slice(keywordEnd, Math.min(text.length, keywordEnd + 40));
+    const extendedPattern = /(?:[，,。；;]\s*(?:这|此|该|那个|这个)(?:问题|事|事情|隐患|危机|谜团)?(?:已|已经|被)?(?:解决|完结|了结|结束|破除|消散))/u;
+    if (extendedPattern.test(extendedAfter)) return true;
+
+    return false;
   }
 
   // ── 内部：关键事件遗漏检查 ──────────────────────────────────────────
@@ -514,29 +785,37 @@ export class NarrativeVerifierSuite {
   /**
    * 检查 chapterIntent 中的关键事件是否在正文中遗漏。
    *
-   * M1 启发式：
-   * - 从 chapterIntent 提取引号内容、「关于X」的 X 作为关键事件关键词
-   * - 若关键词在正文中完全不存在，标记为 intent_omission（severity=hard）
-   * - 若关键词存在但出现次数 < 1，也标记
+   * P0-2 严重度分层：
+   * - [verbatim] 原句缺失：hard + deterministic + missing（确定性硬门）
+   * - [anchor] 词表无法确定：review + heuristic + missing + 空范围（诊断 only）
+   * - 事件摘要：review + heuristic + missing + 空范围（启发式无法判定整体事件缺失）
+   * - 引号/关于X 关键词：review + heuristic + missing + 空范围
+   *
+   * 只有结构化证据证明整体事件缺失时才 hard；单一关键词/词表/相似度结果不得直接 hard block。
    */
   private checkIntentOmission(input: NarrativeVerifierInput): VerificationFinding[] {
     const findings: VerificationFinding[] = [];
     const explicitItems = parseIntentRequirements(input.chapterIntent);
     const eventSummaries = parseAuthorEventSummaries(input.chapterIntent);
 
+    // 事件摘要遗漏：P0-2 降为 review + heuristic + 空范围
+    // 原因：事件摘要覆盖检测基于关键词匹配（INTENT_TOKEN_CANONICALS），
+    // 启发式无法证明"整体事件缺失"，可能只是措辞变化未命中 token。
     for (const event of eventSummaries) {
       if (intentEventCovered(input.text, event.summary)) continue;
       findings.push({
         id: `verifier:event_omission:${event.index}`,
         source: "event_intent_checker",
         failureType: "intent_omission",
-        severity: "hard",
+        severity: "review",
         span: { start: 0, end: 0, excerpt: "" },
-        conflictFact: `作者章纲事件 ${event.index} 在正文中缺少事件级覆盖`,
+        conflictFact: `作者章纲事件 ${event.index} 在正文中可能缺少事件级覆盖（启发式无法确定）`,
         sourceRef: `author-outline:event:${event.index}`,
-        confidence: 0.9,
-        allowedRepairRange: { start: 0, end: input.text.length, excerpt: input.text.slice(0, 60) },
-        description: `作者章纲事件遗漏：${event.summary}`,
+        confidence: 0.6,
+        allowedRepairRange: { start: 0, end: 0, excerpt: "" },
+        description: `作者章纲事件可能遗漏：${event.summary}`,
+        certainty: "heuristic",
+        coverageStatus: "missing",
       });
     }
 
@@ -546,18 +825,42 @@ export class NarrativeVerifierSuite {
           ? intentVerbatimCovered(input.text, item.text)
           : intentAnchorCovered(input.text, item.text);
         if (covered) continue;
-        findings.push({
-          id: `verifier:intent_omission:${item.raw}`,
-          source: "intent_omission_checker",
-          failureType: "intent_omission",
-          severity: "hard",
-          span: { start: 0, end: 0, excerpt: "" },
-          conflictFact: `作者章纲必须包含项「${item.raw}」在正文中遗漏`,
-          sourceRef: `author-outline:${item.raw}`,
-          confidence: 1,
-          allowedRepairRange: { start: 0, end: input.text.length, excerpt: input.text.slice(0, 60) },
-          description: `作者章纲必须包含项遗漏：${item.raw}`,
-        });
+
+        if (item.mode === "verbatim") {
+          // [verbatim] 原句缺失：deterministic + hard + missing
+          findings.push({
+            id: `verifier:intent_omission:${item.raw}`,
+            source: "intent_omission_checker",
+            failureType: "intent_omission",
+            severity: "hard",
+            span: { start: 0, end: 0, excerpt: "" },
+            conflictFact: `作者章纲必须包含项「${item.raw}」在正文中遗漏（原句缺失）`,
+            sourceRef: `author-outline:${item.raw}`,
+            confidence: 1,
+            allowedRepairRange: { start: 0, end: input.text.length, excerpt: input.text.slice(0, 60) },
+            description: `作者章纲必须包含项遗漏（verbatim）：${item.raw}`,
+            certainty: "deterministic",
+            coverageStatus: "missing",
+          });
+        } else {
+          // [anchor] 词表无法确定：review + heuristic + missing + 空范围
+          // 原因：anchor 检测基于 INTENT_TOKEN_CANONICALS 词表，启发式无法证明"整体事件缺失"，
+          // 可能只是措辞变化未命中 token。空范围（start === end）表示诊断 only，不触发改写。
+          findings.push({
+            id: `verifier:intent_omission:${item.raw}`,
+            source: "intent_omission_checker",
+            failureType: "intent_omission",
+            severity: "review",
+            span: { start: 0, end: 0, excerpt: "" },
+            conflictFact: `作者章纲必须包含项「${item.raw}」可能未在正文中覆盖（启发式无法确定）`,
+            sourceRef: `author-outline:${item.raw}`,
+            confidence: 0.5,
+            allowedRepairRange: { start: 0, end: 0, excerpt: "" },
+            description: `作者章纲必须包含项可能遗漏（anchor）：${item.raw}`,
+            certainty: "heuristic",
+            coverageStatus: "missing",
+          });
+        }
       }
       return findings;
     }
@@ -583,18 +886,20 @@ export class NarrativeVerifierSuite {
     for (const keyword of keywords) {
       const pos = input.text.indexOf(keyword);
       if (pos < 0) {
-        // 关键事件完全遗漏
+        // P0-2：引号/关于X 关键词遗漏降为 review + heuristic + 空范围
         findings.push({
           id: `verifier:intent_omission:${keyword}`,
           source: "intent_omission_checker",
           failureType: "intent_omission",
-          severity: "hard",
+          severity: "review",
           span: { start: 0, end: 0, excerpt: "" },
-          conflictFact: `chapterIntent 关键事件「${keyword}」在正文中完全遗漏`,
+          conflictFact: `chapterIntent 关键事件「${keyword}」可能未在正文中覆盖（启发式无法确定）`,
           sourceRef: `intent:${keyword}`,
-          confidence: 0.85,
-          allowedRepairRange: { start: 0, end: Math.min(input.text.length, 200), excerpt: "" },
-          description: `关键事件遗漏：${keyword}`,
+          confidence: 0.5,
+          allowedRepairRange: { start: 0, end: 0, excerpt: "" },
+          description: `关键事件可能遗漏：${keyword}`,
+          certainty: "heuristic",
+          coverageStatus: "missing",
         });
       }
     }
@@ -641,6 +946,8 @@ export class NarrativeVerifierSuite {
           confidence: 0.85,
           allowedRepairRange: { start: 0, end: Math.min(input.text.length, 200), excerpt: "" },
           description: `事实遗漏：${attr}（来自不可违反事实「${fact}」）`,
+          certainty: "corroborated",
+          coverageStatus: "missing",
         });
       }
     }
@@ -652,9 +959,16 @@ export class NarrativeVerifierSuite {
   /**
    * 检查时间线连续性：本章时间不得早于已记录的最新时间（M1.1 新增）。
    *
+   * P0-2 修复：必须识别日期、次日、回忆等上下文；不确定时降为 review。
+   * - "次日早上8点" vs 前一天下午3点 → 正常时间推进，不触发
+   * - "今日上午9点" vs 前一天下午3点 → 正常时间推进，不触发
+   * - "第二天清晨" vs 前一天晚上11点 → 正常时间推进，不触发
+   * - "回忆昨天上午9点" vs 锚点下午3点 → 回忆上下文，不触发
+   * - "上午9点" vs 同日锚点下午3点 → 时间回退，触发 hard
+   *
    * 从 context.facts 中提取时间锚点（含"上午/下午/X点/X时"的事实），
    * 取最大小时数作为基准。从正文中提取时间表达，
-   * 若本章时间 < 锚点时间 → timeline_inconsistency hard finding。
+   * 若本章时间 < 锚点时间 且无日期推进/回忆上下文 → timeline_inconsistency hard finding。
    *
    * 用于检测 F3（时间回退）等场景。
    */
@@ -678,21 +992,56 @@ export class NarrativeVerifierSuite {
       if (period === "下午" || period === "傍晚" || period === "晚上" || period === "夜里") hour += 12;
       if (hour < anchorHour) {
         const pos = m.index ?? 0;
+        // P0-2：检查日期推进/回忆上下文
+        const contextType = this.classifyTimeContext(narrativeText, pos);
+        if (contextType === "day_progression" || contextType === "flashback") {
+          // 次日/今日/第二天/回忆等上下文 → 不触发 hard
+          continue;
+        }
+        // P0-2：无明确日期推进上下文但 hour < anchorHour → 降为 review（启发式无法确定）
+        // 原因：可能有未识别的日期词、回忆标记或叙事跳跃，启发式无法证明"确定时间回退"。
         findings.push({
           id: `verifier:timeline_inconsistency:${pos}`,
           source: "timeline_consistency_checker",
           failureType: "timeline_inconsistency",
-          severity: "hard",
+          severity: "review",
           span: { start: pos, end: pos + m[0].length, excerpt: m[0] },
-          conflictFact: `本章时间「${m[0]}」早于已记录的最新时间「${anchorHour}点」`,
+          conflictFact: `本章时间「${m[0]}」可能早于已记录的最新时间「${anchorHour}点」（启发式无法确定日期上下文）`,
           sourceRef: `timeline:anchor:${anchorHour}`,
-          confidence: 0.8,
+          confidence: 0.5,
           allowedRepairRange: { start: pos, end: pos + m[0].length + 20, excerpt: m[0] },
-          description: `时间回退：${m[0]} 早于第2章的 ${anchorHour} 点`,
+          description: `时间可能回退：${m[0]} 早于锚点 ${anchorHour} 点（需人工确认日期上下文）`,
+          certainty: "heuristic",
+          coverageStatus: "uncertain",
         });
       }
     }
     return findings;
+  }
+
+  /**
+   * P0-2：分类时间上下文。
+   *
+   * 检查 timeMatchPos 前后 60 字符内是否出现日期推进词或回忆标记。
+   * - day_progression：次日/第二天/第三天/今日/今天/明天/后天/随后几天/几天后/后来/翌日/今晚/今夜
+   * - flashback：回忆/想起/记起/记得/当时/那时/之前/前几日/前些天/多年前/多年前
+   * - same_day：无上述标记，视为同日（可比较 hour）
+   */
+  private classifyTimeContext(
+    narrativeText: string,
+    timeMatchPos: number,
+  ): "day_progression" | "flashback" | "same_day" {
+    const windowStart = Math.max(0, timeMatchPos - 80);
+    const windowEnd = Math.min(narrativeText.length, timeMatchPos + 40);
+    const window = narrativeText.slice(windowStart, windowEnd);
+
+    const dayProgressionPattern = /(?:次日|第二天|第三天|第四天|今日|今天|明天|后天|大后天|随后几天|几天后|几天后的|后来|翌日|今晚|今夜|当夜|当晚|当晚的|当夜)/u;
+    if (dayProgressionPattern.test(window)) return "day_progression";
+
+    const flashbackPattern = /(?:回忆|想起|记起|记得|当时|那时|之前|前几日|前些天|多年前|多年前|多年前|多年前|多年前)/u;
+    if (flashbackPattern.test(window)) return "flashback";
+
+    return "same_day";
   }
 
   // ── M1.1 内部：位置连续性检查 ─────────────────────────────────────
@@ -700,9 +1049,11 @@ export class NarrativeVerifierSuite {
   /**
    * 检查位置连续性：角色位置不得无过门跳转（M1.1 新增）。
    *
+   * P0-2 修复：地点跳转缺少可靠主体或时间关系时降为 review。
+   *
    * 从 context.facts 提取角色最新位置（含"位置"或位置关键词），
    * 若正文开头（前 100 字符）既不含原位置关键词也无过门词（走/跑/开车/前往/到达），
-   * 且含跳跃词（立刻/瞬间/突然/马上/直接）→ location_discontinuity hard finding。
+   * 且含跳跃词（立刻/瞬间/突然/马上/直接）→ location_discontinuity finding。
    *
    * 用于检测 F3（空间跳转）等场景。
    */
@@ -728,28 +1079,95 @@ export class NarrativeVerifierSuite {
           jumpTarget.includes(locationPhrase);
         if (!sameLocation) {
           const pos = jumpMatch.index ?? 0;
-          findings.push({
-            id: `verifier:location_discontinuity:${fact.id}`,
-            source: "location_continuity_checker",
-            failureType: "location_discontinuity",
-            severity: "hard",
-            span: { start: pos, end: pos + jumpMatch[0].length, excerpt: jumpMatch[0] },
-            conflictFact: `角色位置无过门跳转：原位置「${locationPhrase}」，正文跳跃到「${jumpTarget}」`,
-            sourceRef: `fact:${fact.id}`,
-            confidence: 0.75,
-            allowedRepairRange: { start: pos, end: pos + jumpMatch[0].length + 20, excerpt: jumpMatch[0] },
-            description: `空间跳转：从「${locationPhrase}」跳跃到「${jumpTarget}」`,
-          });
+          // P0-2：地点跳转缺少可靠主体或时间关系时降为 review。
+          // 从 fact.content 提取角色名（如"第2章结尾林川位置"→"林川"），检查
+          // 该角色名是否出现在 opening 的 jump 之前。若有可靠主体 → hard + corroborated；
+          // 若无可靠主体（主体不明或仅代词）→ review + heuristic + uncertain。
+          const factCharacter = this.extractCharacterFromFact(fact.content);
+          const knownNames = input.knownCharacterNames ?? [];
+          const subjectBeforeJump = opening.slice(0, pos);
+          const hasReliableSubject = factCharacter
+            ? subjectBeforeJump.includes(factCharacter)
+            : knownNames.some((name) => name.length >= 2 && subjectBeforeJump.includes(name));
+          if (hasReliableSubject) {
+            // 可靠主体 + 明确位置跳转 → hard + corroborated（结构化事实冲突）
+            findings.push({
+              id: `verifier:location_discontinuity:${fact.id}`,
+              source: "location_continuity_checker",
+              failureType: "location_discontinuity",
+              severity: "hard",
+              span: { start: pos, end: pos + jumpMatch[0].length, excerpt: jumpMatch[0] },
+              conflictFact: `角色位置无过门跳转：原位置「${locationPhrase}」，正文跳跃到「${jumpTarget}」`,
+              sourceRef: `fact:${fact.id}`,
+              confidence: 1,
+              allowedRepairRange: { start: pos, end: pos + jumpMatch[0].length + 20, excerpt: jumpMatch[0] },
+              description: `空间跳转：从「${locationPhrase}」跳跃到「${jumpTarget}」，缺少过门词`,
+              certainty: "corroborated",
+              coverageStatus: "missing",
+            });
+          } else {
+            // 主体不明或仅代词 → review + heuristic + uncertain
+            findings.push({
+              id: `verifier:location_discontinuity:${fact.id}`,
+              source: "location_continuity_checker",
+              failureType: "location_discontinuity",
+              severity: "review",
+              span: { start: pos, end: pos + jumpMatch[0].length, excerpt: jumpMatch[0] },
+              conflictFact: `角色位置可能无过门跳转：原位置「${locationPhrase}」，正文跳跃到「${jumpTarget}」（启发式无法确定主体/时间关系）`,
+              sourceRef: `fact:${fact.id}`,
+              confidence: 0.5,
+              allowedRepairRange: { start: pos, end: pos + jumpMatch[0].length + 20, excerpt: jumpMatch[0] },
+              description: `空间可能跳转：从「${locationPhrase}」跳跃到「${jumpTarget}」`,
+              certainty: "heuristic",
+              coverageStatus: "uncertain",
+            });
+          }
         }
       }
     }
     return findings;
   }
 
+  /**
+   * P0-2：从 fact.content 提取角色名。
+   * 如"第2章结尾林川位置：青鱼嘴水下" → "林川"
+   * 如"老周的潜水面罩是蓝色" → "老周"
+   * 返回 null 表示无法提取。
+   *
+   * P0-2 修复：贪婪匹配会捕获"结尾林川"等带上下文前缀的串，
+   * 需剥离"第N章/结尾/开头/最后/末尾/前文/前章/本章/当章/当前"等常见上下文词。
+   */
+  private extractCharacterFromFact(content: string): string | null {
+    // 常见上下文前缀（章节标记、时间标记），需从捕获结果中剥离
+    const contextPrefixPattern = /^(?:第[一二三四五六七八九十\d]+章|结尾|开头|最后|末尾|前文|前章|本章|当章|当前|上一章|下一章)+/u;
+
+    // 模式 1：角色名 + "位置"（如"林川位置"、"第2章结尾林川位置"）
+    const posMatch = content.match(/([\u4e00-\u9fa5]{2,4})位置/u);
+    if (posMatch) {
+      const name = posMatch[1].replace(contextPrefixPattern, "");
+      if (name.length >= 2) return name;
+    }
+    // 模式 2：角色名 + "的"（如"老周的"）
+    const possMatch = content.match(/([\u4e00-\u9fa5]{2,4})的/u);
+    if (possMatch) {
+      const name = possMatch[1].replace(contextPrefixPattern, "");
+      if (name.length >= 2) return name;
+    }
+    // 模式 3：角色名 + "在"（如"林川在"）
+    const atMatch = content.match(/([\u4e00-\u9fa5]{2,4})在/u);
+    if (atMatch) {
+      const name = atMatch[1].replace(contextPrefixPattern, "");
+      if (name.length >= 2) return name;
+    }
+    return null;
+  }
+
   // ── M1.1 内部：属性型事实矛盾检查 ─────────────────────────────────
 
   /**
    * 检查属性型 canon 事实矛盾（M1.1 新增）。
+   *
+   * P0-2：certainty=corroborated（结构化事实与正文存在确定冲突）。
    *
    * 从 context.facts 中提取颜色属性（蓝/红/绿/黑/白/黄/紫/灰），
    * 若正文出现与 canon 声明不同的颜色 + 同主体关键词在附近 → fact_contradiction hard finding。
@@ -787,6 +1205,8 @@ export class NarrativeVerifierSuite {
               confidence: 0.9,
               allowedRepairRange: { start: pos, end: pos + color.length + 10, excerpt: color },
               description: `属性矛盾：${subject} 的装备应为${canonColor}，正文写成${color}`,
+              certainty: "corroborated",
+              coverageStatus: "missing",
             });
           }
         }

@@ -92,6 +92,16 @@ export interface ChapterIntent {
    * - 只列空关键字段，不列非空字段（fieldSourceRefs 仍追踪实际贡献来源）
    */
   underSpecifiedFields?: string[];
+  /**
+   * P0-1 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：表达偏好（来自 forbiddenDrift 中的
+   * 风格/句式/对白比例等表达层约束）。
+   *
+   * 设计原则：
+   * - 表达偏好不得伪装成 inviolableFacts（事实硬门只覆盖事实/人物边界，不覆盖表达层）
+   * - 表达偏好作为写前提示，不强制改文、不阻断生成（正文表达归模型原则）
+   * - 来源：constitution.forbiddenDrift 中分类为 "expression_preference" 的条目
+   */
+  expressionPreferences?: string[];
 }
 
 /**
@@ -283,18 +293,31 @@ export class ChapterIntentBuilder {
       (character) => `${character.name}已死亡；不得作为当前时间线的在场行动者；如在回忆、记录或幻觉中出现，必须明确标记其非当前时线。`
     );
 
-    // inviolableFacts：world immutableFacts + constitution.forbiddenDrift
+    // inviolableFacts：world immutableFacts + constitution.forbiddenDrift（分类后）
+    // P0-1 修复：forbiddenDrift 按事实边界、人物边界、表达偏好分类；
+    // 表达偏好不得伪装成 inviolableFacts（事实硬门只覆盖事实/人物边界）。
     const inviolableFacts = [...input.immutableFacts];
     if (inviolableFacts.length) sourceRefs.push("chapter-seed:immutableFacts");
     for (const boundary of deceasedTimelineBoundaries) {
       if (!inviolableFacts.includes(boundary)) inviolableFacts.push(boundary);
     }
     if (deceasedTimelineBoundaries.length > 0) sourceRefs.push("chapter-seed:characters.deceased");
+    const expressionPreferences: string[] = [];
     if (constitution?.forbiddenDrift?.length) {
-      constitution.forbiddenDrift.forEach((f) => {
-        if (!inviolableFacts.includes(f)) inviolableFacts.push(f);
-      });
+      for (const drift of constitution.forbiddenDrift) {
+        const category = classifyForbiddenDrift(drift);
+        if (category === "expression_preference") {
+          // 表达偏好 → 不进入 inviolableFacts，单独存储
+          if (!expressionPreferences.includes(drift)) expressionPreferences.push(drift);
+        } else {
+          // 事实边界 / 人物边界 → 进入 inviolableFacts
+          if (!inviolableFacts.includes(drift)) inviolableFacts.push(drift);
+        }
+      }
       sourceRefs.push("creative-constitution:forbiddenDrift");
+      if (expressionPreferences.length > 0) {
+        sourceRefs.push("creative-constitution:forbiddenDrift:expressionPreferences");
+      }
     }
 
     // 前章承接缺失警告
@@ -644,6 +667,8 @@ export class ChapterIntentBuilder {
       underSpecifiedFields,
       // P4 M3：pass-through 写前 overdue alerts（不重新计算，避免双重计算与潜在不一致）。
       overduePressure: input.overdueAlerts ?? [],
+      // P0-1：表达偏好（不进入 inviolableFacts，不强制改文、不阻断生成）
+      ...(expressionPreferences.length > 0 ? { expressionPreferences } : {}),
     };
 
     return { intent, warnings };
@@ -652,6 +677,54 @@ export class ChapterIntentBuilder {
 
 function dedupe(arr: string[]): string[] {
   return Array.from(new Set(arr));
+}
+
+/**
+ * P0-1 修复：把 forbiddenDrift 条目分类为事实边界、人物边界或表达偏好。
+ *
+ * 分类规则（按优先级）：
+ * 1. expression_preference（表达偏好）：包含风格/句式/对白比例/段落长度/字数/修辞等表达层约束
+ *    例："避免使用'突然'"、"对话比例不超过30%"、"每段不少于100字"、"不要用感叹号"
+ * 2. character_boundary（人物边界）：包含角色知识/角色出现/角色身份等人物层约束
+ *    例："X不知道Y"、"X不能出现在Z"、"X不能是W身份"
+ * 3. fact_boundary（事实边界）：包含世界事实/历史事件/能力设定等事实层约束（默认）
+ *    例："不能改变主角背景"、"不得违反世界规则"、"魔法体系不可变更"
+ *
+ * 表达偏好不得伪装成 inviolableFacts（事实硬门只覆盖事实/人物边界）。
+ */
+function classifyForbiddenDrift(
+  drift: string,
+): "fact_boundary" | "character_boundary" | "expression_preference" {
+  // 表达偏好模式：风格/句式/对白比例/段落长度/字数/修辞/标点
+  const expressionPatterns = [
+    /避免使用|不要用|不可使用|禁用/u,
+    /对白比例|对话比例|dialogue\s*ratio/u,
+    /每段.*?字|段落长度|段落.*?字数/u,
+    /字数必须|字数不少于|字数不超过/u,
+    /感叹号|问号|省略号|标点/u,
+    /修辞|比喻|拟人|排比/u,
+    /句式|短句|长句|复合句/u,
+    /语气|口吻|叙述视角|文风/u,
+    /AI\s*腔|翻译腔|机械感/u,
+    /不用.*?词|避免.*?字/u,
+  ];
+  for (const pattern of expressionPatterns) {
+    if (pattern.test(drift)) return "expression_preference";
+  }
+
+  // 人物边界模式：角色知识/角色出现/角色身份
+  const characterPatterns = [
+    /[^\s]{2,4}不知道|不该知道|不应知道|不能知道/u,
+    /[^\s]{2,4}不能出现在|不应出现在|不得出现在/u,
+    /[^\s]{2,4}不能是|不应是|不得是/u,
+    /角色.*?不能|人物.*?不能/u,
+  ];
+  for (const pattern of characterPatterns) {
+    if (pattern.test(drift)) return "character_boundary";
+  }
+
+  // 默认：事实边界
+  return "fact_boundary";
 }
 
 export function createChapterIntentBuilder(): ChapterIntentBuilder {

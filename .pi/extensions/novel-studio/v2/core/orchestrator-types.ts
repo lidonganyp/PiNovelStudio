@@ -426,6 +426,25 @@ export interface UnifiedFailureEnvelope {
     strategy: "revise_inputs_and_retry_same_chapter";
     maxAttempts: number;
   };
+  /**
+   * P0-4 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：阻断归类。
+   *
+   * - `system_verifier_uncertain`：verifier 不确定或疑似误报（heuristic finding 误入
+   *   hard、coverageStatus=uncertain 等）。恢复责任归系统：同章可重试，不提示用户
+   *   简化章纲；上层交互不得把恢复成本转嫁给用户。
+   * - `author_input_conflict`：ChapterSeed/章纲存在真实矛盾、缺失或不可执行要求
+   *   （如同时要求"角色 A 在场"与"角色 A 已死亡"）。恢复责任归用户：必须修订
+   *   ChapterSeed 或作者章纲后重试。
+   * - `confirmed_content_omission`：候选正文确实遗漏必须包含的事实/事件/原句
+   *   （deterministic/corroborated finding）。恢复责任归系统：同章可重试，由
+   *   NovelOS 重新生成或局部 patch，不要求用户改章纲。
+   *
+   * 未设置时表示未做归类（向后兼容旧阻断路径）。
+   */
+  blockCategory?:
+    | "system_verifier_uncertain"
+    | "author_input_conflict"
+    | "confirmed_content_omission";
 }
 
 export interface ControlPlaneTrace {

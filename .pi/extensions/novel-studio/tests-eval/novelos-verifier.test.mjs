@@ -204,7 +204,7 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
     );
   });
 
-  it("事件遗漏检查：chapterIntent 关键词不在正文 → hard finding", () => {
+  it("事件遗漏检查：chapterIntent 关键词不在正文 → review finding（P0-2 降级）", () => {
     // chapterIntent 提到「青鱼嘴」，但正文完全不包含
     const text = "林默走在路上，看着风景。天气不错，阳光明媚。他继续前行，心中平静。".repeat(3);
 
@@ -214,16 +214,25 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
       chapterIntent: "本章关于「青鱼嘴」的事件",
     });
 
-    const omissionFindings = report.hardFindings.filter(
-      (f) => f.failureType === "intent_omission",
+    // P0-2 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：
+    // 引号/关于X 关键词遗漏降为 review + heuristic + 空范围（诊断 only，不触发 hard block）。
+    // 真实遗漏仍被检出，但作为诊断证据（report.findings）而非硬阻断（hardFindings）。
+    const omissionFindings = report.findings.filter(
+      (f) => f.failureType === "intent_omission"
+        && f.certainty === "heuristic"
+        && f.coverageStatus === "missing",
     );
     assert.ok(
       omissionFindings.length >= 1,
-      "应检测到关键事件遗漏（青鱼嘴）",
+      "应检测到关键事件遗漏（青鱼嘴）作为 heuristic finding",
     );
     assert.ok(
       omissionFindings.every((f) => f.sourceRef.includes("intent:")),
       "sourceRef 应指向 intent",
+    );
+    assert.ok(
+      omissionFindings.every((f) => f.severity === "review"),
+      "P0-2：关键词遗漏应为 review 严重度",
     );
   });
 
@@ -320,19 +329,20 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
     });
 
     // 已知问题：3 个
-    // 1. 知识边界（禁忌知识）
-    // 2. canon 冲突（进入禁地）
-    // 3. 事件遗漏（青鱼嘴）
+    // 1. 知识边界（禁忌知识）→ hard
+    // 2. canon 冲突（进入禁地）→ hard
+    // 3. 事件遗漏（青鱼嘴）→ P0-2 降级为 review + heuristic（不再 hard block）
     const knownProblemTypes = new Set([
       "knowledge_boundary",
       "canon_conflict",
       "intent_omission",
     ]);
 
-    const detectedHard = report.hardFindings.filter((f) =>
+    // P0-2 修复：intent_omission 现在是 review finding，需在 report.findings 中检测
+    const detectedAll = report.findings.filter((f) =>
       knownProblemTypes.has(f.failureType),
     );
-    const detectedTypes = new Set(detectedHard.map((f) => f.failureType));
+    const detectedTypes = new Set(detectedAll.map((f) => f.failureType));
 
     // recall = 检测到的已知问题类型 / 已知问题类型总数
     const recall = detectedTypes.size / knownProblemTypes.size;
@@ -341,18 +351,28 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
       `recall 应 ≥ 0.66（检测到 ${detectedTypes.size}/${knownProblemTypes.size} 类），实际：${recall}`,
     );
 
-    // precision = 正确检测 / 总检测（hard findings 中属于已知问题的比例）
-    const precision = detectedHard.length / report.hardFindings.length;
+    // precision = 正确检测 / 总检测（所有 findings 中属于已知问题的比例）
+    const precision = detectedAll.length / report.findings.length;
     assert.ok(
-      precision >= 0.3,
-      `precision 应 ≥ 0.3（可能有其他检测如 duplicate_scan），实际：${precision}`,
+      precision >= 0.1,
+      `precision 应 ≥ 0.1（可能有其他检测如 duplicate_scan、language_risk），实际：${precision}`,
     );
 
-    // 所有 hard findings 都带 span + sourceRef + confidence
+    // 所有 findings 都带 span + sourceRef + confidence
     assert.ok(
-      report.hardFindings.every((f) => f.span && f.sourceRef && typeof f.confidence === "number"),
-      "所有 hard findings 应带 span + sourceRef + confidence",
+      report.findings.every((f) => f.span && f.sourceRef && typeof f.confidence === "number"),
+      "所有 findings 应带 span + sourceRef + confidence",
     );
+
+    // P0-2：knowledge_boundary 和 canon_conflict 仍为 hard；intent_omission 降为 review
+    const hardTypes = new Set(
+      report.hardFindings
+        .filter((f) => knownProblemTypes.has(f.failureType))
+        .map((f) => f.failureType),
+    );
+    assert.ok(hardTypes.has("knowledge_boundary"), "知识边界仍应为 hard");
+    assert.ok(hardTypes.has("canon_conflict"), "canon 冲突仍应为 hard");
+    assert.ok(!hardTypes.has("intent_omission"), "P0-2：intent_omission 不再为 hard");
   });
 });
 
@@ -406,8 +426,11 @@ describe("NovelOS Narrative Verifier M1.1（事实/连续性/矛盾检查）", (
     );
   });
 
-  it("timeline_inconsistency：正文时间早于 canon 锚点 → hard finding", () => {
+  it("timeline_inconsistency：正文时间早于 canon 锚点 → review finding（P0-2 降级）", () => {
     // F3 场景：canon 记录第2章时间到中午十二点，正文写上午九点
+    // P0-2 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：
+    // 无明确日期推进上下文（次日/第二天/回忆等）时，启发式无法确定是否为同日回退，
+    // 降为 review + heuristic + uncertain，不触发 hard block。
     const context = createContext({
       facts: [
         {
@@ -426,16 +449,23 @@ describe("NovelOS Narrative Verifier M1.1（事实/连续性/矛盾检查）", (
       chapterIntent: "第3章 生成正文",
     });
 
-    const timelineFindings = report.hardFindings.filter(
-      (f) => f.failureType === "timeline_inconsistency",
+    // P0-2：不确定日期上下文 → review + heuristic + uncertain
+    const timelineFindings = report.findings.filter(
+      (f) => f.failureType === "timeline_inconsistency"
+        && f.certainty === "heuristic"
+        && f.coverageStatus === "uncertain",
     );
     assert.ok(
       timelineFindings.length >= 1,
-      "应检测到 timeline_inconsistency（9点 < 12点锚点）",
+      "应检测到 timeline_inconsistency（9点 < 12点锚点）作为 heuristic finding",
     );
     assert.ok(
       timelineFindings.every((f) => f.sourceRef.includes("timeline:anchor:")),
       "sourceRef 应指向 timeline:anchor",
+    );
+    assert.ok(
+      timelineFindings.every((f) => f.severity === "review"),
+      "P0-2：无日期上下文的 timeline 不确定应为 review 严重度",
     );
   });
 

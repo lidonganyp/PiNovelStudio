@@ -768,6 +768,15 @@ export class UnifiedOrchestrator {
           stateCommitExecuted: false,
           chapterSaveExecuted: false,
         };
+        // P0-4 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：按 finding 的 certainty /
+        // coverageStatus 把阻断归因到三类，避免一刀切要求用户改章纲。
+        // - heuristic finding 误入 hard、coverageStatus=uncertain → 系统责任
+        // - deterministic/corroborated 真实遗漏 → 系统责任（重试 / patch）
+        // - 事实/人物边界冲突（作者输入自相矛盾）→ 用户责任
+        const blockGuidance = classifyAgenticVerificationBlock(
+          agenticResult.unresolvedFindings ?? [],
+          chapterNumber,
+        );
         return this.hardBlock(
           input,
           "novelos_agentic_verification",
@@ -783,24 +792,7 @@ export class UnifiedOrchestrator {
             selectedSource: "raw",
             finalText: agenticCandidate.text,
           },
-          {
-            recoverable: true,
-            candidateDisposition: "blocked_evidence_only",
-            userActionRequired: [
-              "查看 stageResults.novelos.unresolvedFindings 与 trajectoryPath，确认仍未满足的当前章约束",
-              `修订第 ${chapterNumber} 章的 ChapterSeed 或作者章纲，解决冲突、重复或非必要的必须项`,
-              `通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
-            ],
-            prohibitedActions: [
-              "accept_or_deliver_blocked_candidate",
-              "save_blocked_candidate_as_chapter",
-              "skip_to_next_chapter",
-            ],
-            retryPlan: {
-              strategy: "revise_inputs_and_retry_same_chapter",
-              maxAttempts: 1,
-            },
-          },
+          blockGuidance,
         );
       }
       candidates.push(agenticCandidate);
@@ -872,8 +864,9 @@ export class UnifiedOrchestrator {
         guidanceCount: styleResult.guidanceCount,
         candidateId: styleResult.candidate?.id ?? null,
         failureReason: styleResult.failureReason,
+        retryWithReducedGuidance: styleResult.retryWithReducedGuidance,
       };
-      const styledCandidate = styleResult.candidate;
+      let styledCandidate = styleResult.candidate;
       if (!styledCandidate) {
         return this.hardBlock(
           input,
@@ -897,13 +890,123 @@ export class UnifiedOrchestrator {
       const preservation = timeSync("stage4_storyPreservation", () =>
         checkEditorialStoryPreservation({
           rawText: agenticCandidate.text,
-          editorialText: styledCandidate.text,
+          editorialText: styledCandidate!.text,
           knownEntities: characterNames,
           entityCoverage: "characters_only",
         }),
       );
       stageResults.storyPreservation = preservation;
-      if (!preservation.preserved) {
+
+      // P1 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：unverifiable 与明确故事漂移分开处理。
+      // - 明确漂移（missing_event/replaced_event/order_violation）→ 阻断，保留 raw 初稿
+      // - unverifiable（事件抽取失败/空文本/无实体）→ 用缩减风格指导重试一次，
+      //   不要求用户修改章纲；重试仍 unverifiable 则保守回退 raw 初稿（不阻断章节生成）
+      if (!preservation.preserved && preservation.unverifiable) {
+        const retryStyleResult = await timeAsync("stage4a_authorStyleRetryUnverifiable", () =>
+          createAuthorStyleOptimizer().optimize({
+            sourceCandidate: agenticCandidate,
+            chapterNumber,
+            intent,
+            context,
+            constitution,
+            writerPromptProfile: input.rawPromptProfile,
+            modelGenerate: wrappedModelGenerate!,
+            timeoutMs: input.timeoutMs,
+            reducedGuidanceRatio: 0.5,
+          }),
+        );
+        stageResults.authorStyleOptimizationUnverifiableRetry = {
+          styleProfileLoaded: retryStyleResult.styleProfileLoaded,
+          styleGuidanceConsumed: retryStyleResult.styleGuidanceConsumed,
+          styleReferenceIds: retryStyleResult.styleReferenceIds,
+          guidanceCount: retryStyleResult.guidanceCount,
+          candidateId: retryStyleResult.candidate?.id ?? null,
+          failureReason: retryStyleResult.failureReason,
+          retryWithReducedGuidance: retryStyleResult.retryWithReducedGuidance,
+          firstPreservationUnverifiable: true,
+          firstPreservationReason: preservation.reason,
+        };
+        const retryCandidate = retryStyleResult.candidate;
+        if (retryCandidate) {
+          const retryPreservation = timeSync("stage4b_retryStoryPreservation", () =>
+            checkEditorialStoryPreservation({
+              rawText: agenticCandidate.text,
+              editorialText: retryCandidate.text,
+              knownEntities: characterNames,
+              entityCoverage: "characters_only",
+            }),
+          );
+          stageResults.retryStoryPreservation = retryPreservation;
+          if (retryPreservation.preserved) {
+            // 重试通过：用重试候选替换原 styledCandidate
+            const staleCandidateIndex = candidates.findIndex((c) => c.id === styledCandidate!.id);
+            if (staleCandidateIndex >= 0) candidates.splice(staleCandidateIndex, 1);
+            styledCandidate = retryCandidate;
+            candidates.push(styledCandidate);
+          } else if (!retryPreservation.preserved && !retryPreservation.unverifiable) {
+            // 重试出现明确漂移 → 阻断，保留 raw 初稿
+            return this.hardBlock(
+              input,
+              "author_style_story_preservation",
+              `作者风格优化重试未通过故事保持检查（明确漂移）：${retryPreservation.reason}`,
+              stageResults,
+              {
+                rawText: agenticCandidate.text,
+                rawFinishReason: agenticCandidate.finishReason ?? null,
+                rawMaxTokens: agenticCandidate.maxTokens ?? null,
+                rawModel: agenticCandidate.model,
+                modelVersion: detectModelVersion(agenticCandidate.model),
+                candidateId: retryCandidate.id,
+                selectedSource: "editorial",
+                finalText: retryCandidate.text,
+              },
+              {
+                recoverable: true,
+                candidateDisposition: "blocked_evidence_only",
+                blockCategory: "confirmed_content_omission",
+                userActionRequired: [
+                  `查看 stageResults.retryStoryPreservation 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化重试的漂移证据`,
+                  `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
+                  `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+                ],
+                prohibitedActions: [
+                  "accept_or_deliver_blocked_candidate",
+                  "save_blocked_candidate_as_chapter",
+                  "skip_to_next_chapter",
+                ],
+                retryPlan: {
+                  strategy: "revise_inputs_and_retry_same_chapter",
+                  maxAttempts: 1,
+                },
+              },
+            );
+          }
+          // 重试仍 unverifiable → 保守回退 raw 初稿（不阻断，但记录降级）
+          if (!retryPreservation.preserved && retryPreservation.unverifiable) {
+            stageResults.authorStyleOptimizationDegradedToRaw = {
+              reason: "风格优化重试仍 unverifiable，保守回退 NovelOS Agentic 初稿",
+              rawCandidateId: agenticCandidate.id,
+              styledCandidateId: retryCandidate.id,
+            };
+            // 从 candidates 移除 unverifiable 的风格优化稿，只保留 agentic 初稿
+            const staleIdx = candidates.findIndex((c) => c.id === retryCandidate.id);
+            if (staleIdx >= 0) candidates.splice(staleIdx, 1);
+            // 跳过后续事实复检/完整性检查对 styledCandidate 的依赖：直接用 agenticCandidate
+            styledCandidate = agenticCandidate;
+          }
+        } else {
+          // 重试未产出候选 → 保守回退 raw 初稿
+          stageResults.authorStyleOptimizationDegradedToRaw = {
+            reason: `风格优化重试未产出候选：${retryStyleResult.failureReason ?? "未产出"}，保守回退 NovelOS Agentic 初稿`,
+            rawCandidateId: agenticCandidate.id,
+            styledCandidateId: null,
+          };
+          const staleIdx = candidates.findIndex((c) => c.id === styledCandidate!.id);
+          if (staleIdx >= 0) candidates.splice(staleIdx, 1);
+          styledCandidate = agenticCandidate;
+        }
+      } else if (!preservation.preserved) {
+        // 明确故事漂移（非 unverifiable）→ 阻断，保留 raw 初稿
         return this.hardBlock(
           input,
           "author_style_story_preservation",
@@ -919,13 +1022,47 @@ export class UnifiedOrchestrator {
             selectedSource: "editorial",
             finalText: styledCandidate.text,
           },
+          {
+            recoverable: true,
+            candidateDisposition: "blocked_evidence_only",
+            blockCategory: "confirmed_content_omission",
+            userActionRequired: [
+              `查看 stageResults.storyPreservation 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化的漂移证据`,
+              `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
+              `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+            ],
+            prohibitedActions: [
+              "accept_or_deliver_blocked_candidate",
+              "save_blocked_candidate_as_chapter",
+              "skip_to_next_chapter",
+            ],
+            retryPlan: {
+              strategy: "revise_inputs_and_retry_same_chapter",
+              maxAttempts: 1,
+            },
+          },
         );
       }
+
+      // P1 修复：人工审阅包 — 永久保留初稿/优化稿差异、事实复检结果与用户修改量占位
+      // 在获得用户样本前，不宣称整章风格优化稳定优于 Agentic 初稿
+      stageResults.authorStyleHumanReviewPackage = buildAuthorStyleHumanReviewPackage(
+        agenticCandidate,
+        styledCandidate,
+        chapterNumber,
+      );
 
       const finalFactRecheck = timeSync("stage5_finalFactRecheck", () =>
         checkCandidateFactGuard(styledCandidate.text, input, agenticCandidate.text),
       );
       stageResults.finalFactRecheck = finalFactRecheck;
+      // P1 修复：回填人工审阅包的事实复检结果
+      if (stageResults.authorStyleHumanReviewPackage) {
+        (stageResults.authorStyleHumanReviewPackage as AuthorStyleHumanReviewPackage).factRecheckResult = {
+          ok: finalFactRecheck.ok,
+          errors: finalFactRecheck.errors,
+        };
+      }
       if (!finalFactRecheck.ok) {
         return this.hardBlock(
           input,
@@ -2883,6 +3020,7 @@ export class UnifiedOrchestrator {
       | "userActionRequired"
       | "prohibitedActions"
       | "retryPlan"
+      | "blockCategory"
     >,
   ): UnifiedOrchestratorOutput {
     // hardBlock 不接收调用方 warnings（阻断路径独立维护局部 warnings，
@@ -2904,6 +3042,9 @@ export class UnifiedOrchestrator {
         ? { prohibitedActions: guidance.prohibitedActions }
         : {}),
       ...(guidance?.retryPlan ? { retryPlan: guidance.retryPlan } : {}),
+      ...(guidance?.blockCategory
+        ? { blockCategory: guidance.blockCategory }
+        : {}),
     };
     stageResults.failureEnvelope = envelope;
     // ── QUALITY-3：hardBlock 路径跳过结构证据扫描，但写清 skipped reason ──
@@ -3230,4 +3371,205 @@ export class UnifiedOrchestrator {
 
 export function createUnifiedOrchestrator(): UnifiedOrchestrator {
   return new UnifiedOrchestrator();
+}
+
+// ============================================================================
+// P1 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：作者风格优化人工审阅包
+// ============================================================================
+
+/**
+ * 人工审阅包：永久保留 Agentic 初稿、风格优化稿及来源关系，供后续用户样本比对。
+ *
+ * 设计原则（任务规格 §六 P1）：
+ * - trace 永久保留 Agentic 初稿、风格优化稿及来源关系
+ * - 展示初稿/优化稿差异、事实复检结果和用户最终修改量
+ * - 在获得用户样本前，不宣称整章风格优化稳定优于 Agentic 初稿
+ *
+ * 注：userModificationDelta 与 positiveBenefitClaim 字段在生成时为占位值，
+ * 需等用户实际修改章节后回填；在此之前 positiveBenefitClaim 恒为 false。
+ */
+export interface AuthorStyleHumanReviewPackage {
+  /** 第 N 章 */
+  chapterNumber: number;
+  /** Agentic 初稿候选 ID */
+  agenticCandidateId: string;
+  /** 风格优化稿候选 ID（与 agentic 相同表示降级回退） */
+  styledCandidateId: string;
+  /** Agentic 初稿文本（永久保留，供用户样本比对） */
+  agenticText: string;
+  /** 风格优化稿文本（永久保留，供用户样本比对） */
+  styledText: string;
+  /** 来源关系：styledCandidateId 的源候选 */
+  sourceRelation: "author_style_full_chapter" | "degraded_to_raw";
+  /** 文本长度差异（正数=优化稿更长，负数=优化稿更短） */
+  lengthDelta: number;
+  /**
+   * 用户最终修改量占位（生成时为 null，用户保存修改后回填）。
+   * 比对基准为最终交付文本（styledText 或 agenticText）。
+   */
+  userModificationDelta: null;
+  /**
+   * 事实复检结果（来自 stage5_finalFactRecheck，生成时为 null，复检完成后回填）。
+   */
+  factRecheckResult: {
+    ok: boolean;
+    errors: string[];
+  } | null;
+  /**
+   * 是否可宣称"整章风格优化稳定优于 Agentic 初稿"。
+   * 在获得用户样本前恒为 false（任务规格 §六 P1 明确要求）。
+   */
+  positiveBenefitClaim: false;
+  /** 备注：解释为何不能宣称正收益 */
+  positiveBenefitClaimReason: string;
+}
+
+/**
+ * 构造人工审阅包。在用户样本回流前，positiveBenefitClaim 恒为 false。
+ */
+function buildAuthorStyleHumanReviewPackage(
+  agenticCandidate: { id: string; text: string },
+  styledCandidate: { id: string; text: string },
+  chapterNumber: number,
+): AuthorStyleHumanReviewPackage {
+  const isDegraded = agenticCandidate.id === styledCandidate.id;
+  return {
+    chapterNumber,
+    agenticCandidateId: agenticCandidate.id,
+    styledCandidateId: styledCandidate.id,
+    agenticText: agenticCandidate.text,
+    styledText: styledCandidate.text,
+    sourceRelation: isDegraded ? "degraded_to_raw" : "author_style_full_chapter",
+    lengthDelta: styledCandidate.text.length - agenticCandidate.text.length,
+    userModificationDelta: null,
+    factRecheckResult: null,
+    positiveBenefitClaim: false,
+    positiveBenefitClaimReason:
+      "在获得用户实际修改样本前，不宣称整章风格优化稳定优于 NovelOS Agentic 初稿（NOVELOS-CONSTRAINT-RELAXATION-1 §六 P1）",
+  };
+}
+
+// ============================================================================
+// P0-4 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：阻断恢复建议归类
+// ============================================================================
+
+/**
+ * agentic 候选验证阻断时未解决 finding 的最小结构（与
+ * AgenticRawSourceResult.unresolvedFindings 同构，本模块只消费这几个字段）。
+ */
+interface UnresolvedAgenticFinding {
+  id: string;
+  failureType: string;
+  sourceRef: string;
+  description: string;
+  conflictFact: string;
+  certainty?: "deterministic" | "corroborated" | "heuristic";
+  coverageStatus?: "covered" | "uncertain" | "missing";
+}
+
+/**
+ * 把 NovelOS Agentic 验证阻断的未解决 finding 归类到三类恢复路径：
+ *
+ * - `system_verifier_uncertain`：heuristic finding 误入 hard 或 coverageStatus=
+ *   uncertain。verifier 不确定或疑似误报，恢复责任归系统，不提示用户简化章纲。
+ * - `author_input_conflict`：ChapterSeed/章纲存在真实矛盾、缺失或不可执行要求
+ *   （fact_contradiction / canon 硬冲突 / 同时要求互斥状态）。用户必须修订输入。
+ * - `confirmed_content_omission`：deterministic/corroborated 的真实内容遗漏
+ *   （verbatim 缺失、必需事实遗漏、事件锚点整体缺失）。系统应重新生成或 patch，
+ *   不要求用户改章纲。
+ *
+ * 归类优先级：author_input_conflict > system_verifier_uncertain >
+ * confirmed_content_omission。即只要有一项指向作者输入自相矛盾，就归到用户责任；
+ * 否则只要有一项 heuristic 误判，就归到系统责任；其余归到内容遗漏（系统重试）。
+ */
+export function classifyAgenticVerificationBlock(
+  unresolvedFindings: UnresolvedAgenticFinding[],
+  chapterNumber: number,
+): Pick<
+  UnifiedFailureEnvelope,
+  | "recoverable"
+  | "candidateDisposition"
+  | "userActionRequired"
+  | "prohibitedActions"
+  | "retryPlan"
+  | "blockCategory"
+> {
+  // 禁止动作与候选处置对所有归类一致：阻断候选不可交付、不可保存、不可跳章
+  const prohibitedActions: UnifiedFailureEnvelope["prohibitedActions"] = [
+    "accept_or_deliver_blocked_candidate",
+    "save_blocked_candidate_as_chapter",
+    "skip_to_next_chapter",
+  ];
+  const candidateDisposition = "blocked_evidence_only" as const;
+  const retryPlan = {
+    strategy: "revise_inputs_and_retry_same_chapter" as const,
+    maxAttempts: 1,
+  };
+
+  // 共享诊断提示：始终告知调用方查看 trace 与未解决 finding
+  const diagnosticHint =
+    `查看 stageResults.novelos.unresolvedFindings 与 trajectoryPath，确认第 ${chapterNumber} 章仍未满足的约束`;
+
+  // 1. 检测 author_input_conflict：作者输入自相矛盾
+  //    - fact_contradiction：正文与结构化事实冲突（如颜色/身份/状态矛盾）
+  //    - canon 相关硬冲突
+  //    - 同一 finding 同时声明两个互斥事实
+  const authorConflictFindings = unresolvedFindings.filter((finding) => {
+    if (finding.failureType === "fact_contradiction") return true;
+    if (finding.failureType === "canon_violation") return true;
+    // inviolableFacts 内部自相矛盾（如同时要求"角色在场"与"角色已死亡"）
+    if (finding.failureType === "inviolable_fact_conflict") return true;
+    return false;
+  });
+  if (authorConflictFindings.length > 0) {
+    return {
+      recoverable: true,
+      candidateDisposition,
+      blockCategory: "author_input_conflict",
+      userActionRequired: [
+        diagnosticHint,
+        `第 ${chapterNumber} 章的 ChapterSeed 或作者章纲存在真实矛盾或不可执行要求：${authorConflictFindings.map((f) => f.conflictFact).join("；")}`,
+        `修订第 ${chapterNumber} 章输入，解决冲突后通过 novel_generate_chapter 重试；verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+      ],
+      prohibitedActions,
+      retryPlan,
+    };
+  }
+
+  // 2. 检测 system_verifier_uncertain：heuristic 误入 hard 或 coverageStatus=uncertain
+  //    这类 finding 不应触发整章阻断，恢复责任归系统，不要求用户改章纲
+  const uncertainFindings = unresolvedFindings.filter((finding) => {
+    if (finding.certainty === "heuristic") return true;
+    if (finding.coverageStatus === "uncertain") return true;
+    return false;
+  });
+  if (uncertainFindings.length > 0) {
+    return {
+      recoverable: true,
+      candidateDisposition,
+      blockCategory: "system_verifier_uncertain",
+      userActionRequired: [
+        diagnosticHint,
+        `第 ${chapterNumber} 章 verifier 存在不确定或疑似误报的 finding（heuristic / uncertain）；恢复责任归系统，无需用户修订章纲`,
+        `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；若反复阻断，请把 trajectoryPath 上报用于 verifier 调优；verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+      ],
+      prohibitedActions,
+      retryPlan,
+    };
+  }
+
+  // 3. 其余归到 confirmed_content_omission：deterministic/corroborated 的真实遗漏
+  //    系统应重新生成或局部 patch，不要求用户改章纲
+  return {
+    recoverable: true,
+    candidateDisposition,
+    blockCategory: "confirmed_content_omission",
+    userActionRequired: [
+      diagnosticHint,
+      `第 ${chapterNumber} 章候选正文存在确定性遗漏或冲突（deterministic / corroborated）；系统应重新生成或局部 patch，无需用户修订章纲`,
+      `通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
+    ],
+    prohibitedActions,
+    retryPlan,
+  };
 }

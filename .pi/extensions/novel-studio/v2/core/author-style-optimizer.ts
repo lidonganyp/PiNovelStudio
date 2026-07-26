@@ -34,6 +34,15 @@ export interface AuthorStyleOptimizationInput {
   writerPromptProfile?: WriterPromptProfile;
   modelGenerate: ModelGenerateFn;
   timeoutMs?: number;
+  /**
+   * P1 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：风格指导缩减比例。
+   *
+   * 当 StoryPreservation 返回 unverifiable 时，编排器用 reduced guidance 重试一次，
+   * 避免因风格指导过载导致事件抽取失败。reducedGuidanceRatio=0.5 表示只保留
+   * 原指导的一半（按 MAX_GUIDANCE_ITEMS 上限再砍半）。
+   * 未设置（undefined）= 使用完整指导（默认行为，向后兼容）。
+   */
+  reducedGuidanceRatio?: number;
 }
 
 export interface AuthorStyleOptimizationResult {
@@ -43,6 +52,10 @@ export interface AuthorStyleOptimizationResult {
   styleGuidanceConsumed: boolean;
   styleReferenceIds: string[];
   guidanceCount: number;
+  /**
+   * P1 修复：标记本次优化是否为缩减指导重试（用于 trace 区分首次优化与 unverifiable 重试）。
+   */
+  retryWithReducedGuidance: boolean;
 }
 
 interface ParsedStyleGuidance {
@@ -72,6 +85,7 @@ function stringList(value: unknown): string[] {
 export function collectAuthorStyleGuidance(
   context: CompiledContext,
   relevantCharacters: string[],
+  reducedGuidanceRatio?: number,
 ): ParsedStyleGuidance {
   const referenceIds: string[] = [];
   const guidance: string[] = [];
@@ -91,11 +105,19 @@ export function collectAuthorStyleGuidance(
     }
   }
 
+  // P1 修复：unverifiable 重试时缩减指导上限，避免风格指导过载导致事件抽取失败
+  const effectiveMaxItems = reducedGuidanceRatio !== undefined && reducedGuidanceRatio > 0 && reducedGuidanceRatio < 1
+    ? Math.max(1, Math.floor(MAX_GUIDANCE_ITEMS * reducedGuidanceRatio))
+    : MAX_GUIDANCE_ITEMS;
+  const effectiveMaxChars = reducedGuidanceRatio !== undefined && reducedGuidanceRatio > 0 && reducedGuidanceRatio < 1
+    ? Math.max(200, Math.floor(MAX_GUIDANCE_CHARS * reducedGuidanceRatio))
+    : MAX_GUIDANCE_CHARS;
+
   const uniqueGuidance = [...new Set(guidance)]
-    .slice(0, MAX_GUIDANCE_ITEMS)
+    .slice(0, effectiveMaxItems)
     .reduce<string[]>((items, item) => {
       const nextLength = [...items, item].join("\n").length;
-      return nextLength <= MAX_GUIDANCE_CHARS ? [...items, item] : items;
+      return nextLength <= effectiveMaxChars ? [...items, item] : items;
     }, []);
 
   return { referenceIds: [...new Set(referenceIds)], guidance: uniqueGuidance };
@@ -123,7 +145,14 @@ function buildUserPrompt(input: AuthorStyleOptimizationInput, guidance: ParsedSt
 
 export class AuthorStyleOptimizer {
   async optimize(input: AuthorStyleOptimizationInput): Promise<AuthorStyleOptimizationResult> {
-    const styleGuidance = collectAuthorStyleGuidance(input.context, input.intent.relevantCharacters);
+    const isRetry = input.reducedGuidanceRatio !== undefined
+      && input.reducedGuidanceRatio > 0
+      && input.reducedGuidanceRatio < 1;
+    const styleGuidance = collectAuthorStyleGuidance(
+      input.context,
+      input.intent.relevantCharacters,
+      input.reducedGuidanceRatio,
+    );
     if (styleGuidance.referenceIds.length === 0 || styleGuidance.guidance.length === 0) {
       return {
         candidate: null,
@@ -132,6 +161,7 @@ export class AuthorStyleOptimizer {
         styleGuidanceConsumed: false,
         styleReferenceIds: styleGuidance.referenceIds,
         guidanceCount: styleGuidance.guidance.length,
+        retryWithReducedGuidance: isRetry,
       };
     }
 
@@ -145,6 +175,7 @@ export class AuthorStyleOptimizer {
         styleGuidanceConsumed: false,
         styleReferenceIds: styleGuidance.referenceIds,
         guidanceCount: styleGuidance.guidance.length,
+        retryWithReducedGuidance: isRetry,
       };
     }
 
@@ -168,11 +199,12 @@ export class AuthorStyleOptimizer {
           styleGuidanceConsumed: true,
           styleReferenceIds: styleGuidance.referenceIds,
           guidanceCount: styleGuidance.guidance.length,
+          retryWithReducedGuidance: isRetry,
         };
       }
       return {
         candidate: {
-          id: `candidate:author_style:${input.sourceCandidate.id}`,
+          id: `candidate:author_style:${input.sourceCandidate.id}${isRetry ? ":retry" : ""}`,
           text: output.text,
           kind: "editorial_amplified",
           model: output.model,
@@ -191,6 +223,7 @@ export class AuthorStyleOptimizer {
         styleGuidanceConsumed: true,
         styleReferenceIds: styleGuidance.referenceIds,
         guidanceCount: styleGuidance.guidance.length,
+        retryWithReducedGuidance: isRetry,
       };
     } catch (error: unknown) {
       return {
@@ -200,6 +233,7 @@ export class AuthorStyleOptimizer {
         styleGuidanceConsumed: true,
         styleReferenceIds: styleGuidance.referenceIds,
         guidanceCount: styleGuidance.guidance.length,
+        retryWithReducedGuidance: isRetry,
       };
     }
   }

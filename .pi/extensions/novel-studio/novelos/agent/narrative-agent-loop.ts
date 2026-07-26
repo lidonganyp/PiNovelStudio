@@ -147,9 +147,22 @@ interface VerifyPatchResult {
 
 const DEFAULT_REPAIR_BATCH_SIZE = 4;
 const MAX_STAGNANT_REPAIR_ROUNDS = 2;
+/** P0-3：语义类 finding（intent_omission）最多自动修复1轮 */
+const MAX_SEMANTIC_REPAIR_ROUNDS = 1;
+/** P0-3：确定性 finding（format/fact/canon 等）可按现有预算执行最多2轮 */
+const MAX_DETERMINISTIC_REPAIR_ROUNDS = 2;
 
 function isVerbatimIntentFinding(finding: VerificationFinding): boolean {
   return /(?:原句|原文|\[verbatim\])/iu.test(`${finding.conflictFact}\n${finding.sourceRef}`);
+}
+
+function isSemanticFinding(finding: VerificationFinding): boolean {
+  // P0-3 修复：只有 heuristic intent_omission 才算语义遗漏（受1轮预算约束）。
+  // - deterministic intent_omission（如 verbatim 原句缺失）→ 确定性遗漏，按现有预算2轮
+  // - corroborated intent_omission → 多源印证遗漏，按现有预算2轮
+  // - 无 certainty 字段的旧 finding（向后兼容）→ 不算语义，按现有预算2轮
+  // 这样保证 verbatim 原句缺失等确定性问题仍可修复2轮，只有启发式误判受1轮约束。
+  return finding.failureType === "intent_omission" && finding.certainty === "heuristic";
 }
 
 function repairPriority(finding: VerificationFinding): number {
@@ -162,18 +175,36 @@ function repairPriority(finding: VerificationFinding): number {
 /**
  * Select a bounded repair batch. Specific must-include findings suppress broad
  * event-summary findings until the concrete obligations have been addressed.
+ *
+ * P0-3 修复：
+ * - 过滤掉空范围 finding（allowedRepairRange.start === end）→ 诊断 only，不进入修复批次
+ * - 过滤掉已达 semantic 修复预算上限的 finding（由 semanticRepairTracker 追踪）
  */
 export function selectRepairFindings(
   findings: VerificationFinding[],
   limit = DEFAULT_REPAIR_BATCH_SIZE,
+  semanticRepairTracker?: Map<string, number>,
 ): VerificationFinding[] {
   const unique = [...new Map(findings.map((finding) => [finding.id, finding])).values()];
-  const hasSpecificIntentFinding = unique.some(
+  // P0-3：过滤空范围 finding（诊断 only，不触发改写）
+  const nonEmptyRange = unique.filter(
+    (finding) => finding.allowedRepairRange.end > finding.allowedRepairRange.start,
+  );
+  // P0-3：过滤已达 semantic 修复预算的 finding
+  const budgetEligible = semanticRepairTracker
+    ? nonEmptyRange.filter((finding) => {
+        if (!isSemanticFinding(finding)) return true;
+        const repaired = semanticRepairTracker.get(finding.id) ?? 0;
+        return repaired < MAX_SEMANTIC_REPAIR_ROUNDS;
+      })
+    : nonEmptyRange;
+
+  const hasSpecificIntentFinding = budgetEligible.some(
     (finding) => finding.failureType === "intent_omission" && finding.source !== "event_intent_checker",
   );
   const eligible = hasSpecificIntentFinding
-    ? unique.filter((finding) => finding.source !== "event_intent_checker")
-    : unique;
+    ? budgetEligible.filter((finding) => finding.source !== "event_intent_checker")
+    : budgetEligible;
 
   return eligible
     .map((finding, index) => ({ finding, index }))
@@ -198,6 +229,12 @@ export class NarrativeAgentLoop {
   private readonly verifier?: NarrativeVerifierSuite;
   private readonly patchService?: CandidatePatchService;
   private readonly maxRepairRounds: number;
+  /**
+   * P0-3：per-finding semantic 修复次数追踪。
+   * key=findingId, value=已修复轮数。
+   * 语义类 finding（intent_omission）最多修复1轮，避免同一语义 finding 连续重写整章。
+   */
+  private readonly semanticRepairTracker: Map<string, number> = new Map();
 
   constructor(options: NarrativeAgentLoopOptions) {
     this.runtime = options.runtime;
@@ -496,7 +533,8 @@ export class NarrativeAgentLoop {
     }
 
     // 3. 每轮只修有限批次，避免把整章所有约束一次性压给模型。
-    let selectedFindings = selectRepairFindings(report.hardFindings);
+    // P0-3：传入 semanticRepairTracker，过滤已达 semantic 修复预算的 finding。
+    let selectedFindings = selectRepairFindings(report.hardFindings, DEFAULT_REPAIR_BATCH_SIZE, this.semanticRepairTracker);
     let feedbacks = selectedFindings.map(findingToFeedback);
     let proposals = patchService.proposePatches(draftText, feedbacks);
     this.candidateWorkspace.savePatchProposals(proposals);
@@ -511,6 +549,16 @@ export class NarrativeAgentLoop {
     while (repairRounds < this.maxRepairRounds) {
       if (this.budget.isExhausted()) break;
       if (proposals.filter((p) => !p.rejected).length === 0) break;
+
+      // P0-3：本轮修复前标记 semantic finding 已修复（避免下轮重复修同一 finding）
+      for (const finding of selectedFindings) {
+        if (isSemanticFinding(finding)) {
+          this.semanticRepairTracker.set(
+            finding.id,
+            (this.semanticRepairTracker.get(finding.id) ?? 0) + 1,
+          );
+        }
+      }
 
       repairRounds++;
       // 生成 patched text
@@ -599,7 +647,13 @@ export class NarrativeAgentLoop {
       }
 
       // 仍有硬失败 → 选择下一有限批次进入下轮
-      selectedFindings = selectRepairFindings(report.hardFindings);
+      // P0-3：传入 semanticRepairTracker，过滤已达 semantic 修复预算的 finding
+      selectedFindings = selectRepairFindings(report.hardFindings, DEFAULT_REPAIR_BATCH_SIZE, this.semanticRepairTracker);
+      // 若所有 semantic finding 已达预算且无 deterministic finding 可修 → 停止
+      if (selectedFindings.length === 0) {
+        stopReason = "stagnant";
+        break;
+      }
       feedbacks = selectedFindings.map(findingToFeedback);
       proposals = patchService.proposePatches(currentText, feedbacks);
       for (const p of proposals) this.trajectory.recordPatchProposal(p);
@@ -621,6 +675,11 @@ export class NarrativeAgentLoop {
   /**
    * 生成 patched text：构建 patch prompt → runtime.prompt() → 提取 patched text。
    *
+   * P0-3 修复：
+   * - 当所有 proposals 都是 localReplacement（精确 span 且非整章）时，
+   *   只要求模型输出 span 内的替换文本，不重写整章。
+   * - 否则回退到原有行为（输出完整正文）。
+   *
    * 失败抛错由 verifyAndPatch catch（保留最后已接受候选）。
    */
   private async generatePatchedText(
@@ -630,31 +689,79 @@ export class NarrativeAgentLoop {
   ): Promise<string> {
     const activeProposals = proposals.filter((p) => !p.rejected);
     const findingById = new Map(findings.map((finding) => [finding.id, finding]));
+
+    // P0-3：判断是否使用局部 replacement 模式
+    const allLocalReplacement = activeProposals.length > 0
+      && activeProposals.every((p) => p.localReplacement === true);
+
     const patchInstructions = activeProposals
       .map((p, i) => {
         const finding = findingById.get(p.findingId);
+        const spanStart = p.targetSpan.start;
+        const spanEnd = p.targetSpan.end;
+        const originalExcerpt = originalDraft.slice(spanStart, Math.min(spanEnd + 20, originalDraft.length));
         return [
           `[修复${i + 1}] findingId=${p.findingId}`,
+          `确定性等级：${p.certainty ?? "unknown"}`,
+          `语义类：${p.isSemantic ? "是（受1轮预算约束）" : "否"}`,
           `证据来源：${finding?.sourceRef ?? "unknown"}`,
           `必须解决：${finding?.conflictFact ?? p.suggestion}`,
           `具体要求：${finding?.description ?? p.suggestion}`,
-          `允许范围：[${p.targetSpan.start}, ${p.targetSpan.end}]`,
+          `允许范围：[${spanStart}, ${spanEnd}]`,
+          `原片段：${originalExcerpt}`,
           `方向：${p.repairDirection}`,
           `建议：${p.suggestion}`,
         ].join("\n");
       })
       .join("\n");
 
-    const userPrompt = [
-      "以下正文存在若干硬伤，请在标记范围内修复，保持其余内容不变，输出完整正文。",
-      "不要调用工具，直接输出修复后的完整正文。",
-      "",
-      "原始正文：",
-      originalDraft,
-      "",
-      "修复范围与方向：",
-      patchInstructions,
-    ].join("\n");
+    let userPrompt: string;
+    if (allLocalReplacement) {
+      // P0-3：局部 replacement 模式 — 只输出 span 内替换文本
+      const replacementSpecs = activeProposals.map((p, i) => {
+        const finding = findingById.get(p.findingId);
+        const spanStart = p.targetSpan.start;
+        const spanEnd = p.targetSpan.end;
+        const originalExcerpt = originalDraft.slice(spanStart, spanEnd);
+        return [
+          `[替换${i + 1}]`,
+          `范围：[${spanStart}, ${spanEnd}]`,
+          `原片段：「${originalExcerpt}」`,
+          `问题：${finding?.conflictFact ?? p.suggestion}`,
+          `要求：${finding?.description ?? p.suggestion}`,
+          `建议：${p.suggestion}`,
+        ].join("\n");
+      }).join("\n\n");
+
+      userPrompt = [
+        "以下正文存在若干局部硬伤，请只输出每个标记范围的替换文本，不要重写整章。",
+        "不要调用工具，按以下格式输出：",
+        "```",
+        "[替换1]",
+        "<只输出范围 [start, end] 内的替换文本>",
+        "[替换2]",
+        "<只输出范围 [start, end] 内的替换文本>",
+        "```",
+        "",
+        "原始正文：",
+        originalDraft,
+        "",
+        "需要替换的范围与要求：",
+        replacementSpecs,
+      ].join("\n");
+    } else {
+      // 完整正文模式（含整章范围或混合场景）
+      userPrompt = [
+        "以下正文存在若干硬伤，请在标记范围内修复，保持其余内容不变，输出完整正文。",
+        "不要调用工具，直接输出修复后的完整正文。",
+        "",
+        "原始正文：",
+        originalDraft,
+        "",
+        "修复范围与方向：",
+        patchInstructions,
+      ].join("\n");
+    }
 
     await this.runtime.prompt(userPrompt);
     await this.runtime.waitForIdle();
@@ -674,12 +781,78 @@ export class NarrativeAgentLoop {
       (c: { type?: string; text?: string }) =>
         c.type === "text" && typeof c.text === "string" && c.text.length > 0,
     ) as Array<{ type: "text"; text: string }>;
-    const patchedText = textBlocks.map((b) => b.text).join("");
+    const modelOutput = textBlocks.map((b) => b.text).join("");
 
-    if (patchedText.trim().length === 0) {
+    if (modelOutput.trim().length === 0) {
       throw new Error("patch 模型未返回有效文本");
     }
-    return patchedText;
+
+    // P0-3：局部 replacement 模式 → 解析替换文本并合并到原 draft
+    if (allLocalReplacement) {
+      const merged = this.applyLocalReplacements(originalDraft, activeProposals, modelOutput);
+      if (merged === null) {
+        // 解析失败 → 回退到模型原始输出（让退化检查兜底）
+        return modelOutput;
+      }
+      return merged;
+    }
+
+    return modelOutput;
+  }
+
+  /**
+   * P0-3：解析模型输出的局部替换文本，合并到原 draft。
+   *
+   * 期望格式：
+   * ```
+   * [替换1]
+   * <替换文本>
+   * [替换2]
+   * <替换文本>
+   * ```
+   *
+   * 合并规则：按 span 范围逆序替换（避免偏移），span 外文本逐字保留。
+   * 解析失败返回 null（调用方回退到模型原始输出）。
+   */
+  private applyLocalReplacements(
+    originalDraft: string,
+    proposals: PatchProposal[],
+    modelOutput: string,
+  ): string | null {
+    // 解析 [替换N] 块
+    const replacements: Array<{ index: number; text: string }> = [];
+    const blockPattern = /\[替换(\d+)\]\s*([\s\S]*?)(?=\[替换\d+\]|$)/gu;
+    let match: RegExpExecArray | null;
+    while ((match = blockPattern.exec(modelOutput)) !== null) {
+      const index = parseInt(match[1], 10);
+      const text = match[2].trim();
+      replacements.push({ index, text });
+    }
+
+    if (replacements.length === 0) return null;
+    replacements.sort((a, b) => a.index - b.index);
+
+    // 按 span 范围逆序替换（避免偏移）
+    let result = originalDraft;
+    const sortedProposals = [...proposals].sort(
+      (a, b) => b.targetSpan.start - a.targetSpan.start,
+    );
+
+    for (let i = 0; i < sortedProposals.length; i++) {
+      const proposal = sortedProposals[i];
+      const replacement = replacements.find((r) => {
+        // 匹配 proposal 在原列表中的 1-based 索引
+        const originalIndex = proposals.indexOf(proposal) + 1;
+        return r.index === originalIndex;
+      });
+      if (!replacement) continue;
+
+      const before = result.slice(0, proposal.targetSpan.start);
+      const after = result.slice(proposal.targetSpan.end);
+      result = before + replacement.text + after;
+    }
+
+    return result;
   }
 
   // ── 内部：构造 fallback 结果 ──────────────────────────────────────────

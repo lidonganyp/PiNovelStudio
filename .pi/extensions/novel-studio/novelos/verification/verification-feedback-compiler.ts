@@ -19,6 +19,8 @@ import type { TextSpan } from "../../v2/core/types.js";
 import type {
   VerificationFailureType,
   VerificationFinding,
+  VerificationCertainty,
+  VerificationCoverageStatus,
   NarrativeVerifierReport,
 } from "./narrative-verifier-suite.js";
 
@@ -43,6 +45,10 @@ export interface VerificationFeedback {
   allowedRepairRange: TextSpan;
   /** 修复建议（人类可读指令） */
   repairSuggestion: string;
+  /** P0-2：确定性等级（从 finding 传播，供 patch service / loop 决定修复预算） */
+  certainty: VerificationCertainty;
+  /** P0-2：覆盖状态（从 finding 传播，供 patch service / loop 决定是否触发改写） */
+  coverageStatus: VerificationCoverageStatus;
 }
 
 // ============================================================================
@@ -75,8 +81,9 @@ const REPAIR_SUGGESTIONS: Record<VerificationFailureType, string> = {
 /**
  * 把 verifier report 编译成结构化 feedback list。
  *
- * 只编译 hard findings（fatal/hard）→ 触发 patch candidate。
- * 软意见（review/info）不编译，不触发 patch。
+ * P0-2 修复：只编译 hard findings 且 allowedRepairRange 非空（start < end）→ 触发 patch candidate。
+ * - hard findings 且空范围（start === end）→ 诊断 only，不触发 patch（避免启发式误判触发整章改写）
+ * - 软意见（review/info）不编译，不触发 patch
  *
  * @param report NarrativeVerifierSuite.verify() 的返回
  * @returns 可操作的 feedback list（供 CandidatePatchService 消费）
@@ -84,11 +91,15 @@ const REPAIR_SUGGESTIONS: Record<VerificationFailureType, string> = {
 export function compileFeedback(
   report: NarrativeVerifierReport,
 ): VerificationFeedback[] {
-  return report.hardFindings.map((finding) => findingToFeedback(finding));
+  return report.hardFindings
+    .filter((finding) => finding.allowedRepairRange.end > finding.allowedRepairRange.start)
+    .map((finding) => findingToFeedback(finding));
 }
 
 /**
  * 单个 finding → feedback 转换。
+ *
+ * P0-2：传播 certainty 与 coverageStatus，供 patch service / loop 决定修复预算。
  */
 export function findingToFeedback(
   finding: VerificationFinding,
@@ -104,6 +115,8 @@ export function findingToFeedback(
     repairSuggestion:
       REPAIR_SUGGESTIONS[finding.failureType] ??
       `修复 ${finding.failureType} 问题`,
+    certainty: finding.certainty,
+    coverageStatus: finding.coverageStatus,
   };
 }
 

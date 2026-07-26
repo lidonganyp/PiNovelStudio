@@ -10,6 +10,14 @@
  * - patch 类型遵循 AGENTS.md 修订优先级：sentence_patch → paragraph_patch → bridge_patch → event_patch
  *   （chapter_rewrite 仅灾难级使用，M1 不产生）
  *
+ * P0-3 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：
+ * - intent_omission 不得默认使用 [0, text.length] 作为修复范围
+ * - verifier 没有精确事件或段落 span 时（allowedRepairRange 空范围），只记录诊断，不自动改写
+ * - 模型返回局部 replacement，而不是每轮重新输出完整正文
+ * - 语义遗漏最多自动修复1轮；确定性格式/事实问题可按现有预算执行最多2轮
+ * - patch 必须通过 span 外逐字不变、事实复检和退化检查
+ * - 原候选始终保留；修复失败不得覆盖最后一个有效候选
+ *
  * 退化判定（M1 启发式）：
  * - patch 后正文长度大幅缩短（> 30%）→ 退化
  * - patch 后行动词密度下降（< 80%）→ agency 稀释 → 退化
@@ -17,7 +25,7 @@
  */
 
 import type { TextSpan } from "../../v2/core/types.js";
-import type { VerificationFailureType } from "../verification/narrative-verifier-suite.js";
+import type { VerificationFailureType, VerificationCertainty } from "../verification/narrative-verifier-suite.js";
 import type { VerificationFeedback } from "../verification/verification-feedback-compiler.js";
 
 // ============================================================================
@@ -47,6 +55,12 @@ export interface PatchProposal {
   rejected?: boolean;
   /** 拒绝原因（如退化） */
   rejectionReason?: string;
+  /** P0-3：确定性等级（从 feedback 传播） */
+  certainty?: VerificationCertainty;
+  /** P0-3：是否为语义类修复（intent_omission 等，受1轮预算约束） */
+  isSemantic?: boolean;
+  /** P0-3：是否需要局部 replacement（true=只输出 span 内替换文本，false=输出完整正文） */
+  localReplacement?: boolean;
 }
 
 export interface PatchEvaluationResult {
@@ -76,17 +90,28 @@ export interface PatchEvaluationResult {
 export class CandidatePatchService {
   /**
    * 根据 feedback list 产生 patch proposal list。
-   * 不直接覆盖 draft/raw，只产生 proposal。
+   *
+   * P0-3 修复：
+   * - 过滤掉空范围 feedback（allowedRepairRange.start === end）→ 诊断 only，不产生 patch
+   * - 标记语义类修复（intent_omission 等）受1轮预算约束
+   * - 标记是否需要局部 replacement（span 精确时只输出替换文本，不重写整章）
    */
   proposePatches(
     draft: string,
     feedbacks: VerificationFeedback[],
   ): PatchProposal[] {
-    return feedbacks.map((fb) => this.proposePatch(draft, fb));
+    return feedbacks
+      .filter((fb) => fb.allowedRepairRange.end > fb.allowedRepairRange.start)
+      .map((fb) => this.proposePatch(draft, fb));
   }
 
   /**
    * 单个 feedback → patch proposal。
+   *
+   * P0-3 修复：
+   * - 传播 certainty（deterministic/corroborated/heuristic）
+   * - 标记 isSemantic（heuristic intent_omission / 语义类，受1轮预算约束）
+   * - 标记 localReplacement（span 精确且非整章时，只输出 span 内替换文本）
    */
   proposePatch(
     draft: string,
@@ -94,6 +119,12 @@ export class CandidatePatchService {
   ): PatchProposal {
     const type = this.inferPatchType(feedback.failureType);
     const repairDirection = this.buildRepairDirection(feedback);
+    const isSemantic = this.isSemanticFailureType(feedback.failureType, feedback.certainty);
+    // P0-3：span 精确（非 [0, draft.length] 整章）且长度 < 40% 时使用局部 replacement
+    const spanLength = feedback.allowedRepairRange.end - feedback.allowedRepairRange.start;
+    const isFullChapter = feedback.allowedRepairRange.start === 0
+      && feedback.allowedRepairRange.end === draft.length;
+    const localReplacement = !isFullChapter && spanLength < draft.length * 0.4;
 
     return {
       findingId: feedback.findingId,
@@ -102,7 +133,36 @@ export class CandidatePatchService {
       suggestion: feedback.repairSuggestion,
       repairDirection,
       applied: false,
+      certainty: feedback.certainty,
+      isSemantic,
+      localReplacement,
     };
+  }
+
+  /**
+   * P0-3：判断 failureType 是否为语义类（受1轮修复预算约束）。
+   *
+   * 语义类：heuristic intent_omission（启发式 anchor/事件摘要遗漏，verifier 不确定）
+   * 非语义类：
+   * - deterministic intent_omission（如 verbatim 原句缺失）→ 确定性遗漏，2轮预算
+   * - corroborated intent_omission → 多源印证遗漏，2轮预算
+   * - format_error / duplicate_pollution / entity_hallucination /
+   *   canon_conflict / promise_conflict / fact_omission /
+   *   fact_contradiction / timeline_inconsistency 等（确定性/结构化事实）→ 2轮预算
+   *
+   * 设计理由：verbatim 原句缺失等确定性遗漏有明确修复目标，可稳定重试2轮；
+   * 只有启发式 anchor 遗漏（verifier 无法确定是否真的缺失）才限制1轮，避免
+   * 同一不确定 finding 连续触发整章重写。
+   */
+  private isSemanticFailureType(
+    failureType: VerificationFailureType,
+    certainty?: VerificationCertainty,
+  ): boolean {
+    // P0-3 修复：只有 heuristic intent_omission 才算语义遗漏（受1轮预算约束）。
+    // - deterministic intent_omission（如 verbatim 原句缺失）→ 确定性遗漏，2轮预算
+    // - corroborated intent_omission → 多源印证遗漏，2轮预算
+    // - 无 certainty 字段的旧 feedback（向后兼容）→ 不算语义，2轮预算
+    return failureType === "intent_omission" && certainty === "heuristic";
   }
 
   /**

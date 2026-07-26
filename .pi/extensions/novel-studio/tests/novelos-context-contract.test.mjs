@@ -97,8 +97,17 @@ test("NovelOS 章纲锚点识别叙事动作表达而不要求正文复述标签
     knownCharacterNames: [],
     inviolableFacts: [],
   });
-  const missingOmissions = missingReport.hardFindings.filter((finding) => finding.failureType === "intent_omission");
-  assert.deepEqual(missingOmissions.map((finding) => finding.sourceRef), ["author-outline:章末预判定位将变"]);
+  // P0-2 修复：anchor 遗漏现在是 review + heuristic（不再 hard block）。
+  // 真实遗漏仍被检出，但作为诊断证据（report.findings）而非硬阻断（hardFindings）。
+  const missingAnchorOmissions = missingReport.findings.filter(
+    (finding) => finding.failureType === "intent_omission"
+      && finding.certainty === "heuristic"
+      && finding.sourceRef === "author-outline:章末预判定位将变",
+  );
+  assert.ok(missingAnchorOmissions.length > 0,
+    `真实遗漏应被检出为 heuristic finding，实际 findings：${JSON.stringify(missingReport.findings)}`);
+  assert.equal(missingAnchorOmissions[0].severity, "review",
+    `anchor 遗漏应为 review 严重度，实际：${missingAnchorOmissions[0].severity}`);
 });
 
 test("NovelOS 章纲事件摘要按事件覆盖而不是整句匹配", () => {
@@ -115,9 +124,16 @@ test("NovelOS 章纲事件摘要按事件覆盖而不是整句匹配", () => {
     knownCharacterNames: [],
     inviolableFacts: [],
   });
-  const eventOmissions = report.hardFindings.filter((finding) => finding.source === "event_intent_checker");
+  // P0-2 修复：事件摘要遗漏现在是 review + heuristic（不再 hard block）。
+  // 真实遗漏仍被检出，但作为诊断证据（report.findings）而非硬阻断（hardFindings）。
+  const eventOmissions = report.findings.filter(
+    (finding) => finding.source === "event_intent_checker"
+      && finding.certainty === "heuristic",
+  );
   assert.equal(eventOmissions.length, 1, JSON.stringify(eventOmissions));
   assert.equal(eventOmissions[0].sourceRef, "author-outline:event:3");
+  assert.equal(eventOmissions[0].severity, "review",
+    `事件摘要遗漏应为 review 严重度，实际：${eventOmissions[0].severity}`);
 });
 
 test("NovelOS 禁止性约束不会被事实遗漏检查反向要求写进正文", () => {
