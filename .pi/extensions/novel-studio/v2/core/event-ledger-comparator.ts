@@ -729,7 +729,15 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
       bestMatch.event.action !== "" &&
       (rawEvent.action === bestMatch.event.action ||
         areActionsSynonymous(rawEvent.action, bestMatch.event.action));
-    if (negationReversal && negationActionConsistent) {
+    // P0 第七轮 canary 修复：增加内容共享校验。
+    // canary 实测：raw "牵着走"（action=走, negated）与 editorial "走到"（action=走）
+    // 通过动作一致性但实为不同动词短语，仅共享 "走" 字。要求共享显著双字片段。
+    const negationSharesContent = hasSharedSignificantBigram(
+      rawEvent.sentence,
+      bestMatch.event.sentence,
+      knownEntities,
+    );
+    if (negationReversal && negationActionConsistent && negationSharesContent) {
       replacedEvents.push({
         rawEventId: rawEvent.id,
         editorialEventId: bestMatch.event.id,
@@ -753,7 +761,7 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
     // P0 第四轮：未遂→实际语义反转检测
     // "差点杀死" → "杀死"：未遂变成实际发生 = 语义反转
     const nearMissReversal = detectNearMissReversal(rawEvent.nearMiss, bestMatch.event.nearMiss);
-    if (nearMissReversal) {
+    if (nearMissReversal && negationSharesContent) {
       replacedEvents.push({
         rawEventId: rawEvent.id,
         editorialEventId: bestMatch.event.id,
@@ -1015,10 +1023,16 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
       bestMatch.event.action,
     );
     // 关键动作替换优先：即使 sharesBigram=true，关键动作被不同动作替换也应阻断
+    // P0 第七轮 canary 修复：similarity=0（无任何共享显著字符）时，低相似度替换
+    // 降为 advisory。canary 实测反例：raw "以前他看不见" -> editorial "他能清晰地看到
+    // 白菜叶上粗糙的盐粒"（actionMatch=true 因 "看" 是 "看到" 子串，但 similarity=0，
+    // 两句无任何共享显著字符）被误判为低相似度替换。similarity=0 意味着完全不同的
+    // 事件，仅因短动作动词子串匹配而配对，不应作为替换证据。
+    // 保留 reversal/critical 路径：它们是结构性证据，不依赖文本相似度。
     const isReplaced = rawHasAction && (
       reversal.reversed
       || criticalReplacement.critical
-      || (lowSimilarity && !sharesBigram)
+      || (lowSimilarity && !sharesBigram && bestMatch.similarity > 0)
     );
 
     if (isReplaced) {
