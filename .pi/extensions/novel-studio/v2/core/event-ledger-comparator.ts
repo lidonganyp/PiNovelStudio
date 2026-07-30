@@ -1023,16 +1023,19 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
       bestMatch.event.action,
     );
     // 关键动作替换优先：即使 sharesBigram=true，关键动作被不同动作替换也应阻断
-    // P0 第七轮 canary 修复：similarity=0（无任何共享显著字符）时，低相似度替换
-    // 降为 advisory。canary 实测反例：raw "以前他看不见" -> editorial "他能清晰地看到
-    // 白菜叶上粗糙的盐粒"（actionMatch=true 因 "看" 是 "看到" 子串，但 similarity=0，
-    // 两句无任何共享显著字符）被误判为低相似度替换。similarity=0 意味着完全不同的
-    // 事件，仅因短动作动词子串匹配而配对，不应作为替换证据。
+    // P0 第七轮 canary 修复：低相似度替换路径从 isReplaced 移除，全部降为 advisory。
+    // canary 实测反例：
+    // - similarity=0：raw "以前他看不见" -> editorial "能看到盐粒"（"看" 是 "看到" 子串
+    //   导致 actionMatch=true，但两句无任何共享显著字符）
+    // - similarity=0.2：raw "冷静地看着目标逼近" -> editorial 另一句（similarity>0
+    //   但 !sharesBigram，actionMatch 来自 "看" 子串匹配）
+    // 根因：actionMatch 使用 includes() 子串匹配，"看" 匹配 "看到"/"看不见" 等不同
+    // 动词。当 !sharesBigram 时，匹配很可能是虚假的，不应作为替换证据。
     // 保留 reversal/critical 路径：它们是结构性证据，不依赖文本相似度。
+    // 低相似度替换仍由 !actionMatch && !objectMatch 路径（line 961-984）处理。
     const isReplaced = rawHasAction && (
       reversal.reversed
       || criticalReplacement.critical
-      || (lowSimilarity && !sharesBigram && bestMatch.similarity > 0)
     );
 
     if (isReplaced) {
