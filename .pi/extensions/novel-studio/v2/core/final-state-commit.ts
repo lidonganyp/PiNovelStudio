@@ -134,6 +134,37 @@ export interface ExpectationEntry extends StateEntryBase {
 
 export type NarrativeStateEntry = CanonEntry | CharacterStateEntry | PromiseEntry | PatternEntry | ExpectationEntry;
 
+// ============================================================================
+// Phase 3D：计划状态（PlannedState）— 与 VerifiedState 分裂存储
+//
+// 计划状态来自 ChapterSeed/Intent，在生成前就存在；VerifiedState 从最终正文
+// 提取，在保存后提交。两者分开存储，让 Preflight 能区分"作者意图"与"已发生事实"，
+// 并为下一章连续性检查提供计划上下文（不污染权威状态）。
+//
+// 核心不变量（计划 §3D）：
+// - planned 字段只存 PlannedStateEntry，不与 canon/character/promise 等权威字段混合
+// - PlannedStateEntry.verified 标记是否已在 VerifiedState 中找到对应条目
+// - PlannedStateEntry 不参与 PromiseLedger / CanonState 的权威查询
+// - 计划状态可被下一章 Preflight 读取，作为"作者曾意图在本章处理"的参考
+// ============================================================================
+
+export interface PlannedStateEntry extends StateEntryBase {
+  /** 计划状态类型，与 NarrativeStateEntry.kind 对齐（不含 pattern，pattern 是正文派生） */
+  plannedKind: "canon" | "character" | "promise" | "expectation";
+  /** 计划内容描述（canon.fact / character.value / promise.description / expectation.description） */
+  plannedContent: string;
+  /** 计划来源：chapter_seed（seed 派生）或 chapter_intent（intent 派生） */
+  plannedSource: "chapter_seed" | "chapter_intent";
+  /** 计划字段子类型（如 character.field=realm/participation，promise.status 等） */
+  plannedField?: string;
+  /** 是否已在最终正文证实的 VerifiedState 中找到对应条目 */
+  verified: boolean;
+  /** 对应的 VerifiedState entry id（若 verified=true） */
+  verifiedEntryId?: string;
+  /** 计划状态在最终正文中的验证结果（hit/miss/conflict） */
+  verificationOutcome?: "hit" | "miss" | "conflict";
+}
+
 export interface NarrativeStateStore {
   schemaVersion: number;
   workspaceId: string;
@@ -144,6 +175,8 @@ export interface NarrativeStateStore {
   expectation?: ExpectationEntry[];
   eventLog?: NarrativeStateEntry[];
   quarantine?: NarrativeStateEntry[];
+  /** Phase 3D：计划状态（来自 ChapterSeed/Intent，非权威，供 Preflight 连续性参考） */
+  planned?: PlannedStateEntry[];
   compactionReport?: MemoryCompactionReport;
   lastCommittedChapter?: string;
   updatedAt: string;
@@ -236,10 +269,18 @@ export function findPromiseSpanInText(
 
 /** 死亡/消亡相关词（用于检测 value 中的死亡声明） */
 const DEATH_TERMS = /死|亡|殒|毙|陨|凋|丧|逝|殁|永别|离世/;
+/**
+ * P0-2c: 全局版死亡词（用于 .replace() 移除所有死亡相关字符）。
+ *
+ * DEATH_TERMS 不带 g flag，.replace() 只移除首个匹配，
+ * 导致 "叶尘死亡" → "叶尘亡"（残留 "亡"）→ charName 错误。
+ * 此全局版本确保 .replace() 移除全部死亡词，正确提取角色名。
+ */
+const DEATH_TERMS_GLOBAL = /死|亡|殒|毙|陨|凋|丧|逝|殁|永别|离世/g;
 /** 死亡证据词 */
 const DEATH_EVIDENCE = /死|亡|殒|毙|陨|遗体|尸体|倒下|断气|身亡|殒命|尸骸/;
 /** 在场行动词（证明角色参与当前事件） */
-const ACTIVE_TERMS = /说|走|跑|笑|看|冲|挡|站|蹲|抬头|低头|推|拉|抓|挥|喊|叫|哭|睁|闭|皱|攥|揣|仰头|弯|跳|扑|退|转身|叹|点头|摇头|扶|背|扛|递|接|拧|进入|出现|来到|在场|坐|躺|守在|待在|盯|注视|凝视|就在/;
+const ACTIVE_TERMS = /说|走|跑|笑|看|冲|挡|站|蹲|抬头|低头|推|拉|抓|挥|喊|叫|哭|睁|闭|皱|攥|揣|仰头|弯|跳|扑|退|转身|叹|点头|摇头|扶|背|扛|递|接|拧|进入|出现|来到|在场|坐|躺|守在|待在|盯|注视|凝视|就在|等待|等候/;
 /** 同伴/友好关系词（用于检测 value 中的关系声明） */
 const COMPANION_TERMS = /companion|ally|friend|伙伴|同伴|友|盟/;
 /** 同伴证据词 */
@@ -256,6 +297,12 @@ const BREAK_TERMS = /失败|违背|破裂|放弃|落空|毁|碎|未遂|错失|�
 const SENTENCE_BOUNDARY = /[。！？!?；;\r\n]/;
 /** STATE-PARTICIPATION-2: 历史转述/回忆标记词 */
 const HISTORICAL_MARKERS = /有人说|听说|传说|据说|想起|回忆|记得|回想|曾经|那时|当年|往日|从前|说起|提到|谈到|传闻|故事|往事|当年|昔日|旧事/;
+/**
+ * P0-2: 在场/参与否定模式。
+ * 匹配 "不在场"/"未到场"/"没有来"/"不会来"/"缺席" 等否定参与的表达。
+ * 当句子含角色名且匹配此模式时，不应作为 participation=present 的证据。
+ */
+const PRESENCE_NEGATION = /不在场|未到场|没有来|不会来|没来|缺席|不在|未出现|没有出现|不参与|未参与|未曾参与|未至|缺席|没有出席|未出席/;
 
 type EvidenceSpan = { start: number; end: number; excerpt: string };
 
@@ -281,6 +328,27 @@ function findSubjectSentence(text: string, anchor: { start: number; end: number 
 
 function findEvidenceInSentence(sentence: EvidenceSpan, pattern: RegExp): EvidenceSpan | null {
   return pattern.test(sentence.excerpt) ? sentence : null;
+}
+
+/**
+ * P0-2b/P0-2c: 将句子按子句标点拆分为子句列表。
+ * 用于验证角色名与状态值（境界/死亡等）是否在同一子句中，
+ * 防止多角色句子中把其他角色的状态误锚定到目标角色。
+ */
+function splitIntoClauses(sentence: string): string[] {
+  return sentence
+    .split(/[，,；;]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * P0-2b/P0-2c: 找到包含指定角色名的子句。
+ * 返回该子句文本，若角色名不在任何子句中则返回 null。
+ */
+function findClauseWithCharacter(sentence: string, characterName: string): string | null {
+  const clauses = splitIntoClauses(sentence);
+  return clauses.find((c) => c.includes(characterName)) ?? null;
 }
 
 function normalizeClaim(value: string): string {
@@ -316,7 +384,16 @@ function findClaimEvidenceInSentence(claim: string, sentence: EvidenceSpan): Evi
 export function validateSemanticSupport(
   entry: NarrativeStateEntry,
   finalText: string,
-  nameSpan: { start: number; end: number; excerpt: string } | null
+  nameSpan: { start: number; end: number; excerpt: string } | null,
+  /**
+   * P0 第六轮结构化绑定：本章已知角色名（含别名）。
+   *
+   * 由生产路径（reanchorStagedStateToFinalText ← orchestrator-commit-save）传入
+   * input.characterNames（含 aliases）。提供时，境界主体归属改用结构化判断——
+   * 句中存在其他角色且不含目标角色 → fail-closed，不再依赖动词正则补丁。
+   * 未提供（旧测试兼容）时回退到 REALM_ENTRY_VERBS + 后置定语检测。
+   */
+  characterNames?: string[]
 ): SemanticSupportResult {
   if (!nameSpan) {
     // 主体未在正文中出现：不在此处判定，交给已有的 :not-found 逻辑处理
@@ -328,24 +405,135 @@ export function validateSemanticSupport(
   if (entry.kind === "character") {
     const value = entry.value ?? "";
     if (entry.field === "realm") {
-      const normalizedSentence = normalizeClaim(subjectSentence.excerpt);
+      // P0-2b: 境界证据必须绑定角色主体
+      // nameSpan 是境界值在正文中的 span（不是角色名 span）
+      // subjectSentence 是包含境界值的句子
+      // 1. 如果句中也含目标角色名 → 检查是否同子句（防止多角色句子中误锚定）
+      // 2. 如果句中不含目标角色名 → 可能是单角色场景（境界单独成句），允许通过
+      // 3. 如果同句但不同子句 → 可能属于其他角色，拒绝
       const normalizedRealm = normalizeClaim(value);
-      return normalizedRealm.length > 0 && normalizedSentence.includes(normalizedRealm)
-        ? { supported: true, reason: "主体所在句覆盖境界状态值", evidenceSpan: subjectSentence }
-        : { supported: false, reason: `semantic-unsupported：realm="${value}" 缺少同句完整境界证据` };
-    }
-    if (DEATH_TERMS.test(value)) {
-      const evidence = findEvidenceInSentence(subjectSentence, DEATH_EVIDENCE);
-      if (evidence) {
-        return { supported: true, reason: "主体所在句有死亡证据", evidenceSpan: evidence };
+      if (normalizedRealm.length === 0) {
+        return { supported: false, reason: `semantic-unsupported：realm="${value}" 为空` };
       }
-      if (ACTIVE_TERMS.test(subjectSentence.excerpt)) {
+      if (subjectSentence.excerpt.includes(entry.characterId)) {
+        // 角色名与境界值在同句 → 检查是否同子句
+        const charClause = findClauseWithCharacter(subjectSentence.excerpt, entry.characterId);
+        if (charClause && normalizeClaim(charClause).includes(normalizedRealm)) {
+          return { supported: true, reason: "主体所在子句覆盖境界状态值", evidenceSpan: subjectSentence };
+        }
+        // 不同子句 → 可能属于其他角色
         return {
           supported: false,
-          reason: `semantic-conflict：value="${value}" 声称死亡，但主体所在句显示在场行动（${nameSpan.excerpt}）`,
+          reason: `semantic-conflict：realm="${value}" 与角色 "${entry.characterId}" 不在同一子句，可能属于其他角色`,
         };
       }
-      return { supported: false, reason: `semantic-unsupported：value="${value}" 缺少同句死亡证据` };
+      // P0 第六轮：境界主体归属改为结构化绑定（取代动词正则补丁）
+      //
+      // 用户验收反例（第六轮）：以下等价表达仍会把 `叶尘 realm=筑基期` 以 confidence=0.7 重锚：
+      //   - "林默的境界是筑基期。叶尘在门外等待。"
+      //   - "林默境界为筑基期。叶尘在门外等待。"
+      //   - "林默处在筑基期。叶尘在门外等待。"
+      //   - "林默是筑基期修士。叶尘在门外等待。"
+      // 根因：旧逻辑未命中 REALM_ENTRY_VERBS 正则便默认"单角色场景"放行；
+      // 继续扩充正则无法彻底解决（"境界是/为/处在/是修士" 等表达无穷）。
+      //
+      // 新规则（结构化主体绑定，仅当 characterNames 提供时启用）：
+      //   境界句中存在其他已知角色且不含目标角色 → fail-closed。
+      //   不依赖任何动词正则，直接用角色存在性判断归属竞争。
+      //   - "林默的境界是筑基期" + 叶尘 realm=筑基期：句含"林默"不含"叶尘" → fail-closed ✓
+      //   - "淬腑境，初期。"（单角色场景，无其他角色） → 通过 ✓
+      //
+      // 回归保护：
+      //   - staged-state-realm-transition.test.mjs 的 "淬腑境，初期" 场景：句中无其他角色 → 通过
+      //   - 旧测试不传 characterNames → 走下方 REALM_ENTRY_VERBS 回退分支（向后兼容）
+      const hasCharacterNames = Array.isArray(characterNames) && characterNames.length > 0;
+      if (hasCharacterNames) {
+        const otherCharactersPresent = characterNames.filter(
+          (c) =>
+            c !== entry.characterId &&
+            c.length >= 2 &&
+            subjectSentence.excerpt.includes(c),
+        );
+        if (otherCharactersPresent.length > 0) {
+          return {
+            supported: false,
+            reason: `semantic-conflict：realm="${value}" 所在句子含其他角色 [${otherCharactersPresent.join("、")}] 但不含角色 "${entry.characterId}"，境界归属于其他角色（fail-closed，结构化绑定）`,
+          };
+        }
+        // 句中无其他角色竞争归属 → 单角色场景，境界值单独成句 → 允许通过。
+        // 仍保留后置定语"的"检测作为结构化补充证据（境界值后紧跟"的"修饰非目标实体）。
+        const realmIdxStruct = subjectSentence.excerpt.indexOf(value);
+        if (realmIdxStruct >= 0) {
+          const afterRealm = subjectSentence.excerpt.slice(
+            realmIdxStruct + value.length,
+            realmIdxStruct + value.length + 1,
+          );
+          if (afterRealm === "的") {
+            return {
+              supported: false,
+              reason: `semantic-conflict：realm="${value}" 在句中作为定语（后跟"的"），修饰非目标角色 "${entry.characterId}" 的实体，境界归属于其他角色（fail-closed，结构化绑定）`,
+            };
+          }
+        }
+        return {
+          supported: true,
+          reason: "境界值所在句无其他角色竞争归属（结构化绑定：单角色场景）",
+          evidenceSpan: subjectSentence,
+        };
+      }
+
+      // 回退路径（未提供 characterNames，旧测试兼容）：保留 REALM_ENTRY_VERBS + 后置定语检测。
+      // 生产路径提供 characterNames 时不会到达此处。
+      //
+      // P0 第五轮：补充"处于"等状态动词。
+      // 用户验收反例："林默处于筑基期。叶尘在门外等待。" + 叶尘 realm=筑基期 → committed=1
+      const REALM_ENTRY_VERBS = /踏入|迈入|突破|进入|达到|晋升|觉醒|开窍|凝气|已是|已至|已到|已达|已入|修至|修为|修炼至|修炼到|晋级|升入|跨入|停留在|巩固在|稳定在|处于|身为|身居|位列|居于/;
+      const hasRealmEntryVerb = REALM_ENTRY_VERBS.test(subjectSentence.excerpt);
+      if (hasRealmEntryVerb) {
+        // 境界句含状态动词 → 主体明确但不是目标角色 → fail-closed
+        return {
+          supported: false,
+          reason: `semantic-conflict：realm="${value}" 所在句子含境界状态动词但不含角色 "${entry.characterId}"，境界可能归属于其他角色（fail-closed）`,
+        };
+      }
+      // P0 第五轮：后置定语结构检测
+      // 用户验收反例："筑基期的林默守在门前。叶尘仍未赶到。" + 叶尘 realm=筑基期 → committed=1
+      // 境界值 "筑基期" 作为定语修饰 "林默"（后跟"的"），明确归属于林默而非叶尘。
+      // 由于目标角色不在本句（上文已检查），境界值后紧跟"的"意味着它修饰的是其他实体 → fail-closed
+      const realmIdx = subjectSentence.excerpt.indexOf(value);
+      if (realmIdx >= 0) {
+        const afterRealm = subjectSentence.excerpt.slice(
+          realmIdx + value.length,
+          realmIdx + value.length + 1,
+        );
+        if (afterRealm === "的") {
+          return {
+            supported: false,
+            reason: `semantic-conflict：realm="${value}" 在句中作为定语（后跟"的"），修饰非目标角色 "${entry.characterId}" 的实体，境界归属于其他角色（fail-closed）`,
+          };
+        }
+      }
+      // 境界句不含状态动词 → 境界单独成句，无主体竞争 → 允许通过
+      return {
+        supported: true,
+        reason: "境界值单独成句，无境界状态动词与其他角色归属信号（单角色场景）",
+        evidenceSpan: subjectSentence,
+      };
+    }
+    if (DEATH_TERMS.test(value)) {
+      // P0-2c: 死亡证据必须与角色名在同一子句
+      const charClause = findClauseWithCharacter(subjectSentence.excerpt, nameSpan.excerpt);
+      if (charClause && DEATH_EVIDENCE.test(charClause)) {
+        return { supported: true, reason: "主体所在子句有死亡证据", evidenceSpan: subjectSentence };
+      }
+      // 死亡证据不在角色子句 → 检查角色子句是否有在场行动
+      if (charClause && ACTIVE_TERMS.test(charClause)) {
+        return {
+          supported: false,
+          reason: `semantic-conflict：value="${value}" 声称死亡，但主体所在子句显示在场行动（${nameSpan.excerpt}）`,
+        };
+      }
+      return { supported: false, reason: `semantic-unsupported：value="${value}" 缺少与主体同子句的死亡证据` };
     }
     if (COMPANION_TERMS.test(value)) {
       const evidence = findEvidenceInSentence(subjectSentence, COMPANION_EVIDENCE);
@@ -369,6 +557,7 @@ export function validateSemanticSupport(
     if (entry.field === "participation") {
       // STATE-PARTICIPATION-2: 区分当前时线参与 vs 历史转述/回忆
       // 检查角色名的所有出现位置，至少一次在非历史句中有行动证据才支持
+      // P0-2: 同时检测否定语义（不在场/未到场/没来...），否定句不算参与证据
       const charName = entry.characterId;
       const allSentences: EvidenceSpan[] = [];
       let searchPos = 0;
@@ -381,13 +570,24 @@ export function validateSemanticSupport(
       }
 
       let hasCurrentTimeline = false;
+      let hasNegationEvidence = false;
       for (const sentence of allSentences) {
         const isHistorical = HISTORICAL_MARKERS.test(sentence.excerpt);
         const hasActive = ACTIVE_TERMS.test(sentence.excerpt);
-        if (!isHistorical && hasActive) {
+        const hasNegation = PRESENCE_NEGATION.test(sentence.excerpt);
+        if (hasNegation) hasNegationEvidence = true;
+        if (!isHistorical && hasActive && !hasNegation) {
           hasCurrentTimeline = true;
           break;
         }
+      }
+
+      // P0-2: 如果所有含角色名的当前时线句都是否定参与，判定为语义冲突
+      if (!hasCurrentTimeline && hasNegationEvidence) {
+        return {
+          supported: false,
+          reason: `semantic-conflict：participation="${value}" 但正文否定角色在场（不在场/未到场/没来等）`,
+        };
       }
 
       return hasCurrentTimeline
@@ -403,17 +603,39 @@ export function validateSemanticSupport(
   if (entry.kind === "canon") {
     const fact = entry.fact ?? "";
     if (DEATH_TERMS.test(fact)) {
-      const evidence = findEvidenceInSentence(subjectSentence, DEATH_EVIDENCE);
-      if (evidence) {
-        return { supported: true, reason: "主体所在句有死亡证据", evidenceSpan: evidence };
+      // P0-2c: 死亡证据必须与角色名在同一子句（canon kind）
+      // 防止 "林默已经死亡，叶尘在门外等待" 提交 canon "叶尘已经死亡"
+      // nameSpan.excerpt 可能是部分匹配（如 "已经死亡" 而非 "叶尘已经死亡"），
+      // 需要从 fact 中提取角色名，检查角色名与死亡证据是否在同一子句
+      const charName = fact
+        .replace(/已经|已|的|了|将|要|正|在/g, "")
+        .replace(DEATH_TERMS_GLOBAL, "")
+        .replace(/已经|已|的|了|将|要|正|在/g, "")
+        .trim();
+      const clauses = splitIntoClauses(subjectSentence.excerpt);
+      let found = false;
+      for (const clause of clauses) {
+        const hasChar = charName.length >= 2 && clause.includes(charName);
+        const hasDeath = DEATH_EVIDENCE.test(clause);
+        if (hasChar && hasDeath) {
+          found = true;
+          break;
+        }
       }
-      if (ACTIVE_TERMS.test(subjectSentence.excerpt)) {
-        return {
-          supported: false,
-          reason: `semantic-conflict：fact="${fact}" 声称死亡，但主体所在句显示在场行动（${nameSpan.excerpt}）`,
-        };
+      if (found) {
+        return { supported: true, reason: "主体所在子句有死亡证据", evidenceSpan: subjectSentence };
       }
-      return { supported: false, reason: `semantic-unsupported：fact="${fact}" 缺少同句死亡证据` };
+      // 检查角色名所在子句是否有在场行动（反向证据）
+      if (charName.length >= 2) {
+        const charClause = clauses.find((c) => c.includes(charName));
+        if (charClause && ACTIVE_TERMS.test(charClause)) {
+          return {
+            supported: false,
+            reason: `semantic-conflict：fact="${fact}" 声称死亡，但主体所在子句显示在场行动`,
+          };
+        }
+      }
+      return { supported: false, reason: `semantic-unsupported：fact="${fact}" 缺少与主体同子句的死亡证据` };
     }
     const evidence = isCompleteClaimMatch(fact, nameSpan.excerpt) ? subjectSentence : null;
     return evidence
@@ -475,7 +697,16 @@ export function validateSemanticSupport(
 export function reanchorStagedStateToFinalText(
   update: StagedStateUpdate,
   finalText: string,
-  chapterNumber: number
+  chapterNumber: number,
+  /**
+   * P0 第六轮结构化绑定：本章已知角色名（含别名）。
+   *
+   * 由生产路径 orchestrator-commit-save.commitAndSave 传入 input.characterNames。
+   * 透传给 validateSemanticSupport，启用境界主体归属的结构化判断
+   * （句中含其他角色但不含目标角色 → fail-closed，取代动词正则补丁）。
+   * 未提供时（旧测试兼容）validateSemanticSupport 回退到 REALM_ENTRY_VERBS 正则。
+   */
+  characterNames?: string[]
 ): StagedStateUpdate {
   const hash = computeFinalTextHash(finalText);
   const sourceChapter = `ch${chapterNumber}`;
@@ -485,7 +716,7 @@ export function reanchorStagedStateToFinalText(
     if (entry.kind === "promise") {
       const span = findPromiseSpanInText(entry.description, finalText);
       // REAL-QUALITY-4A：语义支持校验（fulfilled/broken 必须有兑现/破裂证据）
-      const semantic = validateSemanticSupport(entry, finalText, span);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
       if (!semantic.supported) {
         return {
           ...entry,
@@ -523,7 +754,7 @@ export function reanchorStagedStateToFinalText(
       // EXPECTATION-LEDGER-1：与 promise 同样的 bounded 启发式定位 span
       const span = findPromiseSpanInText(entry.description, finalText);
       // REAL-QUALITY-4A：语义支持校验（fulfilled 必须有兑现证据）
-      const semantic = validateSemanticSupport(entry, finalText, span);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
       if (!semantic.supported) {
         return {
           ...entry,
@@ -561,7 +792,7 @@ export function reanchorStagedStateToFinalText(
       // B2：canon 事实在最终正文中定位 span（与 promise 同样的 bounded 启发式）
       const span = findPromiseSpanInText(entry.fact, finalText);
       // REAL-QUALITY-4A：语义支持校验（阻止名称级误锚定）
-      const semantic = validateSemanticSupport(entry, finalText, span);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
       if (!semantic.supported) {
         return {
           ...entry,
@@ -593,7 +824,7 @@ export function reanchorStagedStateToFinalText(
       // B2：角色名在最终正文中定位 span
       const span = findPromiseSpanInText(entry.field === "realm" ? entry.value : entry.characterId, finalText);
       // REAL-QUALITY-4A：语义支持校验（阻止"角色死亡""关系误分类"一类名称级误锚定）
-      const semantic = validateSemanticSupport(entry, finalText, span);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
       if (!semantic.supported) {
         return {
           ...entry,
@@ -687,6 +918,7 @@ function emptyStore(workspaceId: string): NarrativeStateStore {
     expectation: [],
     eventLog: [],
     quarantine: [],
+    planned: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -711,6 +943,8 @@ function normalizeStore(obj: unknown, workspaceId: string): NarrativeStateStore 
     expectation: Array.isArray(o.expectation) ? (o.expectation as ExpectationEntry[]) : [],
     eventLog: Array.isArray(o.eventLog) ? (o.eventLog as NarrativeStateEntry[]) : legacyEntries,
     quarantine: Array.isArray(o.quarantine) ? (o.quarantine as NarrativeStateEntry[]) : [],
+    // Phase 3D：planned 字段向后兼容（旧 store 无此字段 → 空数组）
+    planned: Array.isArray(o.planned) ? (o.planned as PlannedStateEntry[]) : [],
     compactionReport: o.compactionReport,
     lastCommittedChapter: o.lastCommittedChapter,
     updatedAt: new Date().toISOString(),
@@ -786,18 +1020,25 @@ export class FinalStateCommit {
    * sourceRef span 是否落在最终正文范围内，并记录 finalText hash 供审计追溯。
    * 越界 span 的 entry 被拒绝（防止声称正文不支持的状态）。
    *
+   * Phase 3D：支持 plannedUpdate 参数，把 ChapterSeed/Intent 派生的计划状态
+   * 写入 store.planned 字段（非权威，供下一章 Preflight 连续性参考）。
+   * 计划状态与 VerifiedState 分裂存储：verified 进入 canon/character/promise/
+   * expectation 权威字段，planned 进入 planned 字段并标记验证结果。
+   *
    * @param store 当前长期状态
    * @param finalCandidateId 最终选中的候选 id（必须与 staged 的 finalCandidateId 一致）
    * @param finalText 最终正文（A2：用于校验 sourceRef span 可追溯性 + 记录 hash）
-   * @returns { committed, store, rejected } committed 为落盘后的 store；rejected 为校验失败的 entry
+   * @param plannedUpdate 可选：ChapterSeed/Intent 派生的计划状态（写入 store.planned）
+   * @returns { committed, store, rejected, finalTextHash, plannedPersisted }
    */
   commit(
     store: NarrativeStateStore,
     finalCandidateId: string,
     finalText: string,
     workspaceId: string,
-    projectRoot: string
-  ): { store: NarrativeStateStore; committed: number; rejected: Array<{ entry: NarrativeStateEntry; errors: string[] }>; finalTextHash: string } {
+    projectRoot: string,
+    plannedUpdate?: StagedStateUpdate
+  ): { store: NarrativeStateStore; committed: number; rejected: Array<{ entry: NarrativeStateEntry; errors: string[] }>; finalTextHash: string; plannedPersisted: number } {
     if (this.settled) {
       throw new Error("FinalStateCommit 已 settled，不能重复 commit");
     }
@@ -805,7 +1046,7 @@ export class FinalStateCommit {
 
     if (!this.staged) {
       // 无暂存：直接返回原 store（仍记录 finalText hash 供审计）
-      return { store, committed: 0, rejected: [], finalTextHash: computeFinalTextHash(finalText) };
+      return { store, committed: 0, rejected: [], finalTextHash: computeFinalTextHash(finalText), plannedPersisted: 0 };
     }
 
     // finalCandidateId 必须与暂存时一致（防止候选切换后误提交旧候选的状态）
@@ -861,7 +1102,32 @@ export class FinalStateCommit {
       ],
     };
 
+    // Phase 3D：构建计划状态条目并写入 store.planned
+    // plannedUpdate 是 ChapterSeed/Intent 派生的原始状态（sourceRef=seed:*），
+    // 与 this.staged（已 reanchor 的 VerifiedState）共享 entry id（pattern 除外）。
+    // 通过 id 匹配确定每条计划状态的验证结果（hit/miss/conflict）。
+    const plannedEntries = buildPlannedEntries(
+      plannedUpdate,
+      this.staged,
+      accepted,
+      rejected,
+    );
+
     const compacted = compactNarrativeMemory(nextStore).store;
+
+    // Phase 3D：写入计划状态（在 compaction 之后，避免被覆盖）
+    // 计划状态按 sourceChapter 替换：移除同章旧 planned entries，追加新 planned entries。
+    // 这保证同一章节重复生成不会累积 planned 垃圾。
+    //
+    // P2 修复（PlannedState 闭环）：即使 plannedEntries 为空（例如同章重生成时
+    // ChapterSeed/Intent 未派生计划状态），也必须清除同章旧 planned entries。
+    // 旧的 `if (plannedEntries.length > 0)` 守卫会让空计划重生成留下过时条目，
+    // 污染下一章 ContextCompiler 的连续性参考。无 planned 字段时也需要初始化为 []。
+    const sourceChapter = this.staged.sourceChapter;
+    const otherChaptersPlanned = (compacted.planned ?? []).filter(
+      (e) => e.sourceChapter !== sourceChapter,
+    );
+    compacted.planned = [...otherChaptersPlanned, ...plannedEntries];
 
     // REAL-QUALITY-4A：rejected entry 写入 quarantine（在 compaction 之后，
     // 避免 compactor 用自己的 quarantine 覆盖）。保留 entryId/value/reason 供审计。
@@ -884,7 +1150,7 @@ export class FinalStateCommit {
     saveStateStore(compacted, workspaceId, projectRoot);
 
     this.staged = null;
-    return { store: compacted, committed: accepted.length, rejected, finalTextHash };
+    return { store: compacted, committed: accepted.length, rejected, finalTextHash, plannedPersisted: plannedEntries.length };
   }
 
   /** 查看当前暂存区（只读，测试用）。 */
@@ -906,6 +1172,169 @@ function filterInvalid<T extends { id: string; kind: string }>(
     // invalidIds 形如 "canon:world:genre"（与 entry.id 一致）
     return !invalidIds.has(e.id) && !invalidIds.has(`${e.kind}:*`);
   });
+}
+
+// ============================================================================
+// Phase 3D：buildPlannedEntries — 从 ChapterSeed/Intent 派生计划状态条目
+//
+// 把 plannedUpdate（seed 派生的原始 StagedStateUpdate，sourceRef=seed:*）转换为
+// PlannedStateEntry[]，并通过 id 匹配 verifiedStaged 中的 reanchored 条目确定
+// 验证结果（hit/miss/conflict）。
+//
+// 匹配逻辑：
+// - plannedUpdate.additions 与 verifiedStaged.additions 共享 entry id（pattern 除外）
+// - 通过 id 在 accepted（已通过校验的 verified entries）中查找：
+//   - 找到 → verified=true, verificationOutcome="hit"
+//   - 未找到但在 rejected 中 → 根据 rejected entry 的 sourceRef 后缀判断：
+//     - ":not-found" → verificationOutcome="miss"
+//     - ":semantic-conflict" → verificationOutcome="conflict"
+//     - 其他 → verificationOutcome="miss"（保守归因）
+//   - 既不在 accepted 也不在 rejected → verificationOutcome="miss"
+//
+// pattern entries 不生成 planned 条目（pattern 是正文派生状态，无 seed 计划对应）。
+// ============================================================================
+
+function buildPlannedEntries(
+  plannedUpdate: StagedStateUpdate | undefined,
+  verifiedStaged: StagedStateUpdate,
+  accepted: NarrativeStateEntry[],
+  rejected: Array<{ entry: NarrativeStateEntry; errors: string[] }>,
+): PlannedStateEntry[] {
+  if (!plannedUpdate) return [];
+
+  // 构建 id → accepted entry 索引
+  const acceptedById = new Map<string, NarrativeStateEntry>();
+  for (const entry of accepted) {
+    acceptedById.set(entry.id, entry);
+  }
+
+  // 构建 id → rejected entry 索引
+  const rejectedById = new Map<string, NarrativeStateEntry>();
+  for (const { entry } of rejected) {
+    rejectedById.set(entry.id, entry);
+  }
+
+  // 构建 id → reanchored sourceRef 索引（用于判断验证结果）
+  // verifiedStaged 包含 reanchor 后的 entries，通过 sourceRef 后缀判断结果
+  const reanchoredSourceRefById = new Map<string, string>();
+  for (const entry of verifiedStaged.additions) {
+    reanchoredSourceRefById.set(entry.id, entry.sourceRef);
+  }
+
+  const now = new Date().toISOString();
+  const sourceChapter = plannedUpdate.sourceChapter;
+  const plannedEntries: PlannedStateEntry[] = [];
+
+  for (const entry of plannedUpdate.additions) {
+    // pattern 是正文派生状态，无 seed 计划对应，跳过
+    if (entry.kind === "pattern") continue;
+
+    // 只处理 canon/character/promise/expectation 四类（与 PlannedStateEntry.plannedKind 对齐）
+    const plannedKind: "canon" | "character" | "promise" | "expectation" | undefined =
+      entry.kind === "canon" || entry.kind === "character" || entry.kind === "promise" || entry.kind === "expectation"
+        ? entry.kind
+        : undefined;
+    if (!plannedKind) continue;
+
+    // 提取计划内容描述（按 kind 取对应字段）
+    const plannedContent = extractPlannedContent(entry);
+    if (!plannedContent) continue;
+
+    // 提取计划字段子类型
+    const plannedField = extractPlannedField(entry);
+
+    // 通过 id 匹配 verified 状态
+    const acceptedEntry = acceptedById.get(entry.id);
+    const rejectedEntry = rejectedById.get(entry.id);
+    const reanchoredSourceRef = reanchoredSourceRefById.get(entry.id);
+
+    let verified = false;
+    let verifiedEntryId: string | undefined;
+    let verificationOutcome: "hit" | "miss" | "conflict" | undefined;
+
+    if (acceptedEntry) {
+      verified = true;
+      verifiedEntryId = acceptedEntry.id;
+      verificationOutcome = "hit";
+    } else if (rejectedEntry) {
+      verified = false;
+      // 根据 reanchored sourceRef 后缀判断验证结果
+      if (reanchoredSourceRef) {
+        if (reanchoredSourceRef.endsWith(":not-found")) {
+          verificationOutcome = "miss";
+        } else if (reanchoredSourceRef.endsWith(":semantic-conflict")) {
+          verificationOutcome = "conflict";
+        } else {
+          // 其他拒绝原因（span 越界、schema 错误等）保守归为 miss
+          verificationOutcome = "miss";
+        }
+      } else {
+        verificationOutcome = "miss";
+      }
+    } else {
+      // 既不在 accepted 也不在 rejected：可能 plannedUpdate 包含 verifiedStaged 没有的 entry
+      // （理论上不应发生，但保守处理）
+      verified = false;
+      verificationOutcome = "miss";
+    }
+
+    plannedEntries.push({
+      id: `planned:${entry.id}`,
+      sourceChapter,
+      sourceRef: entry.sourceRef, // 保留原始 seed:* sourceRef
+      confidence: entry.confidence,
+      lastUpdated: now,
+      plannedKind,
+      plannedContent,
+      plannedSource: "chapter_seed",
+      ...(plannedField ? { plannedField } : {}),
+      verified,
+      ...(verifiedEntryId ? { verifiedEntryId } : {}),
+      verificationOutcome,
+    });
+  }
+
+  return plannedEntries;
+}
+
+/**
+ * 从 NarrativeStateEntry 提取计划内容描述（按 kind 取对应字段）。
+ */
+function extractPlannedContent(entry: NarrativeStateEntry): string | null {
+  switch (entry.kind) {
+    case "canon":
+      return entry.fact ?? null;
+    case "character":
+      return entry.value ?? null;
+    case "promise":
+      return entry.description ?? null;
+    case "expectation":
+      return entry.description ?? null;
+    case "pattern":
+      return null; // pattern 不生成 planned 条目
+    default:
+      return null;
+  }
+}
+
+/**
+ * 从 NarrativeStateEntry 提取计划字段子类型（如 character.field, promise.status）。
+ */
+function extractPlannedField(entry: NarrativeStateEntry): string | undefined {
+  switch (entry.kind) {
+    case "character":
+      return entry.field;
+    case "promise":
+      return entry.status;
+    case "expectation":
+      return entry.status;
+    case "canon":
+      return entry.category;
+    case "pattern":
+      return undefined;
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -981,9 +1410,16 @@ function verifyExpectationFinalTextEvidence(
  *
  * sourceRef 格式（由 reanchorStagedStateToFinalText 产生）：
  * - ch{N}#finalText:{hash}:{start}-{end}  → 有 span，校验 start/end 越界
- * - ch{N}#finalText:{hash}:not-found      → 无 span（正文未触及），跳过（已低置信度）
- * - ch{N}#finalText:{hash}                → 无 span（非 promise kind），跳过
- * - 其它（seed:* 等旧格式）               → 跳过（向后兼容，不阻断迁移期旧 entry）
+ * - ch{N}#finalText:{hash}:not-found      → 无 span（正文未触及），拒绝（已低置信度）
+ * - ch{N}#finalText:{hash}:semantic-conflict → 无 span（语义冲突），拒绝
+ * - ch{N}#finalText:{hash}                → 无 span（非 promise kind，如 pattern），通过
+ * - 其它（seed:* 等未重锚定格式）          → 拒绝（P1-1: fail-closed，禁止绕过重锚定）
+ *
+ * P1-1 修复（2026-07-29）：
+ * 原实现中 "无 span 格式被直接放行"，导致直接 stage `sourceRef=seed:*` 可绕过
+ * reanchorStagedStateToFinalText 并写入权威 canon/character/promise。
+ * 现在唯一落盘入口 commit() 强制要求所有 entry 的 sourceRef 含 `#finalText:`，
+ * 证明状态来自最终正文而非 ChapterSeed 意图。
  *
  * 返回 errors 数组（空表示通过）。
  */
@@ -998,10 +1434,18 @@ function verifySourceRefSpan(sourceRef: string, finalText: string): string[] {
     errors.push(`sourceRef semantic-conflict：正文与 state value 语义冲突：${sourceRef}`);
     return errors;
   }
+  // P1-1: fail-closed — sourceRef 必须含 #finalText: 证明来自最终正文
+  // 防止 seed:* 等未重锚定的 sourceRef 绕过 reanchor 直接写入权威状态
+  if (!sourceRef.includes("#finalText:")) {
+    errors.push(
+      `sourceRef 未重锚定到最终正文（缺少 #finalText: 前缀）：${sourceRef}。所有 entry 必须经 reanchorStagedStateToFinalText 处理后再 commit。`,
+    );
+    return errors;
+  }
   // 匹配 :{start}-{end} 结尾的 span（最后一个 : 后面是数字-数字）
   const spanMatch = sourceRef.match(/:(\d+)-(\d+)$/);
   if (!spanMatch) {
-    // 无 span（not-found / 无 span 格式 / 旧格式）→ 不校验
+    // 有 #finalText: 但无 span（如 pattern kind: ch{N}#finalText:{hash}）→ 通过
     return errors;
   }
   const start = parseInt(spanMatch[1], 10);

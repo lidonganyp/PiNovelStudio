@@ -148,6 +148,29 @@ export interface LongTermStateSnapshot {
    * → ChapterIntent.overduePressure 暴露给 writer 模型。空数组表示无逾期期待。
    */
   overdueAlerts?: OverdueAlertEntry[];
+  /**
+   * Phase 3D 计划状态（PlannedState）快照（P2 闭环修复，2026-07-29）。
+   *
+   * 来自 store.planned，是前序章节 ChapterSeed/Intent 派生的"作者曾意图"状态，
+   * 供下一章 Preflight/ContextCompiler 作为连续性参考（不污染权威状态）。
+   *
+   * 设计要点：
+   * - 全量暴露（不经过 retrieveNarrativeContext 过滤）：计划状态总量有限（每章
+   *   ~10-30 条），不会撑爆上下文；且需要让下一章完整看到前序意图。
+   * - verified/verificationOutcome 字段帮助下游判断计划是否被正文实际兑现：
+   *   hit=已兑现、miss=未兑现、conflict=与正文冲突。
+   * - 不参与 PromiseLedger / CanonState 的权威查询（仅作连续性参考）。
+   */
+  planned?: Array<{
+    id: string;
+    plannedKind: "canon" | "character" | "promise" | "expectation";
+    plannedContent: string;
+    plannedSource: "chapter_seed" | "chapter_intent";
+    plannedField?: string;
+    sourceChapter: string;
+    verified: boolean;
+    verificationOutcome?: "hit" | "miss" | "conflict";
+  }>;
 }
 
 export interface CompiledContext {
@@ -583,8 +606,11 @@ export interface V2Output {
   /**
    * FULL-PIPELINE-PREVIEW-1：最终交付正文来源（raw 或 editorial）。
    * 由编排器在 SelectionPolicy 后填入，便于调用方区分基线交付与编辑胜出。
+   *
+   * P0-1 修复（Phase 1 整改）：blocked 路径返回 null（无交付来源），
+   * 表示未优化 Agentic 初稿未交付。仅 status="ok" 才标记 raw/editorial。
    */
-  selectedSource?: "raw" | "editorial";
+  selectedSource?: "raw" | "editorial" | null;
   /**
    * FULL-PIPELINE-PREVIEW-1：最终选中的候选 id。
    * 与 finalSelection.selectedCandidateId 一致，但在无 finalSelection 时也可访问。

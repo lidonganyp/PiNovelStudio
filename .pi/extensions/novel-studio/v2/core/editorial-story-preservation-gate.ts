@@ -34,6 +34,14 @@
  */
 
 import type { TextSpan } from "./types.js";
+import { extractEvents } from "./event-extractor.js";
+import {
+  compareEventLedgers,
+  type LedgerComparison,
+  type CausalBreakEvidence,
+  type StateChangeLossEvidence,
+  type AdvisorySimilarityEvidence,
+} from "./event-ledger-comparator.js";
 
 // ============================================================================
 // 常量
@@ -861,6 +869,26 @@ export interface StoryPreservationGateInput {
    * 动作反转事件不在此阈值内（replacedEventThreshold 单独控制）。
    */
   lowSimilarityReplacementThreshold?: number;
+  /**
+   * Phase 3C：门禁模式选择。
+   * - "event_ledger"（默认）：使用结构化事件账本比对（Phase 3A/3B）。
+   *   生产 agentic_style 流使用此模式。基于事件结构（subject+action+object）
+   *   和因果链比对，能可靠检测"保留人物但整章换事件"的结构性漂移。
+   * - "similarity"：使用旧相似度门（R2.4）。仅 eval 回放/B4 诊断使用。
+   *   基于文本 Jaccard 相似度 + 反义词对检测。
+   * 不传时默认 "event_ledger"（生产默认走新门禁）。
+   */
+  mode?: "similarity" | "event_ledger";
+  /**
+   * P0 第五轮 P1 修复：别名→规范名映射。
+   *
+   * 由 unified-entry 从 seed.characters（name + aliases）构建。传入后 extractEvents
+   * 会把 raw/editorial 文本中的别名规范化到同一规范名，使 "叶尘"（raw）与 "小尘"
+   * （editorial 别名）的 subject 比对仍命中，避免同义改写被误判为事件漂移。
+   *
+   * 仅在 event_ledger 模式生效；similarity 模式不消费此字段。未传入时不做规范化。
+   */
+  aliasToCanonical?: Map<string, string>;
 }
 
 export interface MissingEvent {
@@ -969,6 +997,35 @@ export interface StoryPreservationGateReport {
   entityCoverage: "characters_only" | "full_entities";
   /** 判定原因（用于 trace） */
   reason: string;
+  /**
+   * Phase 3C：门禁模式（event_ledger / similarity）。
+   * 用于 trace 区分生产门禁与 eval 回放门禁。
+   * 不传时为 undefined（旧 trace 兼容）。
+   */
+  mode?: "similarity" | "event_ledger";
+  /**
+   * Phase 3C：因果断裂列表（仅 event_ledger 模式产出）。
+   * raw 事件的 causalParentIds 指向的事件在 editorial 中缺失。
+   * similarity 模式下为空数组（旧逻辑无此检测）。
+   */
+  causalBreaks?: CausalBreakEvidence[];
+  /**
+   * Phase 3C：状态变化丢失列表（仅 event_ledger 模式产出）。
+   * raw state_change 事件的 afterState 在 editorial 中无对应。
+   * similarity 模式下为空数组。
+   */
+  stateChangeLosses?: StateChangeLossEvidence[];
+  /**
+   * Phase 3C：advisory 相似度证据（仅 event_ledger 模式产出，不阻断）。
+   * 记录低相似度但可能为同义改写的句对，供 trace 诊断。
+   * similarity 模式下为空数组。
+   */
+  advisorySimilarities?: AdvisorySimilarityEvidence[];
+  /**
+   * Phase 3C：editorial 可提取事件数（仅 event_ledger 模式产出）。
+   * 用于 trace 审计事件抽取对称性。
+   */
+  editorialEventCount?: number;
 }
 
 // ============================================================================
@@ -978,7 +1035,15 @@ export interface StoryPreservationGateReport {
 /**
  * 检查 editorial 候选是否保留 raw 的故事骨架。
  *
- * 算法：
+ * Phase 3C：默认使用 event_ledger 模式（结构化事件账本比对）。
+ * eval 回放/B4 诊断可通过 `mode: "similarity"` 使用旧相似度门。
+ *
+ * event_ledger 模式算法（Phase 3A/3B）：
+ * 1. 从 raw/editorial 抽取结构化事件（subject+action+object+location+state+causalParentIds）
+ * 2. 比对事件账本：缺失/替换/因果顺序/因果断裂/状态变化丢失
+ * 3. 阻断条件：缺失 >= 阈值 或 替换 >= 阈值 或 顺序违规 > 0 或 因果断裂 > 0 或 状态变化丢失 > 0
+ *
+ * similarity 模式算法（R2.4，eval 回放用）：
  * 1. 构建实体表（仅 knownEntities，不靠频率提取）
  * 2. 无实体 → unverifiable（保守拒绝）
  * 3. 提取 raw 事件锚点句（含 >=1 个已知实体的句子）
@@ -995,6 +1060,22 @@ export interface StoryPreservationGateReport {
 export function checkEditorialStoryPreservation(
   input: StoryPreservationGateInput,
 ): StoryPreservationGateReport {
+  const mode = input.mode ?? "event_ledger";
+  if (mode === "event_ledger") {
+    return checkEditorialStoryPreservationViaLedger(input);
+  }
+  return checkEditorialStoryPreservationViaSimilarity(input);
+}
+
+/**
+ * Phase 3C：event_ledger 模式 — 使用结构化事件账本比对。
+ *
+ * 调用 extractEvents 抽取 raw/editorial 事件，再调用 compareEventLedgers 比对。
+ * 结果映射回 StoryPreservationGateReport 以保持 trace 兼容。
+ */
+function checkEditorialStoryPreservationViaLedger(
+  input: StoryPreservationGateInput,
+): StoryPreservationGateReport {
   const {
     rawText,
     editorialText,
@@ -1004,6 +1085,180 @@ export function checkEditorialStoryPreservation(
     replacedEventThreshold = 1,
     replacedSimilarityThreshold = 0.25,
     lowSimilarityReplacementThreshold = 3,
+    aliasToCanonical,
+  } = input;
+
+  // 边界 1：空文本 → 不可验证，拒绝
+  if (!rawText || !editorialText || rawText.trim().length === 0 || editorialText.trim().length === 0) {
+    return {
+      preserved: false,
+      unverifiable: true,
+      rejectionType: "unverifiable",
+      missingEvents: [],
+      replacedEvents: [],
+      orderViolations: [],
+      rawEventAnchors: [],
+      rawEventAnchorFindings: [],
+      entityCoverage,
+      reason: "raw 或 editorial 为空，无法验证故事骨架保持",
+      mode: "event_ledger",
+      causalBreaks: [],
+      stateChangeLosses: [],
+      advisorySimilarities: [],
+      editorialEventCount: 0,
+    };
+  }
+
+  // 1. 抽取 raw 事件（P0 第五轮 P1 修复：传入 aliasToCanonical 规范化别名）
+  const rawExtraction = extractEvents(rawText, knownEntities, { entityCoverage, aliasToCanonical });
+
+  // 边界 2：无实体或无事件 → 不可验证
+  const entityTable = (knownEntities ?? [])
+    .filter((e) => e && e.trim().length >= 2)
+    .filter((e, i, arr) => arr.indexOf(e) === i);
+  if (entityTable.length === 0) {
+    return {
+      preserved: false,
+      unverifiable: true,
+      rejectionType: "unverifiable",
+      missingEvents: [],
+      replacedEvents: [],
+      orderViolations: [],
+      rawEventAnchors: [],
+      rawEventAnchorFindings: [],
+      entityCoverage,
+      reason: "无法从输入提取任何实体（knownEntities 为空）。event_ledger 模式不靠频率提取伪实体",
+      mode: "event_ledger",
+      causalBreaks: [],
+      stateChangeLosses: [],
+      advisorySimilarities: [],
+      editorialEventCount: 0,
+    };
+  }
+
+  // 2. 抽取 editorial 事件（P0 第五轮 P1 修复：传入 aliasToCanonical 规范化别名）
+  const editorialExtraction = extractEvents(editorialText, knownEntities, { entityCoverage, aliasToCanonical });
+
+  // 3. 比对事件账本
+  const comparison: LedgerComparison = compareEventLedgers({
+    rawEvents: rawExtraction.events,
+    editorialEvents: editorialExtraction.events,
+    rawCausalChains: rawExtraction.causalChains,
+    editorialCausalChains: editorialExtraction.causalChains,
+    knownEntities: entityTable,
+    entityCoverage,
+    rawText,
+    editorialText,
+    missingEventThreshold,
+    replacedEventThreshold,
+    replacedSimilarityThreshold,
+    lowSimilarityReplacementThreshold,
+    // P0 第六轮 P1 修复：传入 aliasToCanonical，让缺失事件检测做 canonical+alias 联合搜索，
+    // 避免单事件 alias 改写累计 missing=1、多事件触发 missing_event 误阻断。
+    aliasToCanonical,
+  });
+
+  // 4. 映射 LedgerComparison → StoryPreservationGateReport
+  // 缺失事件：转换形状
+  const missingEvents: MissingEvent[] = comparison.missingEvents.map((e) => ({
+    anchor: e.rawSentence,
+    rawSpan: e.rawSpan,
+    missingEntities: e.missingEntities,
+    reason: e.reason,
+  }));
+
+  // 替换事件：转换形状
+  const replacedEvents: ReplacedEvent[] = comparison.replacedEvents.map((e) => ({
+    subject: e.subject,
+    rawSentence: e.rawSentence,
+    rawSpan: e.rawSpan,
+    editorialSentence: e.editorialSentence,
+    editorialSpan: e.editorialSpan,
+    similarity: e.similarity,
+    reversal: e.reversal,
+    antonymPair: e.antonymPair,
+    reason: e.reason,
+  }));
+
+  // 因果顺序违规：直接复用（形状兼容）
+  const orderViolations: OrderViolation[] = comparison.orderViolations.map((e) => ({
+    rawBeforeClause: e.rawBeforeClause,
+    rawAfterClause: e.rawAfterClause,
+    editorialBeforeClause: e.editorialBeforeClause,
+    editorialAfterClause: e.editorialAfterClause,
+    connector: e.connector,
+    reason: e.reason,
+  }));
+
+  // 事件锚点 findings：从 rawExtraction.events 转换
+  const rawEventAnchorFindings: EventAnchorFinding[] = rawExtraction.events.map((e) => ({
+    subject: e.subject,
+    action: e.action,
+    eventType: e.eventType,
+    objectOrResult: e.object,
+    sentence: e.sentence,
+    span: e.evidenceSpan,
+    extractable: e.extractable,
+    skipReason: e.skipReason,
+  }));
+
+  // rejectionType 映射：event_ledger 的新类型折叠到旧类型
+  // - causal_break → order_violation（都是因果结构问题）
+  // - state_change_loss → replaced_event（都是事件替换问题）
+  let mappedRejectionType: StoryPreservationGateReport["rejectionType"] = null;
+  if (!comparison.preserved) {
+    if (comparison.unverifiable) {
+      mappedRejectionType = "unverifiable";
+    } else if (comparison.rejectionType === "missing_event") {
+      mappedRejectionType = "missing_event";
+    } else if (comparison.rejectionType === "replaced_event" || comparison.rejectionType === "state_change_loss") {
+      mappedRejectionType = "replaced_event";
+    } else if (comparison.rejectionType === "order_violation" || comparison.rejectionType === "causal_break") {
+      mappedRejectionType = "order_violation";
+    }
+  }
+
+  return {
+    preserved: comparison.preserved,
+    unverifiable: comparison.unverifiable,
+    rejectionType: mappedRejectionType,
+    missingEvents,
+    replacedEvents,
+    orderViolations,
+    rawEventAnchors: rawExtraction.events
+      .filter((e) => e.extractable)
+      .map((e) => e.sentence),
+    rawEventAnchorFindings,
+    entityCoverage,
+    reason: comparison.reason,
+    mode: "event_ledger",
+    causalBreaks: comparison.causalBreaks,
+    stateChangeLosses: comparison.stateChangeLosses,
+    advisorySimilarities: comparison.advisorySimilarities,
+    editorialEventCount: comparison.editorialEventCount,
+  };
+}
+
+/**
+ * similarity 模式 — 旧相似度门（R2.4，eval 回放/B4 诊断用）。
+ *
+ * 保留原始逻辑不变，供 eval 回放使用。生产 agentic_style 流默认走 event_ledger 模式。
+ */
+function checkEditorialStoryPreservationViaSimilarity(
+  input: StoryPreservationGateInput,
+): StoryPreservationGateReport {
+  const {
+    rawText,
+    editorialText,
+    knownEntities,
+    entityCoverage = "characters_only",
+    missingEventThreshold = 2,
+  replacedEventThreshold = 1,
+  // P0-2 修复（Phase 1 整改）：恢复严格阈值。
+  // 原先放宽到 0.15 / 8 会放过"保留人名但整章换剧情"（如交玉玺/离京/烧密信 → 喝茶/游园/看灯会）。
+  // 恢复到 0.25 / 3：相似度低于 0.25 的替换即视为 replaced_event；累计 3 处即阻断。
+  replacedSimilarityThreshold = 0.25,
+  lowSimilarityReplacementThreshold = 3,
   } = input;
 
   // 边界 1：空文本 → 不可验证，拒绝

@@ -266,11 +266,14 @@ function deriveLongTermState(
   });
   const store = loadStateStore(workspaceId, projectRoot);
   // 空状态文件视为无快照（避免向候选注入空噪音）
+  // P2 闭环修复：同时检查 planned 字段——若仅有 planned 条目（无权威状态），
+  // 仍需返回快照以暴露前序章节的计划意图供连续性参考。
   const isEmpty =
     store.canon.length === 0 &&
     store.character.length === 0 &&
     store.promise.length === 0 &&
-    store.pattern.length === 0;
+    store.pattern.length === 0 &&
+    (store.planned ?? []).length === 0;
   if (isEmpty) return null;
   const explicitCharacters = seed.authorChapterContract?.relevantCharacters?.length
     ? seed.authorChapterContract.relevantCharacters
@@ -357,6 +360,19 @@ function deriveLongTermState(
     promptItems: retrieval.promptItems,
     // P4 M3：pre-write overdue alerts，由 retrieveNarrativeContext 从 eligible 派生。
     overdueAlerts: retrieval.overdueAlerts,
+    // P2 闭环修复：Phase 3D 计划状态（PlannedState）全量暴露。
+    // 计划状态不经过 retrieveNarrativeContext 过滤（总量有限，需让下一章完整看到
+    // 前序意图）。verified/verificationOutcome 帮助下游判断计划是否被正文实际兑现。
+    planned: (store.planned ?? []).map((e) => ({
+      id: e.id,
+      plannedKind: e.plannedKind,
+      plannedContent: e.plannedContent,
+      plannedSource: e.plannedSource,
+      plannedField: e.plannedField,
+      sourceChapter: e.sourceChapter,
+      verified: e.verified,
+      verificationOutcome: e.verificationOutcome,
+    })),
   };
 }
 

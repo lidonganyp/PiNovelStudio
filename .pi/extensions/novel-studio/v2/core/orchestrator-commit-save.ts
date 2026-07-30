@@ -199,7 +199,10 @@ export function commitAndSave(
         const reanchored = reanchorStagedStateToFinalText(
           input.stagedStateUpdate,
           finalText,
-          input.chapterNumber
+          input.chapterNumber,
+          // P0 第六轮结构化绑定：传入本章角色名（含别名），启用境界主体归属的
+          // 结构化判断（句中含其他角色但不含目标角色 → fail-closed），取代动词正则补丁。
+          input.characterNames
         );
         // B2：PatternMemory - 从最终正文扫描语言风险，追加 pattern entries。
         // pattern 是正文派生状态（非 seed 派生），在 reanchor 后追加到 additions。
@@ -216,12 +219,16 @@ export function commitAndSave(
         const stateCommit = createFinalStateCommit();
         stateCommit.stage(reanchored);
         const store = loadStateStore(workspaceId, projectRoot);
+        // Phase 3D：传入原始 stagedStateUpdate 作为 plannedUpdate，
+        // 让 FinalStateCommit 把 seed 派生的计划状态写入 store.planned 字段
+        // （非权威，供下一章 Preflight 连续性参考）。
         const result = stateCommit.commit(
           store,
           selectedCandidateId,
           finalText,
           workspaceId,
-          projectRoot
+          projectRoot,
+          input.stagedStateUpdate
         );
         committed = result.committed;
         rejected = result.rejected.length;
@@ -230,6 +237,7 @@ export function commitAndSave(
           rejected,
           finalTextHash: result.finalTextHash,
           patternEntriesAdded: patternEntries.length,
+          plannedPersisted: result.plannedPersisted,
         };
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
