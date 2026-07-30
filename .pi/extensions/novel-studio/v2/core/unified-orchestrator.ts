@@ -41,6 +41,17 @@ import {
 } from "./editorial-candidate-generator.js";
 import { createAuthorStyleOptimizer } from "./author-style-optimizer.js";
 import {
+  selectAuthorStyleStrategies,
+  mergeStrategyParams,
+  buildAuthorStyleStrategyContext,
+  type AuthorStyleStrategyDef,
+  type AuthorStyleStrategySelection,
+} from "../learning/author-style-strategy-registry.js";
+import {
+  loadStrategyPolicyStore,
+  saveStrategyPolicyStore,
+} from "../learning/strategy-policy-store.js";
+import {
   createEditorialStrategyRegistry,
   type EditorialStrategyRegistry,
   type EditorialStrategyDef,
@@ -234,6 +245,7 @@ import {
   type UnifiedOrchestratorOutput,
   type UnifiedFailureEnvelope,
   type ControlPlaneTrace,
+  type HardBlockGuidance,
 } from "./orchestrator-types.js";
 // 公共类型 re-export：保留 unified-orchestrator.js 原有导出面（unified-entry / legacy-trace-adapter 等消费）
 export type {
@@ -241,6 +253,7 @@ export type {
   UnifiedOrchestratorInput,
   UnifiedOrchestratorOutput,
   UnifiedFailureEnvelope,
+  HardBlockGuidance,
 } from "./orchestrator-types.js";
 
 import {
@@ -376,6 +389,33 @@ export class UnifiedOrchestrator {
     if (input.context.longTermState?.retrievalReport) {
       stageResults.contextRetrievalReport = input.context.longTermState.retrievalReport;
       stageResults.contextRetrievalPromptItems = input.context.longTermState.promptItems ?? [];
+    }
+    // ── Phase 2A：风格档案兜底检查（advisory，不阻断） ──────────────────
+    // Phase 1 曾用 hardBlock 阻断缺风格档案的运行；Phase 2A 起，完整 Preflight 已在
+    // runUnifiedPipeline 入口执行（含 style_profile 检查），此处仅作兜底 advisory：
+    // - 生产路径若绕过 runUnifiedPipeline 直接调 orchestrate（如 eval 直调），此处仍能
+    //   记录缺失证据到 stageResults.preflightStyleProfile，但不阻断生成。
+    // - 真正的阻断由 runUnifiedPipeline 的 preflightWorkspace 负责（severity=preflight）。
+    // evalMode / qualityExperiment / fullPipelinePreview 跳过（不交付正式正文）。
+    if (!input.evalMode && !input.qualityExperiment && !input.fullPipelinePreview) {
+      const hasStyleFingerprint = input.context.styleReferences.some(
+        (entry) => entry.kind === "fingerprint",
+      );
+      if (!hasStyleFingerprint) {
+        // Phase 2A：降级为 advisory warning，不再 hardBlock。
+        // 缺风格档案会让风格优化无候选 → 由作者风格整章优化阶段自身的 hard block 处理
+        // （Phase 1 已确保风格优化失败 = hard block，selectedSource=null）。
+        // 此处只记录 advisory，让 trace 读者知道预检缺口。
+        const advisoryMsg = "workspace 缺少 style_profile 风格指纹文档（kind=fingerprint）；作者风格优化阶段可能无候选，建议在 workspaces/{id}/ 下创建风格档案或合成默认档案";
+        warnings.push(advisoryMsg);
+        stageResults.preflightStyleProfile = {
+          passed: false,
+          advisory: true,
+          reason: advisoryMsg,
+        };
+      } else {
+        stageResults.preflightStyleProfile = { passed: true };
+      }
     }
     if (packetErrors.length > 0) {
       return this.hardBlock(input, "control_plane_packet", `NovelTaskPacket 校验失败：${packetErrors.join("; ")}`, stageResults);
@@ -721,12 +761,40 @@ export class UnifiedOrchestrator {
             route: RAW_ROUTE,
             timeoutMs: input.timeoutMs,
             evalPrefix: input.evalPrefix,
+            // Phase 2B：字数软目标转发给 Agentic GenerationPacket
+            targetWordCount: input.targetWordCount,
+            // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
+            fullPipelinePreview: input.fullPipelinePreview,
           }),
         );
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         stageResults.novelos = { shadowEnabled: false, required: true, error: message };
-        return this.hardBlock(input, "novelos_agentic_generation", `NovelOS Agentic 生成异常：${message}`, stageResults);
+        // P1 修复（Phase 1 整改）：Agentic 生成超时/连接异常归类为 recoverable，
+        // 触发工具层 chapter_level_retry 一次；其他异常 hard block。
+        // P1-3：改用 classifyTimeoutFromReason 统一超时识别口径，
+        // 与 candidate=null 分支（source 内部捕获）保持一致。
+        const isModelTimeout = classifyTimeoutFromReason(message) === "model_timeout";
+        return this.hardBlock(
+          input,
+          "novelos_agentic_generation",
+          `NovelOS Agentic 生成异常：${message}`,
+          stageResults,
+          undefined,
+          isModelTimeout
+            ? {
+                gate: "model_timeout",
+                severityOverride: "recoverable",
+                recoverable: true,
+                retryPlan: { strategy: "chapter_level_retry", maxAttempts: 1 },
+                candidateDisposition: "blocked_evidence_only",
+                prohibitedActions: [
+                  "accept_or_deliver_blocked_candidate",
+                  "save_blocked_candidate_as_chapter",
+                ],
+              }
+            : undefined,
+        );
       }
 
       stageResults.novelos = {
@@ -738,6 +806,9 @@ export class UnifiedOrchestrator {
         candidateLength: agenticResult.candidate?.text.length ?? 0,
         stopReason: agenticResult.stopReason,
         failureReason: agenticResult.failureReason ?? null,
+        // P1-3：传播 failureKind 到 trace，便于 replay 仪表盘区分
+        // model_timeout / model_error / runtime_init / budget_exhausted / empty_draft。
+        failureKind: agenticResult.failureKind ?? null,
         budgetSnapshot: agenticResult.budgetSnapshot,
         sourceRefs: agenticResult.sourceRefs,
         toolCalls: agenticResult.toolCalls,
@@ -748,10 +819,45 @@ export class UnifiedOrchestrator {
       };
       const agenticCandidate = agenticResult.candidate;
       if (!agenticCandidate) {
+        // P1-3 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
+        // 真实 Agentic source 会捕获底层异常并返回 candidate=null + failureKind。
+        // 原先此分支一律 hardBlock，导致 model_timeout 无法触发工具层
+        // chapter_level_retry（重试条件 gate==="model_timeout" && severity==="recoverable"）。
+        //
+        // 现在根据 failureKind 区分：
+        // - "model_timeout" → recoverable + gate=model_timeout + chapter_level_retry
+        //   （与 generate() 抛异常的 catch 分支保持一致）
+        // - "model_error" / "runtime_init" / "budget_exhausted" / "empty_draft" / "unknown"
+        //   → 保持 hardBlock（系统责任但不属于可自动恢复的超时）
+        //
+        // 向后兼容：若 source 未设置 failureKind（旧 mock 或第三方实现），
+        // 回退到 failureReason 字符串匹配，保持与 catch 分支相同的超时模式识别。
+        const failureKind = agenticResult.failureKind
+          ?? classifyTimeoutFromReason(agenticResult.failureReason ?? agenticResult.stopReason);
+        if (failureKind === "model_timeout") {
+          return this.hardBlock(
+            input,
+            "novelos_agentic_generation",
+            `NovelOS Agentic 模型超时/连接异常（candidate=null）：${agenticResult.failureReason ?? agenticResult.stopReason}`,
+            stageResults,
+            undefined,
+            {
+              gate: "model_timeout",
+              severityOverride: "recoverable",
+              recoverable: true,
+              retryPlan: { strategy: "chapter_level_retry", maxAttempts: 1 },
+              candidateDisposition: "blocked_evidence_only",
+              prohibitedActions: [
+                "accept_or_deliver_blocked_candidate",
+                "save_blocked_candidate_as_chapter",
+              ],
+            },
+          );
+        }
         return this.hardBlock(
           input,
           "novelos_agentic_generation",
-          `NovelOS Agentic 未产出有效正文：${agenticResult.failureReason ?? agenticResult.stopReason}`,
+          `NovelOS Agentic 未产出有效正文（${failureKind}）：${agenticResult.failureReason ?? agenticResult.stopReason}`,
           stageResults,
         );
       }
@@ -845,6 +951,42 @@ export class UnifiedOrchestrator {
         );
       }
 
+      // Phase 4B：作者风格优化策略选择（Thompson Sampling）
+      // 在 optimize 调用前选择 0-2 个策略，合并参数后传入。
+      // 策略信誉按 modelVersion 隔离；新模型版本无历史经验时使用弱先验 Beta(1,1)。
+      let authorStyleStrategySelection: AuthorStyleStrategySelection | null = null;
+      let authorStyleStrategyParams: import("../learning/author-style-strategy-registry.js").AuthorStyleStrategyParams | undefined;
+      try {
+        const policyStore = loadStrategyPolicyStore(
+          workspaceId ?? "default",
+          projectRoot,
+        );
+        const modelVersionKey = detectModelVersion(agenticCandidate.model);
+        authorStyleStrategySelection = selectAuthorStyleStrategies({
+          modelVersion: modelVersionKey,
+          policyStore,
+          seed: input.strategySeed,
+        });
+        authorStyleStrategyParams = mergeStrategyParams(authorStyleStrategySelection.selected);
+        // 记录策略上下文到 stageResults（供后续 outcome 记录使用）
+        stageResults.authorStyleStrategySelection = {
+          selectedStrategyIds: authorStyleStrategySelection.selected.map((s) => s.strategyId),
+          staticFallbackIds: authorStyleStrategySelection.staticFallback.map((s) => s.strategyId),
+          samples: authorStyleStrategySelection.samples,
+          notes: authorStyleStrategySelection.notes,
+          modelVersion: modelVersionKey,
+        };
+      } catch (strategyError) {
+        // 策略选择失败不阻断生成；降级为无策略参数（默认行为）
+        stageResults.authorStyleStrategySelection = {
+          selectedStrategyIds: [],
+          staticFallbackIds: [],
+          samples: [],
+          notes: [`策略选择失败，降级为无策略：${strategyError instanceof Error ? strategyError.message : String(strategyError)}`],
+          modelVersion: detectModelVersion(agenticCandidate.model),
+        };
+      }
+
       const styleResult = await timeAsync("stage3_authorStyleOptimization", () =>
         createAuthorStyleOptimizer().optimize({
           sourceCandidate: agenticCandidate,
@@ -855,6 +997,7 @@ export class UnifiedOrchestrator {
           writerPromptProfile: input.rawPromptProfile,
           modelGenerate: wrappedModelGenerate!,
           timeoutMs: input.timeoutMs,
+          strategyParams: authorStyleStrategyParams,
         }),
       );
       stageResults.authorStyleOptimization = {
@@ -868,10 +1011,26 @@ export class UnifiedOrchestrator {
       };
       let styledCandidate = styleResult.candidate;
       if (!styledCandidate) {
+        // P0-1 修复（Phase 1 整改）：风格优化未产出候选 → 不再回退 raw 初稿。
+        // 按失败归因分类处理：
+        // - recoverable（empty_result/model_timeout/model_error）→ 产 recoverable envelope，
+        //   触发工具层 register-tools.ts 同阶段重试一次（chapter_level_retry）。
+        // - 非恢复类（no_guidance/prompt_rejected）→ 直接 hard block。
+        // Agentic raw 初稿只作为 blocked evidence 保留在 trace，不交付、不保存。
+        const failureKind = styleResult.failureKind ?? "no_guidance";
+        const isRecoverable = failureKind === "empty_result"
+          || failureKind === "model_timeout"
+          || failureKind === "model_error";
+        stageResults.styleOptimizationBlocked = {
+          reason: "no_candidate",
+          failureKind,
+          failureReason: styleResult.failureReason ?? "未产出候选",
+          recoverable: isRecoverable,
+        };
         return this.hardBlock(
           input,
-          "author_style_optimization",
-          `作者风格整章优化失败：${styleResult.failureReason ?? "未产出候选"}`,
+          "style_optimization_no_candidate",
+          `作者风格整章优化未产出候选（${failureKind}）：${styleResult.failureReason ?? "未产出候选"}。Agentic 初稿仅作 blocked evidence 保留，不交付。`,
           stageResults,
           {
             rawText: agenticCandidate.text,
@@ -880,34 +1039,77 @@ export class UnifiedOrchestrator {
             rawModel: agenticCandidate.model,
             modelVersion: detectModelVersion(agenticCandidate.model),
             candidateId: agenticCandidate.id,
-            selectedSource: "raw",
-            finalText: agenticCandidate.text,
           },
+          isRecoverable
+            ? {
+                gate: "model_timeout",
+                severityOverride: "recoverable",
+                recoverable: true,
+                retryPlan: { strategy: "chapter_level_retry", maxAttempts: 1 },
+                candidateDisposition: "blocked_evidence_only",
+                prohibitedActions: [
+                  "accept_or_deliver_blocked_candidate",
+                  "save_blocked_candidate_as_chapter",
+                ],
+              }
+            : {
+                gate: "style_optimization",
+                severityOverride: "hard",
+                recoverable: false,
+                candidateDisposition: "blocked_evidence_only",
+                prohibitedActions: [
+                  "accept_or_deliver_blocked_candidate",
+                  "save_blocked_candidate_as_chapter",
+                ],
+              },
         );
       }
       candidates.push(styledCandidate);
+
+      // P0-2 修复（Phase 1 整改）：Story Preservation 使用完整实体表。
+      // knownEntities 由 unified-entry 从 characters（含别名）+ worldKeyTerms（factions/places/
+      // currencies/professions/specialAbilities）汇聚。缺失时回退 characterNames + characters_only。
+      const knownEntities = input.knownEntities ?? characterNames;
+      const entityCoverage = input.knownEntities ? "full_entities" : "characters_only";
 
       const preservation = timeSync("stage4_storyPreservation", () =>
         checkEditorialStoryPreservation({
           rawText: agenticCandidate.text,
           editorialText: styledCandidate!.text,
-          knownEntities: characterNames,
-          entityCoverage: "characters_only",
+          knownEntities,
+          entityCoverage,
+          // P0 第五轮 P1 修复：传入别名→规范名映射，使 raw/editorial 用不同称呼时 subject 比对仍命中。
+          aliasToCanonical: input.aliasToCanonical,
         }),
       );
       stageResults.storyPreservation = preservation;
 
-      // P1 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：unverifiable 与明确故事漂移分开处理。
-      // P0-1 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
-      // - 明确漂移（missing_event/replaced_event/order_violation）→ 阻断，保留 raw 初稿
-      // - unverifiable（事件抽取失败/空文本/无实体）→ 用缩减风格指导重试一次，
-      //   不要求用户修改章纲；重试仍 unverifiable → **硬阻断**（不交付未优化 Agentic 初稿）
-      //
-      // 之前的实现把 styledCandidate 替换为 agenticCandidate 后继续保存，
-      // 违反"Agentic 初稿不直接交付"铁律。修复后改为 hardBlock：
-      // - agenticCandidate.text 只作为 rawText 证据保留在 trace
-      // - 阻断候选不保存为正式章节（blocked_evidence_only）
-      // - 用户动作：系统重试，无需修改 ChapterSeed
+      // P0-1 修复（Phase 1 整改）：Story Preservation 失败一律 hard block，不再回退 raw。
+      // 分类恢复：
+      // - unverifiable（事件抽取失败/空文本/无实体）→ 缩减风格指导重试一次；仍不可验证 → hard block。
+      // - 明确漂移（missing_event/replaced_event/order_violation）→ 缩减风格指导重试一次；仍漂移 → hard block。
+      // - 重试未产出候选 → hard block（in-stage 重试预算已耗尽，不再触发 chapter_level_retry）。
+      // Agentic raw 初稿只作为 blocked evidence 保留在 trace，不交付、不保存、不提交状态。
+      // 铁律：Agentic 初稿不直接交付；作者风格整章优化是必经阶段。
+      const blockedEvidenceForPreservation = {
+        rawText: agenticCandidate.text,
+        rawFinishReason: agenticCandidate.finishReason ?? null,
+        rawMaxTokens: agenticCandidate.maxTokens ?? null,
+        rawModel: agenticCandidate.model,
+        modelVersion: detectModelVersion(agenticCandidate.model),
+        candidateId: styledCandidate.id,
+      };
+      const preservationBlockGuidance: HardBlockGuidance = {
+        gate: "story_preservation",
+        severityOverride: "hard",
+        recoverable: false,
+        candidateDisposition: "blocked_evidence_only",
+        prohibitedActions: [
+          "accept_or_deliver_blocked_candidate",
+          "save_blocked_candidate_as_chapter",
+        ],
+      };
+
       if (!preservation.preserved && preservation.unverifiable) {
         const retryStyleResult = await timeAsync("stage4a_authorStyleRetryUnverifiable", () =>
           createAuthorStyleOptimizer().optimize({
@@ -939,8 +1141,8 @@ export class UnifiedOrchestrator {
             checkEditorialStoryPreservation({
               rawText: agenticCandidate.text,
               editorialText: retryCandidate.text,
-              knownEntities: characterNames,
-              entityCoverage: "characters_only",
+              knownEntities,
+              entityCoverage,
             }),
           );
           stageResults.retryStoryPreservation = retryPreservation;
@@ -951,177 +1153,126 @@ export class UnifiedOrchestrator {
             styledCandidate = retryCandidate;
             candidates.push(styledCandidate);
           } else if (!retryPreservation.preserved && !retryPreservation.unverifiable) {
-            // 重试出现明确漂移 → 阻断，保留 raw 初稿
+            // 重试出现明确漂移 → hard block（不再回退 raw）
+            stageResults.styleOptimizationBlocked = {
+              reason: "unverifiable_retry_drift",
+              firstUnverifiableReason: preservation.reason,
+              retryDriftReason: retryPreservation.reason,
+            };
             return this.hardBlock(
               input,
-              "author_style_story_preservation",
-              `作者风格优化重试未通过故事保持检查（明确漂移）：${retryPreservation.reason}`,
+              "story_preservation_retry_drift",
+              `作者风格优化重试出现明确故事漂移：首次不可验证（${preservation.reason}），重试漂移（${retryPreservation.reason}）。Agentic 初稿仅作 blocked evidence，不交付。`,
               stageResults,
-              {
-                rawText: agenticCandidate.text,
-                rawFinishReason: agenticCandidate.finishReason ?? null,
-                rawMaxTokens: agenticCandidate.maxTokens ?? null,
-                rawModel: agenticCandidate.model,
-                modelVersion: detectModelVersion(agenticCandidate.model),
-                candidateId: retryCandidate.id,
-                selectedSource: "editorial",
-                finalText: retryCandidate.text,
-              },
-              {
-                recoverable: true,
-                candidateDisposition: "blocked_evidence_only",
-                blockCategory: "confirmed_content_omission",
-                userActionRequired: [
-                  `查看 stageResults.retryStoryPreservation 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化重试的漂移证据`,
-                  `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
-                  `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
-                ],
-                prohibitedActions: [
-                  "accept_or_deliver_blocked_candidate",
-                  "save_blocked_candidate_as_chapter",
-                  "skip_to_next_chapter",
-                ],
-                retryPlan: {
-                  strategy: "revise_inputs_and_retry_same_chapter",
-                  maxAttempts: 1,
-                },
-              },
+              blockedEvidenceForPreservation,
+              preservationBlockGuidance,
             );
-          }
-          // P0-1 修复：重试仍 unverifiable → 硬阻断（不再静默回退 agenticCandidate）
-          // 之前的实现把 styledCandidate 替换为 agenticCandidate 并继续保存，
-          // 违反"Agentic 初稿不直接交付"铁律。改为 hardBlock 阻断章节生成，
-          // agenticCandidate.text 只作为 rawText 证据保留在 trace。
-          if (!retryPreservation.preserved && retryPreservation.unverifiable) {
-            stageResults.authorStyleOptimizationBlockedUnverifiable = {
-              reason: "风格优化重试仍 unverifiable，硬阻断（不交付未优化 Agentic 初稿）",
-              rawCandidateId: agenticCandidate.id,
-              styledCandidateId: retryCandidate.id,
+          } else {
+            // 重试仍 unverifiable → hard block（不再回退 raw）
+            stageResults.styleOptimizationBlocked = {
+              reason: "unverifiable_retry_failed",
               firstUnverifiableReason: preservation.reason,
               retryUnverifiableReason: retryPreservation.reason,
             };
-            // 从 candidates 移除 unverifiable 的风格优化稿（不保留为可选候选）
-            const staleIdx = candidates.findIndex((c) => c.id === retryCandidate.id);
-            if (staleIdx >= 0) candidates.splice(staleIdx, 1);
             return this.hardBlock(
               input,
-              "author_style_story_preservation",
-              `作者风格优化重试仍未通过故事保持检查（unverifiable）：${retryPreservation.reason}`,
+              "story_preservation_unverifiable_retry_failed",
+              `作者风格优化缩减指导重试仍不可验证：首次（${preservation.reason}），重试（${retryPreservation.reason}）。Agentic 初稿仅作 blocked evidence，不交付。`,
               stageResults,
-              {
-                rawText: agenticCandidate.text,
-                rawFinishReason: agenticCandidate.finishReason ?? null,
-                rawMaxTokens: agenticCandidate.maxTokens ?? null,
-                rawModel: agenticCandidate.model,
-                modelVersion: detectModelVersion(agenticCandidate.model),
-                candidateId: retryCandidate.id,
-                selectedSource: "editorial",
-                finalText: retryCandidate.text,
-              },
-              {
-                recoverable: true,
-                candidateDisposition: "blocked_evidence_only",
-                blockCategory: "system_verifier_uncertain",
-                userActionRequired: [
-                  `查看 stageResults.authorStyleOptimizationBlockedUnverifiable 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化重试的 unverifiable 证据`,
-                  `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
-                  `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
-                ],
-                prohibitedActions: [
-                  "accept_or_deliver_blocked_candidate",
-                  "save_blocked_candidate_as_chapter",
-                  "skip_to_next_chapter",
-                ],
-                retryPlan: {
-                  strategy: "revise_inputs_and_retry_same_chapter",
-                  maxAttempts: 1,
-                },
-              },
+              blockedEvidenceForPreservation,
+              preservationBlockGuidance,
             );
           }
         } else {
-          // P0-1 修复：重试未产出候选 → 硬阻断（不再静默回退 agenticCandidate）
-          // 之前的实现把 styledCandidate 替换为 agenticCandidate 并继续保存，
-          // 违反"Agentic 初稿不直接交付"铁律。改为 hardBlock 阻断章节生成。
-          stageResults.authorStyleOptimizationBlockedNoCandidate = {
-            reason: `风格优化重试未产出候选：${retryStyleResult.failureReason ?? "未产出"}，硬阻断`,
-            rawCandidateId: agenticCandidate.id,
+          // 重试未产出候选 → hard block（in-stage 重试预算已耗尽）
+          stageResults.styleOptimizationBlocked = {
+            reason: "unverifiable_retry_no_candidate",
             firstUnverifiableReason: preservation.reason,
-            retryFailureReason: retryStyleResult.failureReason ?? null,
+            retryFailureReason: retryStyleResult.failureReason ?? "未产出",
           };
           return this.hardBlock(
             input,
-            "author_style_optimization",
-            `作者风格优化重试未产出候选：${retryStyleResult.failureReason ?? "未产出"}`,
+            "story_preservation_unverifiable_retry_no_candidate",
+            `作者风格优化缩减指导重试未产出候选：${retryStyleResult.failureReason ?? "未产出"}。Agentic 初稿仅作 blocked evidence，不交付。`,
             stageResults,
-            {
-              rawText: agenticCandidate.text,
-              rawFinishReason: agenticCandidate.finishReason ?? null,
-              rawMaxTokens: agenticCandidate.maxTokens ?? null,
-              rawModel: agenticCandidate.model,
-              modelVersion: detectModelVersion(agenticCandidate.model),
-              candidateId: styledCandidate!.id,
-              selectedSource: "editorial",
-              finalText: styledCandidate!.text,
-            },
-            {
-              recoverable: true,
-              candidateDisposition: "blocked_evidence_only",
-              blockCategory: "system_verifier_uncertain",
-              userActionRequired: [
-                `查看 stageResults.authorStyleOptimizationBlockedNoCandidate 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化重试的失败原因`,
-                `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
-                `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
-              ],
-              prohibitedActions: [
-                "accept_or_deliver_blocked_candidate",
-                "save_blocked_candidate_as_chapter",
-                "skip_to_next_chapter",
-              ],
-              retryPlan: {
-                strategy: "revise_inputs_and_retry_same_chapter",
-                maxAttempts: 1,
-              },
-            },
+            blockedEvidenceForPreservation,
+            preservationBlockGuidance,
           );
         }
       } else if (!preservation.preserved) {
-        // 明确故事漂移（非 unverifiable）→ 阻断，保留 raw 初稿
-        return this.hardBlock(
-          input,
-          "author_style_story_preservation",
-          `作者风格优化未通过故事保持检查：${preservation.reason}`,
-          stageResults,
-          {
-            rawText: agenticCandidate.text,
-            rawFinishReason: agenticCandidate.finishReason ?? null,
-            rawMaxTokens: agenticCandidate.maxTokens ?? null,
-            rawModel: agenticCandidate.model,
-            modelVersion: detectModelVersion(agenticCandidate.model),
-            candidateId: styledCandidate.id,
-            selectedSource: "editorial",
-            finalText: styledCandidate.text,
-          },
-          {
-            recoverable: true,
-            candidateDisposition: "blocked_evidence_only",
-            blockCategory: "confirmed_content_omission",
-            userActionRequired: [
-              `查看 stageResults.storyPreservation 与 trajectoryPath，确认第 ${chapterNumber} 章风格优化的漂移证据`,
-              `系统可通过 novel_generate_chapter 重试当前第 ${chapterNumber} 章；无需用户修订章纲`,
-              `verifier 清零前不得生成第 ${chapterNumber + 1} 章`,
-            ],
-            prohibitedActions: [
-              "accept_or_deliver_blocked_candidate",
-              "save_blocked_candidate_as_chapter",
-              "skip_to_next_chapter",
-            ],
-            retryPlan: {
-              strategy: "revise_inputs_and_retry_same_chapter",
-              maxAttempts: 1,
-            },
-          },
+        // 明确故事漂移（非 unverifiable）→ 缩减风格指导重试一次；仍漂移 → hard block。
+        const driftRetryStyleResult = await timeAsync("stage4a_authorStyleRetryDrift", () =>
+          createAuthorStyleOptimizer().optimize({
+            sourceCandidate: agenticCandidate,
+            chapterNumber,
+            intent,
+            context,
+            constitution,
+            writerPromptProfile: input.rawPromptProfile,
+            modelGenerate: wrappedModelGenerate!,
+            timeoutMs: input.timeoutMs,
+            reducedGuidanceRatio: 0.5,
+          }),
         );
+        stageResults.authorStyleOptimizationDriftRetry = {
+          styleProfileLoaded: driftRetryStyleResult.styleProfileLoaded,
+          styleGuidanceConsumed: driftRetryStyleResult.styleGuidanceConsumed,
+          styleReferenceIds: driftRetryStyleResult.styleReferenceIds,
+          guidanceCount: driftRetryStyleResult.guidanceCount,
+          candidateId: driftRetryStyleResult.candidate?.id ?? null,
+          failureReason: driftRetryStyleResult.failureReason,
+          retryWithReducedGuidance: driftRetryStyleResult.retryWithReducedGuidance,
+          firstDriftReason: preservation.reason,
+        };
+        const driftRetryCandidate = driftRetryStyleResult.candidate;
+        if (driftRetryCandidate) {
+          const driftRetryPreservation = timeSync("stage4b_retryStoryPreservationDrift", () =>
+            checkEditorialStoryPreservation({
+              rawText: agenticCandidate.text,
+              editorialText: driftRetryCandidate.text,
+              knownEntities,
+              entityCoverage,
+            }),
+          );
+          stageResults.retryStoryPreservationDrift = driftRetryPreservation;
+          if (driftRetryPreservation.preserved) {
+            // 重试通过：用重试候选替换原 styledCandidate
+            const staleCandidateIndex = candidates.findIndex((c) => c.id === styledCandidate!.id);
+            if (staleCandidateIndex >= 0) candidates.splice(staleCandidateIndex, 1);
+            styledCandidate = driftRetryCandidate;
+            candidates.push(styledCandidate);
+          } else {
+            // 重试仍漂移 → hard block（不再回退 raw）
+            stageResults.styleOptimizationBlocked = {
+              reason: "drift_retry_failed",
+              firstDriftReason: preservation.reason,
+              retryDriftReason: driftRetryPreservation.reason,
+            };
+            return this.hardBlock(
+              input,
+              "story_preservation_drift_retry_failed",
+              `作者风格优化缩减指导重试仍漂移：首次（${preservation.reason}），重试（${driftRetryPreservation.reason}）。Agentic 初稿仅作 blocked evidence，不交付。`,
+              stageResults,
+              blockedEvidenceForPreservation,
+              preservationBlockGuidance,
+            );
+          }
+        } else {
+          // 重试未产出候选 → hard block
+          stageResults.styleOptimizationBlocked = {
+            reason: "drift_retry_no_candidate",
+            firstDriftReason: preservation.reason,
+            retryFailureReason: driftRetryStyleResult.failureReason ?? "未产出",
+          };
+          return this.hardBlock(
+            input,
+            "story_preservation_drift_retry_no_candidate",
+            `作者风格优化缩减指导重试未产出候选：${driftRetryStyleResult.failureReason ?? "未产出"}。Agentic 初稿仅作 blocked evidence，不交付。`,
+            stageResults,
+            blockedEvidenceForPreservation,
+            preservationBlockGuidance,
+          );
+        }
       }
 
       // P1 修复：人工审阅包 — 永久保留初稿/优化稿差异、事实复检结果与用户修改量占位
@@ -1206,6 +1357,8 @@ export class UnifiedOrchestrator {
       stageResults.strategyOutcomes = {
         skipped: true,
         reason: "机器裁判已移除；等待用户修改稿与评价反馈后学习",
+        // P1-3：记录本次选中的策略 id，供 novel_strategy_feedback 的自然语言反馈编译器归因
+        selectedStrategyIds: authorStyleStrategySelection?.selected.map((s) => s.strategyId) ?? [],
       };
 
       let commitOutcome: { ok: boolean; error?: string; stateCommit: { committed: number; rejected: number } | null };
@@ -1407,6 +1560,10 @@ export class UnifiedOrchestrator {
             route: RAW_ROUTE,
             timeoutMs: input.timeoutMs,
             evalPrefix: input.evalPrefix,
+            // Phase 2B：字数软目标转发给 Agentic GenerationPacket
+            targetWordCount: input.targetWordCount,
+            // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
+            fullPipelinePreview: input.fullPipelinePreview,
           })
         );
         agenticCandidate = agenticResult.candidate;
@@ -1558,6 +1715,10 @@ export class UnifiedOrchestrator {
             route: RAW_ROUTE,
             timeoutMs: input.timeoutMs,
             evalPrefix: input.evalPrefix,
+            // Phase 2B：字数软目标转发给 Agentic GenerationPacket
+            targetWordCount: input.targetWordCount,
+            // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
+            fullPipelinePreview: input.fullPipelinePreview,
           })
         );
         stageResults.novelos = {
@@ -1994,6 +2155,9 @@ export class UnifiedOrchestrator {
           // 当 FactGuard context 能提供地点/组织/物品实体时，应改为 full_entities。
           knownEntities: input.characterNames,
           entityCoverage: "characters_only",
+          // Phase 3C：eval B4 诊断流保留 similarity 模式（与历史回放对齐）。
+          // 生产 agentic_style 流默认走 event_ledger 模式（见上方 stage4 调用）。
+          mode: "similarity",
         });
         storyPreservationResults.push({ candidateId: ec.id, report });
         storyPreservedCandidates.push(ec);
@@ -2019,6 +2183,12 @@ export class UnifiedOrchestrator {
         // 否则管线测试无法校验事件结构是否真实落地到 trace。
         rawEventAnchorFindings: report.rawEventAnchorFindings,
         entityCoverage: report.entityCoverage,
+        // Phase 3C：event_ledger 模式新增字段（similarity 模式为 undefined/空数组）
+        mode: report.mode,
+        causalBreaks: report.causalBreaks ?? [],
+        stateChangeLosses: report.stateChangeLosses ?? [],
+        advisorySimilarities: report.advisorySimilarities ?? [],
+        editorialEventCount: report.editorialEventCount,
       })
     );
 
@@ -3093,25 +3263,27 @@ export class UnifiedOrchestrator {
       selectedSource?: "raw" | "editorial" | null;
       finalText?: string | null;
     },
-    guidance?: Pick<
-      UnifiedFailureEnvelope,
-      | "recoverable"
-      | "candidateDisposition"
-      | "userActionRequired"
-      | "prohibitedActions"
-      | "retryPlan"
-      | "blockCategory"
-    >,
+    /**
+     * P1 修复（Phase 1 整改）：覆盖默认 severity。
+     *
+     * 默认 severity = stage === "raw_generation" ? "fatal" : "hard"。
+     * 模型超时/空结果类阻断传 "recoverable"，使工具层 register-tools.ts
+     * 的 `severity === "recoverable" && gate === "model_timeout"` 重试条件可达。
+     */
+    guidance?: HardBlockGuidance,
   ): UnifiedOrchestratorOutput {
     // hardBlock 不接收调用方 warnings（阻断路径独立维护局部 warnings，
     // 仅供 QUALITY-16 导出失败等局部 warning 使用，不与主链路 warnings 合并）。
     const warnings: string[] = [];
+    const severity = guidance?.severityOverride
+      ?? (stage === "raw_generation" ? "fatal" : "hard");
     const envelope: UnifiedFailureEnvelope = {
       stage,
-      severity: stage === "raw_generation" ? "fatal" : "hard",
+      severity,
       reason,
-      recoverable: guidance?.recoverable ?? false,
+      recoverable: guidance?.recoverable ?? severity === "recoverable",
       degradedTo: "hard_block",
+      ...(guidance?.gate ? { gate: guidance.gate } : {}),
       ...(guidance?.candidateDisposition
         ? { candidateDisposition: guidance.candidateDisposition }
         : {}),
@@ -3197,7 +3369,10 @@ export class UnifiedOrchestrator {
       chapterId: input.chapterId,
       chapterNumber: input.chapterNumber,
       text: "",
-      selectedSource: "raw",
+      // P0-1 修复（Phase 1 整改）：blocked 路径不伪造 selectedSource。
+      // 原先固定返回 "raw"，把未优化 Agentic 初稿伪装成可交付，与 rawRole="not_deliverable"
+      // 冲突。修复后 blocked 时为 null（无交付来源）；仅 status="ok" 才标记 raw/editorial。
+      selectedSource: null,
       selectedCandidateId: "",
       candidates: [],
       judgeResult: null,
@@ -3663,4 +3838,43 @@ export function classifyAgenticVerificationBlock(
     prohibitedActions,
     retryPlan,
   };
+}
+
+// ============================================================================
+// P1-3 修复：超时识别辅助
+// ============================================================================
+
+/**
+ * P1-3 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
+ * 用于在 source 未设置 failureKind 时，从 failureReason / stopReason 字符串
+ * 回退识别超时/连接异常。
+ *
+ * 与 agentic-raw-candidate-source.ts 中的 TIMEOUT_PATTERNS 保持同步，
+ * 确保编排器 catch 分支（generate 抛异常）和 candidate=null 分支
+ * （source 内部捕获）使用一致的超时识别口径。
+ *
+ * 同一函数也供 catch 分支（line ~768）使用，避免两处分别维护模式列表。
+ */
+const TIMEOUT_REASON_PATTERNS = [
+  "timeout",
+  "timed out",
+  "超时",
+  "aborted",
+  "etimedout",
+  "econnreset",
+];
+
+/**
+ * P1-3 修复：从 reason 字符串识别是否为模型超时/连接异常。
+ *
+ * @returns "model_timeout" 若命中任一超时模式；否则 "unknown"。
+ */
+function classifyTimeoutFromReason(reason: string): "model_timeout" | "unknown" {
+  const lower = reason.toLowerCase();
+  for (const pattern of TIMEOUT_REASON_PATTERNS) {
+    if (lower.includes(pattern)) {
+      return "model_timeout";
+    }
+  }
+  return "unknown";
 }

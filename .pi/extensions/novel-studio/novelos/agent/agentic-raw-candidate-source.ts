@@ -22,6 +22,8 @@ import { randomUUID } from "node:crypto";
 import type { Candidate, CompiledContext } from "../../v2/core/types.js";
 import type { ChapterIntent } from "../../v2/core/chapter-intent-builder.js";
 import type { ModelGenerateFn } from "../../v2/adapters/legacy-model-route-adapter.js";
+import { buildChapterContract, renderContract } from "../../v2/core/model-prompt-adapter.js";
+import type { UnifiedOrchestratorInput } from "../../v2/core/orchestrator-types.js";
 import { createNovelSession } from "../session/novel-session.js";
 import { BudgetPolicy, createBudgetConfigFromEnv } from "../runtime/budget-policy.js";
 import type { BudgetSnapshot } from "../runtime/budget-policy.js";
@@ -36,6 +38,7 @@ import { createNarrativeAgentLoop } from "./narrative-agent-loop.js";
 import type { AgentLoopResult, AgentLoopStopReason } from "./narrative-agent-loop.js";
 import { createNarrativeVerifierSuite } from "../verification/narrative-verifier-suite.js";
 import { createCandidatePatchService } from "./candidate-patch-service.js";
+import { createEvidencePlan } from "./evidence-plan.js";
 
 // ============================================================================
 // 公共接口（编排器通过此接口调用，不直接依赖 NovelOS 内部）
@@ -69,6 +72,19 @@ export interface AgenticRawSourceInput {
    * 生产模式（非 eval）不传，行为不变。
    */
   evalPrefix?: string;
+  /**
+   * Phase 2B：本章字数软目标（非硬性约束）。
+   * 从 config.json targetWordCount.perChapter.min/max 读取，注入为 prompt 软目标。
+   * 模型可自由调整，不作为硬门禁。undefined 时使用默认预算。
+   */
+  targetWordCount?: { min: number; max: number };
+  /**
+   * P0-1 修复：完整链路只读预览模式。
+   * true 时 CandidateWorkspace 走 dryRun（不创建目录、不写盘），
+   * TrajectoryStore 走 persist=false（仅 in-memory）。
+   * 预览模式下 agent loop 仍正常运行，只是不落盘。
+   */
+  fullPipelinePreview?: boolean;
 }
 
 /**
@@ -88,6 +104,31 @@ export interface AgenticRawSourceResult {
   stopReason: AgentLoopStopReason | "not_run";
   /** fallback 原因（candidate=null 时填充） */
   failureReason?: string;
+  /**
+   * P1-3 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
+   * 结构化失败分类，供编排器区分可恢复（model_timeout）与硬失败。
+   *
+   * 原先真实 Agentic source 会捕获异常并返回 candidate:null，
+   * 但只通过 failureReason 字符串传递信息，编排器 candidate=null 分支无法
+   * 可靠识别超时，导致工具层 model_timeout 重试条件不可达。
+   *
+   * 现统一由 source 在所有失败路径上设置 failureKind：
+   * - "model_timeout"：超时/连接重置/abort → 编排器触发 chapter_level_retry
+   * - "model_error"：其他模型异常（解析失败、空响应等）
+   * - "runtime_init"：NovelOS runtime 初始化失败
+   * - "budget_exhausted"：预算耗尽未产出 draft
+   * - "empty_draft"：loop 返回但 draft 为空
+   * - "unknown"：未分类（保留兜底，不应出现在生产路径）
+   *
+   * candidate 非空时 failureKind 可省略。
+   */
+  failureKind?:
+    | "model_timeout"
+    | "model_error"
+    | "runtime_init"
+    | "budget_exhausted"
+    | "empty_draft"
+    | "unknown";
   /** 收集的证据 sourceRefs */
   sourceRefs: string[];
   /** 工具调用次数 */
@@ -193,7 +234,28 @@ export function createAgenticRawCandidateSource(
         route,
         timeoutMs,
         evalPrefix,
+        targetWordCount,
+        fullPipelinePreview,
       } = input;
+
+      // ── 0. P1-5 修复：包装 modelGenerate 捕获真实模型名 ──────────────
+      // 原先 candidate.model 固定为 "novelos_agentic"，导致 detectModelVersion
+      // 无法区分 Gemini / Claude / 模型升级，策略信誉隔离失效。
+      // 现在通过 wrapper 捕获最后一次成功调用的 ModelGenerateOutput.model，
+      // 用于 candidate.model，保证版本键反映真实 provider/model。
+      let lastActualModel: string | null = null;
+      let lastActualProvider: string | null = null;
+      const modelGenerateWithCapture: ModelGenerateFn = async (modelInput) => {
+        const output = await modelGenerate(modelInput);
+        // 捕获最后一次成功调用的真实模型名（覆盖 draft / patch / verify 所有调用）
+        if (output?.model) {
+          lastActualModel = output.model;
+        }
+        if (output?.provider) {
+          lastActualProvider = output.provider;
+        }
+        return output;
+      };
 
       // ── 1. 创建 NovelOS session ──────────────────────────────────────
       const sessionId = `novelos-${chapterId}-${randomUUID().slice(0, 8)}`;
@@ -228,6 +290,7 @@ export function createAgenticRawCandidateSource(
       const candidateWorkspace = createCandidateWorkspace({
         workspaceRoot,
         sessionId,
+        dryRun: fullPipelinePreview === true,
       });
 
       const budget = new BudgetPolicy(createBudgetConfigFromEnv());
@@ -236,22 +299,53 @@ export function createAgenticRawCandidateSource(
         projectRoot,
         workspaceId,
         sessionId,
-        persist: true,
+        persist: !fullPipelinePreview,
       });
 
       trajectory.recordSessionStart(session);
 
-      // ── 3. 构造 NovelOS Runtime + Agent ──────────────────────────────
+      // ── 3. 构建 chapterIntentStr + seedContextStr（P0-2 修复） ──────────
+      // P0-2 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
+      // 原先用自定义 buildChapterIntentString + buildGenerationPacketString 拼接，
+      // 遗漏 characterMotivations / focusCharacterGoals / resistance / choicesAndCosts /
+      // expectedIrreversibleChange / selectedExpectationsToAdvance / causalRelations 等
+      // canonical contract 字段；且 buildGenerationPacketString 向 raw 注入风格指纹，
+      // 违反"风格指纹不得作为 raw 正文执行指令"的规则。
+      //
+      // 修复：
+      // - seedContextStr 改由 buildChapterContract + renderContract 生成，完整覆盖 canonical 字段
+      // - 风格指纹不再注入 raw（renderContract 不渲染 styleReferences）
+      // - openLoops / worldRules / bridgeContext 等运行时上下文追加到 contract 末尾
+      //   （这些是运行时检索上下文，不在 ChapterContract canonical 字段中，但 Agentic 需要感知）
+      // - targetWordCount 覆盖 contract.wordCountTarget
+      // Phase 2C：在 runtime 创建前构建，以便 createEvidencePlan 消费 seedContext，
+      // 再用 plan.allowedTools 过滤工具集。
+      const chapterIntentStr = buildChapterIntentString(intent);
+      const seedContextStr = buildContractContextString(intent, context, characterNames, targetWordCount);
+
+      // ── 4. EvidencePlan（Phase 2C） ──────────────────────────────────
+      // 在 runtime 创建前创建 plan，用 plan.allowedTools 过滤工具集，
+      // 同时把 plan 传给 loop 供 mustVerify 注入 + stopConditions 驱动停止。
+      const evidencePlan = createEvidencePlan({
+        chapterIntent: chapterIntentStr,
+        seedContext: seedContextStr,
+      });
+
+      // ── 5. 构造 NovelOS Runtime + Agent ──────────────────────────────
       // 工具列表从 registry 按 agent 角色获取（只读工具 + project_propose）
       // enableRetrieval=false 时传空数组（B1 无检索工具，agent 无法调工具）
-      const tools = enableRetrieval ? registry.getToolsForRole("agent") : [];
+      // Phase 2C：用 plan.allowedTools 过滤工具集（限定工具防无界遍历）
+      const allTools = enableRetrieval ? registry.getToolsForRole("agent") : [];
+      const allowedToolSet = new Set(evidencePlan.allowedTools);
+      const tools = allTools.filter((tool) => allowedToolSet.has(tool.name));
 
       let runtime: NovelOSRuntime;
       try {
         runtime = createNovelOSRuntime({
           session,
           systemPrompt: NOVELOS_SYSTEM_PROMPT,
-          modelGenerate,
+          // P1-5：使用带捕获的 modelGenerate，记录真实模型名用于版本隔离
+          modelGenerate: modelGenerateWithCapture,
           route,
           tools,
           budget,
@@ -261,7 +355,10 @@ export function createAgenticRawCandidateSource(
         });
       } catch (err) {
         // Runtime 创建失败 → fallback
+        // P1-3：runtime 初始化失败通常是配置/环境问题，归类为 runtime_init。
+        // 但若错误信息包含超时模式（极罕见），仍归 model_timeout 以触发重试。
         const reason = err instanceof Error ? err.message : String(err);
+        const failureKind = classifyFailureKind(reason, "not_run", "runtime_init");
         trajectory.recordFailure({
           stage: "novelos_runtime_init",
           severity: "soft",
@@ -270,14 +367,13 @@ export function createAgenticRawCandidateSource(
           retryPlan: "fallback to one_shot_raw",
         });
         await trajectory.flush();
-        return makeFallbackResult(sessionId, trajectory.getOutputPath(), budget, "not_run", `Runtime 创建失败：${reason}`);
+        return makeFallbackResult(
+          sessionId, trajectory.getOutputPath(), budget, "not_run",
+          `Runtime 创建失败：${reason}`, failureKind,
+        );
       }
 
-      // ── 4. 构建 AgentLoopInput ───────────────────────────────────────
-      const chapterIntentStr = buildChapterIntentString(intent);
-      const seedContextStr = buildSeedContextString(context, characterNames);
-
-      // ── 5. 运行 NarrativeAgentLoop ───────────────────────────────────
+      // ── 6. 运行 NarrativeAgentLoop ───────────────────────────────────
       // enableVerification=false 时不传 verifier/patchService（B2 无验证闭环）
       // loop 已支持 undefined verifier/patchService（见 narrative-agent-loop.ts if (this.verifier && this.patchService)）
       const verifier = enableVerification ? createNarrativeVerifierSuite() : undefined;
@@ -304,10 +400,18 @@ export function createAgenticRawCandidateSource(
           knownCharacterNames: characterNames,
           inviolableFacts: intent.inviolableFacts,
           evalPrefix,
+          // Phase 2C：传入预创建的 plan（allowedTools 已在 runtime 创建前过滤，
+          // loop 不再内部 createEvidencePlan，直接消费此 plan 的 mustVerify + stopConditions）
+          evidencePlan,
         });
       } catch (err) {
         // loop 异常 → fallback
+        // P1-3：异常被 source 内部捕获，编排器只能看到 candidate=null。
+        // 必须由 source 在此处分类 failureKind，否则编排器无法识别超时。
+        // loop 抛出的异常 message 通常包含底层模型错误（timeout / connection reset 等），
+        // 由 classifyFailureKind 解析后映射为 model_timeout 或 model_error。
         const reason = err instanceof Error ? err.message : String(err);
+        const failureKind = classifyFailureKind(reason, "model_error", "model_error");
         trajectory.recordFailure({
           stage: "novelos_agent_loop",
           severity: "soft",
@@ -318,7 +422,7 @@ export function createAgenticRawCandidateSource(
         await trajectory.flush();
         return makeFallbackResult(
           sessionId, trajectory.getOutputPath(), budget, "model_error",
-          `agent loop 异常：${reason}`,
+          `agent loop 异常：${reason}`, failureKind,
         );
       }
 
@@ -332,21 +436,42 @@ export function createAgenticRawCandidateSource(
       // ── 7. 构造结果 ──────────────────────────────────────────────────
       if (loopResult.fallback || !loopResult.text || loopResult.text.trim().length === 0) {
         // fallback → 返回 null candidate
+        // P1-3：loop 内部已捕获模型异常并返回 fallback=true + stopReason="model_error"。
+        // failureReason 包含底层错误信息（由 loop 写入 trajectory）。
+        // 这里需要根据 stopReason + failureReason 推断 failureKind：
+        // - stopReason="model_error" 且 failureReason 含超时模式 → model_timeout
+        // - stopReason="model_error" 其他 → model_error
+        // - stopReason="budget_exhausted" → budget_exhausted
+        // - stopReason="stagnant"/"verifier_cleared" 但文本空 → empty_draft
+        // - 其他 → unknown
+        const fallbackReason = loopResult.fallback
+          ? `agent loop fallback: ${loopResult.lineage.stopReason}`
+          : "agent loop 返回空文本";
+        const fallbackKind = classifyFailureKind(
+          fallbackReason,
+          loopResult.lineage.stopReason,
+          loopResult.lineage.stopReason === "budget_exhausted" ? "budget_exhausted" : "empty_draft",
+        );
         return makeFallbackResult(
           sessionId, trajectory.getOutputPath(), budget,
           loopResult.lineage.stopReason,
-          loopResult.fallback
-            ? `agent loop fallback: ${loopResult.lineage.stopReason}`
-            : "agent loop 返回空文本",
+          fallbackReason,
+          fallbackKind,
         );
       }
 
       // 成功 → 构造 agentic_raw Candidate
+      // P1-5 修复：candidate.model 使用真实模型名（从 modelGenerate 输出捕获），
+      // 不再固定为 "novelos_agentic"。这样 detectModelVersion 能正确区分
+      // Gemini / Claude / 模型升级，策略信誉按真实版本隔离。
+      // 回退：若捕获失败（理论上不应发生，loop 成功至少有一次模型调用），
+      // 使用 route 作为 model（比固定占位符更能反映路由差异）。
+      const candidateModel = lastActualModel ?? route;
       const candidate: Candidate = {
         id: `candidate:agentic_raw:${chapterId}`,
         text: loopResult.text,
         kind: AGENTIC_RAW_KIND,
-        model: "novelos_agentic",
+        model: candidateModel,
         route: AGENTIC_RAW_ROUTE,
         contextHash: `hash-${chapterId}-agentic_raw`,
         generatedAt: new Date().toISOString(),
@@ -393,7 +518,59 @@ export function createAgenticRawCandidateSource(
 // ============================================================================
 
 /**
+ * P1-3 修复：用于匹配底层模型超时/连接异常的错误模式。
+ *
+ * 这些模式与 unified-orchestrator.ts 中 catch 分支的超时识别保持一致，
+ * 确保无论异常在 source 内部被捕获（返回 candidate=null）还是冒泡到
+ * 编排器 catch，都能统一识别为 model_timeout 并触发 chapter_level_retry。
+ */
+const TIMEOUT_PATTERNS = [
+  "timeout",
+  "timed out",
+  "超时",
+  "aborted",
+  "etimedout",
+  "econnreset",
+];
+
+/**
+ * P1-3 修复：把 source 失败归因为结构化 failureKind。
+ *
+ * 判定优先级：
+ * 1. 若 reason 字符串命中 TIMEOUT_PATTERNS → "model_timeout"
+ *    （无论 stopReason 是什么；底层错误信息优先于 loop 的 stopReason 分类，
+ *    因为 loop 在 catch 中统一标记 model_error，但 message 可能是 timeout）
+ * 2. 否则返回 defaultKind（由调用方根据上下文提供）
+ *
+ * @param reason 错误消息（来自异常 message 或 failureReason）
+ * @param _stopReason loop 停止原因（保留参数，便于未来扩展更细分类）
+ * @param defaultKind 默认 failureKind（当未命中超时模式时使用）
+ */
+function classifyFailureKind(
+  reason: string,
+  _stopReason: AgentLoopStopReason | "not_run",
+  defaultKind:
+    | "model_timeout"
+    | "model_error"
+    | "runtime_init"
+    | "budget_exhausted"
+    | "empty_draft"
+    | "unknown",
+): "model_timeout" | "model_error" | "runtime_init" | "budget_exhausted" | "empty_draft" | "unknown" {
+  const lower = reason.toLowerCase();
+  for (const pattern of TIMEOUT_PATTERNS) {
+    if (lower.includes(pattern)) {
+      return "model_timeout";
+    }
+  }
+  return defaultKind;
+}
+
+/**
  * 构造 fallback 结果（candidate=null）。
+ *
+ * P1-3：新增 failureKind 参数，由调用方通过 classifyFailureKind 推断。
+ * 编排器据此在 candidate=null 分支区分可恢复（model_timeout）与硬失败。
  */
 function makeFallbackResult(
   sessionId: string,
@@ -401,6 +578,13 @@ function makeFallbackResult(
   budget: BudgetPolicy,
   stopReason: AgentLoopStopReason | "not_run",
   failureReason: string,
+  failureKind:
+    | "model_timeout"
+    | "model_error"
+    | "runtime_init"
+    | "budget_exhausted"
+    | "empty_draft"
+    | "unknown",
 ): AgenticRawSourceResult {
   return {
     candidate: null,
@@ -409,6 +593,7 @@ function makeFallbackResult(
     budgetSnapshot: budget.getSnapshot(),
     stopReason,
     failureReason,
+    failureKind,
     sourceRefs: [],
     toolCalls: 0,
     verifierCleared: false,
@@ -488,44 +673,99 @@ export function buildChapterIntentString(intent: ChapterIntent): string {
 }
 
 /**
- * 把 CompiledContext 序列化为 agent loop 可读的种子上下文字符串。
- * 只取关键信息（facts/characterStates/openLoops/worldRules），避免上下文过长。
+ * P0-2 修复：构建完整的 ChapterContract 字符串 + 运行时上下文。
+ *
+ * 替代原 buildGenerationPacketString。核心改动：
+ * 1. 使用 buildChapterContract + renderContract 生成 canonical contract 字符串，
+ *    完整覆盖 characterMotivations / focusCharacterGoals / resistance /
+ *    choicesAndCosts / expectedIrreversibleChange / selectedExpectationsToAdvance /
+ *    causalRelations 等原先遗漏的 canonical 字段。
+ * 2. 不再注入风格指纹（风格编辑指导 / 角色声音指导），
+ *    风格指导留到必经 editorial 阶段。
+ * 3. openLoops / worldRules / bridgeContext 等运行时上下文追加到 contract 末尾
+ *    （这些不在 ChapterContract canonical 字段中，但 Agentic 需要感知）。
+ *
+ * 设计原则：
+ * - canonical 字段由统一 contract renderer 生成，不自行拼接
+ * - 风格指纹不得作为 raw 正文执行指令
+ * - 运行时检索上下文（openLoops/worldRules/bridgeContext）保留，供 Agentic 按需检索
  */
-function buildSeedContextString(context: CompiledContext, characterNames: string[]): string {
-  const parts: string[] = [];
+function buildContractContextString(
+  intent: ChapterIntent,
+  context: CompiledContext,
+  characterNames: string[],
+  targetWordCount?: { min: number; max: number },
+): string {
+  // ── 1. 构建 canonical ChapterContract ──────────────────────────────
+  // buildChapterContract 需要 UnifiedOrchestratorInput 的子集（intent + context + constitution）。
+  // AgenticRawSourceInput 只含 intent + context，constitution 从 context.constitution 获取。
+  const contractInput = {
+    intent,
+    context,
+    constitution: context.constitution ?? null,
+  } as UnifiedOrchestratorInput;
+  const contract = buildChapterContract(contractInput);
 
-  // 事实（最多 10 条）
-  if (context.facts.length > 0) {
-    const facts = context.facts.slice(0, 10).map((f) => f.content);
-    parts.push(`已确立事实：\n${facts.map((f) => `  - ${f}`).join("\n")}`);
+  // P0-2：用实际 targetWordCount 覆盖 contract 中的默认 wordCountTarget
+  if (targetWordCount) {
+    contract.wordCountTarget = targetWordCount;
   }
 
-  // 角色状态（最多 5 个角色）
-  if (context.characterStates.length > 0) {
-    const chars = context.characterStates.slice(0, 5).map((c) => {
-      const stateStr = Object.entries(c.state)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(", ");
-      return `  - ${c.name}: ${stateStr}`;
-    });
-    parts.push(`角色状态：\n${chars.join("\n")}`);
-  }
+  // ── 2. 渲染 canonical contract 字符串 ──────────────────────────────
+  const parts: string[] = [renderContract(contract)];
 
-  // 开放伏笔（最多 5 条）
+  // ── 3. 追加运行时检索上下文（非 canonical，但 Agentic 需要感知） ────
+
+  // 开放伏笔（不截断，Agentic 可按需检索详情）
   if (context.openLoops.length > 0) {
-    const loops = context.openLoops.slice(0, 5).map((l) => `  - ${l.description}`);
-    parts.push(`未结伏笔：\n${loops.join("\n")}`);
+    const loops = context.openLoops.map((l) => `  - ${l.id}：${l.description}`);
+    parts.push(`【未结伏笔】（共 ${context.openLoops.length} 条，可按需检索详情）\n${loops.join("\n")}`);
   }
 
-  // 世界规则（最多 5 条）
+  // 世界规则（不截断）
   if (context.worldRules.length > 0) {
-    const rules = context.worldRules.slice(0, 5).map((r) => `  - ${r.description}`);
-    parts.push(`世界规则：\n${rules.join("\n")}`);
+    const rules = context.worldRules.map((r) => `  - ${r.description}`);
+    parts.push(`【世界规则】（共 ${context.worldRules.length} 条）\n${rules.join("\n")}`);
   }
 
-  // 角色名列表
+  // 前章悬置状态（bridgeContext）
+  const bridge = context.bridgeContext;
+  if (bridge && bridge.available) {
+    const bridgeParts: string[] = [];
+    if (bridge.lastEventSummary) {
+      bridgeParts.push(`  前章最后事件：${bridge.lastEventSummary}`);
+    }
+    if (bridge.endingEmotion) {
+      bridgeParts.push(`  前章结尾情绪：${bridge.endingEmotion}`);
+    }
+    if (bridge.openHooks.length > 0) {
+      bridgeParts.push(`  开放钩子（本章必须承接）：`);
+      for (const hook of bridge.openHooks) {
+        bridgeParts.push(`    - ${hook}`);
+      }
+    }
+    if (bridge.unresolvedTensions.length > 0) {
+      bridgeParts.push(`  未解张力（本章必须回应）：`);
+      for (const tension of bridge.unresolvedTensions) {
+        bridgeParts.push(`    - ${tension}`);
+      }
+    }
+    if (bridge.introducedCharacters.length > 0) {
+      bridgeParts.push(`  前章引入角色：${bridge.introducedCharacters.join("、")}`);
+    }
+    if (bridgeParts.length > 0) {
+      parts.push(`【前章悬置状态】\n${bridgeParts.join("\n")}`);
+    }
+  }
+
+  // 本章角色（补充 characterNames，contract.relevantCharacters 已从 intent 派生）
   if (characterNames.length > 0) {
-    parts.push(`本章角色：${characterNames.join("、")}`);
+    parts.push(`【本章角色】：${characterNames.join("、")}`);
+  }
+
+  // 字数软目标（renderContract 不输出 wordCountTarget，单独追加）
+  if (targetWordCount) {
+    parts.push(`【字数软目标】：${targetWordCount.min}-${targetWordCount.max} 字（非硬性约束，可自由调整）`);
   }
 
   return parts.join("\n\n") || "（无种子上下文）";

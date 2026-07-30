@@ -28,14 +28,23 @@ export interface CandidateWorkspaceOptions {
   workspaceRoot: string;
   /** session ID */
   sessionId: string;
+  /**
+   * P0-1 修复：dryRun=true 时不创建目录、不写盘（预览模式用）。
+   * writeDraft 的内容仍保留在内存（memoryStore），供 readDraft 读取。
+   */
+  dryRun?: boolean;
 }
 
 export class CandidateWorkspace {
   private readonly dir: string;
+  private readonly dryRun: boolean;
+  /** dryRun 模式下 draft 的内存镜像（供 readDraft 读取） */
+  private readonly memoryStore = new Map<string, string>();
 
   constructor(options: CandidateWorkspaceOptions) {
     this.dir = join(options.workspaceRoot, "novelos-sessions", options.sessionId);
-    if (!existsSync(this.dir)) {
+    this.dryRun = options.dryRun === true;
+    if (!this.dryRun && !existsSync(this.dir)) {
       mkdirSync(this.dir, { recursive: true });
     }
   }
@@ -49,6 +58,7 @@ export class CandidateWorkspace {
 
   /** 1. evidence-plan.json */
   writeEvidencePlan(plan: EvidencePlan): void {
+    if (this.dryRun) return;
     writeFileSync(
       join(this.dir, "evidence-plan.json"),
       JSON.stringify(plan, null, 2),
@@ -58,6 +68,7 @@ export class CandidateWorkspace {
 
   /** 2. tool-events.jsonl（追加写入，每行一个 JSON） */
   recordToolEvent(event: unknown): void {
+    if (this.dryRun) return;
     appendFileSync(
       join(this.dir, "tool-events.jsonl"),
       JSON.stringify(event) + "\n",
@@ -67,11 +78,16 @@ export class CandidateWorkspace {
 
   /** 3. draft.md */
   writeDraft(text: string): void {
+    if (this.dryRun) {
+      this.memoryStore.set("draft.md", text);
+      return;
+    }
     writeFileSync(join(this.dir, "draft.md"), text, "utf-8");
   }
 
   /** 4. verifier-report.json */
   saveVerifierReport(report: unknown): void {
+    if (this.dryRun) return;
     writeFileSync(
       join(this.dir, "verifier-report.json"),
       JSON.stringify(report, null, 2),
@@ -81,6 +97,7 @@ export class CandidateWorkspace {
 
   /** 5. patch-proposals.json */
   savePatchProposals(proposals: unknown[]): void {
+    if (this.dryRun) return;
     writeFileSync(
       join(this.dir, "patch-proposals.json"),
       JSON.stringify(proposals, null, 2),
@@ -90,6 +107,7 @@ export class CandidateWorkspace {
 
   /** 追加单个 patch proposal（不覆盖已有） */
   appendPatchProposal(proposal: unknown): void {
+    if (this.dryRun) return;
     const path = join(this.dir, "patch-proposals.json");
     let existing: unknown[] = [];
     if (existsSync(path)) {
@@ -105,6 +123,7 @@ export class CandidateWorkspace {
 
   /** 6. lineage.json */
   saveLineage(lineage: unknown): void {
+    if (this.dryRun) return;
     writeFileSync(
       join(this.dir, "lineage.json"),
       JSON.stringify(lineage, null, 2),
@@ -114,6 +133,9 @@ export class CandidateWorkspace {
 
   /** 读取 draft.md（供 verifier 读取） */
   readDraft(): string | null {
+    if (this.dryRun) {
+      return this.memoryStore.get("draft.md") ?? null;
+    }
     const path = join(this.dir, "draft.md");
     if (!existsSync(path)) return null;
     return readFileSyncSafe(path);
