@@ -431,6 +431,16 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
             (rawEvent.action === edEvent.action ||
               areActionsSynonymous(rawEvent.action, edEvent.action));
           if (sameAction) {
+            // P0 第七轮 canary 修复：要求内容共享，防止不可靠的客体提取导致误报。
+            // canary 实测：raw "他看到父亲的右腿" 被错误提取 object=李强（李强不在句中），
+            // 与 editorial "李强看到李一凡" 触发主客体反转。若两句不共享显著双字片段，
+            // 说明提取的 subject/object 不可靠，跳过 swap 检测。
+            const swapSharesContent = hasSharedSignificantBigram(
+              rawEvent.sentence,
+              edEvent.sentence,
+              knownEntities,
+            );
+            if (!swapSharesContent) continue;
             matchedEditorialIds.add(edEvent.id);
             replacedEvents.push({
               rawEventId: rawEvent.id,
@@ -632,7 +642,11 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
       // 若 raw 动作是关键动作，单个删除即阻断
       if (rawEvent.eventType === "action" || rawEvent.eventType === "state_change") {
         const criticalCheck = isCriticalAction(rawEvent.action);
-        if (criticalCheck) {
+        // P0 第七轮 canary 修复：要求 subject 是已知实体，过滤非角色主体的误提取。
+        // canary 实测："任何异能的释放" subject="异能者"（非角色）误触发关键事件删除。
+        const subjectIsKnownEntity =
+          rawEvent.subject !== "" && knownEntitySet.has(rawEvent.subject);
+        if (criticalCheck && subjectIsKnownEntity) {
           replacedEvents.push({
             rawEventId: rawEvent.id,
             editorialEventId: null,
@@ -864,7 +878,11 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
       rawEvent.object.length >= 2 &&
       rawEvent.subject !== rawEvent.object &&
       knownEntitySet.has(rawEvent.object) &&
-      !bestMatch.event.entities.includes(rawEvent.object)
+      !bestMatch.event.entities.includes(rawEvent.object) &&
+      // P0 第七轮 canary 修复：要求内容共享，防止 actionMatch 子串匹配误报。
+      // canary 实测：raw "看" 通过 includes() 匹配 editorial "看到"，但两句
+      // 不共享显著内容，object 差异来自不同事件而非客体替换。
+      hasSharedSignificantBigram(rawEvent.sentence, bestMatch.event.sentence, knownEntities)
     ) {
       const edObj = bestMatch.event.object;
       const edObjEmpty = edObj === "" || edObj.length < 2;
