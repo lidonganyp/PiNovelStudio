@@ -202,7 +202,10 @@ export function commitAndSave(
           input.chapterNumber,
           // P0 第六轮结构化绑定：传入本章角色名（含别名），启用境界主体归属的
           // 结构化判断（句中含其他角色但不含目标角色 → fail-closed），取代动词正则补丁。
-          input.characterNames
+          input.characterNames,
+          // P0 第七轮 P1 修复：传入别名→规范名映射，启用境界主体绑定的 alias 规范化
+          // （"小尘" → "叶尘"），与 Story Preservation Gate 共用同一映射来源。
+          input.aliasToCanonical
         );
         // B2：PatternMemory - 从最终正文扫描语言风险，追加 pattern entries。
         // pattern 是正文派生状态（非 seed 派生），在 reanchor 后追加到 additions。

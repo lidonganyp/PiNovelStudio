@@ -368,6 +368,125 @@ function findClaimEvidenceInSentence(claim: string, sentence: EvidenceSpan): Evi
   return sentence;
 }
 
+// ============================================================================
+// P0 第七轮辅助函数：alias 规范化 + 跨句代词指代解析
+// ============================================================================
+
+/**
+ * P0 第七轮 P1 修复：把文本中的角色别名规范化为 canonical 名。
+ *
+ * 用于境界主体绑定：句子中的别名（如 "小尘"）替换为 canonical 名（如 "叶尘"）后，
+ * 再做角色存在性判断，避免 canonical 角色 "叶尘" 的境界被别名 "小尘" 误判为"其他角色"。
+ *
+ * 与 Story Preservation Gate（editorial-story-preservation-gate）共用同一映射来源，
+ * 保证 extractEvents 与 FinalStateCommit 的角色身份判定一致。
+ *
+ * 实现注意：按别名长度降序替换，避免短别名先替换破坏长别名（如 "小尘" vs "小尘埃"）。
+ * 仅替换 alias !== canonical 且长度 >= 2 的别名；未提供映射时原样返回。
+ */
+function normalizeAliasesInText(
+  text: string,
+  aliasToCanonical?: Map<string, string>,
+): string {
+  if (!aliasToCanonical || aliasToCanonical.size === 0) return text;
+  const aliases = Array.from(aliasToCanonical.entries())
+    .filter(([alias, canonical]) => alias !== canonical && alias.length >= 2)
+    .sort((a, b) => b[0].length - a[0].length);
+  let result = text;
+  for (const [alias, canonical] of aliases) {
+    if (result.includes(alias)) {
+      result = result.split(alias).join(canonical);
+    }
+  }
+  return result;
+}
+
+/**
+ * P0 第七轮 P1 修复：从 characterNames（含别名）构建 canonical 角色名集合。
+ *
+ * characterNames 由 unified-entry 从 seed.characters（name + aliases）扁平化而来，
+ * 同时包含 canonical 名和别名。本函数把每个名字映射到 canonical 名后去重，
+ * 得到"本章所有 canonical 角色名"集合，用于：
+ *   - 判断境界句是否含其他 canonical 角色
+ *   - 判断场景是否为单角色（canonical 集合大小）
+ *   - 跨句代词指代解析时在前句中查找已知角色
+ */
+function buildCanonicalNameSet(
+  characterNames: string[],
+  aliasToCanonical?: Map<string, string>,
+): Set<string> {
+  const set = new Set<string>();
+  for (const name of characterNames) {
+    const canonical = aliasToCanonical?.get(name) ?? name;
+    if (canonical.length >= 2) set.add(canonical);
+  }
+  return set;
+}
+
+/**
+ * P0 第七轮 P0 修复：跨句代词指代解析。
+ *
+ * 用户验收反例（第七轮）：
+ *   "林默抬起头。他已是筑基期。叶尘在门外等待。" + 叶尘 realm=筑基期
+ *   "林默站在门前。此人已达筑基期。叶尘仍未赶到。" + 叶尘 realm=筑基期
+ *   "林默看向远方。其修为已至筑基期。叶尘在门外等待。" + 叶尘 realm=筑基期
+ *
+ * 旧逻辑只检查境界所在句有没有角色姓名，未处理代词主体指代前句角色，
+ * 导致境界归属被误判为单角色场景而通过。
+ *
+ * 算法（bounded 启发式，无 LLM）：
+ * 1. 检测境界句是否以代词开头（他/她/它/此人/其/这/那/该/这家伙/那人）
+ *    - 不以代词开头 → 返回 null（非代词主体句，交由单角色场景判断）
+ * 2. 从境界句起点向前找前一句（跳过句末标点）
+ * 3. 在前句中查找第一个 canonical 角色名作为代词指代对象
+ *    - 找到 → 返回该 canonical 名
+ *    - 未找到（前句无已知角色）→ 返回 null（代词无法解析）
+ *
+ * 返回值：
+ *   - canonical 角色名：代词已解析到该角色
+ *   - null：非代词句，或代词无法解析（调用方决定是否 fail-closed）
+ */
+const PRONOUN_START_PATTERN = /^(他|她|它|此人|其|这|那|该|这家伙|那人|此人)/;
+
+function resolvePronounSubject(
+  finalText: string,
+  subjectSentence: EvidenceSpan,
+  canonicalNames: Set<string>,
+): string | null {
+  const sentenceText = subjectSentence.excerpt.trimStart();
+  if (!PRONOUN_START_PATTERN.test(sentenceText)) {
+    return null; // 非代词主体句
+  }
+
+  // 从境界句起点向前定位前一句
+  let prevEnd = subjectSentence.start;
+  // 跳过境界句前的句末标点（。！？；等）
+  while (prevEnd > 0 && SENTENCE_BOUNDARY.test(finalText[prevEnd - 1])) {
+    prevEnd--;
+  }
+  if (prevEnd === 0) return null; // 无前句
+
+  // 向前扩展到前一句的起点
+  let prevStart = prevEnd;
+  while (prevStart > 0 && !SENTENCE_BOUNDARY.test(finalText[prevStart - 1])) {
+    prevStart--;
+  }
+
+  const prevSentence = finalText.slice(prevStart, prevEnd);
+  if (prevSentence.length === 0) return null;
+
+  // 在前句中查找第一个 canonical 角色名（按长度降序，优先匹配长名，避免 "林默" vs "林" 的子串问题）
+  const sortedNames = Array.from(canonicalNames)
+    .filter((n) => n.length >= 2)
+    .sort((a, b) => b.length - a.length);
+  for (const name of sortedNames) {
+    if (prevSentence.includes(name)) {
+      return name;
+    }
+  }
+  return null; // 前句无已知角色，代词无法解析
+}
+
 /**
  * REAL-QUALITY-4A：校验 state entry 的值是否被最终正文 span 语义支持。
  *
@@ -393,7 +512,17 @@ export function validateSemanticSupport(
    * 句中存在其他角色且不含目标角色 → fail-closed，不再依赖动词正则补丁。
    * 未提供（旧测试兼容）时回退到 REALM_ENTRY_VERBS + 后置定语检测。
    */
-  characterNames?: string[]
+  characterNames?: string[],
+  /**
+   * P0 第七轮 P1 修复：别名→规范名映射（alias → canonical character name）。
+   *
+   * 由生产路径（reanchorStagedStateToFinalText ← orchestrator-commit-save）传入
+   * input.aliasToCanonical（与 Story Preservation Gate 共用同一映射来源）。
+   * 提供时，境界主体绑定会先把句子中的角色别名规范化为 canonical 名再做归属判断，
+   * 修复 "小尘已是筑基期" 对 canonical 角色 "叶尘" 误判为"其他角色"的反例。
+   * 未提供时（旧测试兼容）不做规范化，characterNames 中的别名仍按原名参与判断。
+   */
+  aliasToCanonical?: Map<string, string>
 ): SemanticSupportResult {
   if (!nameSpan) {
     // 主体未在正文中出现：不在此处判定，交给已有的 :not-found 逻辑处理
@@ -409,15 +538,19 @@ export function validateSemanticSupport(
       // nameSpan 是境界值在正文中的 span（不是角色名 span）
       // subjectSentence 是包含境界值的句子
       // 1. 如果句中也含目标角色名 → 检查是否同子句（防止多角色句子中误锚定）
-      // 2. 如果句中不含目标角色名 → 可能是单角色场景（境界单独成句），允许通过
+      // 2. 如果句中不含目标角色名 → 检查其他角色竞争 / 代词指代 / 单角色场景
       // 3. 如果同句但不同子句 → 可能属于其他角色，拒绝
       const normalizedRealm = normalizeClaim(value);
       if (normalizedRealm.length === 0) {
         return { supported: false, reason: `semantic-unsupported：realm="${value}" 为空` };
       }
-      if (subjectSentence.excerpt.includes(entry.characterId)) {
-        // 角色名与境界值在同句 → 检查是否同子句
-        const charClause = findClauseWithCharacter(subjectSentence.excerpt, entry.characterId);
+      // P0 第七轮 P1 修复：先把境界句中的角色别名规范化为 canonical 名。
+      // 修复 "小尘已是筑基期" 对 canonical 角色 "叶尘" 误判为"其他角色"的反例。
+      // 规范化后所有角色存在性判断都基于 canonical 名，与 entry.characterId 一致。
+      const normalizedSentence = normalizeAliasesInText(subjectSentence.excerpt, aliasToCanonical);
+      if (normalizedSentence.includes(entry.characterId)) {
+        // 角色名（或别名规范化后）与境界值在同句 → 检查是否同子句
+        const charClause = findClauseWithCharacter(normalizedSentence, entry.characterId);
         if (charClause && normalizeClaim(charClause).includes(normalizedRealm)) {
           return { supported: true, reason: "主体所在子句覆盖境界状态值", evidenceSpan: subjectSentence };
         }
@@ -448,11 +581,14 @@ export function validateSemanticSupport(
       //   - 旧测试不传 characterNames → 走下方 REALM_ENTRY_VERBS 回退分支（向后兼容）
       const hasCharacterNames = Array.isArray(characterNames) && characterNames.length > 0;
       if (hasCharacterNames) {
-        const otherCharactersPresent = characterNames.filter(
+        // P0 第七轮 P1 修复：用 canonical 角色名集合判断"其他角色竞争"。
+        // characterNames 含别名；先把别名映射到 canonical 再去重，避免别名被当成"其他角色"。
+        const canonicalSet = buildCanonicalNameSet(characterNames, aliasToCanonical);
+        const otherCharactersPresent = Array.from(canonicalSet).filter(
           (c) =>
             c !== entry.characterId &&
             c.length >= 2 &&
-            subjectSentence.excerpt.includes(c),
+            normalizedSentence.includes(c),
         );
         if (otherCharactersPresent.length > 0) {
           return {
@@ -460,25 +596,67 @@ export function validateSemanticSupport(
             reason: `semantic-conflict：realm="${value}" 所在句子含其他角色 [${otherCharactersPresent.join("、")}] 但不含角色 "${entry.characterId}"，境界归属于其他角色（fail-closed，结构化绑定）`,
           };
         }
-        // 句中无其他角色竞争归属 → 单角色场景，境界值单独成句 → 允许通过。
-        // 仍保留后置定语"的"检测作为结构化补充证据（境界值后紧跟"的"修饰非目标实体）。
-        const realmIdxStruct = subjectSentence.excerpt.indexOf(value);
-        if (realmIdxStruct >= 0) {
-          const afterRealm = subjectSentence.excerpt.slice(
-            realmIdxStruct + value.length,
-            realmIdxStruct + value.length + 1,
-          );
-          if (afterRealm === "的") {
+        // P0 第七轮 P0 修复：境界句无角色名（规范化后）→ 跨句代词指代解析。
+        //
+        // 用户验收反例（第七轮）：
+        //   "林默抬起头。他已是筑基期。叶尘在门外等待。" + 叶尘 realm=筑基期 → 旧逻辑误通过
+        //   "林默站在门前。此人已达筑基期。叶尘仍未赶到。" + 叶尘 realm=筑基期 → 旧逻辑误通过
+        //   "林默看向远方。其修为已至筑基期。叶尘在门外等待。" + 叶尘 realm=筑基期 → 旧逻辑误通过
+        //
+        // 旧逻辑在"句中无其他角色竞争"时直接放行（单角色场景），未处理境界句主体是
+        // 代词（他/此人/其）指代前句角色的情况，导致境界归属被误判。
+        //
+        // 新规则（仅当 characterNames 提供时启用）：
+        // 1. 境界句以代词开头 → 解析代词指代的前句 canonical 角色
+        //    - 指代目标角色 → 通过（境界归属目标角色）
+        //    - 指代其他角色 → fail-closed
+        //    - 无法解析（前句无已知角色）→ 走下方单角色/多角色歧义判断
+        // 2. 境界句无代词：
+        //    - 单角色场景（canonicalSet.size <= 1）→ 通过（如 "淬腑境，初期。"）
+        //    - 多角色场景 → fail-closed（境界句无角色名且无代词，归属无法确认）
+        const pronounResolved = resolvePronounSubject(finalText, subjectSentence, canonicalSet);
+        if (pronounResolved !== null) {
+          if (pronounResolved === entry.characterId) {
             return {
-              supported: false,
-              reason: `semantic-conflict：realm="${value}" 在句中作为定语（后跟"的"），修饰非目标角色 "${entry.characterId}" 的实体，境界归属于其他角色（fail-closed，结构化绑定）`,
+              supported: true,
+              reason: `境界句代词主体（他/此人/其）指代前句角色 "${entry.characterId}"，境界归属目标角色（跨句代词解析）`,
+              evidenceSpan: subjectSentence,
             };
           }
+          return {
+            supported: false,
+            reason: `semantic-conflict：realm="${value}" 所在句子的代词主体指向前句角色 "${pronounResolved}"，非目标角色 "${entry.characterId}"（fail-closed，跨句代词解析）`,
+          };
         }
+        // 代词无法解析或无代词 → 按场景角色数判断
+        const singleCharacterScene = canonicalSet.size <= 1;
+        if (singleCharacterScene) {
+          // 单角色场景：境界值单独成句，无主体竞争 → 允许通过。
+          // 仍保留后置定语"的"检测作为结构化补充证据（境界值后紧跟"的"修饰非目标实体）。
+          const realmIdxStruct = subjectSentence.excerpt.indexOf(value);
+          if (realmIdxStruct >= 0) {
+            const afterRealm = subjectSentence.excerpt.slice(
+              realmIdxStruct + value.length,
+              realmIdxStruct + value.length + 1,
+            );
+            if (afterRealm === "的") {
+              return {
+                supported: false,
+                reason: `semantic-conflict：realm="${value}" 在句中作为定语（后跟"的"），修饰非目标角色 "${entry.characterId}" 的实体，境界归属于其他角色（fail-closed，结构化绑定）`,
+              };
+            }
+          }
+          return {
+            supported: true,
+            reason: "境界值所在句无其他角色竞争归属（结构化绑定：单角色场景）",
+            evidenceSpan: subjectSentence,
+          };
+        }
+        // 多角色场景但境界句无角色名（规范化后）且代词无法解析 → fail-closed。
+        // 境界是高价值状态，无法确认主体归属时保守拒绝，交由 commit 写入 quarantine。
         return {
-          supported: true,
-          reason: "境界值所在句无其他角色竞争归属（结构化绑定：单角色场景）",
-          evidenceSpan: subjectSentence,
+          supported: false,
+          reason: `semantic-conflict：realm="${value}" 所在句子无已知角色名（含别名规范化后）且代词主体无法解析，但场景含 ${canonicalSet.size} 个角色，境界归属无法确认（fail-closed，结构化绑定）`,
         };
       }
 
@@ -706,7 +884,16 @@ export function reanchorStagedStateToFinalText(
    * （句中含其他角色但不含目标角色 → fail-closed，取代动词正则补丁）。
    * 未提供时（旧测试兼容）validateSemanticSupport 回退到 REALM_ENTRY_VERBS 正则。
    */
-  characterNames?: string[]
+  characterNames?: string[],
+  /**
+   * P0 第七轮 P1 修复：别名→规范名映射（alias → canonical character name）。
+   *
+   * 由生产路径 orchestrator-commit-save.commitAndSave 传入 input.aliasToCanonical
+   * （与 Story Preservation Gate 共用同一映射来源）。透传给 validateSemanticSupport，
+   * 启用境界主体绑定的 alias 规范化（"小尘" → "叶尘"），避免 canonical 角色的境界
+   * 被别名误判为"其他角色"。未提供时（旧测试兼容）不做规范化。
+   */
+  aliasToCanonical?: Map<string, string>
 ): StagedStateUpdate {
   const hash = computeFinalTextHash(finalText);
   const sourceChapter = `ch${chapterNumber}`;
@@ -716,7 +903,7 @@ export function reanchorStagedStateToFinalText(
     if (entry.kind === "promise") {
       const span = findPromiseSpanInText(entry.description, finalText);
       // REAL-QUALITY-4A：语义支持校验（fulfilled/broken 必须有兑现/破裂证据）
-      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames, aliasToCanonical);
       if (!semantic.supported) {
         return {
           ...entry,
@@ -754,7 +941,7 @@ export function reanchorStagedStateToFinalText(
       // EXPECTATION-LEDGER-1：与 promise 同样的 bounded 启发式定位 span
       const span = findPromiseSpanInText(entry.description, finalText);
       // REAL-QUALITY-4A：语义支持校验（fulfilled 必须有兑现证据）
-      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames, aliasToCanonical);
       if (!semantic.supported) {
         return {
           ...entry,
@@ -792,7 +979,7 @@ export function reanchorStagedStateToFinalText(
       // B2：canon 事实在最终正文中定位 span（与 promise 同样的 bounded 启发式）
       const span = findPromiseSpanInText(entry.fact, finalText);
       // REAL-QUALITY-4A：语义支持校验（阻止名称级误锚定）
-      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames, aliasToCanonical);
       if (!semantic.supported) {
         return {
           ...entry,
@@ -824,7 +1011,7 @@ export function reanchorStagedStateToFinalText(
       // B2：角色名在最终正文中定位 span
       const span = findPromiseSpanInText(entry.field === "realm" ? entry.value : entry.characterId, finalText);
       // REAL-QUALITY-4A：语义支持校验（阻止"角色死亡""关系误分类"一类名称级误锚定）
-      const semantic = validateSemanticSupport(entry, finalText, span, characterNames);
+      const semantic = validateSemanticSupport(entry, finalText, span, characterNames, aliasToCanonical);
       if (!semantic.supported) {
         return {
           ...entry,

@@ -551,6 +551,80 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
       }
     }
 
+    // P0 第七轮：raw 关键事件不允许被无关事件强行匹配后降级 advisory
+    //
+    // 用户验收反例（第七轮，生产 gate 实测）：
+    //   "叶尘杀死林默" → "叶尘端起茶杯。林默站在一旁" → preserved=true（应阻断）
+    //   "叶尘攻击林默" → "叶尘转身离开。林默站在一旁" → preserved=true（应阻断）
+    //   "叶尘封印魔物" → "叶尘走出洞穴。魔物仍在洞中" → preserved=true（应阻断）
+    //
+    // 第六轮 P1-3 修复把"同主体不共享显著内容"统一降为 advisory，导致关键事件被
+    // 无关事件替换后通过。第七轮修复（符合用户指令"允许 raw 关键事件不匹配，
+    // 对未匹配关键事件直接阻断"）：
+    //
+    // 当 raw 含关键动作且 bestMatch 不共享 action/object/content 时：
+    // 1. 检查关键动作（或同义动作）是否在 editorial 全文出现
+    //    - 未出现 → 关键事件被删除/替换为无关事件 → 直接阻断（不消耗 editorial 事件）
+    //    - 出现 → 事件可能在其他位置，当前匹配为配对错误 → 降级 advisory（不阻断）
+    //      （canary 场景：长文本中 "李强回来" 被配到 "李强看"，但 "回来" 在 editorial
+    //       其他位置存在 → 匹配配错，advisory）
+    //
+    // P0 第七轮 P1 调和：仅当 raw 关键动作作用在"已知实体客体"上时才启用此阻断。
+    // 用户验收第六轮反例19："李一凡拿起筷子" → "李一凡吃了"（拿起是关键动作，但筷子
+    // 不是已知实体）是同角色不同事件的 canary 正常改写，不应阻断。
+    // 用户验收第七轮 P0 反例："叶尘杀死林默"→"叶尘端起茶杯"（林默是已知实体）、
+    // "叶尘封印魔物"→"叶尘走出洞穴"（魔物是已知实体）是真正影响故事状态的关键事件
+    // 被无关事件替换，必须阻断。
+    // 区分维度：raw 关键动作是否有"已知实体客体"——有则事件影响故事实体，缺失即阻断；
+    // 无（客体为空或非已知实体）则降为同角色不同事件，交由下方 detectCriticalReplacement
+    // 路径处理（bare-verb 关键动作如 "攻击"→"看一眼" 仍由该路径阻断）。
+    if (
+      bestMatch !== null &&
+      isCriticalAction(rawEvent.action) &&
+      rawEvent.object !== "" &&
+      rawEvent.object.length >= 2 &&
+      knownEntitySet.has(rawEvent.object) &&
+      !bestMatch.actionMatch &&
+      !bestMatch.objectMatch &&
+      !hasSharedSignificantBigram(rawEvent.sentence, bestMatch.event.sentence, knownEntities)
+    ) {
+      // 检查关键动作（或同义动作）是否在 editorial 全文或 editorial 事件 action 中出现
+      const actionInEditorialText = editorialText.includes(rawEvent.action);
+      const actionInEditorialEvents = editorialExtractable.some(
+        (e) => e.action !== "" && areActionsSynonymous(rawEvent.action, e.action),
+      );
+      if (!actionInEditorialText && !actionInEditorialEvents) {
+        // 关键事件缺失：raw 关键动作在 editorial 全文未出现 → 直接阻断
+        replacedEvents.push({
+          rawEventId: rawEvent.id,
+          editorialEventId: bestMatch.event.id,
+          subject: rawEvent.subject,
+          rawAction: rawEvent.action,
+          editorialAction: bestMatch.event.action,
+          rawSentence: rawEvent.sentence,
+          rawSpan: rawEvent.evidenceSpan,
+          editorialSentence: bestMatch.event.sentence,
+          editorialSpan: bestMatch.event.evidenceSpan,
+          similarity: bestMatch.similarity,
+          reversal: false,
+          antonymPair: null,
+          critical: true,
+          rawCriticalAction: rawEvent.action,
+          reason: `关键事件缺失：raw 动作 '${rawEvent.action}' 是关键动作，但在 editorial 全文未出现（被删除或替换为无关事件 '${bestMatch.event.action}'），单个关键事件缺失即阻断`,
+        });
+        continue;
+      }
+      // 关键动作在 editorial 其他位置存在 → 当前匹配为配对错误 → advisory
+      advisorySimilarities.push({
+        rawEventId: rawEvent.id,
+        editorialEventId: bestMatch.event.id,
+        similarity: bestMatch.similarity,
+        sharesBigram: false,
+        note: `raw 关键动作 '${rawEvent.action}' 在 editorial 其他位置存在，当前匹配 '${bestMatch.event.action}' 为配对错误（advisory，不阻断）`,
+      });
+      continue;
+    }
+
     if (bestMatch === null) {
       // P0-1 第三轮：raw 事件是关键动作事件但无任何匹配 → 关键事件被删除
       // 这种情况比替换更严重（事件完全消失），应记录为 critical replacement
