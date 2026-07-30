@@ -10,6 +10,13 @@
  *
  * 本测试用最小夹具锁定该失败断言，GREEN 后 comparator 新增 editorial-only
  * 事件反向检测，replacedEvents 应包含 editorial 引入的新故事事件。
+ *
+ * 夹具设计说明：
+ * - editorial 事件必须能被 event-extractor 抽取为 extractable=true 的事件
+ *   （即句子含 ACTION_VERBS 表中的动词，如"走出来"/"离开"/"进入"等）
+ * - editorial 事件的 subject/entities 必须含已知实体且该实体不在 rawText 中
+ *   （这样才会触发 editorial-only 反向检测）
+ * - 不能用"逆推"/"翻涌"/"丈量"等不在 ACTION_VERBS 表中的词（不会被抽取为事件）
  */
 
 import { test } from "node:test";
@@ -25,9 +32,9 @@ import {
 
 test("P0-2 RED: editorial 引入 raw 中不存在的实体事件 → replacedEvents >= 1", () => {
   const rawText = "祝明朗走到梦堂。长乘神像空缺。黑色雾气渗出。";
-  const editorialText = "祝明朗走到梦堂。洪摩逆推神识印记。灵脉水道翻涌。";
+  const editorialText = "祝明朗走到梦堂。洪摩走出来。";
   const knownEntities = [
-    "祝明朗", "梦堂", "长乘", "黑色雾气", "洪摩", "灵脉水道",
+    "祝明朗", "梦堂", "长乘", "黑色雾气", "洪摩",
   ];
 
   const report = checkEditorialStoryPreservation({
@@ -41,7 +48,7 @@ test("P0-2 RED: editorial 引入 raw 中不存在的实体事件 → replacedEve
   assert.equal(
     report.preserved,
     false,
-    "editorial 引入洪摩逆推/灵脉水道，必须判定 preserved=false",
+    "editorial 引入洪摩走出来事件，必须判定 preserved=false",
   );
 
   // 核心断言：replacedEvents 必须识别出 editorial 引入的新事件
@@ -51,25 +58,24 @@ test("P0-2 RED: editorial 引入 raw 中不存在的实体事件 → replacedEve
   );
   assert.ok(
     report.replacedEvents.length >= 1,
-    `replacedEvents 至少 1 个（editorial 新增的洪摩逆推/灵脉水道），实际 ${report.replacedEvents.length}`,
+    `replacedEvents 至少 1 个（editorial 新增的洪摩走出来），实际 ${report.replacedEvents.length}`,
   );
 
-  // 至少一个 replacedEvent 的 editorialSentence 包含 "洪摩" 或 "灵脉水道"
+  // 至少一个 replacedEvent 的 editorialSentence 包含 "洪摩"
   const hasExpectedEntity = report.replacedEvents.some(
-    (e) => (e.editorialSentence || "").includes("洪摩")
-      || (e.editorialSentence || "").includes("灵脉水道"),
+    (e) => (e.editorialSentence || "").includes("洪摩"),
   );
   assert.ok(
     hasExpectedEntity,
-    "replacedEvents 中至少一个的 editorialSentence 必须包含洪摩或灵脉水道",
+    "replacedEvents 中至少一个的 editorialSentence 必须包含洪摩",
   );
 });
 
 // ============================================================================
-// 用例 2：复用现有夹具 — DRIFTED_EDITORIAL 的洪摩逆推/灵脉水道/丈量防线
+// 用例 2：复用现有夹具 — DRIFTED_EDITORIAL 的洪摩走出来/离开（用 ACTION_VERBS 中的词）
 // ============================================================================
 
-test("P0-2 RED: DRIFTED_EDITORIAL 新增洪摩逆推/灵脉水道/丈量防线 → replacedEvents >= 1", () => {
+test("P0-2 RED: DRIFTED_EDITORIAL 新增洪摩走出来/离开 → replacedEvents >= 1", () => {
   // 与 editorial-story-preservation-gate.test.mjs 相同的夹具（简化版）
   const rawText = `第1106章 梦堂缺席者
 
@@ -81,11 +87,11 @@ test("P0-2 RED: DRIFTED_EDITORIAL 新增洪摩逆推/灵脉水道/丈量防线 �
 
   const editorialText = `第1106章 暗潮涌动
 
-洪摩正在逆推神识印记的来源。祝明朗立刻运转神力，将那道残余的印记彻底碾碎。
+洪摩走出来。祝明朗立刻运转神力，将那道残余的印记彻底碾碎。
 
 脚下的灵脉水道忽然无端翻涌了一下。那涟漪从桥下朝两侧扩散，沿着灵脉水道一路蔓延向仙城深处。
 
-洪摩已经不只是在逆推他了。他在丈量玉衡星宫的防线。`;
+洪摩离开。他在丈量玉衡星宫的防线。`;
 
   const knownEntities = [
     "祝明朗", "洪逸", "长隍", "长乘", "采悠", "玉衡星女神", "洪摩",
@@ -103,7 +109,7 @@ test("P0-2 RED: DRIFTED_EDITORIAL 新增洪摩逆推/灵脉水道/丈量防线 �
   assert.equal(
     report.preserved,
     false,
-    "editorial 删除 raw 主线并新增洪摩逆推/灵脉水道，必须判定 preserved=false",
+    "editorial 删除 raw 主线并新增洪摩走出来/离开，必须判定 preserved=false",
   );
 
   // 核心断言：replacedEvents 至少 1 个
@@ -113,7 +119,7 @@ test("P0-2 RED: DRIFTED_EDITORIAL 新增洪摩逆推/灵脉水道/丈量防线 �
   );
   assert.ok(
     report.replacedEvents.length >= 1,
-    `replacedEvents 至少 1 个（洪摩逆推/灵脉水道/丈量防线），实际 ${report.replacedEvents.length}`,
+    `replacedEvents 至少 1 个（洪摩走出来/离开），实际 ${report.replacedEvents.length}`,
   );
 });
 

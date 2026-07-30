@@ -1098,6 +1098,56 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
     }
   }
 
+  // ── P0-2 修复：editorial-only 事件反向检测 ─────────────────────────────
+  // editorial 中含已知实体、且实体/subject 完全不在 rawText 的事件
+  // = editorial 引入 raw 中不存在的故事线，属于故事骨架替换，单个即阻断。
+  //
+  // 设计理由（用户审计 P0-2 阻断）：
+  // - forward pass 只能匹配 raw→editorial 的对应事件，无法识别 editorial 凭空新增的故事线
+  // - 当 editorial 删除 raw 主线后新增"洪摩逆推/灵脉水道"等故事线时，
+  //   missingEvents 可能因实体在 editorial 全文存在而不触发，导致 replacedEvents 为空
+  // - editorial-only 事件含已知实体（如"洪摩"）但实体作为动作主体在 raw 全文不存在，
+  //   说明 editorial 引入了 raw 没有的故事骨架 → 故事漂移硬证据
+  //
+  // 防误报：
+  // - 只检测含已知实体的事件（防止无关描述性事件误报）
+  // - 实体/subject 必须完全不在 rawText 中（防止 raw 简略提及、editorial 展开的情况）
+  // - 跳过 state_description（描述性事件不是动作替换）
+  // - 跳过已被 forward pass 匹配的 editorial 事件
+  const editorialOnlyEvents: ReplacedEventEvidence[] = [];
+  for (const edEvent of editorialExtractable) {
+    if (matchedEditorialIds.has(edEvent.id)) continue; // 已被 forward pass 匹配
+    // 只检测含已知实体的事件（防止无关描述性事件误报）
+    const hasKnownEntity =
+      edEvent.entities.some((e) => knownEntitySet.has(e)) ||
+      (edEvent.subject !== "" && knownEntitySet.has(edEvent.subject));
+    if (!hasKnownEntity) continue;
+    // 实体/subject 必须完全不在 rawText 中（防止 raw 简略提及、editorial 展开的情况）
+    const subjectInRaw = edEvent.subject !== "" && rawText.includes(edEvent.subject);
+    const anyEntityInRaw = edEvent.entities.some((e) => rawText.includes(e));
+    if (subjectInRaw || anyEntityInRaw) continue;
+    // 跳过 state_description（描述性事件不是动作替换）
+    if (edEvent.eventType === "state_description") continue;
+    editorialOnlyEvents.push({
+      rawEventId: "",
+      editorialEventId: edEvent.id,
+      subject: edEvent.subject,
+      rawAction: "",
+      editorialAction: edEvent.action,
+      rawSentence: "",
+      rawSpan: { start: 0, end: 0, excerpt: "" },
+      editorialSentence: edEvent.sentence,
+      editorialSpan: edEvent.evidenceSpan,
+      similarity: 0,
+      reversal: false,
+      antonymPair: null,
+      critical: true,
+      rawCriticalAction: null,
+      reason: `editorial 引入 raw 中不存在的故事事件：主体 '${edEvent.subject}' 动作 '${edEvent.action}' 在 raw 全文无对应实体（editorial-only 事件，单个即阻断）`,
+    });
+  }
+  replacedEvents.push(...editorialOnlyEvents);
+
   // ── 因果顺序检测 ──────────────────────────────────────────────────────
   // raw 的因果对 (A→B) 在 editorial 中变为 (B→A)
   const orderViolations = detectOrderViolationsFromChains(
