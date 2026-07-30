@@ -679,7 +679,15 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
         rawEvent.action !== "" &&
         (bestMatch.event.eventType === "state_description" || bestMatch.event.action === "")) {
       const criticalCheck = isCriticalAction(rawEvent.action);
-      if (criticalCheck) {
+      // P0 第七轮 canary 修复：要求内容共享，防止不相关事件配对误报。
+      // canary 实测：raw "接过" 匹配到 editorial "摩挲手表"（无动作事件），
+      // 但两句不共享显著内容，配对是虚假的。
+      const actionToNonActionSharesContent = hasSharedSignificantBigram(
+        rawEvent.sentence,
+        bestMatch.event.sentence,
+        knownEntities,
+      );
+      if (criticalCheck && actionToNonActionSharesContent) {
         replacedEvents.push({
           rawEventId: rawEvent.id,
           editorialEventId: bestMatch.event.id,
