@@ -1,0 +1,4 @@
+[submodule "sub2api"]
+	path = sub2api
+	url = git@github.com:lidonganyp/aisub2api.git
+	branch = main
