@@ -115,16 +115,40 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
     // =========================================================================
     {
       name: "novel_workspace_manager",
-      description: "管理工作区。action=\"proxy_finalization\" 委托章节代理审批定稿子操作（accept/accept_with_edits/reject/rollback/inspect）；action=\"proxy_review\" 委托真实 gpt5.6-sol 章节代理初审（runRealChapterProxyReview，需独立授权卡）；action=\"diagnostic\"/\"ingest_reader_feedback\"/\"record_return_chapter\" 委托 advisory 子操作（仅产出 advisory 证据，不进入 raw prompt，不阻断生成，不决定文学胜负）。保持 6 工具契约。",
+      description: "创建、切换、查询工作区，并承载代理审批与 advisory 子操作。action=\"init\" 创建 workspace；action=\"switch\" 校验并切换到已有 workspace；proxy/advisory 子操作保持原有治理边界。保持 6 工具契约。",
       inputSchema: {
         type: "object",
         properties: {
           action: {
             type: "string",
-            enum: ["list", "switch", "info", "chapters", "proxy_finalization", "proxy_review", "diagnostic", "ingest_reader_feedback", "record_return_chapter"],
-            description: "操作类型。proxy_finalization 委托章节代理审批定稿子操作；proxy_review 委托真实 gpt5.6-sol 章节代理初审；diagnostic 聚合当前 chapter advisory 信号；ingest_reader_feedback 写入读者反馈；record_return_chapter 记录回流章 provenance。后三个为 advisory-only 子操作。",
+            enum: ["init", "list", "switch", "info", "chapters", "proxy_finalization", "proxy_review", "diagnostic", "ingest_reader_feedback", "record_return_chapter"],
+            description: "操作类型。init 创建 workspace；switch 切换到已有 workspace；proxy_finalization/proxy_review 处理代理审批；diagnostic/ingest_reader_feedback/record_return_chapter 为 advisory-only 子操作。",
           },
-          workspaceId: { type: "string", description: "workspace ID（proxy_finalization / proxy_review 必填）" },
+          workspaceId: { type: "string", description: "workspace ID（除 list 外通常必填）" },
+          novelName: { type: "string", description: "init 必填：小说名称" },
+          genre: { type: "string", description: "init 必填：主类型/世界观类型" },
+          subGenres: {
+            type: "array",
+            items: { type: "string" },
+            description: "init 可选：子类型列表",
+          },
+          styleProfile: { type: "string", description: "init 可选：作者风格档案 ID，默认 default" },
+          targetWordCount: {
+            type: "object",
+            description: "init 可选：字数软目标",
+            properties: {
+              perChapter: {
+                type: "object",
+                properties: {
+                  min: { type: "number" },
+                  max: { type: "number" },
+                },
+                required: ["min", "max"],
+              },
+              total: { type: "number" },
+            },
+            required: ["perChapter", "total"],
+          },
           // ── proxy_finalization 子操作参数（仅 action="proxy_finalization" 时使用） ──
           proxyAction: {
             type: "string",
@@ -226,7 +250,15 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         },
         required: ["action"],
       },
-      async invoke(input: { action: string; workspaceId?: string }) {
+      async invoke(input: {
+        action: string;
+        workspaceId?: string;
+        novelName?: string;
+        genre?: string;
+        subGenres?: string[];
+        styleProfile?: string;
+        targetWordCount?: { perChapter: { min: number; max: number }; total: number };
+      }) {
         return handlers.handleWorkspaceManager(input);
       },
     },
@@ -235,13 +267,16 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
     // novel_generate_chapter — 统一主链路唯一入口
     // =========================================================================
     // 【重要】这是章节生成的唯一入口，走统一主链路：
-    //   raw -> FactGuard -> EditorialOpportunity -> EditorialCandidate -> Judge -> Select -> StateCommit + AtomicSave
+    //   Preflight → ContextCompiler → ChapterIntent → NovelOS Agentic → Agentic FactGuard
+    //   → 作者风格整章优化 → StoryPreservation → FinalFactRecheck → Completeness
+    //   → FinalStateCommit → AtomicSave + Trace
+    // 生产路径不调用 PairwiseJudge / SelectionPolicy / EditorialOpportunityJudge（仅 eval-only）。
     // 严禁绕过此工具直接调用 novel_narrator 等单工具生成章节正文。
     // Stage0-8 legacy 链路已在 LEGACY-RUNTIME-REMOVAL-1 中删除，不再以任何形式保留
     // （lab-entry / novel_generate_chapter_legacy_test 已不存在）。
     {
       name: "novel_generate_chapter",
-      description: "统一章节生成编排器 - 唯一公开入口，走统一主链路（raw → editorial → judge → select → commit）。严禁绕过此工具直接调用 novel_narrator 等单工具生成章节正文。只有 status=ok 的结果可作为正式章节；blocked/error 结果及 blocked-candidate-evidence 中的正文严禁复制或写入 chapters/。",
+      description: "统一章节生成编排器 - 唯一公开入口，走统一主链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 状态提交/原子保存）。生产不调用机器文学裁判，用户是唯一文学评价权威。严禁绕过此工具直接调用 novel_narrator 等单工具生成章节正文。只有 status=ok 的结果可作为正式章节；blocked/error 结果及 blocked-candidate-evidence 中的正文严禁复制或写入 chapters/。",
       inputSchema: {
         type: "object",
         properties: {
@@ -263,13 +298,13 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             description: "正文主写模型：Gemini 3.1 Pro（默认）。通常省略本字段或传 gemini31；仅当用户明确要求 Claude 时才允许传 claude。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。",
           },
           modelTestRoute: { type: "string", enum: ["glm", "gemini31", "claude48"], description: "显式模型对比路由：glm 锁定 GLM5.2；gemini31 锁定 Gemini 3.1 Pro；claude48 锁定 Claude Opus 4.8。正文实验路由均 fallback=[]，未传时走默认生产路由。" },
-          seed: { type: "number", description: "【REAL-QUALITY-1-PREFLIGHT】随机种子（judge 匿名化 + Thompson Sampling 策略筛选可复现）；传入使 editorial 候选生成可复现（seed=1 时 sample≈0.6271≥0.5，策略被选中→生成 editorial 候选）。" },
+          seed: { type: "number", description: "【REAL-QUALITY-1-PREFLIGHT】随机种子（Thompson Sampling 策略筛选可复现；eval-only 路径同时复现 judge 匿名化与 editorial 候选生成，seed=1 时 sample≈0.6271≥0.5，策略被选中→生成 editorial 候选）。生产路径不调用 judge，seed 仅影响策略信誉采样。" },
           candidateTimeoutMs: { type: "number", description: "单次正文候选模型调用的有界超时（毫秒）；未传时使用统一主链路默认值。" },
           previewTotalTimeoutMs: { type: "number", description: "完整只读预览全部模型调用的总时间预算（毫秒）；仅 fullPipelinePreview 生效。" },
           sceneSolution: { type: "object", description: "仅受控评测兼容字段；生产 raw 不消费场景解法卡。" },
           recoverBlockedRaw: { type: "boolean", description: "显式复用经 hash/完整性校验的 raw_fact_guard 冻结 raw；必须同时显式指定相同 writerModel，默认关闭。" },
           previewOnly: { type: "boolean", description: "【已弃用】旧预览短路径开关（FactGuard 后直接返回 raw）。被 fullPipelinePreview 取代，入口处归一化为完整链路预览。" },
-          fullPipelinePreview: { type: "boolean", description: "【FULL-PIPELINE-PREVIEW-1】完整链路只读预览：执行完整 raw→FactGuard→editorial→judge→select 链路，但跳过所有副作用（不写章节、不提交状态、不写 trace/策略库/证据文件、不执行代理审批、不记录 Phase 6 学习 outcome）。用于在不污染工作区状态下预览候选与裁判结果。" },
+          fullPipelinePreview: { type: "boolean", description: "【FULL-PIPELINE-PREVIEW-1】完整链路只读预览：执行统一主链路（NovelOS Agentic → 作者风格整章优化 → 事实复检），但跳过所有副作用（不写章节、不提交状态、不写 trace/策略库/证据文件、不执行代理审批、不记录 Phase 6 学习 outcome）。用于在不污染工作区状态下预览生成结果。Phase 1 整改后生产路径不含 judge/select；如需评测旧 raw→editorial→judge→select 链路请使用 evalMode=B4。" },
           boundedBestOf3: { type: "boolean", description: "仅历史评测兼容字段；固定场景多候选已退出生产主链路。" },
           qualityExperiment: {
             type: "object",
@@ -307,7 +342,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           seedSource: {
             type: "string",
             enum: ["workspace_or_planner", "workspace_only"],
-            description: "ChapterSeed 来源（action='start' 可选，默认 workspace_or_planner）。",
+            description: "ChapterSeed 来源（action='start' 可选，默认 workspace_only）。workspace_or_planner 仅为旧调用兼容值；自动章节契约拆分已退役，缺种子时同样阻断且不会生成 chN-outline-explicit.md。",
           },
           stopOnFailure: {
             type: "boolean",
@@ -371,16 +406,24 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           return handlers.handleBatchGeneration(input);
         }
         // =========================================================================
-        // P24-续六 Fix6: model_timeout 章节级重试（调度层包裹）
-        // 治理方案要求：model_timeout 不应作为整章 hard_block，需 stage-level retry 或模型 fallback。
+        // P24-续六 Fix6: Agentic model_timeout 章节级重试（调度层包裹）
+        // 作者风格优化的空结果/超时已在编排器阶段内复用 Agentic 候选重试，不进入此分支。
         // 当 handleGenerateChapter 返回的 failureEnvelope 标识为 gate=model_timeout +
         // recoverable=true + severity=recoverable 时，重试一次（带 _modelTimeoutRetryAttempt 标记，
-        // 供 index.ts 顶层 catch 区分首次失败与重试耗尽）。非 model_timeout 失败不重试。
+        // 供 index.ts 顶层 catch 区分首次失败与重试耗尽）。非 Agentic model_timeout 失败不重试。
         // =========================================================================
         const chapterFileSnapshot = captureChapterFileSnapshot(input as unknown as Record<string, unknown>);
         const _mtMaxRetries = input.fullPipelinePreview || input.previewOnly ? 0 : 1;
         let _mtAttempt = 0;
         let _mtResult: any;
+        // P1-6: 记录工具层 model_timeout 重试证据，供 canary runner / metrics 识别恢复路径。
+        // 旧 canary 只识别 stageResults.blockedRawRecovery；新增 stageResults.modelTimeoutRetry
+        // 覆盖 Phase 1 工具层重试，使恢复率指标可信。
+        const _mtRetryTrace: { attempted: boolean; attempts: number; succeeded: boolean; firstFailureEnvelope?: any } = {
+          attempted: false,
+          attempts: 0,
+          succeeded: false,
+        };
         try {
           while (_mtAttempt <= _mtMaxRetries) {
             const _mtInput = _mtAttempt === 0
@@ -393,11 +436,27 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
               && _mtEnv?.severity === "recoverable"
               && _mtAttempt < _mtMaxRetries;
             if (!_mtShouldRetry) break;
+            // 记录首次失败 envelope，attempts+1（即重试次数）
+            _mtRetryTrace.attempted = true;
+            _mtRetryTrace.attempts += 1;
+            _mtRetryTrace.firstFailureEnvelope = _mtEnv;
             _mtAttempt++;
+          }
+          // 重试后若最终 status=ok，视为恢复成功
+          if (_mtRetryTrace.attempted && _mtResult?.status === "ok") {
+            _mtRetryTrace.succeeded = true;
           }
         } catch (error: unknown) {
           protectChapterFileAfterNonDeliverableResult(chapterFileSnapshot, { status: "error" });
           throw error;
+        }
+        // 注入 retry 证据到 stageResults，避免 canary runner 无法识别工具层重试
+        if (_mtRetryTrace.attempted) {
+          if (!_mtResult) _mtResult = { status: "error" };
+          if (!_mtResult.stageResults || typeof _mtResult.stageResults !== "object") {
+            _mtResult.stageResults = {};
+          }
+          _mtResult.stageResults.modelTimeoutRetry = _mtRetryTrace;
         }
         return protectChapterFileAfterNonDeliverableResult(chapterFileSnapshot, _mtResult);
       },
@@ -482,43 +541,69 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
     },
     {
       name: "novel_strategy_feedback",
-      description: "提交用户反馈到 Phase 6 在线学习策略信誉库。支持 5 种操作：\n- choice: 用户在 editorial 与 raw 之间明确选择（最高权重）\n- edit: 用户对最终正文做了修改（高权重，视为对策略候选的否定）\n- rating: 用户对 editorial 候选评分 1-5（4-5=win, <3=loss, 3=tie）\n- status_override: 手动覆盖策略状态（active/dormant/retired）\n- revert: 撤销最近一条 evidence\n\n用户反馈权重高于裁判信号，驱动 Thompson Sampling 在线学习。所有操作可解释、可撤销。",
+      description: "提交用户反馈到 Phase 6 在线学习策略信誉库。支持 choice/edit/rating/status_override/revert。普通章节反馈推荐传 workspaceId + chapterId + naturalLanguageFeedback（或用户修改稿）；系统会从成功 trace 推断 modelVersion、selectedStrategyIds、sourceChapter。显式提供的上下文优先。策略信誉按模型版本隔离，所有操作可解释、可撤销。",
       inputSchema: {
         type: "object",
         properties: {
           workspaceId: { type: "string", description: "小说 workspace ID" },
           action: {
             type: "string",
-            description: "反馈操作类型",
+            description: "反馈操作类型（提供 naturalLanguageFeedback 时可省略，由编译器推断）",
             enum: ["choice", "edit", "rating", "status_override", "revert"],
           },
-          strategyId: { type: "string", description: "策略 id（所有操作必填）" },
-          modelVersion: { type: "string", description: "模型版本键（所有操作必填）" },
+          strategyId: { type: "string", description: "策略 id（提供 naturalLanguageFeedback 时可省略，由编译器推断）" },
+          modelVersion: { type: "string", description: "模型版本键。可省略：提供 chapterId 时从成功 trace 推断；无法推断则明确报错。" },
           sourceChapter: { type: "string", description: "来源章节（choice/edit/rating 必填，如 ch17）" },
           opportunityType: { type: "string", description: "编辑机会类型（choice/edit/rating 必填）" },
           chosen: { type: "string", description: "choice 操作：用户选择 editorial 还是 raw", enum: ["editorial", "raw"] },
           deliveredSource: { type: "string", description: "edit 操作：实际交付来源", enum: ["editorial", "raw", "fallback"] },
-          modified: { type: "boolean", description: "edit 操作：用户是否修改了最终正文" },
-          editDistance: { type: "number", description: "edit 操作：修改幅度 0-1（可选）" },
+          modified: { type: "boolean", description: "edit 操作：用户是否修改了最终正文（提供 userFinalText 时由系统计算，无需手填）" },
+          editDistance: { type: "number", description: "edit 操作：修改幅度 0-1（提供 userFinalText 时由系统计算，无需手填）" },
+          userFinalText: { type: "string", description: "Phase 4A：用户最终修改稿（与 deliveredText 对比自动计算 delta）" },
+          deliveredText: { type: "string", description: "Phase 4A：系统交付正文（与 userFinalText 对比自动计算 delta）" },
+          chapterId: { type: "string", description: "P1 修复：章节 ID（如 \"17\"）。提供 userFinalText + deliveredText + chapterId 时，系统自动把 userModificationDelta 回填到 chapters/{chapterId}.review-package.json sidecar。未提供则跳过 sidecar 回填（仅记录策略信誉）。" },
+          naturalLanguageFeedback: { type: "string", description: "Phase 4D（P1-3）：自然语言反馈（规则驱动编译为结构化策略反馈，无需手填 strategyId/action）" },
+          selectedStrategyIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "本次生成选中的策略 id 列表（供编译器通用情感归因；可从 trace.stageResults.authorStyleStrategySelection.selectedStrategyIds 读取）",
+          },
           rating: { type: "number", description: "rating 操作：1-5 分制评分" },
           candidateSource: { type: "string", description: "rating 操作：评分对象", enum: ["editorial", "raw"] },
           status: { type: "string", description: "status_override 操作：新状态", enum: ["active", "dormant", "retired"] },
           reason: { type: "string", description: "status_override 操作：原因" },
           note: { type: "string", description: "可选备注" },
         },
-        required: ["workspaceId", "action", "strategyId", "modelVersion"],
+        required: ["workspaceId"],
+        allOf: [
+          {
+            // 未提供 naturalLanguageFeedback 时，action + strategyId 仍必填（显式反馈路径）
+            if: {
+              not: {
+                properties: { naturalLanguageFeedback: { type: "string", minLength: 1 } },
+                required: ["naturalLanguageFeedback"],
+              },
+            },
+            then: { required: ["action", "strategyId"] },
+          },
+        ],
       },
       async invoke(input: {
         workspaceId: string;
-        action: "choice" | "edit" | "rating" | "status_override" | "revert";
-        strategyId: string;
-        modelVersion: string;
+        action?: "choice" | "edit" | "rating" | "status_override" | "revert";
+        strategyId?: string;
+        modelVersion?: string;
         sourceChapter?: string;
         opportunityType?: string;
         chosen?: "editorial" | "raw";
         deliveredSource?: "editorial" | "raw" | "fallback";
         modified?: boolean;
         editDistance?: number;
+        userFinalText?: string;
+        deliveredText?: string;
+        chapterId?: string;
+        naturalLanguageFeedback?: string;
+        selectedStrategyIds?: string[];
         rating?: number;
         candidateSource?: "editorial" | "raw";
         status?: "active" | "dormant" | "retired";

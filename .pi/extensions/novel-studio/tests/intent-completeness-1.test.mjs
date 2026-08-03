@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ChapterIntentBuilder } from "../dist-test/v2/core/chapter-intent-builder.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = join(__filename, "..");
@@ -198,6 +199,8 @@ test("INTENT-COMPLETENESS-1 · 显式 ChapterContract 字段原样进入 Intent 
 test("INTENT-COMPLETENESS-1 · 普通生成不因旧模板字段缺失而阻断", async () => {
   // 普通生成：不传 evalMode
   // 使用 V2_FORCE_STUB=1 + 完整 runUnifiedPipeline 跑一遍
+  // Phase 2A：fullPipelinePreview=true 跳过 Preflight（本测试聚焦 intent completeness，
+  // 不验证 workspace 完整性；workspace intent-completeness-test 缺 config.json/characters/）
   process.env.V2_FORCE_STUB = "1";
 
   const { runUnifiedPipeline } = await import("../dist/v2/core/unified-entry.js");
@@ -207,6 +210,7 @@ test("INTENT-COMPLETENESS-1 · 普通生成不因旧模板字段缺失而阻断"
     chapterId: "test-1",
     chapterNumber: 1,
     projectRoot: process.cwd(),
+    fullPipelinePreview: true,
   });
 
   assert.equal(result.status, "ok");
@@ -328,7 +332,7 @@ test("INTENT-COMPLETENESS-1 · 生产 orchestrator 将旧模板缺项保持为 a
       characterStates: [],
       openLoops: [],
       worldRules: [],
-      styleReferences: [],
+      styleReferences: TEST_STYLE_REFERENCES,
       sourceMap: [],
     },
     constitution: null,

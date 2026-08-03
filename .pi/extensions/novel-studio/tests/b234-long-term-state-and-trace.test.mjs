@@ -31,6 +31,7 @@ import {
   reanchorStagedStateToFinalText,
 } from "../dist/v2/core/final-state-commit.js";
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 // ============================================================================
 // 辅助
@@ -65,7 +66,7 @@ function makeContext(overrides = {}) {
     characterStates: [],
     openLoops: [],
     worldRules: [],
-    styleReferences: [],
+    styleReferences: TEST_STYLE_REFERENCES,
     sourceMap: [],
     constitution: null,
     longTermState: null,

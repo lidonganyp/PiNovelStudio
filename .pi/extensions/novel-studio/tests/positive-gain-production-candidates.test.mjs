@@ -8,6 +8,7 @@ import {
   POSITIVE_GAIN_PRODUCTION_ADMISSION,
 } from "../dist-test/v2/core/positive-gain-candidate-generator.js";
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 const baseInput = {
   workspaceId: "xinmo",
@@ -30,7 +31,7 @@ const baseInput = {
     characterStates: [],
     openLoops: [],
     worldRules: [],
-    styleReferences: [],
+    styleReferences: TEST_STYLE_REFERENCES,
     sourceMap: [],
     constitution: null,
     longTermState: null,

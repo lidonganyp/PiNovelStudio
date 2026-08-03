@@ -218,6 +218,8 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
     // 验证 runUnifiedPipeline 把每章候选、judge 仲裁、最终选择落盘到
     // {workspace}/traces/{chapterId}-quality-trace.json（legacy QualityTraceDocument 格式）。
     // 用独立 chapterId 避免与其他用例的 trace 互相 append。
+    // Phase 2A：chapterNumber=1 避免触发 Preflight 前章连续性检查（ch98 state store 不存在）；
+    // trace 路径由 chapterId 决定，与 chapterNumber 无关。
     const tool = await loadGenerateChapterTool();
     assert.ok(tool, "novel_generate_chapter 应注册");
 
@@ -226,7 +228,7 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
       {
         workspaceId: "phase5-unified-default",
         chapterId: "p1-8-trace",
-        chapterNumber: 99,
+        chapterNumber: 1,
         previousChapterSummary: "前章摘要",
         mockAgent: true,
       },

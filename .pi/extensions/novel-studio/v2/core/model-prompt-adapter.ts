@@ -49,6 +49,7 @@ export interface ChapterContract {
   endingTarget: string[];
   inviolableFacts: string[];
   stateConstraints: string[];
+  wordCountTarget?: { min: number; max: number };
   forbidReferenceLeakage: true;
   preserveEstablishedState: true;
 }
@@ -251,6 +252,7 @@ export function buildChapterContract(input: UnifiedOrchestratorInput): ChapterCo
     inviolableFacts,
     stateConstraints: compact(input.intent.factAndCharacterKnowledgeForbiddenZones ?? [])
       .filter((value) => !isMechanicalOrOperationalDirective(value)),
+    wordCountTarget: { min: 2000, max: 3000 },
     forbidReferenceLeakage: true,
     preserveEstablishedState: true,
   };
@@ -279,7 +281,20 @@ function renderList(label: string, values: string[]): string {
   return values.length > 0 ? `${label}：${values.join("；")}` : "";
 }
 
-function renderContract(contract: ChapterContract): string {
+/**
+ * P0-2 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
+ * 导出 renderContract 供 Agentic raw candidate source 消费完整 ChapterContract。
+ *
+ * 原先 Agentic source 用自定义字符串拼接替代 renderContract，遗漏了
+ * characterMotivations / focusCharacterGoals / resistance / choicesAndCosts /
+ * expectedIrreversibleChange / selectedExpectationsToAdvance / causalRelations 等
+ * canonical contract 字段。现在统一通过 renderContract 渲染，确保所有 canonical
+ * 字段进入 Agentic 输入。
+ *
+ * 同时：风格指纹不再由 raw 阶段注入（renderContract 不渲染 styleReferences），
+ * 符合计划"风格指纹不得作为 raw 正文执行指令"的规则。
+ */
+export function renderContract(contract: ChapterContract): string {
   return [
     "【本章叙事契约：所有模型共用，不得改写其事实含义】",
     renderList("作品身份", contract.workIdentity),
@@ -321,6 +336,9 @@ function renderContract(contract: ChapterContract): string {
 /** Apply model-specific ordering and language without mutating the contract. */
 export function adaptWriterPrompt(input: WriterPromptAdapterInput): AdaptedWriterPrompt {
   const contractBlock = renderContract(input.contract);
+  const wordCountHint = input.contract.wordCountTarget
+    ? `本章正文字数目标：${input.contract.wordCountTarget.min}-${input.contract.wordCountTarget.max} 字。请充分展开场景、对话与心理描写，确保内容饱满。`
+    : "本章正文字数目标：2000-3000 字。请充分展开场景、对话与心理描写，确保内容饱满。";
   const outputBoundary = `只输出第${input.chapterNumber}章完整正文，不解释思路，不输出大纲、清单、JSON 或创作说明。`;
   return {
     profile: input.profile,
@@ -328,6 +346,7 @@ export function adaptWriterPrompt(input: WriterPromptAdapterInput): AdaptedWrite
     userPrompt: [
       input.sharedContext,
       contractBlock,
+      wordCountHint,
       "请自行决定具体表达；未在内容契约中声明的写法不构成约束。",
       outputBoundary,
     ].join("\n\n"),

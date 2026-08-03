@@ -1,8 +1,39 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-07-21  
+**快照日期**：2026-07-28（Phase 1 整改后更新）
 **代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
+
+## Phase 1 整改（2026-07-28）
+
+审计发现 P0 回归：风格优化失败时把 Agentic 初稿伪装成优化稿保存（`selectedSource="editorial"` 但实际返回 raw）。Phase 1 整改修复以下问题：
+
+### P0-1：风格失败硬阻断 + provenance 修复
+- 删除 orchestrator 中 5 处 raw 回退路径；风格优化失败一律 `hardBlock`，不再回退 `agenticCandidate`。
+- blocked 路径 `selectedSource=null`（原先固定 `"raw"`，与 `rawRole="not_deliverable"` 冲突）。
+- `hardBlock` 方法新增 `severityOverride` + `gate` 参数（`HardBlockGuidance` 类型）。
+- Agentic 初稿只作为 blocked evidence 保留在 trace，不交付、不保存、不提交状态。
+
+### P0-2：Story Preservation 止血
+- 恢复阈值：`replacedSimilarityThreshold=0.25`（原被放宽到 0.15）、`lowSimilarityReplacementThreshold=3`（原被提到 8）。
+- `knownEntities` 扩展为完整实体表：角色+别名 + `worldKeyTerms`（factions/places/currencies/professions/specialAbilities/levels）。
+- `entityCoverage` 从 `characters_only` 改为 `full_entities`（当 `knownEntities` 存在时）。
+- "保留人名但整章换剧情"（如交玉玺→喝茶）现在被正确阻断。
+
+### P1：FailureEnvelope 超时重试匹配
+- `UnifiedFailureEnvelope.severity` 新增 `"recoverable"`（原仅 preflight|hard|fatal）。
+- 新增 `gate` 字段；工具层 `register-tools.ts` 的 `gate === "model_timeout" && severity === "recoverable"` 重试条件现在可达。
+- `author-style-optimizer.ts` 新增 `failureKind` 分类（no_guidance/prompt_rejected/empty_result/model_timeout/model_error）。
+- Agentic 生成超时也归类为 `recoverable` + `gate=model_timeout`。
+
+### P1：最小风格档案前置检查
+- orchestrator 入口在模型调用前检查 `context.styleReferences` 中是否存在 `kind=fingerprint`。
+- 缺失时 `severity=preflight` hard block，不浪费 Agentic 预算。evalMode 跳过此检查。
+
+### 失败矩阵测试
+- 新增 `tests/phase1-style-failure-matrix.test.mjs`（12 用例）：preflight 阻断、风格优化各 failureKind、Story Preservation 通过/重试/阻断、Agentic 超时。
+- 新增 `tests/test-style-fingerprint.mjs` 共享测试夹具。
+- 9 个现有测试文件更新为使用 `TEST_STYLE_REFERENCES`（避免 preflight 阻断）。
 
 ## 当前架构
 

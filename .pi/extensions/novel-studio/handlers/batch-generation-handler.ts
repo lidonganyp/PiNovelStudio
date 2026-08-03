@@ -14,7 +14,7 @@
  * BATCH-P0-01 / BATCH-P1-01
  */
 
-import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "node:path";
 import { getProjectRoot } from "../utils/config.js";
 import {
@@ -167,19 +167,12 @@ async function handleStart(
     return errorResult(input, projectRoot, prereqCheck.reason);
   }
 
-  // 4. ChapterSeed 检查 + 可选规划（BATCH-P1-03：workspace_or_planner 模式可规划种子）
+  // 4. ChapterSeed 检查。
+  // 自动章节契约拆分已退役；显式章纲/ChapterSeed 属于作者拥有输入。
+  // workspace_or_planner 仅为旧调用兼容值，不再授权系统写入 chN-outline-explicit.md。
   const seedCheck = checkChapterSeedAvailable(workspaceId, startChapter, projectRoot);
   if (!seedCheck.ok) {
-    if ((input.seedSource ?? "workspace_or_planner") === "workspace_or_planner") {
-      // P1-03：规划阶段生成结构化种子（不输出正文）
-      const planResult = planBatchChapterSeeds(workspaceId, startChapter, endChapter, projectRoot);
-      if (!planResult.ok) {
-        return errorResult(input, projectRoot, planResult.reason);
-      }
-    } else {
-      // workspace_only 模式：无种子则阻断
-      return errorResult(input, projectRoot, seedCheck.reason);
-    }
+    return errorResult(input, projectRoot, seedCheck.reason);
   }
 
   // 5. 生成 jobId（P0-FIX-1：校验用户自定义 jobId）
@@ -222,7 +215,7 @@ async function handleStart(
       status: "running",
       startChapter,
       endChapter,
-      seedSource: input.seedSource ?? "workspace_or_planner",
+      seedSource: input.seedSource ?? "workspace_only",
       stopOnFailure: input.stopOnFailure ?? true,
       confirmLargeBatch: input.confirmLargeBatch ?? false,
       createdAt: now,
@@ -473,7 +466,7 @@ function safeCheckpointPath(
  * config.json 的 chapterSeeds 字段不被 ChapterSeedBuilder 消费，已移除该检查路径。
  *
  * 检查 series/ch{startChapter}-outline-explicit.md 是否存在。
- * 不存在 → 阻断（不调用模型）；workspace_or_planner 模式下触发规划阶段。
+ * 不存在 → 阻断（不调用模型），提示补充作者拥有的种子来源。
  */
 function checkChapterSeedAvailable(
   workspaceId: string,
@@ -492,7 +485,7 @@ function checkChapterSeedAvailable(
 
   return {
     ok: false,
-    reason: `workspace ${workspaceId} 缺少 ChapterSeed 来源：无 series/ch${startChapter}-outline-explicit.md。请补充种子源（不提示补章纲）。`,
+    reason: `workspace ${workspaceId} 缺少 ChapterSeed 来源：无 series/ch${startChapter}-outline-explicit.md。自动章节契约拆分已退役；请由作者补充可执行种子源后重试。`,
   };
 }
 
@@ -510,8 +503,8 @@ function checkChapterSeedAvailable(
  *
  * 任一不满足 → 阻断（不调用模型）。
  *
- * 注意：此检查在 ChapterSeed 检查之前执行——种子可以规划，
- * 但世界观/角色档案/前章状态是不可规划的前置条件。
+ * 注意：此检查在 ChapterSeed 检查之前执行。世界观、角色档案、前章状态和
+ * 作者拥有的 ChapterSeed 来源都必须由 workspace 提供；批量入口不再自动规划种子。
  */
 function checkBatchPrerequisites(
   workspaceId: string,
@@ -582,215 +575,4 @@ function checkBatchPrerequisites(
   }
 
   return { ok: true };
-}
-
-// ============================================================================
-// P1-03：ChapterSeed 规划阶段（P0-FIX-3：写入 series/ch{N}-outline-explicit.md）
-// ============================================================================
-
-/**
- * ChapterSeed 规划阶段（BATCH-P1-03，P0-FIX-3 修正）。
- *
- * 当 seedSource="workspace_or_planner" 且 workspace 无 ChapterSeed 时，
- * 生成显式章纲文件 series/ch{N}-outline-explicit.md。
- *
- * P0-FIX-3 修正：旧实现写入 batch-jobs/planned-seeds/ch{N}.json，但
- * ChapterSeedBuilder.loadAuthorChapterContract 只读取 series/ch{N}-outline-explicit.md，
- * 导致规划内容从未进入真实生成上下文。现在直接写入 ChapterSeedBuilder 消费的路径。
- *
- * 文件格式遵循 parseExplicitOutline 解析规范：
- *   - `## 事件 N` 事件头（2-4 个 #）
- *   - 事件块内字段：`- **字段名**：值`（markdown 加粗格式）
- *   - 章级字段（事件块外）：`- **字段名**：值`
- *
- * 严禁输出正文（prose / text / body）。只输出结构化契约字段。
- */
-function planBatchChapterSeeds(
-  workspaceId: string,
-  startChapter: number,
-  endChapter: number,
-  projectRoot: string,
-): { ok: true; generated: number; skipped: number } | { ok: false; reason: string } {
-  const workspacePath = join(projectRoot, "workspaces", workspaceId);
-
-  // 读取 config.json（genre/subGenres/characters）
-  const configPath = join(workspacePath, "config.json");
-  let config: any = {};
-  try {
-    config = JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    return {
-      ok: false,
-      reason: `workspace ${workspaceId} config.json 解析失败，无法规划种子。`,
-    };
-  }
-
-  const genre = config?.genre ?? "未指定";
-  const characters: Array<{ id: string; name: string; role?: string }> =
-    Array.isArray(config?.characters)
-      ? config.characters.map((c: any) => ({
-          id: c?.id ?? c?.name ?? "",
-          name: c?.name ?? "",
-          role: c?.role,
-        }))
-      : [];
-  const characterNames = characters
-    .map((c) => c.name)
-    .filter((name) => name && name.length > 0);
-
-  // 读取 outline.md（提取章节主题）
-  const outlinePath = join(workspacePath, "series", "outline.md");
-  let outlineThemes: Map<number, string> = new Map();
-  if (existsSync(outlinePath)) {
-    try {
-      const outlineText = readFileSync(outlinePath, "utf-8");
-      outlineThemes = extractChapterThemesFromOutline(outlineText);
-    } catch {
-      // outline 读取失败 → 主题占位
-    }
-  }
-
-  // 确保 series 目录存在
-  const seriesDir = join(workspacePath, "series");
-  try {
-    mkdirSync(seriesDir, { recursive: true });
-  } catch {
-    return {
-      ok: false,
-      reason: `无法创建 series 目录: ${seriesDir}`,
-    };
-  }
-
-  // 为每章生成显式章纲文件
-  // P0-FIX-3：写入 series/ch{N}-outline-explicit.md，ChapterSeedBuilder 会读取此文件
-  // P0-A：逐章跳过已有作者章纲文件——不得覆盖作者手动维护的内容
-  const total = endChapter - startChapter + 1;
-  const now = new Date().toISOString();
-  let generated = 0;
-  let skipped = 0;
-  for (let i = 0; i < total; i++) {
-    const chapterNumber = startChapter + i;
-    const outlineFilePath = join(
-      seriesDir, `ch${chapterNumber}-outline-explicit.md`,
-    );
-    // 作者已提供该章章纲 → 跳过，不覆盖
-    if (existsSync(outlineFilePath)) {
-      skipped++;
-      continue;
-    }
-    const chapterFunction = inferChapterFunction(i, total);
-    const chapterTheme =
-      outlineThemes.get(chapterNumber) ?? `第${chapterNumber}章（待细化）`;
-    const outlineContent = buildExplicitOutlineMarkdown({
-      chapterNumber,
-      chapterFunction,
-      chapterTheme,
-      genre,
-      characterNames,
-      plannedAt: now,
-    });
-    try {
-      writeFileSync(outlineFilePath, outlineContent, "utf-8");
-      generated++;
-    } catch {
-      return {
-        ok: false,
-        reason: `无法写入显式章纲文件: ${outlineFilePath}`,
-      };
-    }
-  }
-
-  return { ok: true, generated, skipped };
-}
-
-/**
- * 构建单章显式章纲 markdown 内容。
- *
- * 格式遵循 parseExplicitOutline 解析规范：
- *   - 章级字段放在文件头（事件块外）
- *   - 至少一个 `## 事件 N` 事件头（否则 parseExplicitOutline 返回 parseError）
- *   - 事件块内字段用 `- **字段名**：值` 格式
- *
- * 严禁输出正文。只输出结构化契约字段。
- */
-function buildExplicitOutlineMarkdown(params: {
-  chapterNumber: number;
-  chapterFunction: string;
-  chapterTheme: string;
-  genre: string;
-  characterNames: string[];
-  plannedAt: string;
-}): string {
-  const { chapterNumber, chapterFunction, chapterTheme, genre, characterNames, plannedAt } = params;
-  const lines: string[] = [];
-
-  // 章级字段（loadAuthorChapterContract 在事件块外提取这些字段）
-  lines.push(`# 第${chapterNumber}章 显式章纲（批量规划自动生成 ${plannedAt}）`);
-  lines.push("");
-  lines.push(`- **本章功能**：${chapterFunction}`);
-  lines.push(`- **目标读者体验**：${chapterTheme}`);
-  lines.push(`- **类型**：${genre}`);
-  if (characterNames.length > 0) {
-    lines.push(`- **参与角色**：${characterNames.join("、")}`);
-  }
-  lines.push("");
-
-  // 事件块（parseExplicitOutline 要求至少一个 `## 事件 N` 头）
-  lines.push(`## 事件 1：${chapterTheme}`);
-  lines.push("");
-  lines.push(`- **内容摘要**：${chapterTheme}`);
-  if (characterNames.length > 0) {
-    lines.push(`- **参与角色**：${characterNames.join("、")}`);
-  }
-  lines.push(`- **场景类型**：scene`);
-  lines.push(`- **章末目标**：${chapterTheme}`);
-
-  return lines.join("\n") + "\n";
-}
-
-/**
- * 从 outline.md 提取章节主题。
- *
- * 匹配 "## 第N章" 标题，提取该行后的标题文本；
- * 标题行为空时取下一行非空内容作为主题。
- */
-function extractChapterThemesFromOutline(
-  outlineText: string,
-): Map<number, string> {
-  const themes = new Map<number, string>();
-  const lines = outlineText.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const match = line.match(/^#+\s*第\s*(\d+)\s*章[：:？:]?\s*(.*)$/);
-    if (match) {
-      const num = parseInt(match[1], 10);
-      const title = match[2].trim();
-      if (title) {
-        themes.set(num, title);
-      } else if (i + 1 < lines.length) {
-        // 标题行为空 → 取下一行非空内容
-        const next = lines[i + 1].trim();
-        if (next && !next.startsWith("#")) {
-          themes.set(num, next);
-        }
-      }
-    }
-  }
-  return themes;
-}
-
-/**
- * 按章节在批量范围中的位置推断 chapterFunction。
- *
- * - 第 1 章（开头）：setup
- * - 最后一章：climax（总章数 > 1）或 payoff（单章）
- * - 倒数第 2 章：payoff
- * - 其余：escalation
- */
-function inferChapterFunction(index: number, total: number): string {
-  if (total <= 1) return "payoff";
-  if (index === 0) return "setup";
-  if (index === total - 1) return "climax";
-  if (index === total - 2) return "payoff";
-  return "escalation";
 }

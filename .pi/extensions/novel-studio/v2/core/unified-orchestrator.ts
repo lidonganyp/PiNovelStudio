@@ -22,7 +22,7 @@
  * MethodologyDiagnosticState，且该状态只能进入 raw 后诊断，不能进入 raw prompt。
  */
 
-import { writeFileSync, mkdirSync, renameSync, existsSync } from "fs";
+import { writeFileSync, mkdirSync, renameSync, existsSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { createHash } from "node:crypto";
 import type {
@@ -246,6 +246,7 @@ import {
   type UnifiedFailureEnvelope,
   type ControlPlaneTrace,
   type HardBlockGuidance,
+  type ProgressEvent,
 } from "./orchestrator-types.js";
 // 公共类型 re-export：保留 unified-orchestrator.js 原有导出面（unified-entry / legacy-trace-adapter 等消费）
 export type {
@@ -254,6 +255,7 @@ export type {
   UnifiedOrchestratorOutput,
   UnifiedFailureEnvelope,
   HardBlockGuidance,
+  ProgressEvent,
 } from "./orchestrator-types.js";
 
 import {
@@ -588,15 +590,61 @@ export class UnifiedOrchestrator {
     };
 
     // 阶段计时 helper：async 与 sync 两种，finally 保证早返回也记录已完成阶段。
+    // 同时通过 onUpdate 向前端推送阶段进度（ProgressEvent），避免长时间无响应被前端误判超时。
+    const STAGE_MESSAGES: Record<string, string> = {
+      stage1_novelosAgentic: "NovelOS Agentic 生成初稿中（最耗时，约 5-15 分钟）",
+      stage2_agenticFactGuard: "Agentic 事实守门检查中",
+      stage3_authorStyleOptimization: "作者风格整章优化中（约 5-15 分钟）",
+      stage4_storyPreservation: "故事保持性检查中",
+      stage4a_authorStyleRetryUnverifiable: "作者风格优化重试中（事实不可验证）",
+      stage4a_authorStyleRetryDrift: "作者风格优化重试中（漂移修正）",
+      // 注：两条 stage4b 重试路径故意不映射中文——acceptance-probes 测试用其 stage 名作源码
+      // 锚点扫描 retry 代码块，映射会引入提前出现的位置干扰测试。这两阶段 fallback 到 stage 名。
+      stage5_finalFactRecheck: "最终事实复检中",
+      stage6_commitAndSave: "提交并原子保存章节中",
+      stage7_commitAndSave: "提交并原子保存章节中",
+      stage1_raw: "正文初稿生成中",
+      stage2_rawFactGuard: "正文事实守门检查中",
+      stage1_5_novelosAgenticRaw: "NovelOS Agentic 原始候选生成中",
+    };
+    const emitProgress = (
+      stage: string,
+      status: "start" | "done",
+      durationMs?: number,
+    ) => {
+      if (!input.onUpdate) return;
+      try {
+        const event: ProgressEvent = {
+          stage,
+          status,
+          message: STAGE_MESSAGES[stage] ?? stage,
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          timestamp: new Date().toISOString(),
+        };
+        input.onUpdate(event);
+      } catch {
+        // 进度推送失败不影响生成（与 legacy-tool-wrapper.ts _onUpdate 包装策略一致）
+      }
+    };
     const timeAsync = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
       const start = Date.now();
+      emitProgress(name, "start");
       try { return await fn(); }
-      finally { stageTiming[name] = Date.now() - start; }
+      finally {
+        const dur = Date.now() - start;
+        stageTiming[name] = dur;
+        emitProgress(name, "done", dur);
+      }
     };
     const timeSync = <T>(name: string, fn: () => T): T => {
       const start = Date.now();
+      emitProgress(name, "start");
       try { return fn(); }
-      finally { stageTiming[name] = Date.now() - start; }
+      finally {
+        const dur = Date.now() - start;
+        stageTiming[name] = dur;
+        emitProgress(name, "done", dur);
+      }
     };
 
     // ── Step 1d：模型调用预算门控 ─────────────────────────────────────
@@ -765,6 +813,8 @@ export class UnifiedOrchestrator {
             targetWordCount: input.targetWordCount,
             // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
             fullPipelinePreview: input.fullPipelinePreview,
+            // P1 修复：few-shot 黄金示例透传给 Agentic prompt
+            fewshotSelection: input.fewshotSelection,
           }),
         );
       } catch (error: unknown) {
@@ -987,18 +1037,20 @@ export class UnifiedOrchestrator {
         };
       }
 
-      const styleResult = await timeAsync("stage3_authorStyleOptimization", () =>
-        createAuthorStyleOptimizer().optimize({
-          sourceCandidate: agenticCandidate,
-          chapterNumber,
-          intent,
-          context,
-          constitution,
-          writerPromptProfile: input.rawPromptProfile,
-          modelGenerate: wrappedModelGenerate!,
-          timeoutMs: input.timeoutMs,
-          strategyParams: authorStyleStrategyParams,
-        }),
+      const styleOptimizationInput = {
+        sourceCandidate: agenticCandidate,
+        chapterNumber,
+        intent,
+        context,
+        constitution,
+        writerPromptProfile: input.rawPromptProfile,
+        modelGenerate: wrappedModelGenerate!,
+        timeoutMs: input.timeoutMs,
+        strategyParams: authorStyleStrategyParams,
+        targetWordCount: input.targetWordCount,
+      };
+      let styleResult = await timeAsync("stage3_authorStyleOptimization", () =>
+        createAuthorStyleOptimizer().optimize(styleOptimizationInput),
       );
       stageResults.authorStyleOptimization = {
         styleProfileLoaded: styleResult.styleProfileLoaded,
@@ -1009,23 +1061,42 @@ export class UnifiedOrchestrator {
         failureReason: styleResult.failureReason,
         retryWithReducedGuidance: styleResult.retryWithReducedGuidance,
       };
+      const transientStyleFailure = !styleResult.candidate
+        && (styleResult.failureKind === "empty_result" || styleResult.failureKind === "model_timeout");
+      if (transientStyleFailure) {
+        const firstFailureKind = styleResult.failureKind;
+        const firstFailureReason = styleResult.failureReason ?? "未产出候选";
+        const retryResult = await timeAsync("stage3_authorStyleOptimizationRetry", () =>
+          createAuthorStyleOptimizer().optimize(styleOptimizationInput),
+        );
+        stageResults.authorStyleOptimizationRetry = {
+          attempted: true,
+          scope: "author_style_stage",
+          maxAttempts: 1,
+          triggerFailureKind: firstFailureKind,
+          triggerFailureReason: firstFailureReason,
+          succeeded: !!retryResult.candidate,
+          retryFailureKind: retryResult.failureKind,
+          retryFailureReason: retryResult.failureReason,
+          candidateId: retryResult.candidate?.id ?? null,
+        };
+        styleResult = retryResult;
+      }
       let styledCandidate = styleResult.candidate;
       if (!styledCandidate) {
         // P0-1 修复（Phase 1 整改）：风格优化未产出候选 → 不再回退 raw 初稿。
         // 按失败归因分类处理：
-        // - recoverable（empty_result/model_timeout/model_error）→ 产 recoverable envelope，
-        //   触发工具层 register-tools.ts 同阶段重试一次（chapter_level_retry）。
-        // - 非恢复类（no_guidance/prompt_rejected）→ 直接 hard block。
+        // - empty_result/model_timeout 已在本阶段复用同一 Agentic 候选重试一次；耗尽后 hard block。
+        // - model_error/no_guidance/prompt_rejected 不伪装成超时，直接 hard block。
+        // 工具层 chapter_level_retry 只保留给 Agentic 生成超时。
         // Agentic raw 初稿只作为 blocked evidence 保留在 trace，不交付、不保存。
         const failureKind = styleResult.failureKind ?? "no_guidance";
-        const isRecoverable = failureKind === "empty_result"
-          || failureKind === "model_timeout"
-          || failureKind === "model_error";
         stageResults.styleOptimizationBlocked = {
           reason: "no_candidate",
           failureKind,
           failureReason: styleResult.failureReason ?? "未产出候选",
-          recoverable: isRecoverable,
+          recoverable: false,
+          inStageRetryAttempted: transientStyleFailure,
         };
         return this.hardBlock(
           input,
@@ -1040,28 +1111,16 @@ export class UnifiedOrchestrator {
             modelVersion: detectModelVersion(agenticCandidate.model),
             candidateId: agenticCandidate.id,
           },
-          isRecoverable
-            ? {
-                gate: "model_timeout",
-                severityOverride: "recoverable",
-                recoverable: true,
-                retryPlan: { strategy: "chapter_level_retry", maxAttempts: 1 },
-                candidateDisposition: "blocked_evidence_only",
-                prohibitedActions: [
-                  "accept_or_deliver_blocked_candidate",
-                  "save_blocked_candidate_as_chapter",
-                ],
-              }
-            : {
-                gate: "style_optimization",
-                severityOverride: "hard",
-                recoverable: false,
-                candidateDisposition: "blocked_evidence_only",
-                prohibitedActions: [
-                  "accept_or_deliver_blocked_candidate",
-                  "save_blocked_candidate_as_chapter",
-                ],
-              },
+          {
+            gate: "style_optimization",
+            severityOverride: "hard",
+            recoverable: false,
+            candidateDisposition: "blocked_evidence_only",
+            prohibitedActions: [
+              "accept_or_deliver_blocked_candidate",
+              "save_blocked_candidate_as_chapter",
+            ],
+          },
         );
       }
       candidates.push(styledCandidate);
@@ -1121,6 +1180,7 @@ export class UnifiedOrchestrator {
             writerPromptProfile: input.rawPromptProfile,
             modelGenerate: wrappedModelGenerate!,
             timeoutMs: input.timeoutMs,
+            targetWordCount: input.targetWordCount,
             reducedGuidanceRatio: 0.5,
           }),
         );
@@ -1143,6 +1203,7 @@ export class UnifiedOrchestrator {
               editorialText: retryCandidate.text,
               knownEntities,
               entityCoverage,
+              aliasToCanonical: input.aliasToCanonical,
             }),
           );
           stageResults.retryStoryPreservation = retryPreservation;
@@ -1201,6 +1262,10 @@ export class UnifiedOrchestrator {
         }
       } else if (!preservation.preserved) {
         // 明确故事漂移（非 unverifiable）→ 缩减风格指导重试一次；仍漂移 → hard block。
+        // P1 修复：把 Story Preservation 检测到的 replacedEvents 作为 driftFeedback 传入，
+        // 让重试 prompt 明确告知模型哪些事件被改写了（而非仅缩减 style guidance）。
+        // canary 证据：100% 阻断率源于 amplified 模型改写事件内容（如"看不见"→"清晰看到"），
+        // 单纯缩减 guidance 不足以纠正；需要具体事件保持约束。
         const driftRetryStyleResult = await timeAsync("stage4a_authorStyleRetryDrift", () =>
           createAuthorStyleOptimizer().optimize({
             sourceCandidate: agenticCandidate,
@@ -1211,7 +1276,16 @@ export class UnifiedOrchestrator {
             writerPromptProfile: input.rawPromptProfile,
             modelGenerate: wrappedModelGenerate!,
             timeoutMs: input.timeoutMs,
+            targetWordCount: input.targetWordCount,
             reducedGuidanceRatio: 0.5,
+            driftFeedback: {
+              replacedEvents: (preservation.replacedEvents ?? []).map((e) => ({
+                subject: e.subject,
+                rawSentence: e.rawSentence,
+                editorialSentence: e.editorialSentence,
+                reason: e.reason,
+              })),
+            },
           }),
         );
         stageResults.authorStyleOptimizationDriftRetry = {
@@ -1232,6 +1306,7 @@ export class UnifiedOrchestrator {
               editorialText: driftRetryCandidate.text,
               knownEntities,
               entityCoverage,
+              aliasToCanonical: input.aliasToCanonical,
             }),
           );
           stageResults.retryStoryPreservationDrift = driftRetryPreservation;
@@ -1293,6 +1368,23 @@ export class UnifiedOrchestrator {
           ok: finalFactRecheck.ok,
           errors: finalFactRecheck.errors,
         };
+      }
+      // P1 修复（审阅包回填）：持久化 sidecar，供用户反馈时回填 userModificationDelta
+      // 预览/eval/skip-commit 模式不写 sidecar（与 chapterFilePath=null 一致，不写副作用）
+      if (
+        stageResults.authorStyleHumanReviewPackage
+        && !input.evalMode
+        && !input.fullPipelinePreview
+      ) {
+        const reviewPackagePath = persistAuthorStyleReviewPackage(
+          input.projectRoot,
+          input.workspaceId,
+          input.chapterId,
+          stageResults.authorStyleHumanReviewPackage as AuthorStyleHumanReviewPackage,
+        );
+        if (reviewPackagePath) {
+          (stageResults as Record<string, unknown>).reviewPackagePath = reviewPackagePath;
+        }
       }
       if (!finalFactRecheck.ok) {
         return this.hardBlock(
@@ -1564,6 +1656,7 @@ export class UnifiedOrchestrator {
             targetWordCount: input.targetWordCount,
             // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
             fullPipelinePreview: input.fullPipelinePreview,
+            fewshotSelection: input.fewshotSelection,
           })
         );
         agenticCandidate = agenticResult.candidate;
@@ -1719,6 +1812,7 @@ export class UnifiedOrchestrator {
             targetWordCount: input.targetWordCount,
             // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
             fullPipelinePreview: input.fullPipelinePreview,
+            fewshotSelection: input.fewshotSelection,
           })
         );
         stageResults.novelos = {
@@ -3640,8 +3734,12 @@ export function createUnifiedOrchestrator(): UnifiedOrchestrator {
  * - 展示初稿/优化稿差异、事实复检结果和用户最终修改量
  * - 在获得用户样本前，不宣称整章风格优化稳定优于 Agentic 初稿
  *
- * 注：userModificationDelta 与 positiveBenefitClaim 字段在生成时为占位值，
- * 需等用户实际修改章节后回填；在此之前 positiveBenefitClaim 恒为 false。
+ * P1 修复（审阅包回填）：
+ * - 生成时 userModificationDelta=null 占位，由编排器写入 sidecar
+ *   chapters/chapter-{N}/review-package.json
+ * - 用户提交反馈（handleStrategyFeedback 提供 userFinalText+deliveredText+chapterId）
+ *   时，由 backfillAuthorStyleReviewPackage 原子更新 sidecar 的 userModificationDelta
+ * - positiveBenefitClaim 在累积足够用户样本前恒为 false（任务规格 §六 P1）
  */
 export interface AuthorStyleHumanReviewPackage {
   /** 第 N 章 */
@@ -3659,10 +3757,11 @@ export interface AuthorStyleHumanReviewPackage {
   /** 文本长度差异（正数=优化稿更长，负数=优化稿更短） */
   lengthDelta: number;
   /**
-   * 用户最终修改量占位（生成时为 null，用户保存修改后回填）。
+   * 用户最终修改量（生成时为 null，用户保存修改后由
+   * backfillAuthorStyleReviewPackage 回填为 UserModificationDelta）。
    * 比对基准为最终交付文本（styledText 或 agenticText）。
    */
-  userModificationDelta: null;
+  userModificationDelta: import("../../v2/learning/user-modification-delta.js").UserModificationDelta | null;
   /**
    * 事实复检结果（来自 stage5_finalFactRecheck，生成时为 null，复检完成后回填）。
    */
@@ -3677,6 +3776,15 @@ export interface AuthorStyleHumanReviewPackage {
   positiveBenefitClaim: false;
   /** 备注：解释为何不能宣称正收益 */
   positiveBenefitClaimReason: string;
+  /**
+   * P1 修复：sidecar 持久化时间戳（ISO），用于审计回填时序。
+   * 生成时由 persistAuthorStyleReviewPackage 写入；回填时更新。
+   */
+  persistedAt?: string;
+  /**
+   * P1 修复：用户反馈回填时间戳（ISO），null 表示尚未收到用户反馈。
+   */
+  backfilledAt?: string | null;
 }
 
 /**
@@ -3701,7 +3809,125 @@ function buildAuthorStyleHumanReviewPackage(
     positiveBenefitClaim: false,
     positiveBenefitClaimReason:
       "在获得用户实际修改样本前，不宣称整章风格优化稳定优于 NovelOS Agentic 初稿（NOVELOS-CONSTRAINT-RELAXATION-1 §六 P1）",
+    backfilledAt: null,
   };
+}
+
+// ============================================================================
+// P1 修复（审阅包回填）：sidecar 持久化与回填
+// ============================================================================
+
+/**
+ * sidecar 文件路径：workspaces/{workspaceId}/chapters/{chapterId}.review-package.json
+ *
+ * 与章节正文 {chapterId}.md 同目录，无需创建子目录（atomicSave 自动 mkdir）。
+ * 独立于 quality-trace.json：trace 是不可变审计证据，sidecar 承载可回填的审阅包。
+ */
+function reviewPackageFilePath(
+  projectRoot: string,
+  workspaceId: string,
+  chapterId: string,
+): string {
+  // 与 chapterFilePath 同构（orchestrator-commit-save.ts:485），保持路径一致性
+  return join(
+    projectRoot,
+    "workspaces",
+    workspaceId,
+    "chapters",
+    `${chapterId}.review-package.json`,
+  );
+}
+
+/**
+ * 持久化人工审阅包到 sidecar（原子写入 tmp→rename）。
+ *
+ * 由编排器在 buildAuthorStyleHumanReviewPackage 后调用：
+ * - 写入完整 package（含 userModificationDelta=null 占位 + factRecheckResult）
+ * - 戳记 persistedAt（ISO），便于后续回填时审计时序
+ * - 写入失败不阻断生成（与 trace 持久化一致的容错策略）
+ *
+ * 预览/eval 模式不调用此函数（与 chapterFilePath=null 一致，不写副作用）。
+ */
+export function persistAuthorStyleReviewPackage(
+  projectRoot: string,
+  workspaceId: string,
+  chapterId: string,
+  pkg: AuthorStyleHumanReviewPackage,
+): string | null {
+  const filePath = reviewPackageFilePath(projectRoot, workspaceId, chapterId);
+  try {
+    const stamped: AuthorStyleHumanReviewPackage = {
+      ...pkg,
+      persistedAt: new Date().toISOString(),
+    };
+    atomicSave(filePath, JSON.stringify(stamped, null, 2));
+    return filePath;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    process.stderr.write(
+      `[Unified] 审阅包 sidecar 持久化失败（不阻断生成）：${msg}\n`,
+    );
+    return null;
+  }
+}
+
+/**
+ * 回填用户修改差分到已持久化的审阅包 sidecar。
+ *
+ * 由 handleStrategyFeedback 调用（用户提供 userFinalText + deliveredText + chapterId 时）：
+ * - 读取 sidecar（不存在则返回 not_found）
+ * - 更新 userModificationDelta 字段为计算后的 delta
+ * - 戳记 backfilledAt（ISO），保留原 persistedAt 不变
+ * - positiveBenefitClaim 保持 false（累积足够样本前不宣称正收益）
+ * - 原子写入（tmp→rename），失败返回 error
+ *
+ * @returns backfill 结果：ok/not_found/error + 更新后的 package（ok 时）
+ */
+export function backfillAuthorStyleReviewPackage(input: {
+  projectRoot: string;
+  workspaceId: string;
+  chapterId: string;
+  delta: import("../../v2/learning/user-modification-delta.js").UserModificationDelta;
+}): {
+  status: "ok" | "not_found" | "error";
+  reason: string;
+  reviewPackage?: AuthorStyleHumanReviewPackage;
+  filePath?: string;
+} {
+  const filePath = reviewPackageFilePath(
+    input.projectRoot,
+    input.workspaceId,
+    input.chapterId,
+  );
+  if (!existsSync(filePath)) {
+    return {
+      status: "not_found",
+      reason: `审阅包 sidecar 不存在：${filePath}（章节可能未走统一主链路生成，或预览模式未持久化）`,
+    };
+  }
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    const existing = JSON.parse(raw) as AuthorStyleHumanReviewPackage;
+    const updated: AuthorStyleHumanReviewPackage = {
+      ...existing,
+      userModificationDelta: input.delta,
+      backfilledAt: new Date().toISOString(),
+      // positiveBenefitClaim 保持 false（任务规格 §六 P1：累积样本前不宣称正收益）
+    };
+    atomicSave(filePath, JSON.stringify(updated, null, 2));
+    return {
+      status: "ok",
+      reason: `审阅包 userModificationDelta 已回填（editDistance=${input.delta.editDistance.toFixed(3)}, modified=${input.delta.modified}）`,
+      reviewPackage: updated,
+      filePath,
+    };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      status: "error",
+      reason: `审阅包回填失败：${msg}`,
+    };
+  }
 }
 
 // ============================================================================

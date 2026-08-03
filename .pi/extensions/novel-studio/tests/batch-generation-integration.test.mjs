@@ -98,11 +98,12 @@ describe("BATCH 集成：锁 / ChapterSeed 阻断 / state commit 失败 / 工具
     const workspacePath = join(PROJECT_ROOT, "workspaces", wsId);
     createBatchWorkspace(wsId);
 
-    // 删除 chapterSeeds 配置（模拟缺少 ChapterSeed）
+    // 删除旧 chapterSeeds 配置与真实显式种子（模拟缺少 ChapterSeed）
     const configPath = join(workspacePath, "config.json");
     const config = JSON.parse(readFileSync(configPath, "utf-8"));
     delete config.chapterSeeds;
     writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+    rmSync(join(workspacePath, "series", "ch1-outline-explicit.md"), { force: true });
 
     const mock = createMockGenerateChapter({ workspacePath });
     const result = await tool.execute(

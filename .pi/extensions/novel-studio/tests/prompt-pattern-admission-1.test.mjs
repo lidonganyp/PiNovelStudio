@@ -14,6 +14,7 @@ import {
   resolvePromptPatternLibrary,
   validatePromptPatternLibrary,
 } from "../dist-test/v2/core/prompt-pattern-library.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 const source = {
   sourceId: "github:example",
@@ -80,7 +81,7 @@ const baseInput = {
     characterStates: [],
     openLoops: [],
     worldRules: [],
-    styleReferences: [],
+    styleReferences: TEST_STYLE_REFERENCES,
     sourceMap: [],
     constitution: null,
     longTermState: null,

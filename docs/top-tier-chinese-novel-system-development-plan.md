@@ -57,13 +57,17 @@ LLM 负责：
 
 `CreativeConstitution` 进入 raw 的字段限于作品身份、读者承诺、类型承诺、主角核心冲突、长期主题问题和禁止偏离。`aestheticDirection` 与自动学习的表达偏好不直接进入 raw，避免把作品审美退化成固定写法。
 
-一次跨章序列偏好不得外推为所有章节的生产规则。每个候选都必须基于本章 raw 的可引用机会产生，并在本章独立匿名比较。自然人金标用于校准 judge 与发现系统性偏差，不作为全局来源偏置；逐章比较有效且明确时交付质量赢家，比较不可用、证据无效、tie 或复判冲突时才保留 raw。
+一次跨章序列偏好不得外推为所有章节的生产规则。
+
+> **Phase 1 整改（2026-07-28）**：生产路径已移除候选匿名比较 / 机器文学裁判 / raw safety fallback。生产链路改为 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存，用户是唯一文学裁决者。下方涉及"候选比较 / judge / 赢家 / raw 保留"的描述仅适用于**隔离评测（eval-only）**路径。
+
+【eval-only】每个候选都必须基于本章 raw 的可引用机会产生，并在本章独立匿名比较。自然人金标用于校准 judge 与发现系统性偏差，不作为全局来源偏置；逐章比较有效且明确时交付质量赢家，比较不可用、证据无效、tie 或复判冲突时才保留 raw。
 
 raw 通过事实守卫后，`CraftPhenomenonReport` 才可使用方法论工艺知识。报告按章节相关性覆盖对话、节奏与高潮、连载预期、类型契约、配角、世界观揭示、群像、收尾、五维推进、叙事聚焦与空间调度、跨章健康十一个领域；结论只允许 `observed / uncertain / not_applicable`，`observed / uncertain` 必须引用 raw 中逐字存在的 span。报告不得进入 raw prompt、不得给文学总分、不得直接改文或选择 winner。
 
 跨章诊断使用只读 `MethodologyDiagnosticState`，从作品声明、已接受叙事状态、疲劳状态、世界揭示计划和 arc registry 中提取紧凑且带来源的先前状态。它只在 raw 通过 FactGuard 后加载，不进入 raw prompt，不读取目标章之后的信息，也不能独立授权 candidate。`cross_chapter_health` 的现象或机会除 raw span 外还必须引用本次快照中实际存在的 `sourceRef`；缺失或伪造引用时拒绝该条诊断。
 
-`EditorialOpportunityJudge` 在同一次 post-raw 结构化判断中生成工艺报告和至多两个编辑机会。JSON 解析失败时最多追加一次 schema-only 修复调用，不允许因 schema 错误重写正文。普通 editorial candidate 跟随本章显式 writer family：默认 Gemini 使用 `v2_amplified_gemini31`，显式 Claude 使用 `v2_amplified`；中文自然度的受限 span 校准继续使用独立校准路由。
+`EditorialOpportunityJudge` 在同一次 post-raw 结构化判断中生成工艺报告和至多两个编辑机会（**eval-only**：生产路径已移除，见 §8 Phase 1 整改说明）。JSON 解析失败时最多追加一次 schema-only 修复调用，不允许因 schema 错误重写正文。普通 editorial candidate 跟随本章显式 writer family：默认 Gemini 使用 `v2_amplified_gemini31`，显式 Claude 使用 `v2_amplified`；中文自然度的受限 span 校准继续使用独立校准路由。
 
 `narrative_focus_and_spatial_staging` 只检查注意力是否落在真正改变信息、关系或情绪的动作与细节上，以及人物距离、遮挡、进出路径和物件位置是否承担已有的关系、权力或选择变化。它不要求远景/中景/特写顺序，不统计感官数量，也不把“电影感”当作质量代理。
 
@@ -122,32 +126,23 @@ novel_generate_chapter
        -> ContextCompiler / Retrieval
        -> Budget + Dedupe + Drop Audit
   -> ChapterIntentBuilder
-  -> RawCandidateGenerator
-  -> FactAndContinuityGuard
-  -> EditorialOpportunityJudge
-       -> CraftPhenomenonReport(11 domains, span-backed, advisory-only)
-       -> schema-only repair(max 1, no prose rewrite)
-       -> no_op: raw
-       -> 1-2 EditorialHypotheses
-  -> EditorialCandidateGenerator(current writer family; Gemini default)
-  -> FactAndContinuityGuard(all candidates)
-  -> LanguageRiskAnalyzer(all candidates)
-  -> PairwiseLiteraryJudge
-  -> SelectionPolicy
-       -> clear raw/editorial win: deliver the quality winner
-       -> judge unavailable/tie/conflict/regression: raw safety fallback
-  -> optional SpanRepairCandidate
+  -> NovelOS Agentic Session
+       -> EvidencePlan → ReAct retrieval → draft → verify/patch
+       -> Agentic FactGuard
+  -> Author Style Optimization (full chapter, required)
+       -> style profile missing: preflight hard block (Phase 1)
+       -> no_guidance/prompt_rejected: hard block, selectedSource=null
+       -> model timeout/empty/error: recoverable, gate=model_timeout, retry once
+  -> Story Preservation Gate (full_entities, 0.25/3 thresholds)
+       -> preserved: proceed
+       -> drift/unverifiable: reduced-guidance retry once; still failing → hard block
   -> FinalFactRecheck
-  -> ChapterProxyApproval(gpt5.6-sol)
-       -> clear: proxy_approved_draft
-       -> hold: 不提交状态，等待重生成/诊断
-  -> UserRevisionOrAcceptance(proxy_approved_draft)
-  -> FinalFactRecheck(user_final_text)
+  -> Completeness
   -> FinalStateCommit(user_confirmed_text)
   -> AtomicChapterSave + Trace + Checkpoint + ReviewPacket
 ```
 
-正式使用时默认只向用户提交一份 `gpt5.6-sol` 代理审批稿及摘要，不要求用户常规评选 raw/editorial 多候选。raw 与其他候选保留为可展开审计证据。代理审批稿只是 pending checkpoint；用户修改或确认后的版本重新通过最终事实复检后，才能提交长期状态、写入正式章节并成为下一章 frontier。
+> **Phase 1 整改（2026-07-28）**：生产路径已移除 `PairwiseLiteraryJudge` / `SelectionPolicy` / `EditorialOpportunityJudge` / `raw safety fallback`。这些旧阶段只保留在 `dist-eval/`（NB-4 Generation Matrix B4 层）供隔离评测。生产链路改为 NovelOS Agentic → 作者风格整章优化 → Story Preservation → FinalFactRecheck → 原子保存。风格优化失败不再回退 raw，而是 hard block（`selectedSource=null`）；模型超时/空结果标记为 `recoverable` + `gate=model_timeout`，由工具层同阶段重试一次。用户是唯一文学裁决者。
 
 `direct baseline`、大规模 replay 和 legacy full-chain 只存在于离线诊断工具，不进入每章正常生成成本。
 
@@ -446,22 +441,33 @@ interface StrategyPolicyRecord {
 
 ## 8. 成本控制
 
-正常章节预算：
+> **Phase 1 整改（2026-07-28）**：生产路径已移除 `PairwiseLiteraryJudge` / `SelectionPolicy` / `EditorialOpportunityJudge`。
+> 下方"正常章节预算"中涉及 judge / editorial candidate 的条目仅适用于**隔离评测（eval-only）**路径；
+> 生产路径的预算见下方"生产路径预算"。
+
+正常章节预算（eval-only 路径，含 judge）：
 
 - raw 生成：1 次；
-- 编辑机会判断：1 次低温结构化调用；
-- editorial 生成：0-2 次，仅有明确机会时调用；
-- 主裁判：0-2 次两两比较；
+- 编辑机会判断：1 次低温结构化调用（eval-only）；
+- editorial 生成：0-2 次，仅有明确机会时调用（eval-only）；
+- 主裁判：0-2 次两两比较（eval-only）；
 - span repair：按需，默认 0 次。
+
+生产路径预算（不含 judge）：
+
+- NovelOS Agentic 生成：1 次（含 ReAct 检索/验证/patch，受单章模型调用预算约束）；
+- 作者风格整章优化：1 次（失败 hard block，不回退 raw）；
+- 事实复检 + 完整性检查：本地规则，无 LLM 调用；
+- 状态提交 + 原子保存：本地事务，无 LLM 调用。
 
 成本策略：
 
 - raw 已明显满足章节意图时提前结束；
-- 编辑机会置信度不足时不生成候选；
-- 本地事实检查失败时不调用文学裁判；
-- 裁判 `clear` 且证据有效时不复判；
+- 编辑机会置信度不足时不生成候选（eval-only）；
+- 本地事实检查失败时不调用文学裁判（eval-only）；
+- 裁判 `clear` 且证据有效时不复判（eval-only）；
 - direct/legacy baseline 不进入日常生成；
-- trace 保存裁判结果，重复内容不重新调用。
+- trace 保存裁判结果，重复内容不重新调用（eval-only）。
 
 ## 9. 分阶段实施计划
 
@@ -576,13 +582,12 @@ interface StrategyPolicyRecord {
 - 删除 workspace/chapter whitelist；
 - 删除 config `generationMode`；
 - 删除 V2 `v2NotImplemented -> legacy` 回退；
-- V2 内部失败按 `raw -> hard block` 降级；
-- raw 有效但编辑/裁判失败时交付 raw 并记录 warning；
+- **Phase 1 整改（2026-07-28）**：风格优化失败不再回退 raw，而是 hard block（`selectedSource=null`）。模型超时/空结果标记为 `recoverable` + `gate=model_timeout`，由工具层同阶段重试一次。缺风格档案在模型调用前 `preflight` hard block。
 - 最终正文选定后统一执行状态提交和原子保存。
 
 迁移期只保留一个短期环境回滚开关，Phase 7 删除。
 
-测试：所有章节走统一入口；非白名单 workspace 可用；编辑层失败仍返回 raw；raw 失败结构化阻断；无 silent legacy fallback。
+测试：所有章节走统一入口；非白名单 workspace 可用；风格优化失败 hard block（`selectedSource=null`）；模型超时可恢复重试；缺风格档案 preflight 阻断；无 silent legacy fallback。
 
 退出条件：开发默认路径不再执行 Stage0-8 正文加工。
 
@@ -647,9 +652,9 @@ interface StrategyPolicyRecord {
 使用已有 ch5/ch8/ch17 候选与真人评分，不重新调用生成模型：
 
 - 风险检测是否找到真实问题；
-- LLM judge prompt 是否携带正确上下文；
-- 裁判输出是否有 span；
-- selector 是否在冲突时保护 raw；
+- LLM judge prompt 是否携带正确上下文（仅 eval 路径）；
+- 裁判输出是否有 span（仅 eval 路径）；
+- Story Preservation 是否在事件漂移时正确阻断（生产路径）；
 - 不把 fixture 的具体答案写入规则。
 
 LLM judge 的回归允许单独运行，不放入每次 `npm test` 的确定性套件。
@@ -658,9 +663,9 @@ LLM judge 的回归允许单独运行，不放入每次 `npm test` 的确定性�
 
 不再为验收专门批量烧 token。每次真实生成自动记录：
 
-- raw 是否直接交付；
-- 哪个 hypothesis 被采用；
-- candidate 是否胜出；
+- Agentic 初稿是否通过风格优化（未通过则 hard block）；
+- Story Preservation 是否通过（未通过则缩减指导重试一次）；
+- 风格优化是否触发 recoverable 重试（timeout/empty/error）；
 - 用户是否保留、替换或修改；
 - 模型版本和成本。
 
@@ -670,12 +675,12 @@ LLM judge 的回归允许单独运行，不放入每次 `npm test` 的确定性�
 
 运行指标：
 
-- rawDirectDeliveryRate；
-- editorialOpportunityRate；
-- candidateGenerationCount；
-- judgeClearWinRate；
-- judgeConflictRate；
-- rawFallbackRate；
+- styleOptimizationBlockRate（hard block 占比）；
+- styleOptimizationRecoverableRetryRate（recoverable 重试占比）；
+- storyPreservationBlockRate；
+- storyPreservationRetryPassRate（缩减指导重试通过率）；
+- agenticTimeoutRate；
+- preflightBlockRate（含缺风格档案）；
 - factHardFailureRate；
 - userOverrideRate；
 - acceptedCandidateEditDistance；
@@ -684,8 +689,7 @@ LLM judge 的回归允许单独运行，不放入每次 `npm test` 的确定性�
 
 质量指标以用户行为为最高证据：
 
-- 用户选择 amplified/raw；
-- 用户最终改稿幅度；
+- 用户最终改稿幅度（与风格优化稿的差异）；
 - 同类问题是否重复出现；
 - 伏笔与状态是否跨章正确延续。
 

@@ -13,6 +13,11 @@
 
 import { join } from "node:path";
 import { getProjectRoot } from "../utils/config.js";
+import { loadStrategyTraceContext } from "./strategy-feedback-trace-context.js";
+import {
+  clearUnhealthyProviders,
+  clearChapterTimeoutCounts,
+} from "../api/fallback-manager.js";
 import {
   preflightWorkspace,
   formatPreflightWorkspaceReport,
@@ -60,7 +65,8 @@ export async function handleGenerateChapter(input: {
   previewOnly?: boolean;
   /**
    * FULL-PIPELINE-PREVIEW-1：完整链路只读预览。
-   * 执行完整 raw→editorial→judge→select 链路，但跳过所有副作用（不写章节、不提交状态、不写 trace）。
+   * 执行统一主链路（NovelOS Agentic → 作者风格整章优化 → 事实复检），但跳过所有副作用
+   * （不写章节、不提交状态、不写 trace）。Phase 1 整改后生产路径不含 judge/select。
    */
   fullPipelinePreview?: boolean;
   /** 高价值章节显式启用 raw + 2 个不同场景解法候选。 */
@@ -138,6 +144,21 @@ export async function handleGenerateChapter(input: {
   // - 无 __forceLegacyChain 检查：生产入口始终走统一主链路
   // ============================================================================
   const _unifiedProjectRoot = (input as any)._projectRoot || getProjectRoot();
+
+  // ============================================================================
+  // UNHEALTHY-CLEAR-1：每章独立生成，清除上一章残留的 provider unhealthy 标记
+  // ============================================================================
+  // 根因修复：fallback-manager 的 UNHEALTHY_PROVIDERS（permanent error）和
+  // CHAPTER_TIMEOUT_UNHEALTHY（章级 timeout 累计阈值）是进程内全局 Set，一旦标记
+  // 不会自动清除（原仅 NovelBench 评测运行时调用 clearUnhealthyProviders）。
+  // 导致代理服务瞬时故障（如 403/429/quota）后，provider 被永久标记为 unhealthy，
+  // 后续所有章节生成都被 unhealthy_skip（毫秒级立即失败），即使服务已恢复也无法调用。
+  //
+  // 语义合理性：每章独立生成，上一章的瞬时故障不应污染本章。如果 provider 真永久
+  // 故障，单章内会自然失败（超时 × 重试），不需要跨章保护。
+  clearUnhealthyProviders();
+  clearChapterTimeoutCounts();
+
   try {
     const { runUnifiedPipeline } = await import("../v2/core/unified-entry.js");
     const _unifiedResult = await runUnifiedPipeline({
@@ -155,7 +176,7 @@ export async function handleGenerateChapter(input: {
       candidateTimeoutMs: input.candidateTimeoutMs,
       previewTotalTimeoutMs: input.previewTotalTimeoutMs,
       sceneSolution: input.sceneSolution,
-      // REAL-QUALITY-1-PREFLIGHT：seed 透传到统一编排器（judge 匿名化 + Thompson 可复现）
+      // REAL-QUALITY-1-PREFLIGHT：seed 透传到统一编排器（Thompson 策略筛选可复现；eval-only 路径同时复现 judge 匿名化）
       seed,
       onUpdate: (input as any).__onUpdate,
     });
@@ -165,9 +186,44 @@ export async function handleGenerateChapter(input: {
     // （计划 §Phase 5：无 silent legacy fallback）
     // 编排器内部失败（raw 生成失败等）已在 orchestrator 内降级为 hard block，
     // 此处仅捕获 entry/orchestrator 层未预期异常。
+    // P1 修复（第三轮）：顶层异常也写 trace，避免 silent degrade（用户验收反例：
+    // "顶层异常捕获也只返回 envelope，不写 trace"）。
     process.stderr.write(
       `[Unified] 主链路执行失败：${e?.message ?? e}\n`
     );
+    const _topLevelFailureEnvelope = {
+      stage: "unified_entry",
+      gate: "unified_entry_exception",
+      severity: "hard_block" as const,
+      reason: `统一主链路执行失败：${e?.message ?? e}`,
+      evidence: { error: e?.message ?? String(e), stack: e?.stack ?? null },
+      recoverable: false,
+    };
+    try {
+      const { createLegacyTraceAdapter } = await import("../v2/adapters/legacy-trace-adapter.js");
+      const traceAdapter = createLegacyTraceAdapter({
+        workspacePath: join(_unifiedProjectRoot, "workspaces"),
+        workspaceId,
+        chapterId,
+      });
+      traceAdapter.record({
+        stage: "unified_entry" as any,
+        timestamp: new Date().toISOString(),
+        error: {
+          message: _topLevelFailureEnvelope.reason,
+          code: "unified_entry",
+          recoverable: false,
+        },
+        failureEnvelope: _topLevelFailureEnvelope,
+        contextHash: "top-level-exception",
+      });
+      traceAdapter.flush();
+    } catch (traceErr) {
+      // trace 写入失败不阻断返回（与 unified-entry 一致的容错策略）
+      process.stderr.write(
+        `[Unified] 顶层异常 trace 持久化失败（不阻断返回）：${traceErr instanceof Error ? traceErr.message : String(traceErr)}\n`
+      );
+    }
     return {
       status: "error",
       workspaceId,
@@ -179,8 +235,10 @@ export async function handleGenerateChapter(input: {
       },
       failureEnvelope: {
         stage: "unified_entry",
-        severity: "fatal",
+        gate: "unified_entry_exception",
+        severity: "hard_block",
         reason: `统一主链路执行失败：${e?.message ?? e}`,
+        evidence: { error: e?.message ?? String(e), stack: e?.stack ?? null },
         recoverable: false,
         degradedTo: "hard_block",
       },
@@ -329,15 +387,34 @@ export async function handleStrategyPolicyView(input: {
 
 export async function handleStrategyFeedback(input: {
   workspaceId: string;
-  action: "choice" | "edit" | "rating" | "status_override" | "revert";
-  strategyId: string;
-  modelVersion: string;
+  /** 提供 naturalLanguageFeedback 时可省略（由编译器推断 action） */
+  action?: "choice" | "edit" | "rating" | "status_override" | "revert";
+  /** 提供 naturalLanguageFeedback 时可省略（由编译器推断 strategyId） */
+  strategyId?: string;
+  modelVersion?: string;
   sourceChapter?: string;
   opportunityType?: string;
   chosen?: "editorial" | "raw";
   deliveredSource?: "editorial" | "raw" | "fallback";
   modified?: boolean;
   editDistance?: number;
+  /** Phase 4A：用户最终修改稿（与 deliveredText 对比自动计算 delta） */
+  userFinalText?: string;
+  /** Phase 4A：系统交付正文（与 userFinalText 对比自动计算 delta） */
+  deliveredText?: string;
+  /**
+   * P1 修复（审阅包回填）：章节 ID（如 "17"）。
+   *
+   * 提供 userFinalText + deliveredText + chapterId 时，系统除了计算 delta 写入策略信誉库，
+   * 还会调用 backfillAuthorStyleReviewPackage 把 delta 回填到 sidecar
+   * workspaces/{id}/chapters/{chapterId}.review-package.json 的 userModificationDelta 字段。
+   * 未提供 chapterId 时不执行回填（仅记录策略信誉）。
+   */
+  chapterId?: string;
+  /** Phase 4D（P1-3）：自然语言反馈（规则驱动编译为结构化策略反馈） */
+  naturalLanguageFeedback?: string;
+  /** Phase 4D（P1-3）：本次生成选中的策略 id 列表（供编译器通用情感归因） */
+  selectedStrategyIds?: string[];
   rating?: number;
   candidateSource?: "editorial" | "raw";
   status?: "active" | "dormant" | "retired";
@@ -345,6 +422,20 @@ export async function handleStrategyFeedback(input: {
   note?: string;
 }): Promise<any> {
   const projectRoot = (input as any)._projectRoot || getProjectRoot();
+  const traceContext = input.chapterId
+    ? loadStrategyTraceContext(projectRoot, input.workspaceId, input.chapterId)
+    : null;
+  const modelVersion = input.modelVersion?.trim() || traceContext?.modelVersion;
+  if (!modelVersion) {
+    throw new Error("策略反馈需要 modelVersion；可直接提供，或传 chapterId 由成功 trace 推断");
+  }
+  const selectedStrategyIds = input.selectedStrategyIds?.length
+    ? input.selectedStrategyIds
+    : traceContext?.selectedStrategyIds ?? [];
+  const sourceChapter = input.sourceChapter
+    ?? traceContext?.sourceChapter
+    ?? (input.chapterId ? (/^ch/i.test(input.chapterId) ? input.chapterId : `ch${input.chapterId}`) : undefined);
+  const opportunityType = input.opportunityType ?? traceContext?.opportunityType ?? "author_style";
   const {
     loadStrategyPolicyStore,
     saveStrategyPolicyStore,
@@ -352,23 +443,126 @@ export async function handleStrategyFeedback(input: {
   const { createUserFeedbackIngestor } = await import(
     "../v2/learning/user-feedback-ingestor.js"
   );
+  const { computeUserModificationDelta } = await import(
+    "../v2/learning/user-modification-delta.js"
+  );
 
   const store = loadStrategyPolicyStore(input.workspaceId, projectRoot);
   const ingestor = createUserFeedbackIngestor();
   let result: any;
 
+  // Phase 4A：若调用方提供了 userFinalText + deliveredText，自动计算 userModificationDelta
+  // 不再让 editDistance 由调用方手填（避免硬编码 null / 不一致）
+  // P1 修复（审阅包回填）：delta 计算与 action 解耦——NL feedback 路径 inferredAction="edit"
+  // 时同样需要 delta 供 sidecar 回填，故只要提供 userFinalText + deliveredText 就计算。
+  let computedDelta: ReturnType<typeof computeUserModificationDelta> | null = null;
+  if (
+    input.userFinalText !== undefined
+    && input.deliveredText !== undefined
+  ) {
+    computedDelta = computeUserModificationDelta(
+      input.deliveredText,
+      input.userFinalText,
+    );
+  }
+
+  // ── P1-3 修复：自然语言反馈编译路径 ──────────────────────────────────
+  // 当提供 naturalLanguageFeedback 且未提供 action 时，由 NaturalLanguageFeedbackCompiler
+  // 规则驱动推断 strategyId + inferredAction，自动记录策略信誉 outcome。
+  // 取代原 TODO(P4D)：编译器已实现，不再只标记接收。
+  const hasNaturalLanguageFeedback =
+    !!input.naturalLanguageFeedback && input.naturalLanguageFeedback.trim().length > 0;
+  let compiledFeedback: import("../v2/learning/natural-language-feedback-compiler.js").CompiledFeedback | null = null;
+  let naturalLanguageFeedbackAccepted = false;
+
+  if (hasNaturalLanguageFeedback) {
+    naturalLanguageFeedbackAccepted = true;
+    const { compileNaturalLanguageFeedback } = await import(
+      "../v2/learning/natural-language-feedback-compiler.js"
+    );
+    compiledFeedback = compileNaturalLanguageFeedback(
+      input.naturalLanguageFeedback!,
+      selectedStrategyIds,
+    );
+
+    // 仅当 action 未显式提供时，走编译器自动推断路径（避免与显式 action 双重记录）
+    if (!input.action) {
+      if (compiledFeedback.strategyId) {
+        const compileContext = {
+          sourceChapter: sourceChapter ?? "",
+          modelVersion,
+          strategyId: compiledFeedback.strategyId,
+          opportunityType,
+        };
+        switch (compiledFeedback.inferredAction) {
+          case "choice":
+            // positive 情感 → 用户接受 editorial（策略生效 = win）
+            result = ingestor.ingestChoice(store, {
+              context: compileContext,
+              chosen: "editorial",
+              note: compiledFeedback.reason,
+            });
+            break;
+          case "edit":
+            // negative 情感 → 用户修改 editorial（策略无效 = loss）
+            result = ingestor.ingestEdit(store, {
+              context: compileContext,
+              deliveredSource: "editorial",
+              modified: true,
+              editDistance: undefined,
+              note: compiledFeedback.reason,
+            });
+            break;
+          case "rating":
+          default:
+            // neutral 情感 → 评分 3（tie，不显著影响信誉）
+            result = ingestor.ingestRating(store, {
+              context: compileContext,
+              rating: compiledFeedback.inferredRating,
+              candidateSource: "editorial",
+              note: compiledFeedback.reason,
+            });
+            break;
+        }
+        saveStrategyPolicyStore(store, input.workspaceId, projectRoot);
+      }
+      // P1 修复（审阅包回填）：NL feedback 路径也回填 sidecar（若 chapterId + delta 可用）
+      const nlBackfill = await backfillReviewPackageIfAvailable(input, projectRoot, computedDelta);
+      // action 未提供且编译器无法映射（strategyId=null）→ 只标记接收，不记录 outcome
+      return {
+        status: "ok",
+        workspaceId: input.workspaceId,
+        action: compiledFeedback.inferredAction,
+        strategyId: compiledFeedback.strategyId,
+        modelVersion,
+        result: result ?? { recorded: false, reason: compiledFeedback.reason },
+        compiledFeedback,
+        naturalLanguageFeedbackAccepted,
+        userModificationDelta: computedDelta,
+        reviewPackageBackfill: nlBackfill,
+      };
+    }
+    // action 显式提供 → 走下方 switch；compiledFeedback 作为可审计证据附在返回中
+  }
+
   // 公共上下文（choice/edit/rating 需要 sourceChapter + opportunityType）
+  // 显式 action 路径必须同时提供 strategyId（schema allOf 保证；此处防御性校验）
+  if (input.action && !input.strategyId) {
+    throw new Error(
+      `显式 action="${input.action}" 需要 strategyId（若使用自然语言反馈编译路径，请省略 action）`,
+    );
+  }
   const context = {
-    sourceChapter: input.sourceChapter ?? "",
-    modelVersion: input.modelVersion,
-    strategyId: input.strategyId,
-    opportunityType: input.opportunityType ?? "",
+    sourceChapter: sourceChapter ?? "",
+    modelVersion,
+    strategyId: input.strategyId!,
+    opportunityType,
   };
 
   switch (input.action) {
     case "choice": {
       if (!input.chosen) throw new Error("choice 操作需要 chosen 参数");
-      if (!input.sourceChapter) throw new Error("choice 操作需要 sourceChapter 参数");
+      if (!sourceChapter) throw new Error("choice 操作需要 sourceChapter 参数（可由 chapterId 推断）");
       result = ingestor.ingestChoice(store, {
         context,
         chosen: input.chosen,
@@ -377,22 +571,37 @@ export async function handleStrategyFeedback(input: {
       break;
     }
     case "edit": {
-      if (!input.sourceChapter) throw new Error("edit 操作需要 sourceChapter 参数");
-      if (input.modified === undefined) throw new Error("edit 操作需要 modified 参数");
+      if (!sourceChapter) throw new Error("edit 操作需要 sourceChapter 参数（可由 chapterId 推断）");
       if (!input.deliveredSource) throw new Error("edit 操作需要 deliveredSource 参数");
+      // Phase 4A：优先使用 computedDelta（来自 userFinalText vs deliveredText）
+      // 调用方未提供 userFinalText/deliveredText 时回退到原 modified/editDistance 参数
+      let modified: boolean;
+      let editDistance: number | undefined;
+      let editNote = input.note;
+      if (computedDelta) {
+        modified = computedDelta.modified;
+        editDistance = computedDelta.editDistance;
+        // 把 delta 摘要追加到 note，供 evidence 审计
+        const deltaSummary = `[userModificationDelta] ${computedDelta.reason}`;
+        editNote = editNote ? `${editNote} | ${deltaSummary}` : deltaSummary;
+      } else {
+        if (input.modified === undefined) throw new Error("edit 操作需要 modified 参数（或提供 userFinalText + deliveredText）");
+        modified = input.modified;
+        editDistance = input.editDistance;
+      }
       result = ingestor.ingestEdit(store, {
         context,
         deliveredSource: input.deliveredSource,
-        modified: input.modified,
-        editDistance: input.editDistance,
-        note: input.note,
+        modified,
+        editDistance,
+        note: editNote,
       });
       break;
     }
     case "rating": {
       if (input.rating === undefined) throw new Error("rating 操作需要 rating 参数");
       if (!input.candidateSource) throw new Error("rating 操作需要 candidateSource 参数");
-      if (!input.sourceChapter) throw new Error("rating 操作需要 sourceChapter 参数");
+      if (!sourceChapter) throw new Error("rating 操作需要 sourceChapter 参数（可由 chapterId 推断）");
       result = ingestor.ingestRating(store, {
         context,
         rating: input.rating,
@@ -405,15 +614,15 @@ export async function handleStrategyFeedback(input: {
       if (!input.status) throw new Error("status_override 操作需要 status 参数");
       if (!input.reason) throw new Error("status_override 操作需要 reason 参数");
       result = ingestor.applyStatusOverride(store, {
-        strategyId: input.strategyId,
-        modelVersion: input.modelVersion,
+        strategyId: input.strategyId!,
+        modelVersion,
         status: input.status,
         reason: input.reason,
       });
       break;
     }
     case "revert": {
-      result = ingestor.revertLastOutcome(store, input.strategyId, input.modelVersion);
+      result = ingestor.revertLastOutcome(store, input.strategyId!, modelVersion);
       break;
     }
     default:
@@ -423,12 +632,85 @@ export async function handleStrategyFeedback(input: {
   // 保存更新后的策略信誉库（原子保存 tmp→rename）
   saveStrategyPolicyStore(store, input.workspaceId, projectRoot);
 
+  // P1 修复（审阅包回填）：显式 action 路径也回填 sidecar（若 chapterId + delta 可用）
+  const backfillResult = await backfillReviewPackageIfAvailable(input, projectRoot, computedDelta);
+
+  // naturalLanguageFeedbackAccepted / compiledFeedback 已在上方 P1-3 编译路径初始化
+  // 显式 action 路径下，若同时提供了 naturalLanguageFeedback，compiledFeedback 作为可审计证据返回
+
   return {
     status: "ok",
     workspaceId: input.workspaceId,
-    action: input.action,
-    strategyId: input.strategyId,
-    modelVersion: input.modelVersion,
+    action: input.action!,
+    strategyId: input.strategyId!,
+    modelVersion,
+    traceContext: traceContext
+      ? {
+          tracePath: traceContext.tracePath,
+          inferredModelVersion: !input.modelVersion,
+          inferredSelectedStrategyIds: !input.selectedStrategyIds?.length,
+          inferredSourceChapter: !input.sourceChapter,
+        }
+      : null,
     result,
+    /** Phase 4A：返回 computedDelta 供调用方审计 */
+    userModificationDelta: computedDelta,
+    /** P1 修复（审阅包回填）：sidecar 回填结果（status/reason）供调用方审计 */
+    reviewPackageBackfill: backfillResult,
+    /** Phase 4D（P1-3）：自然语言反馈接收状态与编译结果（可审计） */
+    naturalLanguageFeedbackAccepted,
+    ...(compiledFeedback ? { compiledFeedback } : {}),
   };
+}
+
+// ============================================================================
+// P1 修复（审阅包回填）：sidecar 回填辅助
+// ============================================================================
+
+/**
+ * 若提供了 chapterId 且 computedDelta 可用，调用 backfillAuthorStyleReviewPackage
+ * 把用户修改差分回填到 sidecar review-package.json。
+ *
+ * 设计：
+ * - chapterId 或 computedDelta 缺失 → 返回 skipped（不阻断反馈记录）
+ * - sidecar 不存在 → 返回 not_found（章节可能未走统一主链路，或预览模式未持久化）
+ * - 回填成功 → 返回 ok + 更新后的 package 路径
+ * - 回填异常 → 返回 error（不阻断反馈记录，仅记录失败原因）
+ *
+ * 动态 import 编排器模块，避免 handlers → v2/core 的编译期硬依赖。
+ */
+async function backfillReviewPackageIfAvailable(
+  input: { chapterId?: string; workspaceId: string },
+  projectRoot: string,
+  computedDelta: unknown,
+): Promise<{
+  status: "ok" | "not_found" | "error" | "skipped";
+  reason: string;
+  filePath?: string;
+}> {
+  if (!input.chapterId) {
+    return { status: "skipped", reason: "未提供 chapterId，跳过 sidecar 回填" };
+  }
+  if (!computedDelta) {
+    return { status: "skipped", reason: "未计算 userModificationDelta（需提供 userFinalText + deliveredText）" };
+  }
+  try {
+    const { backfillAuthorStyleReviewPackage } = await import(
+      "../v2/core/unified-orchestrator.js"
+    );
+    const result = backfillAuthorStyleReviewPackage({
+      projectRoot,
+      workspaceId: input.workspaceId,
+      chapterId: input.chapterId,
+      delta: computedDelta as import("../v2/learning/user-modification-delta.js").UserModificationDelta,
+    });
+    return {
+      status: result.status,
+      reason: result.reason,
+      ...(result.filePath ? { filePath: result.filePath } : {}),
+    };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "error", reason: `回填模块加载/执行失败：${msg}` };
+  }
 }

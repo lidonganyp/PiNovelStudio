@@ -49,6 +49,15 @@ const PROXY_FINALIZATION_ACTIONS = new Set([
 export interface HandleWorkspaceManagerInput {
   action: string;
   workspaceId?: string;
+  // init 子操作参数
+  novelName?: string;
+  genre?: string;
+  subGenres?: string[];
+  styleProfile?: string;
+  targetWordCount?: {
+    perChapter: { min: number; max: number };
+    total: number;
+  };
   // proxy_finalization 子操作参数
   proxyAction?: string;
   chapterId?: string;
@@ -189,11 +198,48 @@ export async function handleWorkspaceManager(
     const manager = await createWorkspaceManager();
 
     switch (input.action) {
+      case "init": {
+        if (!input.workspaceId || !input.novelName || !input.genre) {
+          return {
+            status: "error",
+            message: "init 操作需要 workspaceId、novelName、genre",
+          };
+        }
+        const config = await manager.init({
+          workspaceId: input.workspaceId,
+          novelName: input.novelName,
+          genre: input.genre,
+          subGenres: input.subGenres,
+          styleProfile: input.styleProfile,
+          targetWordCount: input.targetWordCount,
+        });
+        return {
+          status: "success",
+          config,
+          message: `Workspace "${input.workspaceId}" 已创建`,
+        };
+      }
+
       case "list": {
         const workspaces = await manager.listWorkspaces();
         return {
           status: "success",
           workspaces,
+        };
+      }
+
+      case "switch": {
+        if (!input.workspaceId) {
+          return {
+            status: "error",
+            message: "请提供 workspaceId",
+          };
+        }
+        const config = await manager.switch(input.workspaceId);
+        return {
+          status: "success",
+          config,
+          message: `已切换到 Workspace "${input.workspaceId}"`,
         };
       }
 

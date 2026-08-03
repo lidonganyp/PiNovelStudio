@@ -31,6 +31,7 @@ import {
   skippedGenreContract,
 } from "../dist/v2/core/genre-contract-compiler.js";
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 // ============================================================================
 // 辅助：构造 worldRules / constitution / intent
@@ -259,7 +260,7 @@ test("GENRE-CONTRACT-1 integration: 类型承诺保留在 trace，不指挥 raw 
         characterStates: [],
         openLoops: [],
         worldRules: makeWorldRules("悬疑"),
-        styleReferences: [],
+        styleReferences: TEST_STYLE_REFERENCES,
         sourceMap: [],
         constitution: null,
         longTermState: null,

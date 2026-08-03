@@ -312,6 +312,8 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
 
 **FailureEnvelope 阻断归因**：所有 Stage/Gate 失败（Preflight/ContextCompiler/Raw/FactGuard/Editorial/Judge/Selection + 顶层 catch）归一成 `FailureEnvelope`（stage/gate/severity/reason/evidence/recoverable/retryPlan/userActionRequired），写入 `workspaces/{id}/traces/{chapterId}-quality-trace.json` 的 `failureEnvelopes` 数组，并通过 `withFailureReturn` 返回给调用方。不再只返回笼统的"章节生成失败"。
 
+> **Phase 1 整改（2026-07-28）**：`severity` 新增 `"recoverable"`（原仅 preflight|hard|fatal），用于模型超时/空结果等可自动恢复的失败。新增 `gate` 字段（如 `model_timeout` / `style_optimization` / `story_preservation` / `preflight`），工具层 `register-tools.ts` 用 `gate === "model_timeout" && severity === "recoverable"` 判断是否同阶段重试一次。风格优化失败不再回退 raw，blocked 路径 `selectedSource=null`。
+
 **novel_preflight_workspace 生成前预检**：统一主链路 Preflight 阶段调用 `preflightWorkspace`，检查 config/角色档案/前章 skeleton/ChapterSeed 可生长性/manifest/模型 timeout/字数预算。预检失败不进入模型生成；缺 `series/outline.md` 不阻断；Seed 不足提示补种子源（不提示补章纲）。
 
 **Gate 级恢复策略**（`craft/event-recovery-config.ts` 配置化预算）：

@@ -151,6 +151,19 @@ export function resolveGenerateResultFile(workspacePath: string, chapterId: stri
 }
 
 /**
+ * P1 修复：作者风格人工审阅包 sidecar 路径: chapters/chapter-{N}/review-package.json
+ *
+ * 与 blueprint.json / generate-result.json 同目录，独立于 quality-trace.json：
+ * - 生成时由编排器写入（userModificationDelta=null 占位）
+ * - 用户提交反馈时（handleStrategyFeedback 提供 userFinalText+deliveredText+chapterId）
+ *   由 backfillAuthorStyleReviewPackage 原子更新 userModificationDelta 字段
+ * - trace 文件保持不可变审计证据，sidecar 承载可回填的人工审阅包
+ */
+export function resolveReviewPackageFile(workspacePath: string, chapterId: string): string {
+  return join(resolveChapterDir(workspacePath, chapterId), "review-package.json");
+}
+
+/**
  * 给 DAGSerializer 用（basePath 已是 chapters/ 目录）。
  * 返回 chapters/chapter-{N}/ 目录（不包含 blueprint.json 文件名）。
  */

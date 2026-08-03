@@ -68,7 +68,6 @@ import type {
 } from "./narrative-agent-loop-types.js";
 import {
   DEFAULT_REPAIR_BATCH_SIZE,
-  MAX_STAGNANT_REPAIR_ROUNDS,
   isSemanticFinding,
   selectRepairFindings,
   findingIds,
@@ -136,7 +135,9 @@ export class NarrativeAgentLoop {
    */
   async run(input: AgentLoopInput): Promise<AgentLoopResult> {
     // ── 1. EvidencePlan ──────────────────────────────────────────────────
-    const plan = createEvidencePlan({
+    // Phase 2C：优先消费调用方预创建的 plan（allowedTools 已在 runtime 创建前过滤）。
+    // 未提供时回退到内部 createEvidencePlan（向后兼容）。
+    const plan = input.evidencePlan ?? createEvidencePlan({
       chapterIntent: input.chapterIntent,
       seedContext: input.seedContext,
     });
@@ -146,7 +147,7 @@ export class NarrativeAgentLoop {
     // ── 2. runAgentTurns（Agent 原生 ReAct loop） ────────────────────────
     let turns: AgentTurnsResult;
     try {
-      turns = await this.runAgentTurns(input);
+      turns = await this.runAgentTurns(input, plan);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.trajectory.recordFailure({
@@ -188,7 +189,7 @@ export class NarrativeAgentLoop {
 
     if (this.verifier && this.patchService) {
       try {
-        const vp = await this.verifyAndPatch(turns.draftText, input);
+        const vp = await this.verifyAndPatch(turns.draftText, input, plan);
         finalText = vp.text;
         verifierReport = vp.verifierReport;
         patchProposals = vp.patchProposals;
@@ -248,8 +249,14 @@ export class NarrativeAgentLoop {
   /**
    * 触发 Agent 原生 loop：构建 userPrompt → runtime.prompt() → waitForIdle()
    * → 从 agent.state.messages 提取 draft + sourceRefs。
+   *
+   * Phase 2C：接收 EvidencePlan 参数，把 plan.mustVerify 注入 prompt 作为
+   * "本章必须验证的事实点" block，引导 Agentic 优先检索这些事实。
    */
-  private async runAgentTurns(input: AgentLoopInput): Promise<AgentTurnsResult> {
+  private async runAgentTurns(
+    input: AgentLoopInput,
+    plan: EvidencePlan,
+  ): Promise<AgentTurnsResult> {
     // R6 修复：eval 模式下注入【前文】段，确保 agentic 生成续写同一故事。
     const promptParts: string[] = [];
     if (input.evalPrefix && input.evalPrefix.trim().length > 0) {
@@ -261,6 +268,16 @@ export class NarrativeAgentLoop {
       "种子上下文：",
       input.seedContext,
       "",
+    );
+    // Phase 2C：注入 mustVerify 事实点，引导 Agentic 优先检索这些事实。
+    if (plan.mustVerify.length > 0) {
+      promptParts.push(
+        "本章必须验证的事实点（优先检索这些事实，确保正文不违反已确立设定）：",
+        ...plan.mustVerify.map((item) => `  - ${item}`),
+        "",
+      );
+    }
+    promptParts.push(
       "请先使用跨源叙事证据检索工具查找结构化事实证据（世界事实、角色状态、原文片段），",
       "再按需使用章节原文片段检索工具查证具体原文。证据充分时直接输出正文，不再发出工具调用指令。",
     );
@@ -358,13 +375,19 @@ export class NarrativeAgentLoop {
    *    - 有 accepted → reverify；清零则用 patchedText 返回
    *    - 仍有硬失败 → 更新 feedbacks/proposals 进入下轮
    * 5. 连续两轮无收敛则停止；仍有硬失败时返回最后已接受候选
+   *
+   * Phase 2C：接收 EvidencePlan，用 plan.stopConditions.maxStagnantRounds
+   * 驱动停滞退出（替代硬编码 MAX_STAGNANT_REPAIR_ROUNDS）。
    */
   private async verifyAndPatch(
     draftText: string,
     input: AgentLoopInput,
+    plan: EvidencePlan,
   ): Promise<VerifyPatchResult> {
     const verifier = this.verifier!;
     const patchService = this.patchService!;
+    // Phase 2C：从 plan 读取停滞阈值（默认与 MAX_STAGNANT_REPAIR_ROUNDS 一致）
+    const maxStagnant = plan.stopConditions.maxStagnantRounds;
 
     // 1. 初次 verify
     let report = verifier.verify({
@@ -498,7 +521,7 @@ export class NarrativeAgentLoop {
         };
       }
 
-      if (stagnantRounds >= MAX_STAGNANT_REPAIR_ROUNDS) {
+      if (stagnantRounds >= maxStagnant) {
         stopReason = "stagnant";
         break;
       }

@@ -17,6 +17,7 @@ import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.
 import { scanFinalTextCompleteness } from "../dist/v2/core/final-text-completeness-guard.js";
 import { loadBlockedCandidateEvidence } from "../dist/v2/core/blocked-candidate-evidence.js";
 import { createHash } from "node:crypto";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 const RQ4F_TRUNCATED_CH20 = [
   "大蛇的身体猛然僵直，随后重重砸进泥水。",
@@ -55,7 +56,7 @@ function makeInput(projectRoot, chapterId, rawText) {
       characterStates: [],
       openLoops: [],
       worldRules: [],
-      styleReferences: [],
+      styleReferences: TEST_STYLE_REFERENCES,
       sourceMap: [],
       constitution: null,
       longTermState: null,
@@ -475,7 +476,7 @@ function makeEditorialPathInput(projectRoot, chapterId) {
       characterStates: [],
       openLoops: [],
       worldRules: [],
-      styleReferences: [],
+      styleReferences: TEST_STYLE_REFERENCES,
       sourceMap: [],
       constitution: null,
       longTermState: null,

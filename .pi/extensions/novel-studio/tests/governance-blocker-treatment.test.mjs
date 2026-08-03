@@ -56,6 +56,8 @@ function setupTestWorkspace(options = {}) {
     join(testWorkspacePath, "characters"),
     join(testWorkspacePath, "chapters"),
     join(testWorkspacePath, "traces"),
+    // P1-4：测试 workspace 也需要 styles 目录（缺风格档案现在会 preflight 阻断）
+    join(testWorkspacePath, "styles"),
   ];
   for (const d of dirs) mkdirSync(d, { recursive: true });
 
@@ -74,6 +76,18 @@ function setupTestWorkspace(options = {}) {
     };
     writeFileSync(join(testWorkspacePath, "config.json"), JSON.stringify(configData, null, 2), "utf-8");
   }
+
+  // P1-4：创建默认风格档案（缺风格档案现在会 preflight 阻断，测试其他阻断条件时需要先满足此前置条件）
+  writeFileSync(
+    join(testWorkspacePath, "styles", "profile.json"),
+    JSON.stringify({
+      id: "governance-test-style",
+      usagePolicy: { fullChapterOptimization: "required" },
+      editorialGuidance: ["人物压力通过动作、停顿和环境变化呈现。"],
+      characterVoiceGuidance: { 林墨: ["少年感保留现实处境。"] },
+    }, null, 2),
+    "utf-8",
+  );
 
   if (withCharacters) {
     writeFileSync(

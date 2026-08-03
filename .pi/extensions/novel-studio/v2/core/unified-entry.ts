@@ -41,6 +41,15 @@ import { loadCreativeConstitution } from "./creative-constitution.js";
 import { loadStateStore, type StagedStateUpdate, type NarrativeStateEntry } from "./final-state-commit.js";
 import { selectAcceptedChapterReferences } from "./historical-state-backfill.js";
 import type { ChapterSeed } from "../../craft/chapter-seed-types.js";
+// Phase 2A：完整 Preflight 接入 runUnifiedPipeline。
+// 在 release gate 之后、ContextCompiler 之前调用 preflightWorkspace，把"前置条件缺失"
+// 从"模型随机失败"中分离出来。预检失败返回 severity=preflight 阻断，不进入模型调用。
+// evalMode / qualityExperiment / fullPipelinePreview 跳过（不交付正式正文）。
+import {
+  preflightWorkspace,
+  formatPreflightWorkspaceReport,
+  type PreflightWorkspaceReport,
+} from "../../craft/workspace-preflight-checker.js";
 import {
   createLegacyModelGenerateFn,
   createStubModelGenerateFn,
@@ -51,9 +60,13 @@ import {
   createLegacyTraceAdapter,
   deriveContextHashFromCompiled,
   type V2TraceRecord,
+  type V2TraceAdapter,
+  type V2TraceStage,
   type JudgeEvidenceTrace,
   type JudgeRoundTrace,
 } from "../adapters/legacy-trace-adapter.js";
+import { atomicSave } from "./orchestrator-commit-save.js";
+import type { FailureEnvelope } from "../../craft/failure-envelope.js";
 import {
   loadStrategyPolicyStore,
   saveStrategyPolicyStore,
@@ -97,6 +110,119 @@ function loadOntologyLevels(workspaceId: string, projectRoot: string): string[] 
   } catch {
     return [];
   }
+}
+
+/**
+ * Phase 2B：加载 workspace config.targetWordCount.perChapter（字数软目标）。
+ *
+ * 从 workspaces/{id}/config.json 的 targetWordCount.perChapter.{min,max} 读取，
+ * 用于注入 Agentic GenerationPacket 作为字数软目标（非硬性约束，模型可自由调整）。
+ *
+ * 读取失败或字段缺失时返回 undefined（由 agentic-raw-candidate-source 使用默认预算）。
+ */
+function loadTargetWordCount(workspaceId: string, projectRoot: string): { min: number; max: number } | undefined {
+  try {
+    const configPath = join(projectRoot, "workspaces", workspaceId, "config.json");
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
+      targetWordCount?: { perChapter?: { min?: unknown; max?: unknown } };
+    };
+    const perChapter = config.targetWordCount?.perChapter;
+    if (!perChapter) return undefined;
+    const min = typeof perChapter.min === "number" && Number.isFinite(perChapter.min) ? perChapter.min : undefined;
+    const max = typeof perChapter.max === "number" && Number.isFinite(perChapter.max) ? perChapter.max : undefined;
+    if (min === undefined || max === undefined) return undefined;
+    if (min <= 0 || max <= 0 || min > max) return undefined;
+    return { min, max };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * P0-2 修复（Phase 1 整改）：加载 workspace config.worldKeyTerms 全部实体数组。
+ *
+ * 用于 Story Preservation 门禁的完整实体表（full_entities）。汇总 factions（组织）、
+ * places（地点）、currencies（物品/货币）、professions（职业）、specialAbilities（能力）、
+ * levels（境界/等级）。levels 字段通常是长描述串（如"炼体（锻骨/淬腑/...）"），
+ * 取括号内子项切分；其他字段已是短实体名，直接使用。
+ *
+ * 读取失败或字段缺失时返回空数组（不阻断；由 characterNames 兜底）。
+ */
+function loadWorldKeyEntities(workspaceId: string, projectRoot: string): string[] {
+  try {
+    const configPath = join(projectRoot, "workspaces", workspaceId, "config.json");
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
+      worldKeyTerms?: Record<string, unknown>;
+    };
+    const terms = config.worldKeyTerms;
+    if (!terms || typeof terms !== "object") return [];
+    const entities: string[] = [];
+    for (const key of Object.keys(terms)) {
+      const value = terms[key];
+      if (!Array.isArray(value)) continue;
+      for (const item of value) {
+        if (typeof item !== "string") continue;
+        const trimmed = item.trim();
+        if (trimmed.length < 2) continue;
+        // levels 字段形如 "炼体（锻骨/淬腑/易筋/洗髓/金身/法相/归一）"，
+        // 取主名 + 括号内子项分别作为实体。
+        entities.push(trimmed);
+        const parenMatch = trimmed.match(/[（(]([^）)]+)[）)]/);
+        if (parenMatch) {
+          const inner = parenMatch[1].split(/[\/、，,]/);
+          for (const sub of inner) {
+            const s = sub.trim();
+            if (s.length >= 2) entities.push(s);
+          }
+        }
+      }
+    }
+    return entities;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * P0-2 修复（Phase 1 整改）：汇聚完整实体表供 Story Preservation 门禁使用。
+ *
+ * 合并角色名+别名 与 worldKeyTerms 全部实体数组，去重，保留 ≥2 字符项。
+ * 返回 null 表示无 worldKeyTerms 实体（orchestrator 回退 characterNames + characters_only）。
+ */
+function buildKnownEntities(characterNames: string[], worldKeyEntities: string[]): string[] | null {
+  if (worldKeyEntities.length === 0) return null;
+  const merged = [...characterNames, ...worldKeyEntities]
+    .filter((e) => e && e.trim().length >= 2)
+    .map((e) => e.trim());
+  return [...new Set(merged)];
+}
+
+/**
+ * P0 第五轮 P1 修复：从 seed.characters 构建别名→规范名映射。
+ *
+ * 每个角色的 `name` 作为规范名，其 `aliases` 全部映射到该规范名；
+ * 规范名自身也映射到自身（幂等，便于无条件查表）。仅保留 ≥2 字符的非空项。
+ *
+ * 用途：传入 Story Preservation Gate 的 extractEvents，使 raw 文本用 "叶尘" 与
+ * editorial 文本用 "小尘"（别名）时，抽取出的 subject 都规范化为 "叶尘"，比对命中。
+ *
+ * @param characters seed 角色列表（含 name 与可选 aliases）
+ * @returns alias→canonical 映射；无角色时返回空 Map（不做规范化）
+ */
+function buildAliasToCanonical(
+  characters: ReadonlyArray<{ name: string; aliases?: string[] }>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const c of characters) {
+    const canonical = c.name?.trim();
+    if (!canonical || canonical.length < 2) continue;
+    map.set(canonical, canonical);
+    for (const alias of c.aliases ?? []) {
+      const a = alias?.trim();
+      if (a && a.length >= 2) map.set(a, canonical);
+    }
+  }
+  return map;
 }
 
 // ============================================================================
@@ -172,11 +298,16 @@ function validateQualityExperiment(
 // ============================================================================
 
 /**
- * modelTestRoute → GLM 路由锁映射（REAL-QUALITY-1-PREFLIGHT）。
+ * modelTestRoute → GLM 路由锁映射（REAL-QUALITY-1-PREFLIGHT，eval/测试用）。
  *
- * 让正常 novel_generate_chapter 完整主链路可按单次参数锁定 GLM5.2：
- * raw → opportunity judge → editorial candidate → pairwise judge → select。
- * 不通过关闭 editorial/judge 或使用 evalMode 规避完整链路。
+ * 让 novel_generate_chapter 在显式传入 modelTestRoute 时锁定到指定模型路由，
+ * 用于评测/对比测试。生产默认（modelTestRoute=undefined）走统一主链路：
+ * NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存，不调用机器文学裁判。
+ *
+ * Phase 1 整改（2026-07-28）：生产路径已移除 raw → opportunity judge → editorial
+ * candidate → pairwise judge → select 旧链路。该旧链路仅在 evalMode=B4 等
+ * 隔离评测路径中保留。modelTestRoute 锁定的 judgeRoute 仅供 eval/测试调用，
+ * 生产路径不触发。
  *
  * 冻结约束：
  * - modelTestRoute="glm" 时，生成调用走 nb4_generate_glm，判断调用走 nb4_judge_glm。
@@ -186,7 +317,7 @@ function validateQualityExperiment(
  *   保持 output.route 不变，仅覆盖底层调用 route），不破坏选择、trace 和报告契约。
  * - 不改 prompt/winner/finalText/候选数量/文学判断规则。
  *
- * @returns 锁定映射（generateRoute/judgeRoute）；非 "glm" 返回 null（不锁定，走默认路由）
+ * @returns 锁定映射（generateRoute/judgeRoute）；非 "glm"/"doubao"/"gpt56" 返回 null（不锁定，走默认路由）
  */
 export function resolveModelTestRouteLock(
   modelTestRoute: string | undefined,
@@ -702,50 +833,121 @@ function buildTraceRecordsFromOrchResult(
   }
 
   // 4. final_selected — 最终选择（含状态提交结果，供回放审计）
-  const selectedSource: FinalSelectedSource = productionFlow?.mode === "agentic_style_full_pipeline"
-    ? "v2_amplified"
-    : orchResult.selectedSource === "editorial" ? "v2_amplified" : "rawStage2";
-  const projectGain: ProjectGain =
-    orchResult.selectedSource === "editorial" ? "positive" : "neutral";
-  const finalSelection: FinalSelectionReport = {
-    selectedCandidateId: orchResult.selectedCandidateId || rawCandidateId,
-    selectedSource,
-    projectGain,
-    whySelected: [
-      productionFlow?.mode === "agentic_style_full_pipeline"
-        ? "NovelOS Agentic 初稿经作者风格整章优化后交付，文学评价权归用户"
-        : orchResult.judgeResult?.auditSummary ?? "无编辑机会或编辑未胜出，交付 raw 基线",
-    ],
-    whyRejected: orchResult.warnings,
-    acceptedRepairs: [],
-    rejectedRepairs: [],
-  };
-  records.push({
-    stage: "final_selected",
-    timestamp: now,
-    finalSelection,
-    contextHash,
-    // Step 1c/1d：模型调用遥测、阶段耗时、调用预算随 trace 落盘
-    modelCalls: orchResult.stageResults.modelCalls as ModelCallEntry[] | undefined,
-    stageTiming: orchResult.stageResults.stageTiming as Record<string, number> | undefined,
-    modelBudget: orchResult.stageResults.modelBudget as
-      | { soft: number; hard: number; used: number; capped: boolean }
-      | undefined,
-    // Phase 4 C9：release governance 绑定，供 canary 证据跨 release 校验
-    releaseGovernance,
-  });
+  // P2 修复（Phase 1 整改）：blocked 运行不写 final_selected。
+  // 原先即使 status="blocked" 也写 final_selected，且 selectedSource 被强制为
+  // "v2_amplified"/"rawStage2"，把未交付的阻断伪装成有交付来源。审计 P2 指出这会让
+  // trace 读者误以为阻断运行已交付正文。修复后：blocked 路径只写 error 记录（见 #5），
+  // 不伪造 final_selected；仅 status="ok" 才记录最终选择。
+  if (orchResult.status !== "blocked") {
+    const selectedSource: FinalSelectedSource = productionFlow?.mode === "agentic_style_full_pipeline"
+      ? "v2_amplified"
+      : orchResult.selectedSource === "editorial" ? "v2_amplified" : "rawStage2";
+    const projectGain: ProjectGain =
+      orchResult.selectedSource === "editorial" ? "positive" : "neutral";
+    const finalSelection: FinalSelectionReport = {
+      selectedCandidateId: orchResult.selectedCandidateId || rawCandidateId,
+      selectedSource,
+      projectGain,
+      whySelected: [
+        productionFlow?.mode === "agentic_style_full_pipeline"
+          ? "NovelOS Agentic 初稿经作者风格整章优化后交付，文学评价权归用户"
+          : orchResult.judgeResult?.auditSummary ?? "无编辑机会或编辑未胜出，交付 raw 基线",
+      ],
+      whyRejected: orchResult.warnings,
+      acceptedRepairs: [],
+      rejectedRepairs: [],
+    };
+    const authorStyleStrategySelection = orchResult.stageResults.authorStyleStrategySelection as
+      | { modelVersion?: unknown; selectedStrategyIds?: unknown }
+      | undefined;
+    const strategyModelVersion = typeof authorStyleStrategySelection?.modelVersion === "string"
+      ? authorStyleStrategySelection.modelVersion
+      : typeof orchResult.stageResults.modelVersion === "string"
+        ? orchResult.stageResults.modelVersion
+        : null;
+    const selectedStrategyIds = Array.isArray(authorStyleStrategySelection?.selectedStrategyIds)
+      ? authorStyleStrategySelection.selectedStrategyIds.filter(
+          (value): value is string => typeof value === "string" && value.length > 0,
+        )
+      : [];
+    records.push({
+      stage: "final_selected",
+      timestamp: now,
+      finalSelection,
+      contextHash,
+      // Step 1c/1d：模型调用遥测、阶段耗时、调用预算随 trace 落盘
+      modelCalls: orchResult.stageResults.modelCalls as ModelCallEntry[] | undefined,
+      stageTiming: orchResult.stageResults.stageTiming as Record<string, number> | undefined,
+      modelBudget: orchResult.stageResults.modelBudget as
+        | { soft: number; hard: number; used: number; capped: boolean }
+        | undefined,
+      ...(strategyModelVersion
+        ? {
+            strategyContext: {
+              modelVersion: strategyModelVersion,
+              selectedStrategyIds,
+              sourceChapter: /^ch/i.test(orchResult.chapterId)
+                ? orchResult.chapterId
+                : `ch${orchResult.chapterId}`,
+              opportunityType: "author_style" as const,
+            },
+          }
+        : {}),
+      // Phase 4 C9：release governance 绑定，供 canary 证据跨 release 校验
+      releaseGovernance,
+    });
+  }
 
   // 5. error — 结构化阻断时记录 failureEnvelope
+  // blocked 路径的核心证据：failureEnvelope 含 stage/severity/gate/reason/recoverable。
+  // 即使无 final_selected，trace 读者也能从 error 记录还原阻断原因与恢复策略。
+  // P1 修复（第三轮）：使用 failureEnvelope.stage 作为 trace record 的 stage（如 "story_preservation"），
+  // 并透传完整 failureEnvelope（含 gate/severity/retryPlan/userActionRequired），
+  // 避免 legacy-trace-adapter 把所有 blocked 路径改写为 stage/gate=v2_error。
   if (orchResult.status === "blocked" && orchResult.failureEnvelope) {
+    const fe = orchResult.failureEnvelope;
+    // P1 修复（第三轮）：映射 UnifiedFailureEnvelope → FailureEnvelope，保留 gate/severity/retryPlan/userActionRequired。
+    // UnifiedFailureEnvelope.severity 用 "hard"|"fatal"，FailureEnvelope 用 "hard_block"；
+    // 映射时 "hard"/"fatal" → "hard_block"，"preflight"/"recoverable" 保持不变。
+    const mappedSeverity: FailureEnvelope["severity"] =
+      fe.severity === "preflight" ? "preflight"
+      : fe.severity === "recoverable" ? "recoverable"
+      : "hard_block";
+    const mappedEnvelope: FailureEnvelope = {
+      stage: fe.stage,
+      gate: fe.gate ?? fe.stage,
+      severity: mappedSeverity,
+      reason: fe.reason,
+      // P1 修复：evidence 不再固定 null。UnifiedFailureEnvelope 无 evidence 字段，
+      // 用 reason + blockCategory + candidateDisposition 作为结构化证据。
+      evidence: {
+        reason: fe.reason,
+        blockCategory: fe.blockCategory ?? null,
+        candidateDisposition: fe.candidateDisposition ?? null,
+        stageResults: orchResult.stageResults,
+      },
+      recoverable: fe.recoverable,
+      retryPlan: fe.retryPlan as FailureEnvelope["retryPlan"],
+      userActionRequired: fe.userActionRequired,
+    };
     records.push({
-      stage: "error",
+      stage: (fe.stage || "error") as V2TraceStage,
       timestamp: now,
       error: {
-        message: orchResult.failureEnvelope.reason,
-        code: orchResult.failureEnvelope.stage,
-        recoverable: orchResult.failureEnvelope.recoverable,
+        message: fe.reason,
+        code: fe.stage,
+        recoverable: fe.recoverable,
       },
+      // P1 修复：透传完整 FailureEnvelope，保留 gate/severity/retryPlan/userActionRequired
+      failureEnvelope: mappedEnvelope,
+      // P2 修复：blocked 路径也保留模型调用遥测与 budget，供审计阻断前的资源消耗。
       contextHash,
+      modelCalls: orchResult.stageResults.modelCalls as ModelCallEntry[] | undefined,
+      stageTiming: orchResult.stageResults.stageTiming as Record<string, number> | undefined,
+      modelBudget: orchResult.stageResults.modelBudget as
+        | { soft: number; hard: number; used: number; capped: boolean }
+        | undefined,
+      releaseGovernance,
     });
   }
 
@@ -776,6 +978,152 @@ function buildTraceRecordsFromOrchResult(
   }
 
   return records;
+}
+
+export interface UnifiedTracePersistenceResult {
+  status: "primary" | "fallback" | "failed";
+  path?: string;
+  primaryAttempts: number;
+  errors: string[];
+}
+
+interface PersistUnifiedTraceInput {
+  projectRoot: string;
+  workspaceId: string;
+  chapterId: string;
+  traceRecords: V2TraceRecord[];
+  adapterFactory?: (options: {
+    workspacePath: string;
+    workspaceId: string;
+    chapterId: string;
+  }) => V2TraceAdapter;
+}
+
+/**
+ * 持久化统一主链路 trace：主路径最多 flush 两次，仍失败则原子写入 reports/traces 备用归档。
+ * 章节/长期状态已在此前提交，因此这里不把 trace I/O 失败伪装成未交付章节；若备用归档也失败，
+ * 返回 status=failed 让调用方在 stageResults 中显式暴露留存违约。
+ */
+export function persistUnifiedTraceWithFallback(
+  input: PersistUnifiedTraceInput,
+): UnifiedTracePersistenceResult {
+  const errors: string[] = [];
+  let primaryAttempts = 0;
+  try {
+    const adapterFactory = input.adapterFactory ?? createLegacyTraceAdapter;
+    const adapter = adapterFactory({
+      workspacePath: join(input.projectRoot, "workspaces"),
+      workspaceId: input.workspaceId,
+      chapterId: input.chapterId,
+    });
+    for (const record of input.traceRecords) adapter.record(record);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      primaryAttempts = attempt;
+      try {
+        const path = adapter.flush();
+        if (path) {
+          return { status: "primary", path, primaryAttempts, errors };
+        }
+        errors.push(`primary flush attempt ${attempt} returned no path`);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`primary flush attempt ${attempt} failed: ${message}`);
+      }
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`trace adapter setup failed: ${message}`);
+  }
+
+  try {
+    const safeWorkspaceId = input.workspaceId.replace(/[^A-Za-z0-9_-]/g, "_");
+    const safeChapterId = input.chapterId.replace(/[^A-Za-z0-9_-]/g, "_");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const fallbackPath = join(
+      input.projectRoot,
+      "reports",
+      "traces",
+      `${safeWorkspaceId}-${safeChapterId}-quality-trace-fallback-${timestamp}.json`,
+    );
+    atomicSave(fallbackPath, JSON.stringify({
+      schemaId: "pinovel-unified-trace-fallback-v1",
+      workspaceId: input.workspaceId,
+      chapterId: input.chapterId,
+      savedAt: new Date().toISOString(),
+      primaryAttempts,
+      primaryErrors: errors,
+      traceRecords: input.traceRecords,
+    }, null, 2));
+    return { status: "fallback", path: fallbackPath, primaryAttempts, errors };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`fallback trace archive failed: ${message}`);
+    return { status: "failed", primaryAttempts, errors };
+  }
+}
+
+/**
+ * P2 修复（Phase 1 整改）：为早期阻断/异常写最小 trace。
+ *
+ * 审计 P2 指出：release gate 阻断、control plane 能力拒绝、Preflight/ContextCompiler
+ * 抛异常等早期退出路径不写质量 trace，导致这些运行的证据无法回放。此 helper 在
+ * 这些路径上写一条 `error` trace 记录（含 failureEnvelope 摘要），使早期阻断也可审计。
+ *
+ * 写入失败不阻断返回（与正常路径 trace 写入一致的容错策略）。
+ * fullPipelinePreview 模式不写 trace 文件（保持预览无副作用）。
+ */
+function persistEarlyBlockedTrace(
+  projectRoot: string,
+  workspaceId: string,
+  chapterId: string,
+  failureEnvelope: Partial<FailureEnvelope> & { stage: string; reason: string; recoverable: boolean },
+  releaseGovernance?: V2TraceRecord["releaseGovernance"],
+  fullPipelinePreview?: boolean,
+): string | null {
+  if (fullPipelinePreview) return null;
+  try {
+    const traceAdapter = createLegacyTraceAdapter({
+      workspacePath: join(projectRoot, "workspaces"),
+      workspaceId,
+      chapterId,
+    });
+    const now = new Date().toISOString();
+    // P1 修复（第三轮）：使用 failureEnvelope.stage（如 "story_preservation"）作为 trace record 的 stage，
+    // 并透传完整 failureEnvelope（含 gate/severity/retryPlan/userActionRequired），
+    // 避免 legacy-trace-adapter 把所有早期阻断路径改写为 stage/gate=v2_error。
+    // failureEnvelope.stage 来自 orchestrator 的 hardBlock 调用，携带具体阻断阶段信息。
+    // 对于部分字段缺失的早期阻断（如 release gate / preflight / control plane），
+    // 用合理默认值补齐：gate 默认为 stage，severity 默认为 hard_block。
+    const fullEnvelope: FailureEnvelope = {
+      stage: failureEnvelope.stage,
+      gate: failureEnvelope.gate ?? failureEnvelope.stage,
+      severity: failureEnvelope.severity ?? "hard_block",
+      reason: failureEnvelope.reason,
+      evidence: failureEnvelope.evidence ?? null,
+      recoverable: failureEnvelope.recoverable,
+      retryPlan: failureEnvelope.retryPlan,
+      userActionRequired: failureEnvelope.userActionRequired,
+    };
+    const traceStage = (fullEnvelope.stage || "error") as V2TraceStage;
+    traceAdapter.record({
+      stage: traceStage,
+      timestamp: now,
+      error: {
+        message: fullEnvelope.reason,
+        code: fullEnvelope.stage,
+        recoverable: fullEnvelope.recoverable,
+      },
+      // P1 修复：透传完整 FailureEnvelope
+      failureEnvelope: fullEnvelope,
+      contextHash: "early-blocked",
+      releaseGovernance,
+    });
+    return traceAdapter.flush() ?? null;
+  } catch (traceErr) {
+    const msg = traceErr instanceof Error ? traceErr.message : String(traceErr);
+    process.stderr.write(`[Unified] 早期阻断 trace 持久化失败（不阻断返回）：${msg}\n`);
+    return null;
+  }
 }
 
 /**
@@ -846,8 +1194,10 @@ function buildEntryControlPlaneBlockedOutput(
   const denial = controlPlane.policy.decisions.at(-1);
   const failureEnvelope = {
     stage: `control_plane_${capability.replaceAll(".", "_")}`,
+    gate: "capability_denied",
     severity: "preflight" as const,
     reason: `capability denied: ${capability} (${reason})`,
+    evidence: denial ? { decision: denial } : null,
     recoverable: false,
     degradedTo: "hard_block" as const,
   };
@@ -917,7 +1267,24 @@ export async function runUnifiedPipeline(
     sceneSolution,
     craftGenes,
     promptPatternIds,
+    onUpdate,
   } = input;
+
+  // 顶层进度推送 helper：在 orchestrate 调用前的顶层阶段（release gate / preflight /
+  // context compile / intent build）推送进度，让前端尽早感知工具已启动。
+  // orchestrate 内部的耗时阶段（stage1-stage6）由 timeAsync/timeSync 自动推送。
+  const emitTopProgress = (
+    stage: string,
+    status: "start" | "done",
+    message: string,
+  ) => {
+    if (!onUpdate) return;
+    try {
+      onUpdate({ stage, status, message, timestamp: new Date().toISOString() });
+    } catch {
+      // 进度推送失败不影响生成
+    }
+  };
 
   const promptPatternResolution = loadPromptPatternLibrary(projectRoot, {
     mode: evalMode === undefined ? "production" : "evaluation",
@@ -1009,6 +1376,7 @@ export async function runUnifiedPipeline(
       evalPrefix,
       agenticCandidateSource: evalAgenticSource,
       controlPlane: evalControlPlane,
+      onUpdate,
     });
     // Eval 模式不写 trace / 不保存策略信誉库 / 不提交状态（编排器 evalMode 已跳过 commitAndSave）
     return mapOrchResultToV2Output(
@@ -1035,6 +1403,16 @@ export async function runUnifiedPipeline(
     canaryEvidenceRunId: releaseGateResult.ok ? releaseGateResult.canaryEvidenceRunId : null,
   };
   if (!releaseGateResult.ok) {
+    // P2 修复（Phase 1 整改）：release gate 阻断也写 trace，使早期阻断可审计。
+    persistEarlyBlockedTrace(
+      projectRoot,
+      workspaceId,
+      chapterId,
+      // P1 修复：透传完整 release gate failureEnvelope（含 gate/severity/retryPlan/userActionRequired）
+      releaseGateResult.failureEnvelope,
+      releaseGovernanceTrace,
+      effectiveFullPipelinePreview,
+    );
     return {
       status: "blocked",
       workspaceId,
@@ -1052,6 +1430,85 @@ export async function runUnifiedPipeline(
           reason: releaseGateResult.failureEnvelope.reason,
         },
       },
+    };
+  }
+
+  // ── Phase 2A：完整 Preflight 接入（计划 §2A） ──────────────────────────
+  // 在 release gate 通过后、ContextCompiler 之前执行 workspace 预检。
+  // 把"前置条件缺失"（config 缺字段 / 角色档案缺失 / 前章连续性失效 / ChapterSeed 不可生长 /
+  // 显式章纲解析失败 / 模型 timeout 无效 / 字数预算倒挂）从"模型随机失败"中分离出来，
+  // 避免浪费模型预算。预检失败返回 severity=preflight 阻断，不进入模型调用。
+  //
+  // 跳过条件（与 orchestrator 内 Phase 1 兜底检查一致）：
+  // - evalMode 已在上方 return，不会到达此处
+  // - qualityExperiment（隔离质量天花板采样，不交付正式正文）
+  // - fullPipelinePreview（只读链路预览，不交付正式正文）
+  //
+  // 预检通过但 warnings 非空 → 写入 stageResults.preflightWarnings，不阻断。
+  // 预检失败 → 写早期 trace + 返回 blocked + failureEnvelope(stage=preflight, severity=preflight)。
+  const preflightReport: PreflightWorkspaceReport | null =
+    !qualityExperiment && !effectiveFullPipelinePreview
+      ? preflightWorkspace({
+          workspacePath: join(projectRoot, "workspaces", workspaceId),
+          workspaceId,
+          chapterId,
+          chapterNumber,
+          projectRoot,
+        })
+      : null;
+  if (preflightReport && !preflightReport.passed) {
+    const preflightReason = formatPreflightWorkspaceReport(preflightReport);
+    persistEarlyBlockedTrace(
+      projectRoot,
+      workspaceId,
+      chapterId,
+      {
+        stage: "preflight",
+        gate: "preflight",
+        severity: "preflight",
+        reason: preflightReason,
+        evidence: preflightReport.blockingItems,
+        recoverable: false,
+      },
+      releaseGovernanceTrace,
+      effectiveFullPipelinePreview,
+    );
+    return {
+      status: "blocked",
+      workspaceId,
+      chapterId,
+      chapterNumber,
+      text: "",
+      candidates: [],
+      diagnostics: [],
+      failureEnvelope: {
+        stage: "preflight",
+        gate: "preflight",
+        severity: "preflight",
+        reason: preflightReason,
+        evidence: preflightReport.blockingItems,
+        recoverable: false,
+        degradedTo: "hard_block",
+        userActionRequired: preflightReport.fixInstructions,
+        prohibitedActions: [
+          "accept_or_deliver_blocked_candidate",
+          "save_blocked_candidate_as_chapter",
+        ],
+      },
+      stageResults: {
+        unifiedPipeline: true,
+        preflight: {
+          passed: false,
+          blockingItems: preflightReport.blockingItems,
+          warnings: preflightReport.warnings,
+          fixInstructions: preflightReport.fixInstructions,
+        },
+        releaseGovernance: releaseGovernanceTrace,
+      },
+      isPreviewRun: effectiveFullPipelinePreview,
+      selectedSource: null,
+      selectedCandidateId: "",
+      isUnderSpecified: false,
     };
   }
 
@@ -1089,6 +1546,12 @@ export async function runUnifiedPipeline(
     `load workspace context: ${workspaceId}`,
   );
   if (!stateReadDecision.allowed) {
+    // P2 修复（Phase 1 整改）：control plane 能力拒绝也写 trace。
+    persistEarlyBlockedTrace(
+      projectRoot, workspaceId, chapterId,
+      { stage: "control_plane_state_read", gate: "capability_denied", severity: "hard_block", reason: "capability denied: state.read (workspace context read denied)", evidence: { capability: "state.read", denial: stateReadDecision }, recoverable: false },
+      releaseGovernanceTrace, effectiveFullPipelinePreview,
+    );
     return buildEntryControlPlaneBlockedOutput(
       input,
       controlPlane,
@@ -1101,16 +1564,52 @@ export async function runUnifiedPipeline(
   // ContextCompiler.compile 内部调用 loadCreativeConstitution / loadStateStore，
   // 把 constitution 与 longTermState 只读快照塞进 CompiledContext。
   // 此处只读复用 sourceSeed 派生 ChapterIntentInput，不重复加载。
-  const compiler = createContextCompiler();
-  const compiled = compiler.compile({
-    workspaceId,
-    chapterId,
-    chapterNumber,
-    projectRoot,
-  });
+  //
+  // P2 修复（Phase 1 整改）：ContextCompiler 加载 workspace 文件可能抛异常。
+  // 审计 P2 指出"早期 Preflight/Context 异常没有质量 trace"——原先异常直接冒泡，
+  // 不写 trace，证据无法回放。现在 catch 后写早期 trace + 返回结构化 blocked。
+  let compiled: ReturnType<ReturnType<typeof createContextCompiler>["compile"]>;
+  let compileDiagnostics: Diagnostic[] = [];
+  try {
+    const compiler = createContextCompiler();
+    compiled = compiler.compile({
+      workspaceId,
+      chapterId,
+      chapterNumber,
+      projectRoot,
+    });
+    compileDiagnostics = compiled.diagnostics ?? [];
+  } catch (earlyErr) {
+    const msg = earlyErr instanceof Error ? earlyErr.message : String(earlyErr);
+    persistEarlyBlockedTrace(
+      projectRoot, workspaceId, chapterId,
+      { stage: "context_compiler", gate: "context_load", severity: "hard_block", reason: `ContextCompiler 异常：${msg}`, evidence: { error: msg }, recoverable: false },
+      releaseGovernanceTrace, effectiveFullPipelinePreview,
+    );
+    return {
+      status: "blocked",
+      workspaceId, chapterId, chapterNumber,
+      text: "",
+      candidates: [],
+      diagnostics: [],
+      failureEnvelope: {
+        stage: "context_compiler",
+        gate: "context_load",
+        severity: "hard_block",
+        reason: `ContextCompiler 异常：${msg}`,
+        evidence: { error: msg },
+        recoverable: false,
+        degradedTo: "hard_block",
+      },
+      stageResults: { unifiedPipeline: true, earlyException: true },
+      isPreviewRun: effectiveFullPipelinePreview,
+      selectedSource: null,
+      selectedCandidateId: "",
+      isUnderSpecified: false,
+    };
+  }
   const context = compiled.context;
   const seed = compiled.sourceSeed;
-  const compileDiagnostics: Diagnostic[] = compiled.diagnostics ?? [];
 
   // ── 2. ChapterIntentBuilder：从 ChapterSeed + constitution + state 派生意图 ──
   // ChapterIntent 是创作方向（不是章纲/句式清单）。inviolableFacts 合并
@@ -1238,6 +1737,18 @@ export async function runUnifiedPipeline(
 
   // ── 4. characterNames：从 seed 角色列表派生（CANON-IDENTITY-1: 含 aliases） ──
   const characterNames = (seed.characters ?? []).flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+  // P0-2 修复（Phase 1 整改）：Story Preservation 完整实体表。
+  // 合并 characterNames + config.worldKeyTerms（factions/places/currencies/professions/
+  // specialAbilities/levels），供 editorial-story-preservation-gate 做 full_entities 检查。
+  // 无 worldKeyTerms 时为 null，orchestrator 回退 characterNames + characters_only。
+  const worldKeyEntities = loadWorldKeyEntities(workspaceId, projectRoot);
+  const knownEntities = buildKnownEntities(characterNames, worldKeyEntities);
+  // P0 第五轮 P1 修复：构建别名→规范名映射，供 Story Preservation Gate 规范化 subject。
+  // 每个角色的 name 为规范名，其 aliases 映射到 name；name 自身也映射到 name（幂等）。
+  // 使 raw 用 "叶尘" 与 editorial 用 "小尘"（别名）时 subject 比对仍命中，避免同义改写误阻断。
+  const aliasToCanonical = buildAliasToCanonical(seed.characters ?? []);
+  // Phase 2B：加载字数软目标，转发给 Agentic GenerationPacket。
+  const targetWordCount = loadTargetWordCount(workspaceId, projectRoot);
   const acceptedChapterReferences = selectAcceptedChapterReferences({
     workspaceId,
     projectRoot,
@@ -1275,6 +1786,12 @@ export async function runUnifiedPipeline(
     safetyMarginTokens: Number(process.env.PINOVEL_CONTEXT_SAFETY_MARGIN_TOKENS ?? 4096),
   });
   if (!stateStageDecision.allowed) {
+    // P2 修复（Phase 1 整改）：control plane 能力拒绝也写 trace。
+    persistEarlyBlockedTrace(
+      projectRoot, workspaceId, chapterId,
+      { stage: "control_plane_state_stage", gate: "capability_denied", severity: "hard_block", reason: "capability denied: state.stage (narrative state staging denied)", evidence: { capability: "state.stage", denial: stateStageDecision }, recoverable: false },
+      releaseGovernanceTrace, effectiveFullPipelinePreview,
+    );
     return buildEntryControlPlaneBlockedOutput(
       input,
       controlPlane,
@@ -1294,6 +1811,8 @@ export async function runUnifiedPipeline(
     || qualityExperiment
     ? undefined
     : "agentic_style" as const;
+  // 推送 pipeline_start：前端尽早感知工具已启动，进入编排器后 timeAsync/timeSync 接管阶段进度
+  emitTopProgress("pipeline", "start", "统一主链路编排开始（Preflight → Agentic → 风格优化 → 复检 → 保存）");
   const orchestrator = new UnifiedOrchestrator();
   const orchResult = await orchestrator.orchestrate({
     workspaceId,
@@ -1305,8 +1824,12 @@ export async function runUnifiedPipeline(
     context: contextSafety.workingContext,
     constitution: context.constitution ?? null,
     characterNames,
+    knownEntities: knownEntities ?? undefined,
+    // P0 第五轮 P1 修复：别名→规范名映射，供 Story Preservation Gate 规范化 subject。
+    aliasToCanonical,
     fewshotSelection: acceptedChapterReferences,
     ontologyLevels,
+    targetWordCount,
     modelGenerate,
     // REAL-QUALITY-1-PREFLIGHT：双轨路由锁定（modelTestRoute=glm 时）
     // - generationModelGenerate：raw + editorial candidate → nb4_generate_glm
@@ -1350,6 +1873,7 @@ export async function runUnifiedPipeline(
     fullPipelinePreview: effectiveFullPipelinePreview,
     qualityExperiment,
     previewTotalTimeoutMs,
+    onUpdate,
   });
   if (blockedRawRecovery) {
     orchResult.stageResults.blockedRawRecovery = blockedRawRecovery.provenance;
@@ -1378,38 +1902,44 @@ export async function runUnifiedPipeline(
   // 把每章候选、judge 仲裁 span、最终选择、状态提交落盘到
   // {projectRoot}/workspaces/{workspaceId}/traces/{chapterId}-quality-trace.json
   // 使 replay benchmark 与 legacy QualityTraceDocument 解析器可回放。
-  // 写入失败不阻断生成（trace 缺失可补，正文污染不可逆）。
+  // 主路径写入失败时重试一次，再写 reports/traces 备用归档。
+  // 章节/状态已提交，故不能把 trace I/O 失败伪装成未交付章节；备用归档也失败时，
+  // 必须在 stageResults.tracePersistence 显式暴露留存违约，禁止只写 stderr 后返回无解释的 ok。
   //
   // FULL-PIPELINE-PREVIEW-1：预览模式不写 trace 文件——预览必须保持工作区无副作用。
   let tracePath: string | undefined;
   if (!effectiveFullPipelinePreview) {
-    try {
-      const traceAdapter = createLegacyTraceAdapter({
-        workspacePath: join(projectRoot, "workspaces"),
-        workspaceId,
-        chapterId,
-      });
-      const contextHash = deriveContextHashFromCompiled(context);
-      const traceRecords = buildTraceRecordsFromOrchResult(orchResult, contextHash, releaseGovernanceTrace);
-      for (const rec of traceRecords) {
-        traceAdapter.record(rec);
-      }
-      tracePath = traceAdapter.flush();
-    } catch (traceErr) {
-      const msg = traceErr instanceof Error ? traceErr.message : String(traceErr);
-      process.stderr.write(`[Unified] trace 持久化失败（不阻断生成）：${msg}\n`);
+    const contextHash = deriveContextHashFromCompiled(context);
+    const traceRecords = buildTraceRecordsFromOrchResult(orchResult, contextHash, releaseGovernanceTrace);
+    const tracePersistence = persistUnifiedTraceWithFallback({
+      projectRoot,
+      workspaceId,
+      chapterId,
+      traceRecords,
+    });
+    tracePath = tracePersistence.path;
+    orchResult.stageResults.tracePersistence = tracePersistence;
+    if (tracePersistence.status === "fallback") {
+      orchResult.warnings.push(`主 trace 写入失败，已保存备用归档：${tracePersistence.path}`);
+    } else if (tracePersistence.status === "failed") {
+      const message = `trace 主路径与备用归档均失败：${tracePersistence.errors.join("；")}`;
+      orchResult.warnings.push(message);
+      process.stderr.write(`[Unified] ${message}\n`);
     }
   }
 
   // ── 6. 映射到 V2Output 兼容形状 ────────────────────────────────────────
   // 统一主链路永远不返回 v2NotImplemented（无 legacy 回退）。
   // 编译期 diagnostics 与意图构建 warnings 一并写入 stageResults 供 trace 审计。
+  // Phase 2A：预检 warnings（非阻断）合并到 stageResults.preflight 与 orchResult.warnings。
+  const preflightWarnings = preflightReport?.warnings ?? [];
+  const mergedWarnings = [...orchResult.warnings, ...preflightWarnings];
   const baseStageResults: Record<string, unknown> = {
     ...orchResult.stageResults,
     unifiedPipeline: true,
     selectedSource: orchResult.selectedSource,
     selectedCandidateId: orchResult.selectedCandidateId,
-    warnings: orchResult.warnings,
+    warnings: mergedWarnings,
     intentWarnings,
     compileDiagnostics: compileDiagnostics.map((d) => ({
       id: d.id,
@@ -1421,6 +1951,15 @@ export async function runUnifiedPipeline(
     tracePath: tracePath ?? null,
     // G6：发行治理门禁决策摘要（releaseId/environmentFingerprint/approvalRef/devMode）
     releaseGovernance: releaseGovernanceTrace,
+    // Phase 2A：预检结果摘要（passed=true 时 blockingItems 为空；skipped 时为 null）
+    preflight: preflightReport
+      ? {
+          passed: preflightReport.passed,
+          warnings: preflightReport.warnings,
+          checks: preflightReport.checks,
+          durationMs: preflightReport.durationMs,
+        }
+      : { skipped: true, reason: "qualityExperiment or fullPipelinePreview bypass" },
     judgeArbitration: orchResult.stageResults.judgeArbitration
       ?? (orchResult.judgeResult
         ? {

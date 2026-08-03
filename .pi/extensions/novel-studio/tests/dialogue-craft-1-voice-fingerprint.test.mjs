@@ -32,6 +32,7 @@ import {
   skippedDialogueCraft,
 } from "../dist/v2/core/dialogue-craft-compiler.js";
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 // ============================================================================
 // 辅助：构造 ChapterIntent / VoiceFingerprint / CharacterState
@@ -118,7 +119,7 @@ async function runRawFailureWithDialogue({ voiceFingerprints = [] } = {}) {
         characterStates: [makeCharacterState("林川"), makeCharacterState("苏婉")],
         openLoops: [],
         worldRules: [],
-        styleReferences: [],
+        styleReferences: TEST_STYLE_REFERENCES,
         sourceMap: [],
         constitution: null,
         longTermState: null,

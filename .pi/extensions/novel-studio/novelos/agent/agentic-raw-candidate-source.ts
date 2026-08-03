@@ -39,6 +39,10 @@ import type { AgentLoopResult, AgentLoopStopReason } from "./narrative-agent-loo
 import { createNarrativeVerifierSuite } from "../verification/narrative-verifier-suite.js";
 import { createCandidatePatchService } from "./candidate-patch-service.js";
 import { createEvidencePlan } from "./evidence-plan.js";
+import {
+  buildFewshotPromptBlock,
+  type AgenticFewshotSelection,
+} from "./agentic-fewshot-prompt.js";
 
 // ============================================================================
 // 公共接口（编排器通过此接口调用，不直接依赖 NovelOS 内部）
@@ -85,6 +89,15 @@ export interface AgenticRawSourceInput {
    * 预览模式下 agent loop 仍正常运行，只是不落盘。
    */
   fullPipelinePreview?: boolean;
+  /**
+   * P1 修复：Few-shot 黄金示例（来自 FewshotSelector，经 manifest 准入）。
+   *
+   * 编排器从 input.fewshotSelection 透传。Agentic prompt 消费 examples 作为
+   * 写作参考（非机械配额），帮助模型对齐场景类型/叙事节拍/情绪弧。
+   * manifestApproved=false 或 examples 为空时不注入。
+   * undefined 时使用默认行为（不注入 few-shot）。
+   */
+  fewshotSelection?: AgenticFewshotSelection;
 }
 
 /**
@@ -236,6 +249,7 @@ export function createAgenticRawCandidateSource(
         evalPrefix,
         targetWordCount,
         fullPipelinePreview,
+        fewshotSelection,
       } = input;
 
       // ── 0. P1-5 修复：包装 modelGenerate 捕获真实模型名 ──────────────
@@ -321,7 +335,7 @@ export function createAgenticRawCandidateSource(
       // Phase 2C：在 runtime 创建前构建，以便 createEvidencePlan 消费 seedContext，
       // 再用 plan.allowedTools 过滤工具集。
       const chapterIntentStr = buildChapterIntentString(intent);
-      const seedContextStr = buildContractContextString(intent, context, characterNames, targetWordCount);
+      const seedContextStr = buildContractContextString(intent, context, characterNames, targetWordCount, fewshotSelection);
 
       // ── 4. EvidencePlan（Phase 2C） ──────────────────────────────────
       // 在 runtime 创建前创建 plan，用 plan.allowedTools 过滤工具集，
@@ -695,6 +709,7 @@ function buildContractContextString(
   context: CompiledContext,
   characterNames: string[],
   targetWordCount?: { min: number; max: number },
+  fewshotSelection?: AgenticFewshotSelection,
 ): string {
   // ── 1. 构建 canonical ChapterContract ──────────────────────────────
   // buildChapterContract 需要 UnifiedOrchestratorInput 的子集（intent + context + constitution）。
@@ -766,6 +781,12 @@ function buildContractContextString(
   // 字数软目标（renderContract 不输出 wordCountTarget，单独追加）
   if (targetWordCount) {
     parts.push(`【字数软目标】：${targetWordCount.min}-${targetWordCount.max} 字（非硬性约束，可自由调整）`);
+  }
+
+  // P1 修复：注入 few-shot 黄金示例（经 manifest 准入，作为写作参考而非机械配额）
+  const fewshotBlock = buildFewshotPromptBlock(fewshotSelection);
+  if (fewshotBlock) {
+    parts.push(fewshotBlock);
   }
 
   return parts.join("\n\n") || "（无种子上下文）";

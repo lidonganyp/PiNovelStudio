@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
 import { buildTrustedControlPlane } from "../dist/v2/core/control-plane.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 const RAW_TEXT = [
   "林川推开门，走进没有开灯的房间。",
@@ -38,7 +39,7 @@ function makeContext() {
     characterStates: [{
       characterId: "林川", name: "林川", state: { role: "protagonist" }, sourceIds: ["test"],
     }],
-    openLoops: [], worldRules: [], styleReferences: [], sourceMap: [],
+    openLoops: [], worldRules: [], styleReferences: TEST_STYLE_REFERENCES, sourceMap: [],
     constitution: null, longTermState: null,
   };
 }

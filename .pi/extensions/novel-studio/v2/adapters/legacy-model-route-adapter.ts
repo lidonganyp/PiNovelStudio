@@ -295,6 +295,10 @@ function buildStubTextByKind(kind: string, route: string, userPrompt: string): s
   switch (kind) {
     case "raw_chapter":
       return STUB_RAW_TEXT;
+    case "agentic_raw":
+      // Phase 3C：agentic_raw 是初稿，与 raw_chapter 共用 stub 文本（含角色名），
+      // 使事件抽取器能从 stub 文本中提取已知实体事件。
+      return STUB_RAW_TEXT;
     case "opportunity_judge":
       return STUB_OPPORTUNITY_VERDICT;
     case "editorial_amplified":

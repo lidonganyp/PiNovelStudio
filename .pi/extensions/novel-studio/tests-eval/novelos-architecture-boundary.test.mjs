@@ -116,7 +116,23 @@ function makeContext(overrides = {}) {
     ],
     openLoops: [],
     worldRules: [],
-    styleReferences: [],
+    // Phase 1 整改：orchestrator 入口要求 context.styleReferences 中存在 kind=fingerprint
+    // 的档案，否则在模型调用前 hard block。本测试验证 shadow 模式行为，不是 preflight 行为，
+    // 因此提供最小可消费风格指纹以通过前置检查。
+    styleReferences: [{
+      id: "style:arch-boundary-test",
+      kind: "fingerprint",
+      content: JSON.stringify({
+        id: "arch-boundary-test",
+        usagePolicy: { rawPrompt: "excluded", fullChapterOptimization: "required" },
+        editorialGuidance: [
+          "保持叙事节奏紧凑。",
+          "对白自然口语化。",
+          "章末留有钩子。",
+        ],
+        characterVoiceGuidance: {},
+      }),
+    }],
     sourceMap: [],
     constitution: null,
     longTermState: null,

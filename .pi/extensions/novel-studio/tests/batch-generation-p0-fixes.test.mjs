@@ -447,13 +447,13 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // P0-A：作者已有章纲不被覆盖
+  // P0-A：作者章纲所有权
   //
-  // startChapter 缺少章纲时，规划器只应为缺失章节生成；
-  // 已有作者章纲文件必须跳过，不覆盖。
+  // startChapter 缺少章纲时必须阻断；已有作者章纲保持原样，
+  // 系统不得为缺失章节生成模板章纲。
   // ──────────────────────────────────────────────────────────────────────
-  describe("P0-A：作者已有章纲不被覆盖", () => {
-    it("规划器跳过已有作者章纲文件，只为缺失章节生成", async () => {
+  describe("P0-A：作者章纲所有权", () => {
+    it("缺失起始章种子时阻断，已有作者章纲不覆盖且不补模板", async () => {
       const wsId = "batch-p0fix-author-outline";
       const workspacePath = join(PROJECT_ROOT, "workspaces", wsId);
       createBatchWorkspace(wsId);
@@ -465,11 +465,11 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
       const authorContent = "# 第2章 作者手写章纲\n\n## 事件 1：作者专属内容\n\n- **内容摘要**：这是作者精心设计的内容，不应被覆盖\n";
       writeFileSync(authorOutlinePath, authorContent, "utf-8");
 
-      // 删除第 1 章章纲（如果 createBatchWorkspace 创建了），确保规划器被触发
+      // 删除第 1 章章纲（如果 createBatchWorkspace 创建了），确保缺种子
       const ch1OutlinePath = join(seriesDir, "ch1-outline-explicit.md");
       if (existsSync(ch1OutlinePath)) rmSync(ch1OutlinePath);
 
-      // start：第 1 章无章纲 → 触发规划；第 2 章有作者章纲 → 应跳过
+      // start：第 1 章无章纲 → 应阻断；第 2 章有作者章纲 → 保持不变
       const mock = createMockGenerateChapter({ workspacePath });
       const result = await tool.execute(
         "test-p0fix-author-outline",
@@ -495,15 +495,17 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
       assert.equal(
         afterAuthorContent,
         authorContent,
-        "作者已有章纲文件不应被规划器覆盖",
+        "作者已有章纲文件不应被系统覆盖",
       );
       assert.ok(
         afterAuthorContent.includes("作者手写章纲"),
         "作者内容应完好保留",
       );
 
-      // 第 1 章章纲应被规划器生成
-      assert.ok(existsSync(ch1OutlinePath), "第 1 章章纲应被规划器生成");
+      const details = result.details || result;
+      assert.equal(details.status, "error", "缺失第 1 章作者种子时应阻断");
+      assert.equal(mock.calls.length, 0, "缺种子时不得调用章节生成");
+      assert.equal(existsSync(ch1OutlinePath), false, "第 1 章不得生成模板章纲");
 
       cleanupWorkspace(wsId);
     });

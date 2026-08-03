@@ -50,6 +50,18 @@ function createMinimalWorkspace() {
   mkdirSync(join(PHASE5_WORKSPACE, "chapters"), { recursive: true });
   mkdirSync(join(PHASE5_WORKSPACE, "characters"), { recursive: true });
   mkdirSync(join(PHASE5_WORKSPACE, "series"), { recursive: true });
+  mkdirSync(join(PHASE5_WORKSPACE, "styles"), { recursive: true });
+  // P1 修复：最小风格档案前置检查要求 workspace 有 style_profile 风格指纹。
+  writeFileSync(
+    join(PHASE5_WORKSPACE, "styles", "profile.json"),
+    JSON.stringify({
+      id: "routing-split-test",
+      usagePolicy: { rawPrompt: "excluded", fullChapterOptimization: "required" },
+      editorialGuidance: ["保持叙事节奏紧凑。", "对白自然口语化。", "章末留有钩子。"],
+      characterVoiceGuidance: {},
+    }),
+    "utf-8",
+  );
 
   const config = {
     name: "Routing split 验证",
@@ -233,12 +245,14 @@ describe("MODEL-ROUTING-CLAUDE46-1A：modelTestRoute=glm 锁定全部 generation
     const tool = await loadGenerateChapterTool();
     assert.ok(tool, "novel_generate_chapter 应注册");
 
+    // Phase 2A：chapterNumber=1 避免触发 Preflight 前章连续性检查（ch1 state store 不存在）。
+    // trace 路径由 chapterId 决定，与 chapterNumber 无关。
     const result = await tool.execute(
       "test-routing-glm-lock",
       {
         workspaceId: "phase5-routing-split",
-        chapterId: "2",
-        chapterNumber: 2,
+        chapterId: "routing-glm-1",
+        chapterNumber: 1,
         previousChapterSummary: "前章摘要",
         mockAgent: true,
         modelTestRoute: "glm",

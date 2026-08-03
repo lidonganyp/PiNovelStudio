@@ -157,8 +157,35 @@ export interface UnifiedOrchestratorInput {
   methodologyDiagnosticState?: MethodologyDiagnosticState;
   /** 本章已知角色名（用于 ensemble 扫描） */
   characterNames: string[];
+  /**
+   * P0-2 修复（Phase 1 整改）：Story Preservation 完整实体表。
+   *
+   * 由 unified-entry 从 config.characters（含别名）+ worldKeyTerms（factions/places/
+   * currencies/professions/specialAbilities）汇聚去重。覆盖角色、别名、地点、组织、
+   * 物品、能力等，供 editorial-story-preservation-gate 做 full_entities 检查。
+   * 缺失时回退到 characterNames（向后兼容，但 entityCoverage 仍记 characters_only）。
+   */
+  knownEntities?: string[];
+  /**
+   * P0 第五轮 P1 修复：别名→规范名映射（alias → canonical character name）。
+   *
+   * 由 unified-entry 从 seed.characters（name + aliases）构建：每个角色的 name 为规范名，
+   * aliases 映射到该 name。传入后 Story Preservation Gate 的 extractEvents 会把
+   * raw/editorial 文本中的别名规范化到同一规范名，使 "叶尘"（raw）与 "小尘"
+   * （editorial 别名）的 subject 比对仍命中，避免同义改写被误判为事件漂移而 hard block。
+   * 未传入时不做规范化（向后兼容）。
+   */
+  aliasToCanonical?: Map<string, string>;
   /** WORLD-ONTOLOGY-1：workspace config 中声明的 closed-world levels。 */
   ontologyLevels?: string[];
+  /**
+   * Phase 2B：本章字数软目标（非硬性约束）。
+   *
+   * 从 workspace config.targetWordCount.perChapter.{min,max} 读取，
+   * 由编排器转发给 agenticCandidateSource，注入为 Agentic GenerationPacket 的软目标。
+   * 模型可自由调整，不作为硬门禁。undefined 时由 agentic-raw-candidate-source 使用默认预算。
+   */
+  targetWordCount?: { min: number; max: number };
   /**
    * DIALOGUE-CRAFT-1：本章可用角色声音指纹（来自接受稿/样章抽取）。
    * L0 阶段调用方可传 undefined 或空数组（无指纹加载器）；
@@ -246,6 +273,12 @@ export interface UnifiedOrchestratorInput {
   contextSafety?: ContextSafetyResult;
   /** 随机种子（judge 匿名化，可复现） */
   seed?: number;
+  /**
+   * Phase 4B：作者风格优化策略 Thompson Sampling 随机种子（可复现）。
+   * 未设置时使用 Math.random（不可复现）。
+   * 与 judge seed 分离，避免 judge 复现性受策略选择影响。
+   */
+  strategySeed?: number;
   /** 单候选超时 ms */
   timeoutMs?: number;
   /**
@@ -349,6 +382,29 @@ export interface UnifiedOrchestratorInput {
      */
     _registryOverride?: ChapterProxyApprovalRegistry;
   };
+  /**
+   * 流式进度回调（PI 工具协议注入）。编排器在 timeAsync/timeSync 阶段边界调用，
+   * 向前端推送阶段进度（ProgressEvent），避免长时间无响应被前端误判超时。
+   * 签名为 (event: unknown) => void 与 V2Input.onUpdate 一致；实际 event 为 ProgressEvent。
+   */
+  onUpdate?: (event: unknown) => void;
+}
+
+/**
+ * 流式进度事件（PI 工具协议注入，用于向前端推送阶段进度，避免长时间无响应被误判超时）。
+ * onUpdate 签名为 (event: unknown) => void 与 V2Input.onUpdate 一致，实际 event 为本类型。
+ */
+export interface ProgressEvent {
+  /** 阶段标识符（如 "stage1_novelosAgentic"，与 stageTiming key 一致） */
+  stage: string;
+  /** 阶段状态：start=开始，done=完成，blocked=阻断 */
+  status: "start" | "done" | "blocked";
+  /** 中文可读消息 */
+  message: string;
+  /** done 时的耗时（毫秒） */
+  durationMs?: number;
+  /** ISO 时间戳 */
+  timestamp: string;
 }
 
 export interface UnifiedOrchestratorOutput {
@@ -359,8 +415,15 @@ export interface UnifiedOrchestratorOutput {
   chapterNumber: number;
   /** 最终交付正文 */
   text: string;
-  /** 最终选中的来源：raw 或 editorial */
-  selectedSource: "raw" | "editorial";
+  /**
+   * 最终选中的来源：raw 或 editorial；status="blocked" 时为 null。
+   *
+   * P0-1 修复（Phase 1 整改）：blocked 路径不再伪造为 "raw"。
+   * 原先 hardBlock 固定返回 selectedSource="raw"，把未优化 Agentic 初稿伪装成可交付，
+   * 与 rawRole="not_deliverable" 冲突。修复后：blocked 时为 null（无交付来源），
+   * 仅成功交付（status="ok"）才标记 raw 或 editorial。
+   */
+  selectedSource: "raw" | "editorial" | null;
   /** 最终选中的候选 id */
   selectedCandidateId: string;
   /** 所有候选（raw + editorial） */
@@ -406,7 +469,25 @@ export interface UnifiedOrchestratorOutput {
 
 export interface UnifiedFailureEnvelope {
   stage: string;
-  severity: "preflight" | "hard" | "fatal";
+  /**
+   * 阻断严重程度。
+   * - preflight：生成前预检失败（缺配置/角色档案/风格档案等），不可自动恢复。
+   * - recoverable：模型随机失败（超时/空结果），可由工具层同阶段重试一次；重试耗尽转 hard。
+   * - hard：内容/事实/故事保持类阻断，不可自动恢复，需系统重试或用户介入。
+   * - fatal：raw 生成阶段不可恢复失败。
+   *
+   * P1 修复（Phase 1 整改）：新增 "recoverable"，使工具层 model_timeout 重试条件可达。
+   * 原先 severity 仅 preflight|hard|fatal，导致 register-tools.ts 的
+   * `severity === "recoverable"` 检查永不命中，超时被误判为不可恢复。
+   */
+  severity: "preflight" | "recoverable" | "hard" | "fatal";
+  /**
+   * 门禁标识（与 craft/failure-envelope.ts 的 gate 同义）。
+   * 工具层 register-tools.ts 用 `gate === "model_timeout"` 判断是否同阶段重试。
+   * 典型值：model_timeout / style_optimization / story_preservation / fact_guard /
+   * completeness / context_safety / control_plane / preflight 等。
+   */
+  gate?: string;
   reason: string;
   recoverable: boolean;
   /** raw 失败 -> hard_block（无 legacy 回退） */
@@ -423,7 +504,15 @@ export interface UnifiedFailureEnvelope {
   >;
   /** 结构化恢复计划；不会自动绕过 verifier。 */
   retryPlan?: {
-    strategy: "revise_inputs_and_retry_same_chapter";
+    /**
+     * - revise_inputs_and_retry_same_chapter：需用户修订输入后同章重试。
+     * - retry_gate：模型随机失败（超时/空结果），工具层同阶段重试一次，不改输入。
+     * - chapter_level_retry：章节级重试（register-tools.ts model_timeout 路径）。
+     */
+    strategy:
+      | "revise_inputs_and_retry_same_chapter"
+      | "retry_gate"
+      | "chapter_level_retry";
     maxAttempts: number;
   };
   /**
@@ -446,6 +535,26 @@ export interface UnifiedFailureEnvelope {
     | "author_input_conflict"
     | "confirmed_content_omission";
 }
+
+/**
+ * P0-1 修复（Phase 1 整改）：hardBlock 方法的 guidance 参数类型。
+ *
+ * 从 UnifiedFailureEnvelope 选取可由调用方覆盖的字段，加上 severityOverride
+ * （覆盖默认 severity）。抽成独立类型便于在多处 hardBlock 调用复用常量时
+ * 保留字面量类型推断（否则对象字面量会被宽化为 string[]）。
+ */
+export type HardBlockGuidance = Pick<
+  UnifiedFailureEnvelope,
+  | "gate"
+  | "recoverable"
+  | "candidateDisposition"
+  | "userActionRequired"
+  | "prohibitedActions"
+  | "retryPlan"
+  | "blockCategory"
+> & {
+  severityOverride?: "preflight" | "recoverable" | "hard" | "fatal";
+};
 
 export interface ControlPlaneTrace {
   packet: {

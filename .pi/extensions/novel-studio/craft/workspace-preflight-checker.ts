@@ -524,7 +524,14 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
   // P30 修复公共节点污染：三段式解析
   //   1. workspace-local 优先：workspaces/{workspaceId}/styles/profile.json（workspace 私有指纹）
   //   2. 公共 shared 次选：styles/profiles/{styleProfile}.json（公共作者风格指纹库）
-  //   3. 两者皆无时不阻断，仅记录 missing=true，由运行时回退到代码内置默认
+  //   3. 两者皆无时阻断（P1-4 修复）
+  //
+  // P1-4 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
+  //   原先双路径缺失时仅 warning + passed=true，声称使用代码内置默认风格。
+  //   但统一主链路要求有效作者风格档案是必需输入（计划 §Phase 1），
+  //   缺风格档案必须在模型调用前 hard block（severity=preflight），
+  //   否则 Agentic 生成会在无风格指导的情况下调用模型，违反"模型调用前阻断"原则。
+  //   现改为：双路径缺失 → blockingItems + passed=false。
   const styleProfileName = configData?.styleProfile;
   if (styleProfileName && typeof styleProfileName === "string") {
     const workspaceLocalPath = join(projectRoot, "workspaces", workspaceId, "styles", "profile.json");
@@ -534,16 +541,40 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
     } else if (existsSync(sharedPath)) {
       checks.styleProfile = { passed: true, detail: { path: sharedPath, source: "shared" } };
     } else {
-      warnings.push(`风格指纹文件不存在：workspaces/${workspaceId}/styles/profile.json 与 styles/profiles/${styleProfileName}.json 均缺失（将使用代码内置默认风格）`);
-      checks.styleProfile = { passed: true, detail: { missing: true, paths: [workspaceLocalPath, sharedPath] } };
+      // P1-4：双路径缺失 → 阻断（不再回退到代码内置默认风格）
+      blockingItems.push({
+        check: "style_profile_missing",
+        reason: `风格指纹文件不存在：workspaces/${workspaceId}/styles/profile.json 与 styles/profiles/${styleProfileName}.json 均缺失`,
+        fixInstruction:
+          `在 workspaces/${workspaceId}/styles/profile.json 创建作者风格档案（含 editorialGuidance / characterVoiceGuidance / usagePolicy），` +
+          `或在 styles/profiles/${styleProfileName}.json 创建公共风格指纹；` +
+          `也可在 workspaces/${workspaceId}/ 下运行风格档案合成工具生成默认档案`,
+        evidence: {
+          styleProfileName,
+          checkedPaths: [workspaceLocalPath, sharedPath],
+        },
+      });
+      checks.styleProfile = { passed: false, detail: { missing: true, paths: [workspaceLocalPath, sharedPath] } };
     }
   } else {
-    // 无 styleProfile 字段时，仅检查 workspace-local（如 story-outline-planner-test 不再配置 styleProfile）
+    // 无 styleProfile 字段时，仅检查 workspace-local
     const workspaceLocalPath = join(projectRoot, "workspaces", workspaceId, "styles", "profile.json");
     if (existsSync(workspaceLocalPath)) {
       checks.styleProfile = { passed: true, detail: { path: workspaceLocalPath, source: "workspace-local" } };
     } else {
-      checks.styleProfile = { passed: true, detail: { skipped: "no styleProfile configured, no workspace-local profile" } };
+      // P1-4：未配置 styleProfile 且无 workspace-local 档案 → 阻断
+      blockingItems.push({
+        check: "style_profile_missing",
+        reason: `config.json 未配置 styleProfile 字段，且 workspaces/${workspaceId}/styles/profile.json 不存在`,
+        fixInstruction:
+          `在 workspaces/${workspaceId}/config.json 添加 styleProfile 字段并创建对应风格档案，` +
+          `或直接在 workspaces/${workspaceId}/styles/profile.json 创建作者风格档案（含 editorialGuidance / characterVoiceGuidance / usagePolicy）`,
+        evidence: {
+          styleProfileName: null,
+          checkedPaths: [workspaceLocalPath],
+        },
+      });
+      checks.styleProfile = { passed: false, detail: { missing: true, paths: [workspaceLocalPath] } };
     }
   }
 

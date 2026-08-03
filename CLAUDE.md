@@ -48,17 +48,21 @@ The legacy Stage0-8 chain is **deleted**, not dormant. Its "stages 0→8 must ru
 `novel_generate_chapter` → `handlers/public-handlers.ts:handleGenerateChapter` → `v2/core/unified-entry.ts:runUnifiedPipeline` → `v2/core/unified-orchestrator.ts`. Flow:
 
 ```
-Preflight → ContextCompiler → ChapterIntentBuilder → Raw candidate
-→ FactGuard → EditorialOpportunity → EditorialCandidate (0-2)
-→ PairwiseJudge (anonymous A/B, span-constrained, reverse-reviewable)
-→ SelectionPolicy → SpanRepair → FinalFactRecheck → FinalStateCommit → AtomicSave + Trace
+Preflight (style profile check) → ContextCompiler → ChapterIntentBuilder
+→ NovelOS Agentic (EvidencePlan → ReAct retrieval → draft → verify/patch)
+→ Agentic FactGuard → Author Style Optimization (full chapter)
+→ Story Preservation Gate (full_entities, 0.25/3 thresholds)
+→ FinalFactRecheck → Completeness → FinalStateCommit → AtomicSave + Trace
 ```
 
-Core design rules (from `docs/top-tier-chinese-novel-system-development-plan.md` §2, the architecture truth source):
+The old `PairwiseJudge` / `SelectionPolicy` / `EditorialOpportunity` stages are **eval-only** (NB-4 Generation Matrix B4 layer). Production never calls machine literary judges; the user is the sole literary authority. The old "raw candidate → editorial candidate → judge → select" flow is retained only in `dist-eval/` for isolated evaluation.
+
+Core design rules (from `docs/top-tier-chinese-novel-system-development-plan.md`, the architecture truth source):
 - **Authoritative content, free expression:** pass overall plot direction, chapter function, prior state, character motivations, foreshadowing/promises, causality, inviolable facts, and ending target. Do not prescribe openings, senses, diction, syntax, rhetoric, dialogue, paragraph rhythm, or concrete scene expression.
-- **Opportunity-driven, not fixed multi-candidate:** generate raw first; only spawn 0-2 editorial candidates when a provable, span-cited edit opportunity exists. Never fixed 4-5 variants.
-- **Human-aligned selection decides literary winner.** Current model judges are advisory because they have not passed the natural-human alignment gate. Mechanical comparators and heuristic story extraction never decide winner.
-- **raw is the internal baseline and safe fallback.** If no editorial candidate clearly wins, deliver raw. Never deliver text worse than raw. No silent legacy fallback.
+- **Agentic draft is not directly delivered.** NovelOS Agentic produces the initial draft, which must pass through author style optimization before delivery. The Agentic draft is internal baseline evidence only.
+- **Style optimization failure = hard block (Phase 1 remediation).** If style optimization produces no candidate (no_guidance/prompt_rejected) → `severity=hard`, `selectedSource=null`. If model timeout/empty/error → `severity=recoverable`, `gate=model_timeout`, tool-layer retries once. The Agentic draft is preserved as blocked evidence in trace only; it is never saved as a chapter or delivered to the user.
+- **Story Preservation Gate uses full_entities coverage.** `knownEntities` includes characters, aliases, locations, organizations, items, and abilities (from `config.worldKeyTerms`). Thresholds: `replacedSimilarityThreshold=0.25`, `lowSimilarityReplacementThreshold=3`. "Keep character names but replace all events" is blocked.
+- **Preflight style profile check (Phase 1).** The orchestrator checks for a `kind=fingerprint` style reference before any model call. Missing → `severity=preflight` hard block.
 - **Style fingerprints, voice fingerprints, few-shot examples, prompt patterns, and craft scans are trace/selection/experiment evidence.** They are not raw prose instructions.
 - **Long-term narrative state (4 kinds: CanonState / CharacterState / PromiseLedger / PatternMemory) is only committed after the final text is selected** — staged during candidate generation, committed post-selection.
 - **Per-model strategy reputation:** a contextual bandit (Thompson Sampling) adjusts editorial-strategy call probability; old-model experience does not constrain new-model capability. See `v2/learning/`.

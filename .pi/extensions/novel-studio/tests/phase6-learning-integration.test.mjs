@@ -28,6 +28,7 @@ import {
 } from "../dist/v2/learning/strategy-policy-store.js";
 import { createContextualStrategySelector } from "../dist/v2/learning/contextual-strategy-selector.js";
 import { createStrategyOutcomeRecorder } from "../dist/v2/learning/strategy-outcome-recorder.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 // ============================================================================
 // 辅助：复用 phase5 的 intent/context/stub 模式
@@ -63,7 +64,7 @@ function makeContext(overrides = {}) {
     ],
     openLoops: [],
     worldRules: [],
-    styleReferences: [],
+    styleReferences: TEST_STYLE_REFERENCES,
     sourceMap: [],
     constitution: null,
     longTermState: null,

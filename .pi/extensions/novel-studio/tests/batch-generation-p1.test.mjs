@@ -1,9 +1,9 @@
 /**
- * BATCH P1 测试 — summary trace / seed planner / extended preflight
+ * BATCH P1 测试 — summary trace / author-owned seed boundary / extended preflight
  *
  * 覆盖 P1 验收点：
  *   P1-02  批量 summary trace 文件写入（每章耗时/模型调用/状态提交/失败 envelope）
- *   P1-03  可选 ChapterSeed 规划阶段（只输出结构化种子，不输出正文）
+ *   P1-03  ChapterSeed 为作者拥有输入，缺失时阻断且不伪造章纲
  *   P1-04  缺少世界观/角色档案/前章状态时在生成前阻断
  */
 
@@ -22,7 +22,7 @@ import {
 
 const P1_WORKSPACE = "batch-p1-test";
 
-describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
+describe("BATCH P1：summary trace / author-owned seed boundary / extended preflight", () => {
   let tool;
 
   before(async () => {
@@ -153,20 +153,20 @@ describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // P1-03：可选 ChapterSeed 规划阶段（P0-FIX-3：写入 series/ch{N}-outline-explicit.md）
+  // P1-03：ChapterSeed 作者拥有边界
   //
-  // seedSource="workspace_or_planner" 且无 workspace 种子时，
-  // 规划阶段应生成 series/ch{N}-outline-explicit.md 显式章纲文件。
-  // ChapterSeedBuilder.loadAuthorChapterContract 会读取此文件。
+  // workspace_or_planner 仅保留为兼容输入；自动章节契约拆分已退役。
+  // 缺种子时必须阻断，不得生成 series/ch{N}-outline-explicit.md。
   // ──────────────────────────────────────────────────────────────────────
-  describe("P1-03：ChapterSeed 规划阶段", () => {
-    it("workspace_or_planner 模式下无种子时自动规划显式章纲", async () => {
+  describe("P1-03：ChapterSeed 作者拥有边界", () => {
+    it("workspace_or_planner 模式下无种子时阻断且不生成显式章纲", async () => {
       const wsId = "batch-p1-planner-test";
       const workspacePath = join(PROJECT_ROOT, "workspaces", wsId);
       createBatchWorkspace(wsId);
 
       // 确保无显式章纲（模拟无种子）
       const explicitPath = join(workspacePath, "series", "ch1-outline-explicit.md");
+      rmSync(explicitPath, { force: true });
       assert.ok(!existsSync(explicitPath), "不应有显式章纲");
 
       const mock = createMockGenerateChapter({ workspacePath });
@@ -190,22 +190,14 @@ describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
       );
 
       const details = result.details || result;
-      // 规划阶段应生成显式章纲，批量任务应成功执行（不被阻断）
-      assert.equal(details.status, "completed", "规划显式章纲后应完成批量任务");
-      assert.equal(mock.calls.length, 3, "应调用 3 章模型");
+      assert.equal(details.status, "error", "缺作者种子时应在批量启动前阻断");
+      assert.equal(mock.calls.length, 0, "缺种子时不得调用章节生成");
+      assert.match(details.failureEnvelope?.reason ?? "", /ChapterSeed|种子源|作者/);
 
-      // P0-FIX-3：规划的显式章纲应写入 series/ch{N}-outline-explicit.md（不是 batch-jobs/planned-seeds/）
       for (let n = 1; n <= 3; n++) {
         const outlinePath = join(workspacePath, "series", `ch${n}-outline-explicit.md`);
-        assert.ok(existsSync(outlinePath), `应生成 series/ch${n}-outline-explicit.md`);
+        assert.equal(existsSync(outlinePath), false, `不得生成 series/ch${n}-outline-explicit.md`);
       }
-
-      // 验证显式章纲文件是 markdown 格式（非正文），可被 parseExplicitOutline 解析
-      const outline1Text = readFileSync(join(workspacePath, "series", "ch1-outline-explicit.md"), "utf-8");
-      assert.ok(outline1Text.includes("## 事件 1"), "显式章纲应含 `## 事件 1` 事件头");
-      assert.ok(outline1Text.includes("内容摘要"), "显式章纲应含内容摘要字段");
-      // 不得含正文内容
-      assert.ok(!outline1Text.includes("# 第1章\n\n这是第1章的正文"), "显式章纲不得含正文");
 
       // 旧的 planned-seeds 目录不应存在（P0-FIX-3：不再写 JSON 到该目录）
       const oldSeedsDir = join(workspacePath, "batch-jobs", "planned-seeds");
@@ -221,6 +213,7 @@ describe("BATCH P1：summary trace / seed planner / extended preflight", () => {
 
       // 确保无显式章纲
       const explicitPath = join(workspacePath, "series", "ch1-outline-explicit.md");
+      rmSync(explicitPath, { force: true });
       assert.ok(!existsSync(explicitPath), "不应有显式章纲");
 
       const mock = createMockGenerateChapter({ workspacePath });

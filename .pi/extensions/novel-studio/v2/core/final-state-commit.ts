@@ -475,16 +475,19 @@ function resolvePronounSubject(
   const prevSentence = finalText.slice(prevStart, prevEnd);
   if (prevSentence.length === 0) return null;
 
-  // 在前句中查找第一个 canonical 角色名（按长度降序，优先匹配长名，避免 "林默" vs "林" 的子串问题）
+  // 在前句中查找 canonical 角色名（按长度降序，优先匹配长名，避免 "林默" vs "林" 的子串问题）。
+  // 若前句同时出现多个角色，代词主体无法由 bounded 规则可靠确定，必须
+  // 返回 null 让调用方在多角色场景下 fail-closed，不能依赖 characterNames 数组顺序。
   const sortedNames = Array.from(canonicalNames)
     .filter((n) => n.length >= 2)
     .sort((a, b) => b.length - a.length);
-  for (const name of sortedNames) {
-    if (prevSentence.includes(name)) {
-      return name;
-    }
+  const namesInPreviousSentence = sortedNames.filter((name) =>
+    prevSentence.includes(name),
+  );
+  if (namesInPreviousSentence.length !== 1) {
+    return null; // 无角色或多个角色：代词归属不确定，调用方应 fail-closed
   }
-  return null; // 前句无已知角色，代词无法解析
+  return namesInPreviousSentence[0]!;
 }
 
 /**

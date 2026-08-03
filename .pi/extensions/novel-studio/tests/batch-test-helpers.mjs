@@ -88,6 +88,14 @@ export function createBatchWorkspace(workspaceId) {
     "utf-8",
   );
 
+  // 批量编排测试的默认作者种子。自动章节契约拆分已退役，成功路径必须显式具备
+  // ChapterSeedBuilder 实际消费的 ch{startChapter}-outline-explicit.md。
+  writeFileSync(
+    join(workspacePath, "series", "ch1-outline-explicit.md"),
+    "# 第1章 作者测试种子\n\n## 事件 1：接受传承\n\n- **内容摘要**：叶尘在现实压力下选择接受传承，并因此暴露身份。\n- **参与角色**：叶尘\n- **本章功能**：setup\n- **章末目标**：追踪者察觉传承被激活\n",
+    "utf-8",
+  );
+
   writeFileSync(
     join(workspacePath, "characters", "叶尘.md"),
     "# 叶尘\n主角，废物少年，偶得传承。\n",

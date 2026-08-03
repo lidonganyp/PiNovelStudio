@@ -59,7 +59,18 @@ function makeContext(overrides = {}) {
     ],
     openLoops: [],
     worldRules: [],
-    styleReferences: [],
+    // P1 修复（Phase 1 整改）：orchestrator 入口要求 style_profile 风格指纹（kind=fingerprint），
+    // 缺失会在模型调用前 hard block。测试默认提供最小可消费档案。
+    styleReferences: [
+      {
+        id: "style:default-fingerprint",
+        kind: "fingerprint",
+        content: JSON.stringify({
+          editorialGuidance: ["保持叙事节奏紧凑", "对白自然口语化"],
+          characterVoiceGuidance: {},
+        }),
+      },
+    ],
     sourceMap: [],
     constitution: null,
     longTermState: null,

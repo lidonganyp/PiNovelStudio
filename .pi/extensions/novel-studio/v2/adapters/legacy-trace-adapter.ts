@@ -22,6 +22,7 @@
  */
 
 import { QualityTraceRecorder } from "../../craft/quality-trace-recorder.js";
+import type { FailureEnvelope } from "../../craft/failure-envelope.js";
 import type {
   Candidate,
   CandidateComparison,
@@ -154,6 +155,14 @@ export interface V2TraceRecord {
   };
   /** 错误信息（error 阶段） */
   error?: { message: string; code?: string; recoverable: boolean };
+  /**
+   * P1 修复（第三轮）：完整 FailureEnvelope，用于 blocked 路径透传真实 stage/gate/severity/retryPlan/userActionRequired。
+   *
+   * 用户验收反例：常规 blocked 路径固定写成 stage=error，适配器再落成 stage/gate=v2_error，
+   * 丢失真实 gate、severity、retryPlan、userActionRequired。
+   * 新增此字段后，legacy-trace-adapter 优先使用完整 envelope，而非从 error 字段重建。
+   */
+  failureEnvelope?: FailureEnvelope;
   /** 上下文 hash（所有阶段都记录，便于关联） */
   contextHash?: string;
   /** Phase D 新增：rawStage2 候选 id（rawstage2_generated 阶段） */
@@ -176,6 +185,16 @@ export interface V2TraceRecord {
   stageTiming?: Record<string, number>;
   /** Step 1d：模型调用预算（final_selected 阶段） */
   modelBudget?: { soft: number; hard: number; used: number; capped: boolean };
+  /**
+   * 成功章节的用户反馈归因上下文。
+   * novel_strategy_feedback 可凭 chapterId 从 trace 推断这些字段，避免普通用户手填内部版本键/策略 ID。
+   */
+  strategyContext?: {
+    modelVersion: string;
+    selectedStrategyIds: string[];
+    sourceChapter: string;
+    opportunityType: "author_style";
+  };
   /**
    * Step 5：NovelOS agentic_raw shadow 候选摘要（novelos_agentic 阶段）。
    * 持久化 trajectory 路径 + agentic_raw 摘要 + budget snapshot，
@@ -314,7 +333,20 @@ export function createLegacyTraceAdapter(
         }
       }
       // 映射 error 到 failureEnvelopes[]
-      if (record.error) {
+      // P1 修复（第三轮）：优先使用完整 failureEnvelope（含真实 gate/severity/retryPlan/userActionRequired），
+      // 而非从 error 字段重建（旧逻辑固定 stage/gate=v2_error，丢失真实阻断阶段信息）。
+      if (record.failureEnvelope) {
+        recorder.recordFailureEnvelope({
+          stage: record.failureEnvelope.stage,
+          gate: record.failureEnvelope.gate,
+          severity: record.failureEnvelope.severity,
+          reason: record.failureEnvelope.reason,
+          evidence: record.failureEnvelope.evidence ?? record.failureEnvelope.stage,
+          recoverable: record.failureEnvelope.recoverable,
+          retryPlan: record.failureEnvelope.retryPlan,
+          userActionRequired: record.failureEnvelope.userActionRequired,
+        });
+      } else if (record.error) {
         recorder.recordFailureEnvelope({
           stage: `v2_${record.stage}`,
           gate: `v2_${record.stage}`,
@@ -369,7 +401,9 @@ function mapRecordToGate(record: V2TraceRecord): {
   const stage = `v2_${record.stage}`;
   // 各阶段语义化 status/reason
   let status = hasError ? "ERROR" : "PASS";
-  let reason = `V2 stage ${record.stage} completed`;
+  let reason = hasError
+    ? (record.error?.message ?? `V2 stage ${record.stage} failed`)
+    : `V2 stage ${record.stage} completed`;
   let score = 0;
 
   if (record.stage === "candidate_compared" && record.comparison) {

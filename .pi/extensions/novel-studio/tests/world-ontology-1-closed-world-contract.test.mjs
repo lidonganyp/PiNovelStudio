@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { compileOntologyContract } from "../dist/v2/core/ontology-contract-compiler.js";
 import { createFactContinuityGuard } from "../dist/v2/core/fact-continuity-guard.js";
 import { localizeLlmText } from "../dist/utils/llm-language-guard.js";
+import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -69,7 +70,7 @@ test("WO1 unit: 未登记术语 筑体/铸骨 产生 review 诊断（FACTGUARD-D
     text: "李一凡突破到了筑体境，骨骼发出脆响。他的铸骨境修炼已经初见成效。",
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -87,7 +88,7 @@ test("WO1 unit: 合法术语 锻骨/淬腑/易筋 通过", () => {
     text: "李一凡的锻骨境修炼已入门槛，下一步是淬腑境。他感觉易筋境还很遥远。",
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -104,7 +105,7 @@ test("WO1 unit: 开放名词不进入 closed-world gate", () => {
     text: "李一凡的心境平和，仿佛进入了某种意境。窗外下着雨。",
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -127,7 +128,7 @@ test("OPR1: 含标点的两字符候选不产生 ontology_violation", () => {
     text: textWithPunct,
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -146,7 +147,7 @@ test("OPR1: 含数字的两字符候选不产生 ontology_violation", () => {
     text: textWithDigit,
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -163,7 +164,7 @@ test("OPR1: 纯中文未登记术语产生 review 诊断（FACTGUARD-DOWNGRADE-1
     text: "李一凡突破到了筑体境，随后铸骨境的修炼也初见成效。",
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -181,7 +182,7 @@ test("OPR1: 已登记术语仍通过（回归不误杀）", () => {
     text: "李一凡的锻骨境修炼已入门槛，淬腑境还很遥远。易筋境更是遥不可及。",
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -198,7 +199,7 @@ test("FGLB1: 普通险境/绝境不因前置上下文被识别为未登记境界
     text: "他从九死险境里挣脱，又决定利用绝境反击。这里描述的是处境，不是力量等级。",
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -219,7 +220,7 @@ test("OCL1: 已登记 ontology category label 炼魂境/炼体境 不视为未�
     text: "炼魂境强调精神层面的修炼，炼体境则侧重肉身，两者都是体系分类标签。",
     context: {
       facts: [], characterStates: [], openLoops: [], worldRules: [],
-      styleReferences: [], sourceMap: [], constitution: null, longTermState: null,
+      styleReferences: TEST_STYLE_REFERENCES, sourceMap: [], constitution: null, longTermState: null,
     },
     ontologyContract: contract,
   });
@@ -245,7 +246,7 @@ test("OCL1: ontology category label 不参与角色有序境界 transition", () 
         state: { realm: "锻骨" },
         sourceIds: ["state:ch18"],
       }],
-      openLoops: [], worldRules: [], styleReferences: [], sourceMap: [],
+      openLoops: [], worldRules: [], styleReferences: TEST_STYLE_REFERENCES, sourceMap: [],
       constitution: null, longTermState: null,
     },
     knownCharacterNames: ["李一凡"],
@@ -269,7 +270,7 @@ test("WO1 transition: 角色从既有锻骨状态无升级事件直接变成易�
         state: { realm: "锻骨" },
         sourceIds: ["state:ch19"],
       }],
-      openLoops: [], worldRules: [], styleReferences: [], sourceMap: [],
+      openLoops: [], worldRules: [], styleReferences: TEST_STYLE_REFERENCES, sourceMap: [],
       constitution: null, longTermState: null,
     },
     knownCharacterNames: ["李一凡"],
@@ -296,7 +297,7 @@ test("WO1 transition: 同章明确突破到下一境界时允许", () => {
         state: { realm: "锻骨" },
         sourceIds: ["state:ch19"],
       }],
-      openLoops: [], worldRules: [], styleReferences: [], sourceMap: [],
+      openLoops: [], worldRules: [], styleReferences: TEST_STYLE_REFERENCES, sourceMap: [],
       constitution: null, longTermState: null,
     },
     knownCharacterNames: ["李一凡"],
@@ -317,7 +318,7 @@ test("WO1 transition: 历史提及其他境界不改写当前状态", () => {
         characterId: "li-yifan", name: "李一凡",
         state: { realm: "锻骨" }, sourceIds: ["state:ch19"],
       }],
-      openLoops: [], worldRules: [], styleReferences: [], sourceMap: [],
+      openLoops: [], worldRules: [], styleReferences: TEST_STYLE_REFERENCES, sourceMap: [],
       constitution: null, longTermState: null,
     },
     knownCharacterNames: ["李一凡"],
@@ -341,7 +342,7 @@ test("WO1 transition: 当前境界缺 sourceRef 时只产生 review", () => {
         characterId: "li-yifan", name: "李一凡",
         state: { realm: "锻骨" }, sourceIds: [],
       }],
-      openLoops: [], worldRules: [], styleReferences: [], sourceMap: [],
+      openLoops: [], worldRules: [], styleReferences: TEST_STYLE_REFERENCES, sourceMap: [],
       constitution: null, longTermState: null,
     },
     knownCharacterNames: ["李一凡"],
@@ -403,7 +404,7 @@ test("WO1 integration: raw prompt 与 FactGuard 消费同一 ontology contract",
           characterId: "li-yifan", name: "李一凡",
           state: { role: "protagonist", realm: "锻骨" }, sourceIds: ["state:ch19"],
         }],
-        openLoops: [], worldRules: [], styleReferences: [], sourceMap: [],
+        openLoops: [], worldRules: [], styleReferences: TEST_STYLE_REFERENCES, sourceMap: [],
         constitution: null, longTermState: null,
       },
       constitution: null,

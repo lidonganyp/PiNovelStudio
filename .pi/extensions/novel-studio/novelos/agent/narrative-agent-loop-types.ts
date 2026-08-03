@@ -47,6 +47,17 @@ export interface AgentLoopInput {
    * 而非从 scratch 生成不同故事。生产模式（非 eval）不传，行为不变。
    */
   evalPrefix?: string;
+  /**
+   * Phase 2C：调用方预创建的 EvidencePlan。
+   *
+   * 若提供，loop 不再内部 createEvidencePlan，而是直接消费此 plan：
+   * - mustVerify 注入 runAgentTurns 的 prompt（"本章必须验证的事实点" block）
+   * - stopConditions.maxStagnantRounds 驱动 verifyAndPatch 的停滞退出
+   * - allowedTools 已由调用方在创建 runtime 前用于过滤工具集
+   *
+   * 若未提供，loop 内部 createEvidencePlan（向后兼容）。
+   */
+  evidencePlan?: EvidencePlan;
 }
 
 export type AgentLoopStopReason =
