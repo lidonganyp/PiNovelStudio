@@ -14,7 +14,8 @@ export type WriterPromptProfile =
   | "gpt_writer_v1"
   | "chinese_writer_v1"
   | "gemini_writer_v1"
-  | "gemini_writer_v2";
+  | "gemini_writer_v2"
+  | "gemini_writer_v2_layered";
 
 export interface ChapterContract {
   workIdentity: string[];
@@ -333,9 +334,111 @@ export function renderContract(contract: ChapterContract): string {
   ].filter(Boolean).join("\n");
 }
 
+/**
+ * CONTRACT-LAYERING-ABLATION-1: 分层渲染 ChapterContract。
+ *
+ * 与 renderContract（平铺）相同的字段内容，但明确分为四层权威级别：
+ *   1. 硬约束层（硬事实：不可违背，违反即阻断）
+ *   2. 叙事目标层（章节义务：本章要达成的功能、体验与必须包含的结构性要素）
+ *   3. 历史证据层（按需参考，非强制消费）
+ *   4. 模型决策空间层（表达决策：创作指引，可自行决定表达方式）
+ *
+ * 假设 H1：明确权威层级后，模型会更少机械执行清单，同时保持事实安全和章节功能。
+ * 实验路径：evalMode=B3 + evalPromptProfile=gemini_writer_v2_layered，与 gemini_writer_v2 对照。
+ * 生产路径不使用此渲染（生产用 renderContract 平铺）；仅 eval 隔离评测使用。
+ */
+export function renderLayeredContract(contract: ChapterContract): string {
+  const layers: string[] = [];
+
+  // ── 层 1：硬约束层（不可违背）──
+  const hardConstraints: string[] = [];
+  hardConstraints.push(...(contract.inviolableFacts ?? []).map((v) => `  - ${v}`));
+  hardConstraints.push(...(contract.stateConstraints ?? []).map((v) => `  - ${v}`));
+  hardConstraints.push(...(contract.forbiddenDrift ?? []).map((v) => `  - ${v}`));
+  hardConstraints.push("  - 禁止泄漏、复述或仿写参考文本");
+  hardConstraints.push("  - 禁止改变既定人物与世界状态");
+  if (hardConstraints.length > 2) {
+    layers.push([
+      "【层 1·硬约束｜违反即阻断，不得变通】",
+      "以下为不可违背的事实与边界，任何表达都不得与之冲突：",
+      ...hardConstraints,
+    ].join("\n"));
+  }
+
+  // ── 层 2：叙事目标层（本章要达成什么）──
+  const narrativeGoals: string[] = [];
+  if (contract.workIdentity?.length) narrativeGoals.push(`  - 作品身份：${contract.workIdentity.join("；")}`);
+  if (contract.readerPromises?.length) narrativeGoals.push(`  - 长期读者承诺：${contract.readerPromises.join("；")}`);
+  if (contract.genrePromises?.length) narrativeGoals.push(`  - 类型承诺：${contract.genrePromises.join("；")}`);
+  if (contract.protagonistCoreConflict?.length) narrativeGoals.push(`  - 主角核心冲突：${contract.protagonistCoreConflict.join("；")}`);
+  if (contract.thematicQuestions?.length) narrativeGoals.push(`  - 长期主题问题：${contract.thematicQuestions.join("；")}`);
+  if (contract.overallPlotDirection?.length) narrativeGoals.push(`  - 整体剧情方向：${contract.overallPlotDirection.join("；")}`);
+  if (contract.chapterFunction?.length) narrativeGoals.push(`  - 本章功能：${contract.chapterFunction.join("；")}`);
+  if (contract.readerExperience?.length) narrativeGoals.push(`  - 目标读者体验：${contract.readerExperience.join("；")}`);
+  if (contract.endingTarget?.length) narrativeGoals.push(`  - 章末目标：${contract.endingTarget.join("；")}`);
+  // 章节义务字段：作者明确要求本章必须包含的事件、元素、状态变化、伏笔与因果，
+  // 违反即章节功能缺失，属于义务而非模型可自由决定的表达方式。
+  if (contract.eventSummaries?.length) narrativeGoals.push(`  - 事件内容：${contract.eventSummaries.join("；")}`);
+  if (contract.mustInclude?.length) narrativeGoals.push(`  - 必须包含：${contract.mustInclude.join("；")}`);
+  if (contract.stateChanges?.length) narrativeGoals.push(`  - 状态变化：${contract.stateChanges.join("；")}`);
+  if (contract.foreshadowing?.length) narrativeGoals.push(`  - 伏笔与承诺：${contract.foreshadowing.join("；")}`);
+  if (contract.causalRelations?.length) narrativeGoals.push(`  - 因果关系：${contract.causalRelations.join("；")}`);
+  if (narrativeGoals.length > 0) {
+    layers.push([
+      "【层 2·叙事目标｜本章必须达成的功能与体验】",
+      "以下定义本章在长篇结构中的功能位置与目标读者体验：",
+      ...narrativeGoals,
+    ].join("\n"));
+  }
+
+  // ── 层 3：历史证据层（按需参考，非强制消费）──
+  const evidence: string[] = [];
+  if (contract.historicalContinuity?.length) evidence.push(`  - 历史连续性：${contract.historicalContinuity.join("；")}`);
+  if (contract.historicalCharacterState?.length) evidence.push(`  - 相关人物历史状态：${contract.historicalCharacterState.join("；")}`);
+  if (contract.recentPatternMemory?.length) evidence.push(`  - 近期叙事模式：${contract.recentPatternMemory.join("；")}`);
+  if (evidence.length > 0) {
+    layers.push([
+      "【层 3·历史证据｜按需参考，非强制消费】",
+      "以下为已发生章节的证据摘要；仅在你判断需要保持连续性时参考，不必逐条复述或对齐：",
+      ...evidence,
+    ].join("\n"));
+  }
+
+  // ── 层 4：模型决策空间层（创作指引，可自行决定表达）──
+  const decisionSpace: string[] = [];
+  if (contract.currentPressure?.length) decisionSpace.push(`  - 当前压力：${contract.currentPressure.join("；")}`);
+  if (contract.previousState?.length) decisionSpace.push(`  - 前文状态：${contract.previousState.join("；")}`);
+  if (contract.relevantCharacters?.length) decisionSpace.push(`  - 本章相关角色：${contract.relevantCharacters.join("；")}`);
+  if (contract.relevantCharacterStates?.length) decisionSpace.push(`  - 相关人物状态：${contract.relevantCharacterStates.join("；")}`);
+  if (contract.characterMotivations?.length) decisionSpace.push(`  - 人物动机：${contract.characterMotivations.join("；")}`);
+  if (contract.focusCharacterGoals?.length) decisionSpace.push(`  - 焦点角色目标：${contract.focusCharacterGoals.join("；")}`);
+  if (contract.resistance?.length) decisionSpace.push(`  - 本章阻力：${contract.resistance.join("；")}`);
+  if (contract.choicesAndCosts?.length) decisionSpace.push(`  - 选择与代价：${contract.choicesAndCosts.join("；")}`);
+  if (contract.expectedIrreversibleChange?.length) decisionSpace.push(`  - 预期不可逆变化：${contract.expectedIrreversibleChange.join("；")}`);
+  if (contract.selectedPromisesToAdvance?.length) decisionSpace.push(`  - 本章选中承诺：${contract.selectedPromisesToAdvance.join("；")}`);
+  if (contract.selectedExpectationsToAdvance?.length) decisionSpace.push(`  - 本章选中读者期待：${contract.selectedExpectationsToAdvance.join("；")}`);
+  if (contract.causalEndPressure?.length) decisionSpace.push(`  - 因果章末压力：${contract.causalEndPressure.join("；")}`);
+  if (decisionSpace.length > 0) {
+    layers.push([
+      "【层 4·模型决策空间｜创作指引，可自行决定表达方式】",
+      "以下为创作方向与情节要素指引；具体场景、对白、心理、节奏、修辞由你自行决定，",
+      "未在此层列出的写法不构成约束。请避免逐条清单式执行，应有机融入叙事：",
+      ...decisionSpace,
+    ].join("\n"));
+  }
+
+  return [
+    "【本章叙事契约（分层版）：所有模型共用，不得改写其事实含义】",
+    ...layers,
+  ].join("\n\n");
+}
+
 /** Apply model-specific ordering and language without mutating the contract. */
 export function adaptWriterPrompt(input: WriterPromptAdapterInput): AdaptedWriterPrompt {
-  const contractBlock = renderContract(input.contract);
+  const useLayered = input.profile === "gemini_writer_v2_layered";
+  const contractBlock = useLayered
+    ? renderLayeredContract(input.contract)
+    : renderContract(input.contract);
   const wordCountHint = input.contract.wordCountTarget
     ? `本章正文字数目标：${input.contract.wordCountTarget.min}-${input.contract.wordCountTarget.max} 字。请充分展开场景、对话与心理描写，确保内容饱满。`
     : "本章正文字数目标：2000-3000 字。请充分展开场景、对话与心理描写，确保内容饱满。";
