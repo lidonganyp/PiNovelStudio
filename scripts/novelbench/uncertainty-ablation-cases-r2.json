@@ -1,0 +1,240 @@
+{
+  "caseSetId": "uncertainty-ablation-r2",
+  "description": "不确定性驱动检索决策 A/B 对照实验第二轮 case set。低风险 case 补充 worldRules/constitution 修复 FactGuard 误报；新增高风险 case 带 mustVerify 测试必需事实召回。",
+  "cases": [
+    {
+      "caseId": "real-xuanhuan-1",
+      "genre": "玄幻",
+      "riskLevel": "low",
+      "targetChapter": 7,
+      "prefix": "林默盘膝坐在断崖之上，丹田内的灵力如潮水般翻涌。三日前那一战，他险些被黑袍人的'噬魂印'击散神魂，幸亏师父留下的玉简中记载的'天枢心法'最后一层在生死关头自行运转，才将那道噬魂印化去。但他清楚，黑袍人提到的'九幽令主'绝不会善罢甘休——那是百年前被五大宗门联手封印的存在。云岚在崖下喊他下去用饭，他睁开眼，瞳孔深处有金光一闪而过。临行前，师父曾留下一句没说完的话：'若九幽令主破封，唯一能与之抗衡的，是天枢秘境深处的……'后面的字被血污遮住，他至今未能参透。",
+      "characterNames": ["林默", "云岚", "黑袍人", "九幽令主", "师父"],
+      "worldRules": [
+        {"id": "wr-tianshu-xinfa", "description": "天枢心法是天枢宗的核心功法，共九层，第九层可破境", "type": "secret_technique", "affectedCharacters": ["林默"]},
+        {"id": "wr-jiuyou-seal", "description": "九幽令主百年前被五大宗门联手封印，封印正在松动", "type": "seal", "affectedCharacters": ["九幽令主"]},
+        {"id": "wr-five-sects", "description": "五大宗门是天枢、青冥、玄天、紫微、太华，曾联手封印九幽令主", "type": "organization_plan", "affectedCharacters": []},
+        {"id": "wr-tianshu-sect", "description": "天枢宗是五大宗门之一，林默的师父是天枢宗掌门", "type": "organization_plan", "affectedCharacters": ["林默", "师父"]},
+        {"id": "wr-shihun-yin", "description": "噬魂印是黑袍人的阴毒秘法，可侵蚀神魂", "type": "secret_technique", "affectedCharacters": ["黑袍人"]},
+        {"id": "wr-tianshu-realm", "description": "天枢秘境是天枢宗的禁地，深处藏有抗衡九幽令主的方法", "type": "organization_plan", "affectedCharacters": []}
+      ],
+      "constitution": {
+        "workIdentity": "玄幻修真长篇：天枢宗弟子林默对抗九幽令主的故事",
+        "readerPromise": ["修炼升级线清晰", "宗门博弈有深度", "章末有钩子"],
+        "genrePromises": ["玄幻修真", "宗门争斗", "秘境探索"],
+        "protagonistCoreConflict": "林默需在天枢秘境深处找到抗衡九幽令主的方法，同时应对宗门内部暗流",
+        "thematicQuestions": ["正道与魔道的界限", "传承与背叛"],
+        "aestheticDirection": ["东方玄幻", "肃杀氛围"],
+        "forbiddenDrift": ["现代科技", "西方魔法体系"],
+        "sourceIds": ["constitution"]
+      }
+    },
+    {
+      "caseId": "real-suspense-1",
+      "genre": "悬疑",
+      "riskLevel": "low",
+      "targetChapter": 5,
+      "prefix": "苏婉第三次来到那栋废弃的疗养院。十年前，她的母亲就是从这里走出去后再也没有回家。陈警官在门口抽烟，目光扫过墙角那道新鲜的划痕——上一次来时还没有。两人沿着走廊深入，病房的门牌号已经锈蚀，但 307 号房间的门把手上却挂着一条崭新的红丝带。苏婉记得，母亲生前的日记里反复提到过 307，称那里'住着一个不该存在的人'。她伸手推门，门没锁。屋内一片漆黑，只有书桌上摆着一张照片——照片上是十年前的母亲，怀里抱着一个苏婉从未见过的男童。",
+      "characterNames": ["苏婉", "陈警官", "母亲", "男童"],
+      "constitution": {
+        "workIdentity": "悬疑长篇：苏婉调查母亲十年前在疗养院失踪的真相",
+        "readerPromise": ["层层反转", "线索闭环", "心理恐怖氛围"],
+        "genrePromises": ["悬疑", "心理惊悚"],
+        "protagonistCoreConflict": "苏婉在调查中发现自己身份可能是一个谎言",
+        "thematicQuestions": ["记忆的可靠性", "身份的真实性"],
+        "aestheticDirection": ["冷硬写实", "压抑氛围"],
+        "forbiddenDrift": ["超自然力量", "科幻元素"],
+        "sourceIds": ["constitution"]
+      }
+    },
+    {
+      "caseId": "real-urban-1",
+      "genre": "都市",
+      "riskLevel": "low",
+      "targetChapter": 9,
+      "prefix": "凌晨三点十七分，叶辰盯着屏幕上那行不该存在的日志——有人用他的权限访问了核心数据库。他切换到监控画面，发现昨晚十一点整，公司副总周明远带着一个陌生女人进入了机房。那个女人穿着过时的灰色风衣，手里提着一个叶辰熟悉的老式公文包——那是他失踪三年的师父林老的遗物。叶辰的手停在键盘上方，背后渗出冷汗。三年前林老离奇失踪前，曾反复叮嘱他：'核心数据库里藏着的东西，绝不能让周家的人碰。'如今周明远的出现，似乎印证了林老当年的担忧。",
+      "characterNames": ["叶辰", "周明远", "林老", "陌生女人"],
+      "constitution": {
+        "workIdentity": "都市商业悬疑长篇：叶辰追查师父林老失踪真相与核心数据库秘密",
+        "readerPromise": ["商战博弈", "技术细节扎实", "节奏紧凑"],
+        "genrePromises": ["都市", "商战", "悬疑"],
+        "protagonistCoreConflict": "叶辰在追查中发现林老失踪与周家商业阴谋相关",
+        "thematicQuestions": ["商业伦理", "师徒传承"],
+        "aestheticDirection": ["现代都市", "冷峻克制"],
+        "forbiddenDrift": ["超自然力量", "玄幻修真"],
+        "sourceIds": ["constitution"]
+      }
+    },
+    {
+      "caseId": "real-xianxia-1",
+      "genre": "仙侠",
+      "riskLevel": "low",
+      "targetChapter": 12,
+      "prefix": "青衫剑修沈无涯立于剑崖之巅，手中长剑'霜回'嗡鸣不止。三日前他在天魔渊斩杀了一名天魔长老，对方临死前却笑着告诉他：'你以为你师父真的是正道魁首？三十年前的青冥山惨案，主谋就是他。'沈无涯不愿相信，但那枚从天魔长老怀中掉落的玉佩，分明刻着师父静玄真人的道号。更让他心神不宁的是，玉佩背面还刻着'青冥'二字——那是三十年前被屠戮殆尽的青冥宗的传承信物。他必须找到当年惨案的唯一幸存者，被流放到南疆的青冥宗前掌门弟子柳惊鸿，问清真相。",
+      "characterNames": ["沈无涯", "静玄真人", "柳惊鸿", "天魔长老"],
+      "worldRules": [
+        {"id": "wr-taiyi-xuantian", "description": "太乙玄天剑诀是静玄真人的独门绝杀，从不外传", "type": "secret_technique", "affectedCharacters": ["静玄真人", "沈无涯"]},
+        {"id": "wr-qingming-sect", "description": "青冥宗三十年前被屠戮殆尽，全宗上下三百七十二口无一幸存", "type": "organization_plan", "affectedCharacters": ["柳惊鸿"]},
+        {"id": "wr-jingxuan-leader", "description": "静玄真人是当今正道魁首，太乙玄门掌门", "type": "organization_plan", "affectedCharacters": ["静玄真人"]},
+        {"id": "wr-tianmo-yuan", "description": "天魔渊是魔道据点，沈无涯在此斩杀天魔长老", "type": "organization_plan", "affectedCharacters": ["沈无涯"]},
+        {"id": "wr-shuanghui-sword", "description": "霜回是沈无涯的本命飞剑，可感应主人心境", "type": "secret_technique", "affectedCharacters": ["沈无涯"]}
+      ],
+      "constitution": {
+        "workIdentity": "仙侠长篇：剑修沈无涯追查三十年前青冥山惨案真相",
+        "readerPromise": ["剑修成长线", "正魔博弈", "师徒伦理冲突"],
+        "genrePromises": ["仙侠", "剑修", "宗门争斗"],
+        "protagonistCoreConflict": "沈无涯发现师父可能是三十年前惨案主谋，面临信仰崩塌",
+        "thematicQuestions": ["正邪之辨", "师恩与正义"],
+        "aestheticDirection": ["古典仙侠", "清冷孤绝"],
+        "forbiddenDrift": ["现代科技", "西方魔法"],
+        "sourceIds": ["constitution"]
+      }
+    },
+    {
+      "caseId": "real-scifi-1",
+      "genre": "科幻",
+      "riskLevel": "low",
+      "targetChapter": 4,
+      "prefix": "星历 2387 年，'远行者号'飞船在距离地球 4.2 光年的比邻星 b 轨道上悬停。舰长陈曦注视着全息屏幕上那座从地底挖掘出的巨型结构——它显然不是自然形成，几何精度达到了原子级别。三日前，地球指挥中心传来最后一条加密指令：'立即撤离，不要尝试解读。'但指令发出十二小时后，地球方面就陷入了沉默，所有信道都是白噪音。工程官李远在分析那座结构时发现了一个奇怪的频率，与人类脑波的 α 波段高度吻合。更诡异的是，自从飞船抵达比邻星 b 后，船上九名船员中已经有三人开始做同一个梦——梦里他们站在一片金色沙漠中，一个模糊的身影反复念叨着一个无法翻译的音节。",
+      "characterNames": ["陈曦", "李远", "船员"],
+      "constitution": {
+        "workIdentity": "硬科幻长篇：远行者号在比邻星 b 发现外星结构后的生存危机",
+        "readerPromise": ["硬科幻设定", "未知探索", "心理恐怖"],
+        "genrePromises": ["科幻", "太空探索", "第一次接触"],
+        "protagonistCoreConflict": "陈曦在地球失联后需决定是撤离还是解读外星信号",
+        "thematicQuestions": ["人类认知边界", "文明接触伦理"],
+        "aestheticDirection": ["硬科幻", "冷峻深邃"],
+        "forbiddenDrift": ["超自然魔法", "玄幻修真"],
+        "sourceIds": ["constitution"]
+      }
+    },
+    {
+      "caseId": "high-xuanhuan-1",
+      "genre": "玄幻",
+      "riskLevel": "high",
+      "targetChapter": 8,
+      "prefix": "林默在天枢秘境外围的密林中醒来，左臂的噬魂印侵蚀痕迹仍在隐隐作痛——三日前那一战后，他用天枢心法压制住了伤势，但远未痊愈，左臂目前只能发挥平时三成的力量。云岚在两日前离开去天枢宗求援，至今未归，临走前约定在秘境入口的青石处汇合。林默怀中揣着师父留下的血玉，这是打开葬神渊封印的钥匙，他必须在此等待云岚，不可独自深入。密林深处传来异响，似乎有什么东西正在接近。",
+      "characterNames": ["林默", "云岚", "黑袍人", "九幽令主", "师父"],
+      "authorMustInclude": [
+        "确认林默左臂噬魂印伤势当前状态",
+        "查证云岚当前所在位置",
+        "验证血玉的具体位置和用途"
+      ],
+      "inviolableFacts": [
+        "林默左臂被噬魂印侵蚀，只能发挥三成力量",
+        "云岚两日前离开去求援，至今未归",
+        "血玉在林默怀中，是打开葬神渊封印的钥匙",
+        "林默约定在秘境入口青石处与云岚汇合"
+      ],
+      "worldRules": [
+        {"id": "wr-tianshu-xinfa", "description": "天枢心法是天枢宗的核心功法，共九层，第九层可破境", "type": "secret_technique", "affectedCharacters": ["林默"]},
+        {"id": "wr-jiuyou-seal", "description": "九幽令主百年前被五大宗门联手封印在葬神渊，封印正在松动", "type": "seal", "affectedCharacters": ["九幽令主"]},
+        {"id": "wr-shihun-yin", "description": "噬魂印是黑袍人的阴毒秘法，可侵蚀神魂，林默左臂被侵蚀", "type": "secret_technique", "affectedCharacters": ["黑袍人", "林默"]},
+        {"id": "wr-blood-jade", "description": "血玉是师父留下的钥匙，可打开葬神渊封印", "type": "secret_technique", "affectedCharacters": ["林默"]},
+        {"id": "wr-tianshu-sect", "description": "天枢宗是五大宗门之一，林默的师父是天枢宗掌门", "type": "organization_plan", "affectedCharacters": ["林默", "师父"]},
+        {"id": "wr-zangshen-yuan", "description": "葬神渊是天枢秘境深处的绝对禁地，九幽令主封印于此", "type": "seal", "affectedCharacters": ["九幽令主"]}
+      ],
+      "constitution": {
+        "workIdentity": "玄幻修真长篇：天枢宗弟子林默对抗九幽令主的故事",
+        "readerPromise": ["修炼升级线清晰", "宗门博弈有深度", "章末有钩子"],
+        "genrePromises": ["玄幻修真", "宗门争斗", "秘境探索"],
+        "protagonistCoreConflict": "林默需在天枢秘境深处找到抗衡九幽令主的方法，同时应对宗门内部暗流",
+        "thematicQuestions": ["正道与魔道的界限", "传承与背叛"],
+        "aestheticDirection": ["东方玄幻", "肃杀氛围"],
+        "forbiddenDrift": ["现代科技", "西方魔法体系"],
+        "sourceIds": ["constitution"]
+      },
+      "workspaceFixture": {
+        "historicalChapters": [
+          {
+            "number": 6,
+            "title": "噬魂印之伤",
+            "text": "林默盘膝坐在天枢秘境外围的密林中，左臂的噬魂印侵蚀痕迹仍在隐隐作痛。三日前那一战，黑袍人的噬魂印险些击散他的神魂，幸亏天枢心法第九层在生死关头自行运转，才将那道噬魂印化去大半，但左臂目前只能发挥平时三成的力量。云岚在两日前离开，去天枢宗求援，临走前约定在秘境入口的青石处汇合，至今未归。林默怀中揣着师父留下的血玉，这块血玉是打开葬神渊封印的钥匙，也是抗衡九幽令主的唯一希望。密林深处传来异响，似乎有什么东西正在接近。林默握紧血玉，左臂的伤势让他无法全力应战，只能依靠天枢心法压制噬魂印的侵蚀。"
+          }
+        ],
+        "canonEvents": [
+          {"id": "evt-shihun-yin", "fact": "林默左臂噬魂印伤势", "category": "ability_rule", "sourceChapter": "ch6"},
+          {"id": "evt-yunlan-leave", "fact": "云岚当前所在位置", "category": "location", "sourceChapter": "ch6"},
+          {"id": "evt-blood-jade", "fact": "血玉的具体位置和用途", "category": "entity", "sourceChapter": "ch6"},
+          {"id": "evt-tianshu-xinfa", "fact": "天枢心法第九层可压制噬魂印侵蚀", "category": "ability_rule", "sourceChapter": "ch6"},
+          {"id": "evt-zangshen-yuan", "fact": "葬神渊是天枢秘境深处的绝对禁地，九幽令主封印于此", "category": "location", "sourceChapter": "ch6"}
+        ],
+        "characterStates": [
+          {"characterId": "林默", "field": "leftArmStatus", "value": "林默左臂噬魂印伤势"},
+          {"characterId": "林默", "field": "leftArmDetail", "value": "被黑袍人噬魂印侵蚀，目前只能发挥三成力量"},
+          {"characterId": "云岚", "field": "location", "value": "云岚当前所在位置"},
+          {"characterId": "云岚", "field": "locationDetail", "value": "前往天枢宗求援，约定在秘境入口青石处汇合"},
+          {"characterId": "林默", "field": "bloodJade", "value": "血玉的具体位置和用途"},
+          {"characterId": "林默", "field": "bloodJadeDetail", "value": "血玉在林默怀中，是打开葬神渊封印的钥匙"}
+        ],
+        "promises": [
+          {"id": "promise-shihun-yin", "description": "林默左臂噬魂印伤势需在秘境中找到解法", "status": "open"},
+          {"id": "promise-yunlan-return", "description": "云岚求援归来与林默汇合", "status": "advancing"},
+          {"id": "promise-zangshen-yuan", "description": "血玉打开葬神渊封印抗衡九幽令主", "status": "open"}
+        ]
+      }
+    },
+    {
+      "caseId": "high-suspense-1",
+      "genre": "悬疑",
+      "riskLevel": "high",
+      "targetChapter": 7,
+      "prefix": "苏婉坐在医院走廊的长椅上，手里攥着陈警官的警徽。昨夜在 307 房间，那个黑影从衣柜中扑出时，陈警官推开了苏婉，自己却被击中后脑，目前仍在 ICU 昏迷，医生说未来 48 小时是关键期。苏婉独自调查，翻看母亲日记时发现第 47 页到 52 页被整齐撕掉，撕痕很新。今早一个自称'张医生'的男人打来电话，声称在疗养院工作过，知道那些被撕掉页面的内容，约她今晚在城东旧仓库见面。更让苏婉崩溃的是，昨晚回家后她发现客厅沙发上坐着一个二十岁出头的青年，自称'苏明'，说自己是苏婉的弟弟——但苏婉的记忆中，她一直是独生女。",
+      "characterNames": ["苏婉", "陈警官", "母亲", "苏明", "张医生"],
+      "authorMustInclude": [
+        "确认陈警官当前所在地点和伤势状态",
+        "查证苏明是否真的是苏婉的弟弟",
+        "验证张医生的真实身份和可信度"
+      ],
+      "inviolableFacts": [
+        "陈警官昨夜被击中后脑，目前在 ICU 昏迷，48 小时关键期",
+        "苏婉的记忆中她一直是独生女",
+        "母亲日记第 47 到 52 页被撕掉，撕痕很新",
+        "张医生约苏婉今晚在城东旧仓库见面"
+      ],
+      "worldRules": [
+        {"id": "wr-hospital-icu", "description": "陈警官在 ICU 昏迷，苏婉持有他的警徽", "type": "organization_plan", "affectedCharacters": ["陈警官", "苏婉"]},
+        {"id": "wr-diary-torn", "description": "母亲日记第 47 到 52 页被撕掉，撕痕很新，可能含关键信息", "type": "organization_plan", "affectedCharacters": ["母亲"]},
+        {"id": "wr-zhang-doctor", "description": "张医生自称在疗养院工作过，知道被撕掉页面的内容", "type": "organization_plan", "affectedCharacters": ["张医生"]}
+      ],
+      "constitution": {
+        "workIdentity": "悬疑长篇：苏婉调查母亲十年前在疗养院失踪的真相",
+        "readerPromise": ["层层反转", "线索闭环", "心理恐怖氛围"],
+        "genrePromises": ["悬疑", "心理惊悚"],
+        "protagonistCoreConflict": "苏婉在调查中发现自己身份可能是一个谎言",
+        "thematicQuestions": ["记忆的可靠性", "身份的真实性"],
+        "aestheticDirection": ["冷硬写实", "压抑氛围"],
+        "forbiddenDrift": ["超自然力量", "科幻元素"],
+        "sourceIds": ["constitution"]
+      },
+      "workspaceFixture": {
+        "historicalChapters": [
+          {
+            "number": 5,
+            "title": "307 房间的黑影",
+            "text": "苏婉第三次来到那栋废弃的疗养院，陈警官陪同在侧。307 号房间的门把手上挂着一条崭新的红丝带，苏婉记得母亲生前的日记里反复提到过 307。她推开门，屋内一片漆黑，只有书桌上摆着一张照片——十年前的母亲，怀里抱着一个苏婉从未见过的男童。突然，一个黑影从衣柜中扑出，陈警官推开苏婉，自己却被击中后脑，当场倒地不起。苏婉拨打 120，陈警官被紧急送往市一医院 ICU 抢救，医生说未来 48 小时是关键期。苏婉握着陈警官的警徽，独自坐在医院走廊，开始翻看母亲的日记。今早一个自称张医生的男人打来电话，声称在疗养院工作过，知道日记被撕掉页面的内容。苏明昨晚出现在苏婉家中，自称是她的弟弟，但苏婉的记忆中她一直是独生女。"
+          }
+        ],
+        "canonEvents": [
+          {"id": "evt-chen-icu", "fact": "陈警官当前所在地点和伤势状态", "category": "location", "sourceChapter": "ch5"},
+          {"id": "evt-suming-identity", "fact": "苏明是否真的是苏婉的弟弟", "category": "entity", "sourceChapter": "ch5"},
+          {"id": "evt-zhang-doctor", "fact": "张医生的真实身份和可信度", "category": "entity", "sourceChapter": "ch5"},
+          {"id": "evt-diary-torn", "fact": "母亲日记第 47 到 52 页被撕掉，撕痕很新", "category": "timeline", "sourceChapter": "ch5"},
+          {"id": "evt-icu-48h", "fact": "陈警官在 ICU 昏迷，未来 48 小时是关键期", "category": "timeline", "sourceChapter": "ch5"}
+        ],
+        "characterStates": [
+          {"characterId": "陈警官", "field": "location", "value": "陈警官当前所在地点和伤势状态"},
+          {"characterId": "陈警官", "field": "injuryDetail", "value": "被黑影击中后脑，在市一医院 ICU 昏迷，48 小时关键期"},
+          {"characterId": "苏明", "field": "identity", "value": "苏明是否真的是苏婉的弟弟"},
+          {"characterId": "苏明", "field": "identityDetail", "value": "自称苏婉弟弟的青年，但苏婉记忆中她是独生女"},
+          {"characterId": "张医生", "field": "credibility", "value": "张医生的真实身份和可信度"},
+          {"characterId": "张医生", "field": "credibilityDetail", "value": "自称在疗养院工作过，约苏婉在城东旧仓库见面"}
+        ],
+        "promises": [
+          {"id": "promise-chen-recovery", "description": "陈警官能否在 48 小时关键期内苏醒", "status": "open"},
+          {"id": "promise-suming-truth", "description": "苏明真实身份与苏婉记忆的矛盾", "status": "open"},
+          {"id": "promise-zhang-trap", "description": "张医生约见是真相还是陷阱", "status": "advancing"}
+        ]
+      }
+    }
+  ]
+}
