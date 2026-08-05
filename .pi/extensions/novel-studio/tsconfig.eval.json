@@ -29,6 +29,8 @@
     "novelos/eval/ceiling-abc-pilot.ts",
     "novelos/eval/prompt-context-ablation.ts",
     "novelos/eval/reference-guided-prompt-ablation.ts",
+    "novelos/eval/uncertainty-driven-ablation.ts",
+    "novelos/eval/uncertainty-recall-metrics.ts",
     "novelos/eval/final-decision.ts",
     "v2/core/replay-provenance-guard.ts",
     "v2/core/strategy-evidence-store.ts",
