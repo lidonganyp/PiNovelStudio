@@ -33,6 +33,7 @@
     "novelos/eval/uncertainty-recall-metrics.ts",
     "novelos/eval/uncertainty-fixture-workspace.ts",
     "novelos/eval/uncertainty-statistics.ts",
+    "novelos/eval/uncertainty-ablation-report.ts",
     "novelos/eval/final-decision.ts",
     "v2/core/replay-provenance-guard.ts",
     "v2/core/strategy-evidence-store.ts",

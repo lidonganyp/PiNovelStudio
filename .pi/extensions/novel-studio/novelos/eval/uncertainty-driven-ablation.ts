@@ -53,6 +53,12 @@ import {
   isAblationWorkspaceFixture,
   type AblationWorkspaceFixture,
 } from "./uncertainty-fixture-workspace.js";
+import {
+  generateComparisonReport,
+  generateBlindPack,
+  type BlindPackEntry,
+  type BlindPack,
+} from "./uncertainty-ablation-report.js";
 import { join } from "node:path";
 
 // ============================================================================
@@ -338,64 +344,6 @@ function readTrajectory(trajectoryPath: string): TrajectoryEntry[] {
   } catch {
     return [];
   }
-}
-
-/**
- * 从 trajectory 提取 confirmed sourceRefs。
- *
- * 两个来源：
- * 1. ranked_evidence 条目的 data.evidences[].sourceRef（如果存在）
- * 2. tool_event 条目的 data.result.details.sourceRef（tool_execution_end）
- *
- * 工具返回的 sourceRef 可能是 "ranked:no-match" / "character:empty" 等无效值，
- * 这些代表"未找到证据"，过滤掉不计入有效 sourceRefs。
- */
-function extractSourceRefsFromTrajectory(trajectoryPath: string): string[] {
-  const entries = readTrajectory(trajectoryPath);
-  const sourceRefs: string[] = [];
-  const INVALID_REFS = new Set(["ranked:no-match", "character:empty", "empty", "no-match"]);
-  for (const entry of entries) {
-    // 来源 1：ranked_evidence 条目
-    if (entry.type === "ranked_evidence") {
-      const data = entry.data as { evidences?: Array<{ sourceRef?: string }> } | null;
-      if (Array.isArray(data?.evidences)) {
-        for (const ev of data.evidences) {
-          if (typeof ev?.sourceRef === "string" && !INVALID_REFS.has(ev.sourceRef)) {
-            sourceRefs.push(ev.sourceRef);
-          }
-        }
-      }
-    }
-    // 来源 2：tool_execution_end 条目
-    if (entry.type === "tool_event") {
-      const data = entry.data as { type?: string; result?: { details?: { sourceRef?: string } } } | null;
-      if (data?.type === "tool_execution_end") {
-        const ref = data?.result?.details?.sourceRef;
-        if (typeof ref === "string" && !INVALID_REFS.has(ref) && !ref.endsWith(":no-match") && !ref.endsWith(":empty")) {
-          sourceRefs.push(ref);
-        }
-      }
-    }
-  }
-  return sourceRefs;
-}
-
-/**
- * 从 trajectory 提取 EvidencePlan.mustVerify 的数量。
- *
- * 找 evidence_plan 条目，返回 data.mustVerify.length。
- * 无 evidence_plan 条目时返回 0。
- */
-function extractMustVerifyFromTrajectory(trajectoryPath: string): number {
-  const entries = readTrajectory(trajectoryPath);
-  for (const entry of entries) {
-    if (entry.type !== "evidence_plan") continue;
-    const data = entry.data as { mustVerify?: unknown[] } | null;
-    if (Array.isArray(data?.mustVerify)) {
-      return data.mustVerify.length;
-    }
-  }
-  return 0;
 }
 
 /**
@@ -952,169 +900,9 @@ export function aggregateMetrics(metrics: ArmMetrics[]): AggregatedMetrics {
 }
 
 // ============================================================================
-// 报告生成
+// 报告与盲测包生成（已提取到 uncertainty-ablation-report.ts）
 // ============================================================================
-
-function generateComparisonReport(result: AblationResult): string {
-  const lines: string[] = [];
-  lines.push("# 不确定性驱动检索决策 A/B 对照实验报告");
-  lines.push("");
-  lines.push(`**Run ID**：${result.runId}`);
-  lines.push(`**时间**：${result.timestamp}`);
-  lines.push(`**Case 数**：${result.cases.length}`);
-  lines.push("");
-
-  // 聚合指标对比表
-  lines.push("## 聚合指标对比");
-  lines.push("");
-  lines.push("| 指标 | A 组（强制检索） | B 组（不确定性驱动） | 差异 |");
-  lines.push("|------|-------------------|----------------------|------|");
-  const a = result.aggregate.armA;
-  const b = result.aggregate.armB;
-  lines.push(
-    `| 成功率 | ${a.successCount}/${result.cases.length} | ${b.successCount}/${result.cases.length} | ${b.successCount - a.successCount >= 0 ? "+" : ""}${b.successCount - a.successCount} |`,
-  );
-  lines.push(
-    `| 平均工具调用次数 | ${a.avgToolCalls.toFixed(2)} | ${b.avgToolCalls.toFixed(2)} | ${b.avgToolCalls - a.avgToolCalls >= 0 ? "+" : ""}${(b.avgToolCalls - a.avgToolCalls).toFixed(2)} |`,
-  );
-  lines.push(
-    `| 平均 sourceRefs 数 | ${a.avgSourceRefs.toFixed(2)} | ${b.avgSourceRefs.toFixed(2)} | ${b.avgSourceRefs - a.avgSourceRefs >= 0 ? "+" : ""}${(b.avgSourceRefs - a.avgSourceRefs).toFixed(2)} |`,
-  );
-  lines.push(
-    `| 平均 FactGuard 硬错误 | ${a.avgFactGuardErrors.toFixed(2)} | ${b.avgFactGuardErrors.toFixed(2)} | ${b.avgFactGuardErrors - a.avgFactGuardErrors >= 0 ? "+" : ""}${(b.avgFactGuardErrors - a.avgFactGuardErrors).toFixed(2)} |`,
-  );
-  lines.push(
-    `| 平均生成延迟 (ms) | ${a.avgDurationMs.toFixed(0)} | ${b.avgDurationMs.toFixed(0)} | ${b.avgDurationMs - a.avgDurationMs >= 0 ? "+" : ""}${(b.avgDurationMs - a.avgDurationMs).toFixed(0)} |`,
-  );
-  lines.push(
-    `| 完整性通过率 | ${(a.completenessPassRate * 100).toFixed(1)}% | ${(b.completenessPassRate * 100).toFixed(1)}% | |`,
-  );
-  lines.push(
-    `| 无关证据比例（近似） | ${(a.avgIrrelevantEvidenceRatio * 100).toFixed(1)}% | ${(b.avgIrrelevantEvidenceRatio * 100).toFixed(1)}% | ${b.avgIrrelevantEvidenceRatio - a.avgIrrelevantEvidenceRatio >= 0 ? "+" : ""}${((b.avgIrrelevantEvidenceRatio - a.avgIrrelevantEvidenceRatio) * 100).toFixed(1)}% |`,
-  );
-  lines.push(
-    `| token 输入总量 | ${a.totalTokenIn} | ${b.totalTokenIn} | ${a.totalTokenIn === "unknown" || b.totalTokenIn === "unknown" ? "(部分 unknown)" : ""} |`,
-  );
-  lines.push(
-    `| token 输出总量 | ${a.totalTokenOut} | ${b.totalTokenOut} | ${a.totalTokenOut === "unknown" || b.totalTokenOut === "unknown" ? "(部分 unknown)" : ""} |`,
-  );
-  lines.push("");
-
-  // 每 case 明细
-  lines.push("## 每 Case 明细");
-  lines.push("");
-  for (const c of result.cases) {
-    lines.push(`### ${c.caseId}`);
-    lines.push("");
-    lines.push("| 指标 | A 组 | B 组 |");
-    lines.push("|------|------|------|");
-    lines.push(`| success | ${c.armA.metrics.success} | ${c.armB.metrics.success} |`);
-    lines.push(`| textLength | ${c.armA.metrics.textLength} | ${c.armB.metrics.textLength} |`);
-    lines.push(`| toolCalls | ${c.armA.metrics.toolCalls} | ${c.armB.metrics.toolCalls} |`);
-    lines.push(`| sourceRefsCount | ${c.armA.metrics.sourceRefsCount} | ${c.armB.metrics.sourceRefsCount} |`);
-    lines.push(`| mustVerifyCount | ${c.armA.metrics.mustVerifyCount} | ${c.armB.metrics.mustVerifyCount} |`);
-    lines.push(`| factGuardErrors | ${c.armA.metrics.factGuardErrors} | ${c.armB.metrics.factGuardErrors} |`);
-    lines.push(`| completenessPassed | ${c.armA.metrics.completenessPassed} | ${c.armB.metrics.completenessPassed} |`);
-    lines.push(`| irrelevantEvidenceRatio | ${c.armA.metrics.irrelevantEvidenceRatio.toFixed(3)} | ${c.armB.metrics.irrelevantEvidenceRatio.toFixed(3)} |`);
-    lines.push(`| durationMs | ${c.armA.metrics.durationMs} | ${c.armB.metrics.durationMs} |`);
-    lines.push(`| tokenIn | ${c.armA.metrics.tokenIn} | ${c.armB.metrics.tokenIn} |`);
-    lines.push(`| tokenOut | ${c.armA.metrics.tokenOut} | ${c.armB.metrics.tokenOut} |`);
-    lines.push(`| selectedSource | ${c.armA.metrics.selectedSource} | ${c.armB.metrics.selectedSource} |`);
-    if (c.armA.metrics.failureReason || c.armB.metrics.failureReason) {
-      lines.push(`| failureReason | ${c.armA.metrics.failureReason ?? ""} | ${c.armB.metrics.failureReason ?? ""} |`);
-    }
-    lines.push("");
-  }
-
-  // 最低通过条件判定
-  lines.push("## 最低通过条件判定");
-  lines.push("");
-  lines.push(`- B 组事实硬伤 ≤ A 组：${result.passCriteria.factGuardNotWorse ? "✓ PASS" : "✗ FAIL"}`);
-  lines.push(`- B 组工具调用次数 < A 组：${result.passCriteria.toolCallsReduced ? "✓ PASS" : "✗ FAIL"}`);
-  // Step 1：recallNotWorse 三态显示
-  const recallDisplay = result.passCriteria.recallNotWorse === "pass"
-    ? "✓ PASS"
-    : result.passCriteria.recallNotWorse === "unmeasured"
-      ? "? UNMEASURED（召回率未测量，需 Step 2 修复 fixture 后重跑）"
-      : "✗ FAIL";
-  lines.push(`- B 组必需事实召回率 ≥ A 组：${recallDisplay}`);
-  if (result.passCriteria.recallUnmeasuredReason) {
-    lines.push(`  - 原因：${result.passCriteria.recallUnmeasuredReason}`);
-  }
-  lines.push("");
-  lines.push(`**总体判定**：${result.passCriteria.overallPassed ? "✓ PASS（可考虑更大规模 replay）" : "✗ FAIL（需调整后再实验）"}`);
-  lines.push("");
-  lines.push("> 注意：人工盲测的自然度和叙事完成度由用户通过 blind-pack.json 盲测后裁决。");
-  lines.push("> token 成本指标存在 unknown gap（部分路径 tokenUsage 仍为 \"unknown\"），需后续修复透传。");
-
-  return lines.join("\n");
-}
-
-// ============================================================================
-// 盲测包生成
-// ============================================================================
-
-export interface BlindPackEntry {
-  /** 匿名 ID（A/B 随机映射，不暴露 arm 身份） */
-  anonymousId: string;
-  caseId: string;
-  text: string;
-}
-
-export interface BlindPack {
-  runId: string;
-  timestamp: string;
-  /** 匿名映射（仅记录映射关系，盲测时不应查看） */
-  mapping: Record<string, { caseId: string; arm: "A" | "B" }>;
-  entries: BlindPackEntry[];
-  instructions: string;
-}
-
-export function generateBlindPack(result: AblationResult): BlindPack {
-  const entries: BlindPackEntry[] = [];
-  const mapping: Record<string, { caseId: string; arm: "A" | "B" }> = {};
-
-  for (const c of result.cases) {
-    // 随机映射 A/B → X/Y（每 case 独立随机）
-    const aIsX = Math.random() < 0.5;
-    const xId = `X-${c.caseId}`;
-    const yId = `Y-${c.caseId}`;
-
-    if (aIsX) {
-      mapping[xId] = { caseId: c.caseId, arm: "A" };
-      mapping[yId] = { caseId: c.caseId, arm: "B" };
-    } else {
-      mapping[xId] = { caseId: c.caseId, arm: "B" };
-      mapping[yId] = { caseId: c.caseId, arm: "A" };
-    }
-
-    entries.push({
-      anonymousId: xId,
-      caseId: c.caseId,
-      text: aIsX ? c.armA.v2Output.text ?? "" : c.armB.v2Output.text ?? "",
-    });
-    entries.push({
-      anonymousId: yId,
-      caseId: c.caseId,
-      text: aIsX ? c.armB.v2Output.text ?? "" : c.armA.v2Output.text ?? "",
-    });
-  }
-
-  return {
-    runId: result.runId,
-    timestamp: result.timestamp,
-    mapping,
-    entries,
-    instructions: [
-      "盲测说明：",
-      "1. 每个 case 有两个匿名文本（X 和 Y），分别来自 A 组（强制检索）和 B 组（不确定性驱动）。",
-      "2. 请逐 case 阅读两个文本，从以下维度评分（1-5 分）：",
-      "   - 自然度（中文表达是否自然、无 AI 腔）",
-      "   - 叙事完成度（情节是否完整、是否有明显遗漏）",
-      "   - 事实准确性（是否有事实硬伤、人物状态错误）",
-      "3. 对每对 X/Y 选择「更优」或「平局」。",
-      "4. 评分完成后，查看 mapping 确认 X/Y 对应的 A/B 身份。",
-      "5. 最低通过条件：B 组文学质量不下降（B 组胜率 ≥ 40% 或平局为主）。",
-    ].join("\n"),
-  };
-}
+// generateComparisonReport / generateBlindPack / BlindPackEntry / BlindPack
+// 从 ./uncertainty-ablation-report.js 导入并 re-export，保持向后兼容。
+export { generateComparisonReport, generateBlindPack } from "./uncertainty-ablation-report.js";
+export type { BlindPackEntry, BlindPack } from "./uncertainty-ablation-report.js";
