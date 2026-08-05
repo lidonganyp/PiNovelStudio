@@ -35,6 +35,7 @@
     "novelos/eval/uncertainty-statistics.ts",
     "novelos/eval/uncertainty-ablation-report.ts",
     "novelos/eval/final-decision.ts",
+    "novelos/agent/must-verify-coverage-gate.ts",
     "v2/core/replay-provenance-guard.ts",
     "v2/core/strategy-evidence-store.ts",
     "v2/core/machine-review-schema.ts",
