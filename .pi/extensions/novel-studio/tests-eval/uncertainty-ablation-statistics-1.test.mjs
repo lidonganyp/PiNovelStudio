@@ -133,8 +133,17 @@ describe("UNCERTAINTY-ABLATION-STATISTICS-1：computeSignTestPValue", () => {
     assert.ok(p < 0.05, `9/10 应显著（p<0.05），实际 p=${p}`);
   });
 
+  it("8 正 / 8 总（B 完全优于 A）→ p<0.01", async () => {
+    const mod = await importModule();
+    // 双侧符号检验：8/8 → 2 * (0.5)^8 = 0.0078125 < 0.01
+    // （5/5 双侧 p=0.0625 不满足 <0.01，改用 8/8 验证高度显著）
+    const p = mod.computeSignTestPValue(8, 8);
+    assert.ok(p < 0.01, `8/8 应高度显著（p<0.01），实际 p=${p}`);
+  });
+
   it("10 正 / 10 总（B 完全优于 A）→ p<0.01", async () => {
     const mod = await importModule();
+    // 双侧符号检验：10/10 → 2 * (0.5)^10 = 0.001953 < 0.01
     const p = mod.computeSignTestPValue(10, 10);
     assert.ok(p < 0.01, `10/10 应高度显著（p<0.01），实际 p=${p}`);
   });

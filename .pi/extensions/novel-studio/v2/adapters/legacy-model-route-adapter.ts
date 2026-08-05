@@ -58,6 +58,21 @@ export interface ModelGenerateInput {
   requestedRoute?: string;
   /** MODEL-PROMPT-ADAPTER-1：本次调用使用的提示词表达层，供 trace/消融切片。 */
   promptProfile?: string;
+  /**
+   * UNCERTAINTY-ABLATION-STATISTICS-1（Step 3）：采样温度。
+   *
+   * 仅 eval 路径使用（CLI modelGenerate 读取此字段构造请求 body）。
+   * 生产 legacy fallback-manager 不读此字段（由路由配置决定）。
+   * 未设置时由调用方默认（CLI 默认 0.72）。
+   */
+  temperature?: number;
+  /**
+   * UNCERTAINTY-ABLATION-STATISTICS-1（Step 3）：随机种子（可复现性）。
+   *
+   * 仅 eval 路径使用。多 seed 实验中每 seed 注入不同值分离生成随机性。
+   * 未设置时不传 seed 字段（模型自行随机）。
+   */
+  seed?: number;
 }
 
 export interface ModelGenerateOutput {
