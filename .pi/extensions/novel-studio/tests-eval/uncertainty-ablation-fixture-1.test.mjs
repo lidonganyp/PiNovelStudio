@@ -439,10 +439,11 @@ describe("UNCERTAINTY-ABLATION-FIXTURE-1：NarrativeSearchService 正向命中 c
     });
     const canon = service.queryCanon();
     assert.ok(canon.length > 0, "queryCanon 应返回非空 canon events");
-    // 应含 ability_rule / location / entity 类别
+    // LegacyStateAdapter 把 skeleton.events 转换为 category=timeline 的 canon
+    // （fixture.canonEvents.category 字段不保留，因 LegacyStateAdapter 只产生 timeline/location）
     const categories = new Set(canon.map((e) => e.category));
-    assert.ok(categories.has("ability_rule") || categories.has("location") || categories.has("entity"),
-      "canon 应含 ability_rule/location/entity 类别");
+    assert.ok(categories.has("timeline") || categories.has("location"),
+      "canon 应含 timeline 或 location 类别（LegacyStateAdapter 转换后）");
   });
 
   it("high-xuanhuan-1：queryCharacterState('林默') 返回 character states", async () => {

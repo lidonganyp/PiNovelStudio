@@ -47,6 +47,12 @@ import {
   type ConfirmedEvidence,
   type RecallCriterion,
 } from "./uncertainty-recall-metrics.js";
+import {
+  setupAblationWorkspace,
+  cleanupAblationWorkspace,
+  isAblationWorkspaceFixture,
+  type AblationWorkspaceFixture,
+} from "./uncertainty-fixture-workspace.js";
 import { join } from "node:path";
 
 // ============================================================================
@@ -124,6 +130,16 @@ export interface AblationCase {
     forbiddenDrift: string[];
     sourceIds: string[];
   };
+  /**
+   * Step 2：高风险 case 的 workspace fixture 数据。
+   *
+   * 提供后 runAblationArm 会创建临时 projectRoot 并植入 fixture 数据，
+   * 使 NarrativeSearchService 的检索工具能正向命中 confirmed 证据。
+   * 不提供时 runAblationArm 用 process.cwd() 作为 projectRoot（低风险 case 行为不变）。
+   *
+   * fixture 数据对 A/B 两组相同（避免引入额外变量）。
+   */
+  workspaceFixture?: AblationWorkspaceFixture;
 }
 
 /** 单臂指标 */
@@ -657,6 +673,10 @@ export function extractMetrics(
  * B 组：retrievalPromptOverride=UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT
  *
  * evalMode="B2"：启用 Agentic + 检索，不启用验证（A/B 差异只在检索决策规则）。
+ *
+ * Step 2：caseData.workspaceFixture 提供时，创建临时 projectRoot 植入 fixture 数据，
+ * 使检索工具能正向命中 confirmed 证据。try/finally 保证清理。
+ * 无 fixture 时用 process.cwd()（低风险 case 行为不变）。
  */
 export async function runAblationArm(
   arm: "A" | "B",
@@ -673,40 +693,55 @@ export async function runAblationArm(
   const context = buildFullContext(caseData);
   const wrappedModelGenerate = wrapModelGenerateWithRoute(modelGenerate, generateRoute);
 
-  const result = await runUnifiedPipeline({
-    workspaceId: `ablation-${caseData.caseId}-${arm}`,
-    chapterId: `${caseData.caseId}-${arm}`,
-    chapterNumber: caseData.targetChapter,
-    projectRoot: process.cwd(),
-    candidateTimeoutMs: timeoutMs,
-    // Eval 参数
-    evalMode: "B2",
-    evalPrefix: caseData.prefix,
-    evalIntent: intent,
-    evalContext: context,
-    evalModelGenerate: wrappedModelGenerate,
-    evalCharacterNames: caseData.characterNames,
-    evalPromptProfile: resolveWriterPromptProfile({ route: generateRoute }),
-    // A/B 差异变量
-    retrievalPromptOverride,
-  });
-
-  const durationMs = Date.now() - start;
-  // 从 stageResults.evalAgentic 提取 trajectoryPath，连同 caseData/intent/context 传给 extractMetrics
-  const stageResults = (result.stageResults ?? {}) as Record<string, unknown>;
-  const evalAgentic = (stageResults.evalAgentic ?? {}) as { trajectoryPath?: string };
-  const metrics = extractMetrics(
-    arm,
-    caseData.caseId,
-    result,
-    durationMs,
-    evalAgentic.trajectoryPath,
+  // Step 2：高风险 case 用临时 projectRoot（植入 fixture 数据）；低风险 case 用 process.cwd()
+  const workspaceSetup = setupAblationWorkspace({
     caseData,
-    intent,
-    context,
-  );
+    arm,
+    parentProjectRoot: process.cwd(),
+  });
+  const { projectRoot, workspaceId } = workspaceSetup;
 
-  return { arm, caseId: caseData.caseId, v2Output: result, metrics };
+  try {
+    const result = await runUnifiedPipeline({
+      workspaceId,
+      chapterId: `${caseData.caseId}-${arm}`,
+      chapterNumber: caseData.targetChapter,
+      projectRoot,
+      candidateTimeoutMs: timeoutMs,
+      // Eval 参数
+      evalMode: "B2",
+      evalPrefix: caseData.prefix,
+      evalIntent: intent,
+      evalContext: context,
+      evalModelGenerate: wrappedModelGenerate,
+      evalCharacterNames: caseData.characterNames,
+      evalPromptProfile: resolveWriterPromptProfile({ route: generateRoute }),
+      // A/B 差异变量
+      retrievalPromptOverride,
+    });
+
+    const durationMs = Date.now() - start;
+    // 从 stageResults.evalAgentic 提取 trajectoryPath，连同 caseData/intent/context 传给 extractMetrics
+    const stageResults = (result.stageResults ?? {}) as Record<string, unknown>;
+    const evalAgentic = (stageResults.evalAgentic ?? {}) as { trajectoryPath?: string };
+    const metrics = extractMetrics(
+      arm,
+      caseData.caseId,
+      result,
+      durationMs,
+      evalAgentic.trajectoryPath,
+      caseData,
+      intent,
+      context,
+    );
+
+    return { arm, caseId: caseData.caseId, v2Output: result, metrics };
+  } finally {
+    // Step 2：清理临时 workspace（仅 createdTempWorkspace=true 时实际删除）
+    if (workspaceSetup.createdTempWorkspace) {
+      cleanupAblationWorkspace(projectRoot);
+    }
+  }
 }
 
 // ============================================================================
@@ -746,6 +781,17 @@ export function loadAblationCases(caseSetPath: string): AblationCase[] {
         typeof cs.targetChapter !== "number" || typeof cs.prefix !== "string") {
       throw new Error(`case set 第 ${i + 1} 个 case 缺少必填字段（caseId/genre/targetChapter/prefix）`);
     }
+    // Step 2：解析 workspaceFixture（可选）；提供时用类型守卫验证格式
+    let workspaceFixture: AblationWorkspaceFixture | undefined;
+    if (cs.workspaceFixture !== undefined) {
+      if (!isAblationWorkspaceFixture(cs.workspaceFixture)) {
+        throw new Error(
+          `case set 第 ${i + 1} 个 case (${cs.caseId}) 的 workspaceFixture 格式无效：` +
+            `应有 historicalChapters 数组（含 number/title/text）`,
+        );
+      }
+      workspaceFixture = cs.workspaceFixture;
+    }
     return {
       caseId: cs.caseId,
       genre: cs.genre,
@@ -757,6 +803,7 @@ export function loadAblationCases(caseSetPath: string): AblationCase[] {
       inviolableFacts: cs.inviolableFacts,
       worldRules: cs.worldRules,
       constitution: cs.constitution,
+      workspaceFixture,
     };
   });
 }
