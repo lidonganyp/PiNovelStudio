@@ -66,6 +66,10 @@ import type {
   AgentTurnsResult,
   VerifyPatchResult,
 } from "./narrative-agent-loop-types.js";
+import type {
+  CoverageGate,
+  CoverageGateResult,
+} from "./must-verify-coverage-gate.js";
 import {
   DEFAULT_REPAIR_BATCH_SIZE,
   isSemanticFinding,
@@ -92,6 +96,8 @@ export class NarrativeAgentLoop {
   private readonly trajectory: TrajectoryStore;
   private readonly verifier?: NarrativeVerifierSuite;
   private readonly patchService?: CandidatePatchService;
+  private readonly coverageGate?: CoverageGate;
+  private readonly maxCoverageRetries: number;
   private readonly maxRepairRounds: number;
   /**
    * P0-3：per-finding semantic 修复次数追踪。
@@ -110,6 +116,14 @@ export class NarrativeAgentLoop {
     this.trajectory = options.trajectory as TrajectoryStore;
     this.verifier = options.verifier as NarrativeVerifierSuite | undefined;
     this.patchService = options.patchService as CandidatePatchService | undefined;
+    this.coverageGate = options.coverageGate;
+    const configuredCoverageRetries = options.maxCoverageRetries;
+    this.maxCoverageRetries =
+      configuredCoverageRetries !== undefined &&
+      Number.isFinite(configuredCoverageRetries) &&
+      configuredCoverageRetries >= 0
+        ? Math.floor(configuredCoverageRetries)
+        : 1;
     const envRounds = Number(process.env.PINOVEL_NOVELOS_MAX_REPAIR_ROUNDS);
     this.maxRepairRounds = options.maxRepairRounds ?? (Number.isFinite(envRounds) && envRounds >= 0 ? envRounds : 2);
 
@@ -146,8 +160,54 @@ export class NarrativeAgentLoop {
 
     // ── 2. runAgentTurns（Agent 原生 ReAct loop） ────────────────────────
     let turns: AgentTurnsResult;
+    let coverageGateResult: CoverageGateResult | undefined;
+    let coverageGateRetries = 0;
+    let coverageRetryPrompt: string | undefined;
     try {
-      turns = await this.runAgentTurns(input, plan);
+      while (true) {
+        turns = await this.runAgentTurns(input, plan, coverageRetryPrompt);
+        if (!this.coverageGate) break;
+
+        // The gate consumes the persisted trajectory so confirmed tool evidence
+        // is auditable. In-memory test trajectories remain fail-closed unless
+        // compiled context already covers the required facts.
+        await this.trajectory.flush();
+        coverageGateResult = this.coverageGate.checkAndBlock({
+          evidencePlan: plan,
+          trajectoryPath: this.trajectory.getOutputPath(),
+          inviolableFacts: input.inviolableFacts ?? [],
+          contextCoveredFacts: this.collectContextCoveredFacts(input.context),
+        });
+        if (coverageGateResult.passed) break;
+
+        this.trajectory.recordFailure({
+          stage: "must_verify_coverage_gate",
+          severity: "hard",
+          reason: "P0/P1 mustVerify facts remain uncovered after Agentic retrieval",
+          evidence:
+            coverageGateResult.failureEnvelope?.evidence ??
+            coverageGateResult.unverifiedHighRisk,
+          recoverable: true,
+          retryPlan:
+            coverageGateResult.failureEnvelope?.retryPlan ??
+            "agent_loop_retry_with_explicit_must_verify_prompt",
+        });
+
+        if (coverageGateRetries >= this.maxCoverageRetries) {
+          return this.makeFallback(
+            plan,
+            turns.sourceRefs,
+            "must_verify_coverage_failed",
+            turns.evidenceFacts,
+            turns.toolCalls,
+            coverageGateResult,
+            coverageGateRetries,
+          );
+        }
+
+        coverageGateRetries += 1;
+        coverageRetryPrompt = this.buildCoverageRetryPrompt(coverageGateResult);
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.trajectory.recordFailure({
@@ -157,7 +217,7 @@ export class NarrativeAgentLoop {
         recoverable: true,
         retryPlan: "fallback to one_shot_raw",
       });
-      return this.makeFallback(plan, [], "model_error");
+      return this.makeFallback(plan, [], "model_error", [], 0, coverageGateResult, coverageGateRetries);
     }
 
     // ── 预算耗尽或无 draft → fallback ────────────────────────────────────
@@ -230,6 +290,8 @@ export class NarrativeAgentLoop {
       evidenceFacts: turns.evidenceFacts,
       verifierCleared,
       hardFindingCount,
+      ...(coverageGateResult ? { coverageGate: coverageGateResult } : {}),
+      ...(coverageGateRetries > 0 ? { coverageGateRetries } : {}),
     };
     this.candidateWorkspace.saveLineage(lineage);
     this.trajectory.recordOutput({ draftLength: finalText.length, lineage });
@@ -256,6 +318,7 @@ export class NarrativeAgentLoop {
   private async runAgentTurns(
     input: AgentLoopInput,
     plan: EvidencePlan,
+    coverageRetryPrompt?: string,
   ): Promise<AgentTurnsResult> {
     // R6 修复：eval 模式下注入【前文】段，确保 agentic 生成续写同一故事。
     const promptParts: string[] = [];
@@ -277,10 +340,19 @@ export class NarrativeAgentLoop {
         "",
       );
     }
-    promptParts.push(
-      "请先使用跨源叙事证据检索工具查找结构化事实证据（世界事实、角色状态、原文片段），",
-      "再按需使用章节原文片段检索工具查证具体原文。证据充分时直接输出正文，不再发出工具调用指令。",
-    );
+    // eval-only：retrievalPromptOverride 覆盖默认强制检索 prompt（A/B 对照实验用）。
+    // 生产路径不传此字段，使用默认"请先使用跨源叙事证据检索工具查找..."强制检索 prompt（行为不变）。
+    if (input.retrievalPromptOverride) {
+      promptParts.push(input.retrievalPromptOverride);
+    } else {
+      promptParts.push(
+        "请先使用跨源叙事证据检索工具查找结构化事实证据（世界事实、角色状态、原文片段），",
+        "再按需使用章节原文片段检索工具查证具体原文。证据充分时直接输出正文，不再发出工具调用指令。",
+      );
+    }
+    if (coverageRetryPrompt) {
+      promptParts.push("", coverageRetryPrompt);
+    }
     const userPrompt = promptParts.join("\n");
 
     await this.runtime.prompt(userPrompt);
@@ -624,6 +696,31 @@ export class NarrativeAgentLoop {
     return modelOutput;
   }
 
+  /** Flatten authoritative compiled-context text for deterministic coverage matching. */
+  private collectContextCoveredFacts(input: AgentLoopInput["context"]): string[] {
+    return [
+      ...input.facts.map((fact) => fact.content),
+      ...input.characterStates.map((state) =>
+        `${state.name} ${JSON.stringify(state.state)}`,
+      ),
+      ...input.openLoops.map((loop) => loop.description),
+      ...input.worldRules.map((rule) => rule.description),
+    ].filter((fact) => fact.trim().length > 0);
+  }
+
+  /** Build a bounded retry instruction from the gate's concrete evidence. */
+  private buildCoverageRetryPrompt(result: CoverageGateResult): string {
+    const items = result.unverifiedHighRisk.map(
+      (item) => `  - [${item.riskLevel}] ${item.item}: ${item.reason}`,
+    );
+    return [
+      "事实覆盖门重试要求：以下高风险事实尚未获得 confirmed 证据。",
+      ...items,
+      "请先使用允许的叙事检索工具逐项查证，并让工具返回可追溯 sourceRef；",
+      "在证据覆盖前不要声称事实已确认，也不要用猜测替代检索。",
+    ].join("\n");
+  }
+
   // ── 内部：构造 fallback 结果 ──────────────────────────────────────────
 
   private makeFallback(
@@ -632,6 +729,8 @@ export class NarrativeAgentLoop {
     stopReason: AgentLoopStopReason,
     evidenceFacts: string[] = [],
     toolCalls = 0,
+    coverageGate?: CoverageGateResult,
+    coverageGateRetries = 0,
   ): AgentLoopResult {
     const lineage: AgentLoopLineage = {
       evidencePlan: plan,
@@ -642,6 +741,8 @@ export class NarrativeAgentLoop {
       evidenceFacts,
       verifierCleared: false,
       hardFindingCount: 0,
+      ...(coverageGate ? { coverageGate } : {}),
+      ...(coverageGateRetries > 0 ? { coverageGateRetries } : {}),
     };
     this.candidateWorkspace.saveLineage(lineage);
     this.trajectory.recordFailure({

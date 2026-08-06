@@ -24,6 +24,10 @@ import type { CandidatePatchService, PatchProposal } from "./candidate-patch-ser
 import type {
   EvidencePlan,
 } from "./evidence-plan.js";
+import type {
+  CoverageGate,
+  CoverageGateResult,
+} from "./must-verify-coverage-gate.js";
 
 // ============================================================================
 // 类型
@@ -58,6 +62,18 @@ export interface AgentLoopInput {
    * 若未提供，loop 内部 createEvidencePlan（向后兼容）。
    */
   evidencePlan?: EvidencePlan;
+  /**
+   * eval-only：覆盖默认的"强制跨源检索"prompt 决策规则。
+   *
+   * 生产路径不传此字段，runAgentTurns 使用默认的"请先使用跨源叙事证据检索工具查找..."
+   * 强制检索 prompt（行为完全不变）。
+   *
+   * eval 路径（如 uncertainty-driven-ablation）传入不确定性驱动的决策规则文本，
+   * 替换默认强制检索 prompt，用于 A/B 对照实验。
+   *
+   * 不暴露思维链，只改变检索决策规则。
+   */
+  retrievalPromptOverride?: string;
 }
 
 export type AgentLoopStopReason =
@@ -66,7 +82,8 @@ export type AgentLoopStopReason =
   | "stagnant"
   | "verifier_cleared"
   | "model_error"
-  | "tool_error";
+  | "tool_error"
+  | "must_verify_coverage_failed";
 
 export interface AgentLoopLineage {
   evidencePlan: EvidencePlan;
@@ -80,6 +97,10 @@ export interface AgentLoopLineage {
   verifierCleared: boolean;
   /** 硬失败数量（最终） */
   hardFindingCount: number;
+  /** mustVerify 覆盖门最近一次结果（若启用） */
+  coverageGate?: CoverageGateResult;
+  /** 覆盖门触发的有限重试次数 */
+  coverageGateRetries?: number;
 }
 
 export interface AgentLoopResult {
@@ -107,6 +128,10 @@ export interface NarrativeAgentLoopOptions {
   trajectory: TrajectoryStore;
   verifier?: NarrativeVerifierSuite;
   patchService?: CandidatePatchService;
+  /** 可选事实覆盖门；只决定检索重试，不决定最终正文交付。 */
+  coverageGate?: CoverageGate;
+  /** 覆盖门失败后的最大 Agentic 重试次数，默认 1。 */
+  maxCoverageRetries?: number;
   /** 最大修复轮数（默认 2，可通过 PINOVEL_NOVELOS_MAX_REPAIR_ROUNDS 环境变量覆盖） */
   maxRepairRounds?: number;
 }

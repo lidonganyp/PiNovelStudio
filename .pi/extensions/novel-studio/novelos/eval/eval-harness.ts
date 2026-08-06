@@ -620,10 +620,10 @@ export async function runAgentLoopForEval(
   // 按 mode 映射能力开关（B1/B2/B3 干净分层消融）
   const capabilities: AgenticRawSourceCapabilities =
     mode === "b1"
-      ? { enableRetrieval: false, enableVerification: false }
+      ? { enableRetrieval: false, enableVerification: false, enableCoverageGate: false }
       : mode === "b2"
-        ? { enableRetrieval: true, enableVerification: false }
-        : { enableRetrieval: true, enableVerification: true }; // b3
+        ? { enableRetrieval: true, enableVerification: false, enableCoverageGate: false }
+        : { enableRetrieval: true, enableVerification: true, enableCoverageGate: false }; // b3
 
   const source = createAgenticRawCandidateSource(capabilities);
 

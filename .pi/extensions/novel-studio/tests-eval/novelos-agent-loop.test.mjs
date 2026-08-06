@@ -208,6 +208,10 @@ function setupLoop(opts = {}) {
     permissionPolicy,
     budget,
     trajectory,
+    ...(opts.coverageGate ? { coverageGate: opts.coverageGate } : {}),
+    ...(opts.maxCoverageRetries !== undefined
+      ? { maxCoverageRetries: opts.maxCoverageRetries }
+      : {}),
     // 不传 verifier/patchService → 跳过 verify/patch（D.2 专门测试）
   });
 
@@ -401,5 +405,142 @@ describe("NovelOS Narrative Agent Loop（ReAct 架构）", () => {
     // 未传 verifier → verifierCleared=false
     assert.equal(result.lineage.verifierCleared, false, "未传 verifier 时 verifierCleared 应为 false");
     assert.equal(result.repairRounds, 0, "未传 patchService 时 repairRounds 应为 0");
+  });
+
+  it("coverage gate receives the plan, compiled context facts, and trajectory path", async () => {
+    const calls = [];
+    const coverageGate = {
+      checkAndBlock(input) {
+        calls.push(input);
+        return {
+          passed: true,
+          unverifiedHighRisk: [],
+          confirmedItems: [],
+          skippedReason: "context_covered",
+          failureEnvelope: undefined,
+        };
+      },
+    };
+    const { loop, trajectory } = setupLoop({ coverageGate });
+
+    const evidencePlan = {
+      known: [],
+      unknown: [],
+      mustVerify: ["林默真实身份"],
+      allowedTools: ["search_chapter_span"],
+      stopConditions: {
+        maxStagnantRounds: 2,
+        verifierHardErrorsCleared: true,
+        modelDeclaresSufficient: true,
+      },
+    };
+    await loop.run({
+      chapterIntent: "章节意图",
+      seedContext: "林默在青鱼嘴",
+      context: {
+        ...minimalContext(),
+        facts: [{ id: "fact-1", content: "林默真实身份已确认", sourceIds: [], kind: "fact" }],
+      },
+      inviolableFacts: ["林默真实身份"],
+      evidencePlan,
+    });
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].evidencePlan, evidencePlan);
+    assert.ok(calls[0].contextCoveredFacts.includes("林默真实身份已确认"));
+    assert.equal(calls[0].trajectoryPath, trajectory.getOutputPath());
+  });
+
+  it("retries once with an explicit uncovered-fact retrieval prompt", async () => {
+    const calls = [];
+    const coverageGate = {
+      checkAndBlock(input) {
+        calls.push(input);
+        if (calls.length === 1) {
+          return {
+            passed: false,
+            unverifiedHighRisk: [{ item: "林默真实身份", riskLevel: "P0", reason: "uncovered" }],
+            confirmedItems: [],
+            failureEnvelope: {
+              stage: "must_verify_coverage_gate",
+              gate: "unverified_high_risk_facts",
+              severity: "hard",
+              evidence: [{ item: "林默真实身份", riskLevel: "P0", reason: "uncovered" }],
+              recoverable: true,
+              retryPlan: "agent_loop_retry_with_explicit_must_verify_prompt",
+            },
+          };
+        }
+        return { passed: true, unverifiedHighRisk: [], confirmedItems: [], skippedReason: "context_covered" };
+      },
+    };
+    const { loop, modelCalls } = setupLoop({ coverageGate });
+
+    const result = await loop.run({
+      chapterIntent: "章节意图",
+      seedContext: "林默在青鱼嘴",
+      context: minimalContext(),
+      evidencePlan: {
+        known: [],
+        unknown: [],
+        mustVerify: ["林默真实身份"],
+        allowedTools: ["search_chapter_span"],
+        stopConditions: {
+          maxStagnantRounds: 2,
+          verifierHardErrorsCleared: true,
+          modelDeclaresSufficient: true,
+        },
+      },
+    });
+
+    assert.equal(result.fallback, false);
+    assert.equal(calls.length, 2);
+    assert.ok(
+      modelCalls.some((call) => String(call.userPrompt ?? "").includes("林默真实身份")),
+      "重试 prompt 应显式包含未覆盖事实",
+    );
+  });
+
+  it("hard-blocks after the bounded coverage retry is exhausted", async () => {
+    const coverageGate = {
+      checkAndBlock() {
+        return {
+          passed: false,
+          unverifiedHighRisk: [{ item: "林默真实身份", riskLevel: "P0", reason: "uncovered" }],
+          confirmedItems: [],
+          failureEnvelope: {
+            stage: "must_verify_coverage_gate",
+            gate: "unverified_high_risk_facts",
+            severity: "hard",
+            evidence: [{ item: "林默真实身份", riskLevel: "P0", reason: "uncovered" }],
+            recoverable: true,
+            retryPlan: "agent_loop_retry_with_explicit_must_verify_prompt",
+          },
+        };
+      },
+    };
+    const { loop } = setupLoop({ coverageGate, maxCoverageRetries: 1 });
+
+    const result = await loop.run({
+      chapterIntent: "章节意图",
+      seedContext: "林默在青鱼嘴",
+      context: minimalContext(),
+      evidencePlan: {
+        known: [],
+        unknown: [],
+        mustVerify: ["林默真实身份"],
+        allowedTools: ["search_chapter_span"],
+        stopConditions: {
+          maxStagnantRounds: 2,
+          verifierHardErrorsCleared: true,
+          modelDeclaresSufficient: true,
+        },
+      },
+    });
+
+    assert.equal(result.fallback, true);
+    assert.equal(result.text, "");
+    assert.equal(result.lineage.stopReason, "must_verify_coverage_failed");
+    assert.equal(result.lineage.coverageGate?.passed, false);
   });
 });

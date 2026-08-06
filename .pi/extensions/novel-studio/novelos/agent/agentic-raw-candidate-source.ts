@@ -22,7 +22,8 @@ import { randomUUID } from "node:crypto";
 import type { Candidate, CompiledContext } from "../../v2/core/types.js";
 import type { ChapterIntent } from "../../v2/core/chapter-intent-builder.js";
 import type { ModelGenerateFn } from "../../v2/adapters/legacy-model-route-adapter.js";
-import { buildChapterContract, renderContract } from "../../v2/core/model-prompt-adapter.js";
+import { buildChapterContract, renderContract, renderLayeredContract } from "../../v2/core/model-prompt-adapter.js";
+import type { WriterPromptProfile } from "../../v2/core/model-prompt-adapter.js";
 import type { UnifiedOrchestratorInput } from "../../v2/core/orchestrator-types.js";
 import { createNovelSession } from "../session/novel-session.js";
 import { BudgetPolicy, createBudgetConfigFromEnv } from "../runtime/budget-policy.js";
@@ -39,6 +40,7 @@ import type { AgentLoopResult, AgentLoopStopReason } from "./narrative-agent-loo
 import { createNarrativeVerifierSuite } from "../verification/narrative-verifier-suite.js";
 import { createCandidatePatchService } from "./candidate-patch-service.js";
 import { createEvidencePlan } from "./evidence-plan.js";
+import { createMustVerifyCoverageGate } from "./must-verify-coverage-gate.js";
 import {
   buildFewshotPromptBlock,
   type AgenticFewshotSelection,
@@ -98,6 +100,23 @@ export interface AgenticRawSourceInput {
    * undefined 时使用默认行为（不注入 few-shot）。
    */
   fewshotSelection?: AgenticFewshotSelection;
+  /**
+   * CONTRACT-LAYERING-ABLATION-1：写作提示词表达层。
+   *
+   * 当 profile="gemini_writer_v2_layered" 时，buildContractContextString 使用
+   * renderLayeredContract（分层渲染），否则用 renderContract（平铺渲染）。
+   * 生产路径不传此字段（undefined），行为不变（用平铺渲染）。
+   * 仅 evalMode 隔离评测使用。
+   */
+  writerPromptProfile?: WriterPromptProfile;
+  /**
+   * eval-only：覆盖 Agentic loop 的"强制跨源检索"prompt 决策规则。
+   *
+   * 生产路径不传此字段，loop 使用默认"请先使用跨源叙事证据检索工具查找..."强制检索 prompt（行为不变）。
+   * eval 路径（如 uncertainty-driven-ablation）传入不确定性驱动的决策规则文本，
+   * 用于 A/B 对照实验。不暴露思维链，只改变检索决策规则。
+   */
+  retrievalPromptOverride?: string;
 }
 
 /**
@@ -191,6 +210,8 @@ export interface AgenticRawSourceCapabilities {
   enableRetrieval?: boolean;
   /** 是否启用验证 + patch 闭环（B1/B2=false, B3=true） */
   enableVerification?: boolean;
+  /** 是否启用 mustVerify 覆盖门（离线消融可显式关闭） */
+  enableCoverageGate?: boolean;
 }
 
 // ============================================================================
@@ -232,6 +253,7 @@ export function createAgenticRawCandidateSource(
 ): AgenticRawCandidateSource {
   const enableRetrieval = capabilities?.enableRetrieval ?? true;
   const enableVerification = capabilities?.enableVerification ?? true;
+  const enableCoverageGate = capabilities?.enableCoverageGate ?? true;
 
   return {
     async generate(input: AgenticRawSourceInput): Promise<AgenticRawSourceResult> {
@@ -250,6 +272,8 @@ export function createAgenticRawCandidateSource(
         targetWordCount,
         fullPipelinePreview,
         fewshotSelection,
+        writerPromptProfile,
+        retrievalPromptOverride,
       } = input;
 
       // ── 0. P1-5 修复：包装 modelGenerate 捕获真实模型名 ──────────────
@@ -335,7 +359,7 @@ export function createAgenticRawCandidateSource(
       // Phase 2C：在 runtime 创建前构建，以便 createEvidencePlan 消费 seedContext，
       // 再用 plan.allowedTools 过滤工具集。
       const chapterIntentStr = buildChapterIntentString(intent);
-      const seedContextStr = buildContractContextString(intent, context, characterNames, targetWordCount, fewshotSelection);
+      const seedContextStr = buildContractContextString(intent, context, characterNames, targetWordCount, fewshotSelection, writerPromptProfile);
 
       // ── 4. EvidencePlan（Phase 2C） ──────────────────────────────────
       // 在 runtime 创建前创建 plan，用 plan.allowedTools 过滤工具集，
@@ -403,6 +427,9 @@ export function createAgenticRawCandidateSource(
         trajectory,
         ...(verifier ? { verifier } : {}),
         ...(patchService ? { patchService } : {}),
+        ...(enableCoverageGate && fullPipelinePreview !== true
+          ? { coverageGate: createMustVerifyCoverageGate() }
+          : {}),
       });
 
       let loopResult: AgentLoopResult;
@@ -417,6 +444,8 @@ export function createAgenticRawCandidateSource(
           // Phase 2C：传入预创建的 plan（allowedTools 已在 runtime 创建前过滤，
           // loop 不再内部 createEvidencePlan，直接消费此 plan 的 mustVerify + stopConditions）
           evidencePlan,
+          // eval-only：A/B 对照实验用，覆盖默认强制检索 prompt（生产不传，行为不变）
+          retrievalPromptOverride,
         });
       } catch (err) {
         // loop 异常 → fallback
@@ -710,6 +739,7 @@ function buildContractContextString(
   characterNames: string[],
   targetWordCount?: { min: number; max: number },
   fewshotSelection?: AgenticFewshotSelection,
+  profile?: WriterPromptProfile,
 ): string {
   // ── 1. 构建 canonical ChapterContract ──────────────────────────────
   // buildChapterContract 需要 UnifiedOrchestratorInput 的子集（intent + context + constitution）。
@@ -726,8 +756,13 @@ function buildContractContextString(
     contract.wordCountTarget = targetWordCount;
   }
 
+  // CONTRACT-LAYERING-ABLATION-1：根据 profile 选择渲染策略
+  // - "gemini_writer_v2_layered" → renderLayeredContract（分层渲染）
+  // - 其他 / undefined → renderContract（平铺渲染，生产默认）
+
   // ── 2. 渲染 canonical contract 字符串 ──────────────────────────────
-  const parts: string[] = [renderContract(contract)];
+  const contractRenderer = profile === "gemini_writer_v2_layered" ? renderLayeredContract : renderContract;
+  const parts: string[] = [contractRenderer(contract)];
 
   // ── 3. 追加运行时检索上下文（非 canonical，但 Agentic 需要感知） ────
 
