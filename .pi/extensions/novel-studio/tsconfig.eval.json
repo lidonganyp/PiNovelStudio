@@ -37,6 +37,7 @@
     "novelos/eval/tool-interface-baseline.ts",
     "novelos/eval/typed-facade-tool.ts",
     "novelos/eval/tool-ab-runner.ts",
+    "novelos/eval/tool-ab-real-runner.ts",
     "novelos/eval/final-decision.ts",
     "novelos/agent/must-verify-coverage-gate.ts",
     "v2/core/replay-provenance-guard.ts",

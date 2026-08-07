@@ -29,6 +29,32 @@ import {
 import { VALID_EVIDENCE_LEVELS } from "./uncertainty-recall-metrics.js";
 
 // ============================================================================
+// 无效 sourceRef 分类（区分"预期无匹配"与"真实失败"）
+// ============================================================================
+
+/**
+ * 无效 sourceRef 的分类标签。
+ *
+ * no_match / profile_only / empty 是**预期分类**（检索无匹配、风格档案降级、空结果），
+ * 不是普通失败率。它们代表"本次调用未产生有效证据引用"，但属于工具在特定查询下的
+ * 正常输出（如 low-risk 场景查询不存在的实体），不应被误判成失败。
+ */
+export type InvalidSourceRefCategory =
+  | "no_match"       // ranked:no-match / no-match / :no-match
+  | "profile_only"   // voice:profile_only:degraded / voice:*:degraded
+  | "empty"          // character:empty / empty / :empty
+  | "other";         // 其他无效形态（如空串）
+
+/** 把无效 sourceRef 归类（符合 INVALID_REF_PATTERNS 语义） */
+export function classifyInvalidSourceRef(ref: string | undefined): InvalidSourceRefCategory {
+  if (typeof ref !== "string" || ref.length === 0) return "empty";
+  if (/no-match/.test(ref) || /^no-match$/.test(ref)) return "no_match";
+  if (/profile_only/.test(ref) || /:degraded$/.test(ref)) return "profile_only";
+  if (/empty/.test(ref)) return "empty";
+  return "other";
+}
+
+// ============================================================================
 // 类型
 // ============================================================================
 
@@ -66,7 +92,9 @@ export interface ToolAbArmAggregation {
   totalErrors: number;
   sourceRefsValid: number;
   sourceRefsInvalid: number;
-  /** 有效 sourceRef / 总调用（完整性） */
+  /** 无效 sourceRef 按分类计数（no_match / profile_only 是预期分类，非失败） */
+  invalidSourceRefByCategory: Record<InvalidSourceRefCategory, number>;
+  /** 有效证据引用率 = 有效 sourceRef / 总调用（含预期的 no_match/profile_only，非失败率） */
   sourceRefCompleteness: number;
   /** 场景平均 mustVerify 覆盖率 */
   avgCoverageRatio: number;
@@ -154,6 +182,12 @@ function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregatio
   let totalErrors = 0;
   let sourceRefsValid = 0;
   let sourceRefsInvalid = 0;
+  const invalidByCategory: Record<InvalidSourceRefCategory, number> = {
+    no_match: 0,
+    profile_only: 0,
+    empty: 0,
+    other: 0,
+  };
   let coverageSum = 0;
 
   for (const s of scenarios) {
@@ -167,9 +201,17 @@ function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregatio
     totalErrors += s.errors;
     sourceRefsValid += s.sourceRefsValid;
     sourceRefsInvalid += s.sourceRefsInvalid;
+    // 无效 sourceRef 按分类统计（区分预期无匹配与真实失败）
+    for (const c of s.calls) {
+      if (!c.sourceRef) continue;
+      if (c.sourceRefValid) continue;
+      invalidByCategory[classifyInvalidSourceRef(c.sourceRef)] += 1;
+    }
     coverageSum += s.mustVerify.coverageRatio;
   }
 
+  // 有效证据引用率 = 有效 sourceRef / 总调用；
+  // 分母含预期的 no_match / profile_only / empty（这些是"未产生有效引用"的预期分类，非失败率）
   const sourceRefCompleteness = totalCalls > 0 ? sourceRefsValid / totalCalls : 1;
 
   return {
@@ -183,6 +225,7 @@ function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregatio
     totalErrors,
     sourceRefsValid,
     sourceRefsInvalid,
+    invalidSourceRefByCategory: invalidByCategory,
     sourceRefCompleteness,
     avgCoverageRatio: scenarios.length > 0 ? coverageSum / scenarios.length : 0,
   };
@@ -294,7 +337,7 @@ export function formatToolAbMarkdown(comparison: ToolAbComparison): string {
   lines.push("| 门禁 | 结论 | 详情 |");
   lines.push("|------|------|------|");
   lines.push(`| mustVerify 覆盖率不降级 | ${comparison.gate.mustVerifyCoverageNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.mustVerifyCoverage} |`);
-  lines.push(`| sourceRef 完整率不降级 | ${comparison.gate.sourceRefCompletenessNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.sourceRefCompleteness} |`);
+  lines.push(`| 有效证据引用率不降级 | ${comparison.gate.sourceRefCompletenessNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.sourceRefCompleteness} |`);
   lines.push(`| 负担更优（工具面减少） | ${comparison.gate.burdenReduced ? "✓" : "✗"} | ${comparison.gate.details.burdenReduced} |`);
   lines.push(`| 失败行为不退化 | ${comparison.gate.failureNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.failureNotDegraded} |`);
   lines.push("");
@@ -315,8 +358,20 @@ export function formatToolAbMarkdown(comparison: ToolAbComparison): string {
   lines.push(`| 失败 | ${agg.A.totalErrors} | ${agg.B.totalErrors} |`);
   lines.push(`| 有效 sourceRef | ${agg.A.sourceRefsValid} | ${agg.B.sourceRefsValid} |`);
   lines.push(`| 无效 sourceRef | ${agg.A.sourceRefsInvalid} | ${agg.B.sourceRefsInvalid} |`);
-  lines.push(`| sourceRef 完整率 | ${agg.A.sourceRefCompleteness.toFixed(3)} | ${agg.B.sourceRefCompleteness.toFixed(3)} |`);
+  lines.push(`| 有效证据引用率 | ${agg.A.sourceRefCompleteness.toFixed(3)} | ${agg.B.sourceRefCompleteness.toFixed(3)} |`);
   lines.push(`| 平均 mustVerify 覆盖率 | ${agg.A.avgCoverageRatio.toFixed(3)} | ${agg.B.avgCoverageRatio.toFixed(3)} |`);
+  lines.push("");
+  lines.push("### 无效 sourceRef 分类明细（预期分类，非失败率）");
+  lines.push("");
+  lines.push("| 分类 | A 组 | B 组 | 说明 |");
+  lines.push("|------|------|------|------|");
+  lines.push(`| no_match | ${agg.A.invalidSourceRefByCategory.no_match} | ${agg.B.invalidSourceRefByCategory.no_match} | 检索无匹配（如 low-risk 查询不存在实体），预期输出 |`);
+  lines.push(`| profile_only | ${agg.A.invalidSourceRefByCategory.profile_only} | ${agg.B.invalidSourceRefByCategory.profile_only} | 风格档案降级引用，非正文事实 |`);
+  lines.push(`| empty | ${agg.A.invalidSourceRefByCategory.empty} | ${agg.B.invalidSourceRefByCategory.empty} | 空结果/空引用 |`);
+  lines.push(`| other | ${agg.A.invalidSourceRefByCategory.other} | ${agg.B.invalidSourceRefByCategory.other} | 其他无效形态 |`);
+  lines.push("");
+  lines.push("> 有效证据引用率 = 有效 sourceRef / 总调用。分母包含上述预期的 no_match / profile_only / empty 分类，");
+  lines.push("> 它们代表\"本次调用未产生有效事实引用\"，是工具在特定查询下的正常输出，**不是普通失败率**。");
   lines.push("");
   lines.push("## 各场景详情");
   lines.push("");
@@ -345,4 +400,75 @@ export function formatToolAbMarkdown(comparison: ToolAbComparison): string {
   lines.push("- B 组仅当证据覆盖不下降且不劣化失败行为时，才进入生产迁移讨论（Phase 4.3 门）。");
   lines.push("");
   return lines.join("\n");
+}
+
+// ============================================================================
+// trajectory 副本（持久化 trace 证据）
+// ============================================================================
+
+/**
+ * 把 A/B 确定性 replay 的每场景工具调用指标序列化为 trajectory 条目
+ * （tool_visibility + tool_call_metrics），满足"无真实模型也必须有持久化 trace 证据"。
+ *
+ * @param comparison runToolAbReplay 的结果
+ * @returns 每场景每组的 trajectory 条目数组，键为 `${scenarioId}:${arm}`
+ */
+export function buildToolAbTrajectory(comparison: ToolAbComparison): Record<
+  string,
+  Array<{ type: string; timestamp: number; data: unknown }>
+> {
+  const out: Record<string, Array<{ type: string; timestamp: number; data: unknown }>> = {};
+  const base = Date.now();
+  for (const s of comparison.scenarios) {
+    for (const arm of ["A", "B"] as const) {
+      const key = `${s.scenarioId}:${arm}`;
+      const entries: Array<{ type: string; timestamp: number; data: unknown }> = [];
+      const m = arm === "A" ? s.A : s.B;
+      // tool_visibility 快照
+      entries.push({
+        type: "tool_visibility",
+        timestamp: base,
+        data: {
+          systemAllowedTools: m.visibleTools,
+          selectedTools: m.selectedTools,
+          rejectedTools: [],
+          visibleTools: m.visibleTools,
+        },
+      });
+      // 按调用顺序写 tool_call_metrics
+      m.calls.forEach((c, idx) => {
+        entries.push({
+          type: "tool_call_metrics",
+          timestamp: base + idx,
+          data: {
+            toolName: c.tool,
+            toolCallId: `${s.scenarioId}-${arm}-${idx}`,
+            args: c.args,
+            latencyMs: c.latencyMs,
+            resultChars: c.resultChars,
+            estimateTokens: c.estimateTokens,
+            evidenceLevel: c.evidenceLevel ?? undefined,
+            sourceRefs: c.sourceRef ? [c.sourceRef] : [],
+            resultKind: c.resultKind ?? undefined,
+            returnedCount: c.returnedCount ?? undefined,
+            truncated: c.truncated ?? undefined,
+            nextQueryHint: c.nextQueryHint ?? undefined,
+            empty: c.empty,
+            timeout: c.timeout,
+            isError: c.isError,
+            duplicateQuery: c.duplicateQuery,
+          },
+        });
+      });
+      out[key] = entries;
+    }
+  }
+  return out;
+}
+
+/** 把 trajectory 条目写入 JSONL 副本 */
+export function formatTrajectoryJsonl(
+  entries: Array<{ type: string; timestamp: number; data: unknown }>,
+): string {
+  return entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
 }
