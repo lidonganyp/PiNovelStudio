@@ -407,6 +407,20 @@ describe("Phase 3 统一工具结果格式（resultKind/returnedCount/truncated/
     );
   });
 
+  it("maxChapters 被有界收束（不抛错、不无界遍历历史章节）", async () => {
+    // 传超大/非法 maxChapters，系统应安全收束，返回结构完整
+    for (const maxChapters of [999_999, Number.NaN, Number.POSITIVE_INFINITY, -5]) {
+      const result = await callTool("search_chapter_span", {
+        query: "林默",
+        maxChapters,
+        maxResults: 5,
+      });
+      assert.equal(typeof result.details.returnedCount, "number", `maxChapters=${maxChapters} 应安全返回数字`);
+      assert.ok(Number.isInteger(result.details.returnedCount) && result.details.returnedCount >= 0, `returnedCount 应非负整数`);
+      assert.equal(typeof result.details.truncated, "boolean", "应返回 truncated");
+    }
+  });
+
   it("截断时 truncated=true 且 nextQueryHint 非空（limit+1 探测）", async () => {
     // 构造 >50 条 canon 的独立 workspace
     const bigRoot = mkdtempSync(join(tmpdir(), "novelos-big-canon-"));

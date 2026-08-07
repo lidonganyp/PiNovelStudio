@@ -232,7 +232,7 @@ describe("TOOL-INTERFACE-BASELINE-1：报告格式化", () => {
     assert.equal(parsed.summary.totalCalls, baseline.summary.totalCalls);
   });
 
-  it("Markdown 含标题、聚合指标表、各场景小节与 Phase 3 兼容性说明", async () => {
+  it("Markdown 含标题、聚合指标表、各场景小节与 Phase 3/3.1 说明", async () => {
     const mod = await importModule();
     const baseline = await mod.runToolInterfaceBaseline();
     const md = mod.formatToolInterfaceBaselineMarkdown(baseline);
@@ -241,6 +241,7 @@ describe("TOOL-INTERFACE-BASELINE-1：报告格式化", () => {
     assert.ok(md.includes("## 各场景详情"), "应含场景详情区");
     assert.ok(md.includes("SC1-canon-fact"), "应含 SC1");
     assert.ok(md.includes("SC7-multi-tool-mixed"), "应含 SC7");
-    assert.ok(md.includes("Phase 3 兼容性要求"), "应含 Phase 3 兼容性说明");
+    assert.ok(md.includes("Phase 3 / 3.1 兼容性要求"), "应含 Phase 3/3.1 兼容性说明");
+    assert.ok(md.includes("评测 visibleTools ≠ 真实模型可见工具"), "应含评测/模型可见工具区分说明");
   });
 });

@@ -59,6 +59,9 @@ export const RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = NARRATIVE_TOOL_NAMES;
 /** 列表型查询工具的默认有界上限（宽查询不可无界返回） */
 export const DEFAULT_LIST_LIMIT = 50;
 
+/** 章节范围查询的默认有界上限（maxChapters 同样不可无界） */
+export const DEFAULT_CHAPTER_LIMIT = 200;
+
 /**
  * 把所有宽查询的 limit 收束到 [1, DEFAULT_LIST_LIMIT] 有界区间。
  * 模型可传任意 maxResults/limit，但系统必须拒绝无界返回。
@@ -67,6 +70,16 @@ function boundedLimit(requested: number | undefined, fallback: number): number {
   const n = requested ?? fallback;
   if (!Number.isFinite(n)) return fallback;
   return Math.max(1, Math.min(Math.floor(n), DEFAULT_LIST_LIMIT));
+}
+
+/**
+ * 把章节范围（maxChapters）收束到 [1, DEFAULT_CHAPTER_LIMIT]。
+ * model 可传任意最大章节数，但系统必须拒绝无界遍历历史章节。
+ */
+function boundedChapterLimit(requested: number | undefined, fallback: number): number {
+  const n = requested ?? fallback;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(Math.floor(n), DEFAULT_CHAPTER_LIMIT));
 }
 
 /**
@@ -224,9 +237,10 @@ const searchChapterSpanFactory: ToolFactory = (ctx) => ({
       maxResults?: number;
     };
     const limit = boundedLimit(maxResults, 10);
+    const chapterLimit = boundedChapterLimit(maxChapters, 10);
     const spans = ctx.searchService.searchChapterSpan(
       query,
-      maxChapters ?? 10,
+      chapterLimit,
       limit + 1,
     );
     const { items, truncated } = probeLimit(spans, limit);

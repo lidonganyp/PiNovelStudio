@@ -701,9 +701,15 @@ export function formatToolInterfaceBaselineMarkdown(baseline: ToolInterfaceBasel
   lines.push("## 说明");
   lines.push("");
   lines.push("本报告是**工具执行面基线**（tool execution-surface baseline）：它直接驱动 createNarrativeTools 真实现，观测工具 `execute` 的执行结果。");
-  lines.push("因此 `visibleTools` 固定记录 `NARRATIVE_TOOL_NAMES`（9 个工具全量），**不代表**模型实际可见的 schema 集。");
-  lines.push("真实生产路径已按 `evidencePlan.allowedTools` 过滤工具，schema 注入（`tool-schema-injector` / `pi-agent-core-adapter`）使用过滤后的工具集；");
-  lines.push("模型可见 schema 的渐进披露需另做一次 runtime visibility 检查，本基线不覆盖。");
+  lines.push("因此本报告的 `visibleTools` 记录的是**评测执行面**（`NARRATIVE_TOOL_NAMES` 全量 9 个），**不代表**模型实际可见的 schema 集。");
+  lines.push("");
+  lines.push("**评测 visibleTools ≠ 真实模型可见工具**：");
+  lines.push("- 评测 `visibleTools`：工具执行面快照，固定为全量 `NARRATIVE_TOOL_NAMES`（9 个），用于标注工具实现范围。");
+  lines.push("- 真实模型可见工具：由上游 `evidencePlan.allowedTools` 过滤（`agentic-raw-candidate-source`），");
+  lines.push("  再经 `injectToolSchemas`（`tool-schema-injector` / `pi-agent-core-adapter`）把过滤后的子集注入 system prompt。");
+  lines.push("- 渐进披露已由真实 runtime 核对测试锁定（`tests/phase31-tool-visibility-runtime.test.mjs`）：");
+  lines.push("  `allowedTools → runtime tools → 注入 schema → visibleTools`，白名单外工具 fail-closed 拒绝，");
+  lines.push("  真实可见集是评测执行面的真子集。");
   lines.push("");
   lines.push("本报告冻结「当前 9 个专用工具」的行为作为 Phase 3（统一工具结果格式）的对照组。");
   lines.push("Phase 3（`resultKind` / `returnedCount` / `truncated` / `nextQueryHint`）已实施并在本基线中逐调用记录。");
@@ -762,11 +768,14 @@ export function formatToolInterfaceBaselineMarkdown(baseline: ToolInterfaceBasel
     }
     lines.push("");
   }
-  lines.push("## Phase 3 兼容性要求（后续实施时遵守）");
+  lines.push("## Phase 3 / 3.1 兼容性要求（已落地）");
   lines.push("");
   lines.push("- 原有 `text` 和 `details` 不删除；新增 `resultKind`、`returnedCount`、`truncated`");
   lines.push("- `nextQueryHint` 必须由系统确定性生成，不能让模型自由注入");
   lines.push("- 所有工具统一上限和空结果语义；不改变检索排序和证据等级");
+  lines.push("- Phase 3.1：列表型宽查询有界 `DEFAULT_LIST_LIMIT=50`；");
+  lines.push("  `search_chapter_span` 的 `maxChapters` 有界 `DEFAULT_CHAPTER_LIMIT=200`（拒绝无界遍历历史章节）");
+  lines.push("- Phase 3.1：渐进披露由真实 runtime 核对测试锁定（评测执行面全量 ≠ 真实模型可见子集）");
   lines.push("");
   return lines.join("\n");
 }
