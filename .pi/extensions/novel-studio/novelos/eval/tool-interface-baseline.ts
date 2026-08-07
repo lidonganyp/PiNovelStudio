@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createNarrativeTools } from "../tools/narrative-tools.js";
 import { NARRATIVE_TOOL_NAMES } from "../tools/narrative-tools.js";
+import type { ToolProtocol } from "../tools/tool-protocol.js";
 import { createNarrativeSearchService } from "../agent/narrative-search-service.js";
 import { ToolCallMetricsTracer } from "../trajectory/tool-metrics-tracer.js";
 import type { ToolCallMetrics } from "../trajectory/tool-metrics-tracer.js";
@@ -394,7 +395,7 @@ export const BASELINE_SCENARIOS: BaselineScenario[] = [
 // Workspace 构造（写入 legacy 状态文件）
 // ============================================================================
 
-function setupBaselineWorkspace(data: BaselineWorkspaceData): {
+export function setupBaselineWorkspace(data: BaselineWorkspaceData): {
   projectRoot: string;
   workspaceId: string;
   cleanup: () => void;
@@ -438,7 +439,7 @@ function setupBaselineWorkspace(data: BaselineWorkspaceData): {
 // ============================================================================
 
 /** 从工具结果 details 提取 ConfirmedEvidence[]（按 VALID_EVIDENCE_LEVELS + 有效 sourceRef 过滤） */
-function collectConfirmedEvidences(details: unknown): ConfirmedEvidence[] {
+export function collectConfirmedEvidences(details: unknown): ConfirmedEvidence[] {
   if (!details || typeof details !== "object") return [];
   const d = details as Record<string, unknown>;
   const out: ConfirmedEvidence[] = [];
@@ -497,12 +498,26 @@ function collectConfirmedEvidences(details: unknown): ConfirmedEvidence[] {
 // 基线 replay 执行
 // ============================================================================
 
-async function runScenario(scenario: BaselineScenario): Promise<BaselineScenarioMetrics> {
+/**
+ * 用给定的工具解析器运行单个场景，返回该工具执行面下的场景指标。
+ *
+ * 工具解析器接收 searchService，返回要参与执行的工具对象列表。
+ * - A 组：`(ss) => createNarrativeTools({ searchService: ss })`（9 个专用工具）
+ * - B 组：`(ss) => [createTypedFacadeTool({ searchService: ss })]`（typed facade）
+ *
+ * Phase 4 A/B 复用本函数，保证两组在同一场景、同一 workspace、同一指标口径下比较。
+ */
+export async function runScenarioWithTools(
+  scenario: BaselineScenario,
+  resolveTools: (searchService: ReturnType<typeof createNarrativeSearchService>) => ToolProtocol[],
+): Promise<BaselineScenarioMetrics> {
   const { projectRoot, workspaceId, cleanup } = setupBaselineWorkspace(scenario.workspace);
   const tracer = new ToolCallMetricsTracer();
   const callMetrics: BaselineCallMetrics[] = [];
   const allConfirmed: ConfirmedEvidence[] = [];
   const mustVerifyItems: string[] = [];
+  /** 可见工具集从解析出的工具派生（A=9 专用工具，B=单个 facade），保证 metric 反映真实工具面 */
+  let visibleToolNames: string[] = [];
 
   try {
     const searchService = createNarrativeSearchService({
@@ -510,8 +525,9 @@ async function runScenario(scenario: BaselineScenario): Promise<BaselineScenario
       workspaceId,
       sourceChapter: `ch${scenario.workspace.historicalChapters.length}`,
     });
-    const tools = createNarrativeTools({ searchService });
+    const tools = resolveTools(searchService);
     const toolByName = new Map(tools.map((t) => [t.name, t]));
+    visibleToolNames = tools.map((t) => t.name).sort();
 
     for (let i = 0; i < scenario.calls.length; i++) {
       const call = scenario.calls[i];
@@ -578,7 +594,7 @@ async function runScenario(scenario: BaselineScenario): Promise<BaselineScenario
     category: scenario.category,
     description: scenario.description,
     selectedTools: [...new Set(scenario.calls.map((c) => c.tool))],
-    visibleTools: [...NARRATIVE_TOOL_NAMES].sort(),
+    visibleTools: visibleToolNames,
     samples: scenario.calls.length,
     actualCalls: callMetrics.length,
     callsByTool: snap.callsByTool,
@@ -603,7 +619,13 @@ async function runScenario(scenario: BaselineScenario): Promise<BaselineScenario
   };
 }
 
-function toBaselineCall(metrics: ToolCallMetrics): BaselineCallMetrics {
+async function runScenario(scenario: BaselineScenario): Promise<BaselineScenarioMetrics> {
+  return runScenarioWithTools(scenario, (searchService) =>
+    createNarrativeTools({ searchService }),
+  );
+}
+
+export function toBaselineCall(metrics: ToolCallMetrics): BaselineCallMetrics {
   return {
     tool: metrics.toolName,
     args: metrics.args,

@@ -230,7 +230,11 @@ export class ToolCallMetricsTracer {
     const isError = event.isError;
 
     const query = typeof args.query === "string" ? args.query : "";
-    const dupKey = query ? `${toolName}:${query}` : `${toolName}:`;
+    // 重复检测的语义查询身份：typed facade 场景所有调用工具名相同（query_narrative），
+    // 若用 toolName 会导致不同结构化查询（canon/character_state/timeline 等）互相挤占 dupKey。
+    // 因此优先用 intent（facade 的语义查询身份）作 scope；非 facade 调用无 intent，回退 toolName。
+    const scope = typeof args.intent === "string" && args.intent.length > 0 ? args.intent : toolName;
+    const dupKey = query ? `${scope}:${query}` : `${scope}:`;
     const queryCount = (this.queryCounts.get(dupKey) ?? 0) + 1;
     this.queryCounts.set(dupKey, queryCount);
     const duplicateQuery = queryCount > 1;
