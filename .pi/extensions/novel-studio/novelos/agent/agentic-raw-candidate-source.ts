@@ -45,6 +45,16 @@ import {
   buildFewshotPromptBlock,
   type AgenticFewshotSelection,
 } from "./agentic-fewshot-prompt.js";
+import { NARRATIVE_TOOL_NAMES, RETRIEVAL_TOOL_NAMES } from "../tools/narrative-tools.js";
+import {
+  runEvidenceDecisionRound,
+  retrievalCallBudgetForDepth,
+} from "./evidence-decision.js";
+import {
+  createToolVisibilitySnapshot,
+  attachToolMetricsTracer,
+  recordToolVisibility,
+} from "../trajectory/tool-metrics-tracer.js";
 
 // ============================================================================
 // 公共接口（编排器通过此接口调用，不直接依赖 NovelOS 内部）
@@ -110,11 +120,17 @@ export interface AgenticRawSourceInput {
    */
   writerPromptProfile?: WriterPromptProfile;
   /**
-   * eval-only：覆盖 Agentic loop 的"强制跨源检索"prompt 决策规则。
+   * eval-only：覆盖 Agentic loop 的检索决策规则 prompt。
    *
-   * 生产路径不传此字段，loop 使用默认"请先使用跨源叙事证据检索工具查找..."强制检索 prompt（行为不变）。
-   * eval 路径（如 uncertainty-driven-ablation）传入不确定性驱动的决策规则文本，
-   * 用于 A/B 对照实验。不暴露思维链，只改变检索决策规则。
+   * Phase 2D（2026-08-06）三缺口修复后：
+   * 生产路径不传此字段，loop 默认使用不确定性驱动的检索决策规则
+   * （上下文足够则直接生成，缺关键信息才检索）。
+   *
+   * eval A/B 对照实验中：
+   * - A 组（baseline）传入 FORCED_RETRIEVAL_PROMPT，保持旧强制检索行为作为基线。
+   * - B 组（treatment）传入 UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT，与生产默认一致。
+   *
+   * 不暴露思维链，只改变检索决策规则。
    */
   retrievalPromptOverride?: string;
 }
@@ -160,6 +176,7 @@ export interface AgenticRawSourceResult {
     | "runtime_init"
     | "budget_exhausted"
     | "empty_draft"
+    | "must_verify_coverage_failed"
     | "unknown";
   /** 收集的证据 sourceRefs */
   sourceRefs: string[];
@@ -230,10 +247,17 @@ const AGENTIC_RAW_ROUTE = "novelos_agentic";
  */
 export const AGENTIC_RAW_KIND = "agentic_raw";
 
-/** NovelOS system prompt */
+/**
+ * NovelOS system prompt（Phase 2D 缺口二修复 2026-08-07）。
+ *
+ * 移除旧 system prompt 中"先检索、再生成正文"的强制语义。
+ * 检索决策改由独立 EvidenceDecision 回合（needRetrieval/queries/retrievalDepth）与
+ * 不确定性驱动规则（narrative-agent-loop 的 DEFAULT_UNCERTAINTY_DRIVEN_PROMPT）驱动：
+ * 上下文足以保证事实/人物状态/因果关系时直接生成正文，缺关键信息才检索。
+ */
 const NOVELOS_SYSTEM_PROMPT =
-  "你是顶尖网文作家。你将通过叙事证据循环收集证据并生成章节正文。" +
-  "先根据证据计划检索历史章节和叙事状态，再基于证据生成正文。" +
+  "你是顶尖网文作家。你将基于本章意图、种子上下文与叙事证据生成章节正文。" +
+  "仅当现有上下文不足以保证事实、人物状态或因果关系正确时，才调用叙事证据工具查证。" +
   "只输出正文，不要写大纲、注释或分析。";
 
 // ============================================================================
@@ -361,13 +385,42 @@ export function createAgenticRawCandidateSource(
       const chapterIntentStr = buildChapterIntentString(intent);
       const seedContextStr = buildContractContextString(intent, context, characterNames, targetWordCount, fewshotSelection, writerPromptProfile);
 
-      // ── 4. EvidencePlan（Phase 2C） ──────────────────────────────────
+      // ── 4. EvidencePlan（Phase 2C + Phase 2D 三缺口修复） ───────────
       // 在 runtime 创建前创建 plan，用 plan.allowedTools 过滤工具集，
       // 同时把 plan 传给 loop 供 mustVerify 注入 + stopConditions 驱动停止。
-      const evidencePlan = createEvidencePlan({
+      //
+      // Phase 2D 三缺口修复（2026-08-06）：
+      // 缺口一：传入结构化 intent，让 inferAllowedToolsFromIntent 收窄工具集
+      //         （不再默认全量 9 工具，避免 prompt 过载与工具差异稀释）。
+      // 缺口三：传入 compiledContext + bridgeContextAvailable，让 EvidencePlan
+      //         - 从 intent 结构化字段提取 mustVerify（替代字符串启发式）
+      //         - 从 context 提取 known 摘要行（≤80字/条，≤12条）
+      //         - 根据 bridgeContextAvailable 判断是否需要 search_chapter_span
+      // 不传 intent 时回退到 M1 启发式（向后兼容，但生产路径始终传 intent）。
+      const evidencePlanBase = createEvidencePlan({
         chapterIntent: chapterIntentStr,
         seedContext: seedContextStr,
+        intent,
+        compiledContext: context,
+        bridgeContextAvailable: context.bridgeContext?.available ?? false,
       });
+
+      // ── 4b. 缺口三：模型参与的 EvidenceDecision 回合 ──────────────────
+      // 系统先提供安全事实与摘要（EvidencePlan）→ 模型独立判断未知点/工具/检索深度
+      // → 系统校验（selectedTools ∩ systemAllowedTools、mustVerify 不可删、事实真值不可改）
+      // → 合并出最终计划，用于下面过滤工具集。
+      // 决策回合失败 fail-safe 回退系统计划（source="fallback"），不阻断生成；
+      // 事实安全仍由 coverage gate + FactGuard 保证。
+      const decisionRound = await runEvidenceDecisionRound({
+        evidencePlan: evidencePlanBase,
+        chapterIntent: chapterIntentStr,
+        seedContext: seedContextStr,
+        modelGenerate: modelGenerateWithCapture,
+        route,
+        timeoutMs,
+      });
+      const evidencePlan = decisionRound.plan;
+      trajectory.recordContextDecision(decisionRound.decision);
 
       // ── 5. 构造 NovelOS Runtime + Agent ──────────────────────────────
       // 工具列表从 registry 按 agent 角色获取（只读工具 + project_propose）
@@ -376,6 +429,19 @@ export function createAgenticRawCandidateSource(
       const allTools = enableRetrieval ? registry.getToolsForRole("agent") : [];
       const allowedToolSet = new Set(evidencePlan.allowedTools);
       const tools = allTools.filter((tool) => allowedToolSet.has(tool.name));
+
+      // ── 5b. Phase 0：记录工具可见性快照 ──────────────────────────────
+      // 对比「系统允许边界 / 模型选择 / 被拒绝 / 最终可见」四者，用于观测工具暴露是否一致。
+      // 在 runtime 创建前记录，确保决策后、注入前的真实可见集被留存。
+      recordToolVisibility(
+        trajectory,
+        createToolVisibilitySnapshot({
+          systemAllowedTools: evidencePlanBase.allowedTools,
+          selectedTools: decisionRound.decision.request.selectedTools,
+          rejectedTools: decisionRound.decision.validation.rejectedTools,
+          visibleTools: tools.map((tool) => tool.name),
+        }),
+      );
 
       let runtime: NovelOSRuntime;
       try {
@@ -386,6 +452,14 @@ export function createAgenticRawCandidateSource(
           modelGenerate: modelGenerateWithCapture,
           route,
           tools,
+          // 缺口一防御纵深：注入边界白名单 = 全部叙事工具。
+          // 即使未来绕过 evidencePlan.allowedTools 过滤，集合外工具也无法注入。
+          allowedToolNames: NARRATIVE_TOOL_NAMES,
+          // 缺口三执行：把检索深度推导的调用次数预算传给 runtime。
+          // runtime 统计检索工具调用并在达到预算时经 afterToolCall 停止 loop，
+          // 使"retrievalDepth → 工具调用次数/停止逻辑"成为系统强制约束（非仅 prompt 建议）。
+          retrievalToolNames: RETRIEVAL_TOOL_NAMES,
+          retrievalBudget: retrievalCallBudgetForDepth(evidencePlan.retrievalDepth),
           budget,
           trajectory,
           kind: AGENTIC_RAW_KIND,
@@ -410,6 +484,15 @@ export function createAgenticRawCandidateSource(
           `Runtime 创建失败：${reason}`, failureKind,
         );
       }
+
+      // ── 5c. Phase 0：挂载工具调用指标追踪器 ──────────────────────────
+      // 订阅 runtime 事件流，按 toolCallId 匹配 start/end，计算每次调用的
+      // latency / resultChars / evidenceLevel / sourceRefs / 空结果 / 超时 / 异常 / 重复 query，
+      // 并写入 trajectory tool_call_metrics 条目。loop 结束后卸载，避免事件流泄漏。
+      const unsubscribeMetrics = attachToolMetricsTracer({
+        runtime,
+        trajectory,
+      });
 
       // ── 6. 运行 NarrativeAgentLoop ───────────────────────────────────
       // enableVerification=false 时不传 verifier/patchService（B2 无验证闭环）
@@ -462,12 +545,16 @@ export function createAgenticRawCandidateSource(
           recoverable: true,
           retryPlan: "fallback to one_shot_raw",
         });
+        unsubscribeMetrics();
         await trajectory.flush();
         return makeFallbackResult(
           sessionId, trajectory.getOutputPath(), budget, "model_error",
           `agent loop 异常：${reason}`, failureKind,
         );
       }
+
+      // Phase 0：loop 结束（无论成败）卸载工具指标追踪器，避免事件流泄漏
+      unsubscribeMetrics();
 
       // ── 6. flush trajectory ─────────────────────────────────────────
       trajectory.recordSessionEnd({
@@ -493,7 +580,11 @@ export function createAgenticRawCandidateSource(
         const fallbackKind = classifyFailureKind(
           fallbackReason,
           loopResult.lineage.stopReason,
-          loopResult.lineage.stopReason === "budget_exhausted" ? "budget_exhausted" : "empty_draft",
+          loopResult.lineage.stopReason === "budget_exhausted"
+            ? "budget_exhausted"
+            : loopResult.lineage.stopReason === "must_verify_coverage_failed"
+              ? "must_verify_coverage_failed"
+              : "empty_draft",
         );
         return makeFallbackResult(
           sessionId, trajectory.getOutputPath(), budget,
@@ -589,22 +680,26 @@ const TIMEOUT_PATTERNS = [
  * @param _stopReason loop 停止原因（保留参数，便于未来扩展更细分类）
  * @param defaultKind 默认 failureKind（当未命中超时模式时使用）
  */
-function classifyFailureKind(
+export function classifyFailureKind(
   reason: string,
-  _stopReason: AgentLoopStopReason | "not_run",
+  stopReason: AgentLoopStopReason | "not_run",
   defaultKind:
     | "model_timeout"
     | "model_error"
     | "runtime_init"
     | "budget_exhausted"
     | "empty_draft"
+    | "must_verify_coverage_failed"
     | "unknown",
-): "model_timeout" | "model_error" | "runtime_init" | "budget_exhausted" | "empty_draft" | "unknown" {
+): "model_timeout" | "model_error" | "runtime_init" | "budget_exhausted" | "empty_draft" | "must_verify_coverage_failed" | "unknown" {
   const lower = reason.toLowerCase();
   for (const pattern of TIMEOUT_PATTERNS) {
     if (lower.includes(pattern)) {
       return "model_timeout";
     }
+  }
+  if (stopReason === "must_verify_coverage_failed") {
+    return "must_verify_coverage_failed";
   }
   return defaultKind;
 }
@@ -627,6 +722,7 @@ function makeFallbackResult(
     | "runtime_init"
     | "budget_exhausted"
     | "empty_draft"
+    | "must_verify_coverage_failed"
     | "unknown",
 ): AgenticRawSourceResult {
   return {

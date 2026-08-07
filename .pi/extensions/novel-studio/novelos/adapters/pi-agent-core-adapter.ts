@@ -268,6 +268,12 @@ export interface CreateNovelOSAgentOptions {
   modelGenerate: ModelGenerateFn;
   /** 可用工具列表 */
   tools: AgentTool[];
+  /**
+   * 工具注入白名单（Phase 2D 缺口一防御纵深，必填）。
+   * injectToolSchemas 只接受白名单内工具，集合外工具 fail-closed 拒绝，
+   * 防止绕过上游 allowedTools 过滤的全量注入。生产路径传叙事工具白名单。
+   */
+  allowedToolNames: ReadonlySet<string>;
   /** 自主管理的 session ID（不依赖 PI Host） */
   sessionId: string;
   /** 候选 kind 标签（默认 novelos_agentic） */
@@ -283,6 +289,11 @@ export interface CreateNovelOSAgentOptions {
    * 故用 afterToolCall terminate 实现 bounded stop。
    */
   afterToolCall?: AgentOptions["afterToolCall"];
+  /**
+   * beforeToolCall hook（Phase 2D 缺口三执行）：工具执行前调用。
+   * runtime 用它阻断检索预算用尽后的检索调用（{ block: true }），不终止 loop。
+   */
+  beforeToolCall?: AgentOptions["beforeToolCall"];
   /** 超时 ms（传给 modelGenerate） */
   timeoutMs?: number;
 }
@@ -301,18 +312,21 @@ export function createNovelOSAgent(options: CreateNovelOSAgentOptions): Agent {
     route,
     modelGenerate,
     tools,
+    allowedToolNames,
     sessionId,
     kind,
     transformContext,
     prepareNextTurnWithContext,
     afterToolCall,
+    beforeToolCall,
     timeoutMs,
   } = options;
 
   const model = createPlaceholderModel(route);
   const streamFn = createProjectStreamFn(modelGenerate, route, kind);
   // 注入 ReAct 工具调用约定 + 工具 schema 到 system prompt（幂等）
-  const systemPromptWithTools = injectToolSchemas(systemPrompt, tools);
+  // 缺口一：allowedToolNames 白名单使注入边界 fail-closed，拒绝白名单外工具。
+  const systemPromptWithTools = injectToolSchemas(systemPrompt, tools, allowedToolNames);
 
   const agentOptions: AgentOptions = {
     initialState: {
@@ -327,6 +341,7 @@ export function createNovelOSAgent(options: CreateNovelOSAgentOptions): Agent {
     ...(transformContext ? { transformContext } : {}),
     ...(prepareNextTurnWithContext ? { prepareNextTurnWithContext } : {}),
     ...(afterToolCall ? { afterToolCall } : {}),
+    ...(beforeToolCall ? { beforeToolCall } : {}),
   };
 
   return new Agent(agentOptions);

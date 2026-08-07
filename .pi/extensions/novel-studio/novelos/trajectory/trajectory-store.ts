@@ -42,7 +42,9 @@ export type TrajectoryEntryType =
   | "verifier_report"
   | "patch_proposal"
   | "repair_round"
-  | "ranked_evidence";
+  | "ranked_evidence"
+  | "tool_visibility"
+  | "tool_call_metrics";
 
 /** Trajectory 条目（JSONL 一行） */
 export interface TrajectoryEntry {
@@ -139,6 +141,21 @@ export class TrajectoryStore {
   /** 记录 ranked evidence（agent 通过 search_narrative_evidence 工具看到的排序证据，P0-1） */
   recordRankedEvidence(evidence: unknown): void {
     this.push("ranked_evidence", evidence);
+  }
+
+  /**
+   * Phase 0：记录本会话工具可见性快照（systemAllowedTools / selectedTools / rejectedTools / visibleTools）。
+   * 用于观测"模型能看到什么、系统允许什么、最终注入什么"三者是否一致。
+   */
+  recordToolVisibility(visibility: unknown): void {
+    this.push("tool_visibility", visibility);
+  }
+
+  /**
+   * Phase 0：记录单次工具调用指标（latency / 字符数 / evidenceLevel / sourceRef / 空结果 / 超时 / 异常 / 重复 query）。
+   */
+  recordToolCallMetrics(metrics: unknown): void {
+    this.push("tool_call_metrics", metrics);
   }
 
   getEntries(): TrajectoryEntry[] {

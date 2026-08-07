@@ -26,6 +26,33 @@ import { makeNarrativeToolResult } from "./tool-protocol.js";
 import type { NarrativeSearchService } from "../agent/narrative-search-service.js";
 
 // ============================================================================
+// 叙事工具白名单（Phase 2D 缺口一防御纵深 2026-08-07）
+// ============================================================================
+
+/**
+ * 唯一允许进入 agent 工具注入的叙事工具名集合。
+ *
+ * 这是工具注入边界的权威白名单：`injectToolSchemas` 只接受该集合内的工具，
+ * 集合外的工具（诊断/未来新增）一律 fail-closed 拒绝，防止"全量注入"绕过
+ * 上游 evidencePlan.allowedTools 过滤。集合即工具注入层的最大合法规模，
+ * 比"数量上限"更有意义（数量上限会因全量 9 个恰好通过而失效）。
+ */
+export const NARRATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "search_narrative_evidence",
+  "search_chapter_span",
+  "query_canon",
+  "query_character_state",
+  "query_timeline",
+  "query_character_knowledge_boundary",
+  "query_promise_ledger",
+  "query_pattern_memory",
+  "query_voice_evidence",
+]);
+
+/** 检索类工具子集（全部 9 个叙事工具都是只读检索/查询工具） */
+export const RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = NARRATIVE_TOOL_NAMES;
+
+// ============================================================================
 // 工具创建工厂：每个工具接收 searchService，返回 ToolProtocol
 // ============================================================================
 
@@ -34,6 +61,38 @@ export interface ToolFactoryContext {
 }
 
 type ToolFactory = (ctx: ToolFactoryContext) => ToolProtocol<TSchema>;
+
+/**
+ * Models often emit a short multi-token query (for example "苏明 弟弟")
+ * while the legacy index stores each fact as a natural-language sentence.
+ * Keep the exact query as the first choice, then recover evidence by querying
+ * meaningful whitespace/punctuation-delimited tokens and de-duplicating refs.
+ */
+function searchNarrativeEvidenceWithTokenFallback(
+  searchService: NarrativeSearchService,
+  query: string,
+  maxResults: number,
+): ReturnType<NarrativeSearchService["searchRanked"]> {
+  const exact = searchService.searchRanked(query, { maxResults });
+  if (exact.length > 0) return exact;
+
+  const tokens = [...new Set(
+    query
+      .split(/[\s,，、;；:：/|]+/u)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2),
+  )];
+  if (tokens.length < 2) return [];
+
+  const merged = new Map<string, (typeof exact)[number]>();
+  for (const token of tokens) {
+    for (const evidence of searchService.searchRanked(token, { maxResults })) {
+      const key = `${evidence.sourceRef}\u0000${evidence.excerpt}`;
+      if (!merged.has(key)) merged.set(key, evidence);
+    }
+  }
+  return [...merged.values()].slice(0, maxResults);
+}
 
 // ============================================================================
 // 0. search_narrative_evidence（跨源结构化检索，P0-1 新增）
@@ -57,7 +116,11 @@ const searchNarrativeEvidenceFactory: ToolFactory = (ctx) => ({
   timeoutMs: 15_000,
   async execute(_toolCallId, params) {
     const { query, maxResults } = params as { query: string; maxResults?: number };
-    const evidences = ctx.searchService.searchRanked(query, { maxResults: maxResults ?? 10 });
+    const evidences = searchNarrativeEvidenceWithTokenFallback(
+      ctx.searchService,
+      query,
+      maxResults ?? 10,
+    );
     if (evidences.length === 0) {
       return makeNarrativeToolResult(
         `未找到与 "${query}" 相关的结构化证据。`,
@@ -440,18 +503,6 @@ export const NARRATIVE_TOOL_FACTORIES: ToolFactory[] = [
   queryPatternMemoryFactory,
   queryVoiceEvidenceFactory,
 ];
-
-export const NARRATIVE_TOOL_NAMES = [
-  "search_narrative_evidence",
-  "search_chapter_span",
-  "query_canon",
-  "query_character_state",
-  "query_timeline",
-  "query_character_knowledge_boundary",
-  "query_promise_ledger",
-  "query_pattern_memory",
-  "query_voice_evidence",
-] as const;
 
 /**
  * 创建全部 9 个叙事工具（接收 NarrativeSearchService）。

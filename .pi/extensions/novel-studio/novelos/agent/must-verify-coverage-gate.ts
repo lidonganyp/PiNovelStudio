@@ -66,6 +66,12 @@ interface ConfirmedEvidence {
   excerpt: string;
 }
 
+const CONFIRMED_EVIDENCE_LEVELS = new Set([
+  "confirmed",
+  "confirmed_state",
+  "exact_chapter_span",
+]);
+
 const P0_MARKERS = [
   "身份",
   "真实身份",
@@ -160,14 +166,39 @@ function readConfirmedEvidence(trajectoryPath: string): ConfirmedEvidence[] {
     const evidence: ConfirmedEvidence[] = [];
     const seen = new Set<string>();
 
+    const addEvidence = (sourceRef: unknown, excerpt: unknown): void => {
+      if (typeof sourceRef !== "string" || typeof excerpt !== "string" || !excerpt) {
+        return;
+      }
+      const key = `${sourceRef}\u0000${excerpt}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      evidence.push({ sourceRef, excerpt });
+    };
+
     const visit = (value: unknown): void => {
       if (!value || typeof value !== "object") return;
       const record = value as Record<string, unknown>;
+      if (record.type === "ranked_evidence") {
+        const data = record.data;
+        if (data && typeof data === "object") {
+          const evidences = (data as Record<string, unknown>).evidences;
+          if (Array.isArray(evidences)) {
+            for (const item of evidences) {
+              if (!item || typeof item !== "object") continue;
+              const ranked = item as Record<string, unknown>;
+              if (CONFIRMED_EVIDENCE_LEVELS.has(String(ranked.evidenceLevel ?? ""))) {
+                addEvidence(ranked.sourceRef, ranked.excerpt);
+              }
+            }
+          }
+        }
+      }
       const details = record.details;
       if (details && typeof details === "object") {
         const detailRecord = details as Record<string, unknown>;
         if (
-          detailRecord.evidenceLevel === "confirmed" &&
+          CONFIRMED_EVIDENCE_LEVELS.has(String(detailRecord.evidenceLevel ?? "")) &&
           typeof detailRecord.sourceRef === "string"
         ) {
           const excerpt =
@@ -176,14 +207,7 @@ function readConfirmedEvidence(trajectoryPath: string): ConfirmedEvidence[] {
               : typeof record.text === "string"
                 ? record.text
                 : extractText(record.content);
-          const key = `${detailRecord.sourceRef}\u0000${excerpt}`;
-          if (excerpt && !seen.has(key)) {
-            seen.add(key);
-            evidence.push({
-              sourceRef: detailRecord.sourceRef,
-              excerpt,
-            });
-          }
+          addEvidence(detailRecord.sourceRef, excerpt);
         }
       }
       for (const child of Object.values(record)) {

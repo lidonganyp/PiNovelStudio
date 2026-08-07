@@ -83,6 +83,30 @@ import {
 } from "./narrative-patch-merger.js";
 
 // ============================================================================
+// 检索决策规则 prompt
+// ============================================================================
+
+/**
+ * Phase 2D（2026-08-06）三缺口修复 — 缺口二：不确定性驱动的检索决策。
+ *
+ * 取代旧的"请先使用跨源叙事证据检索工具查找..."强制检索 prompt。
+ * 设计原则（对齐用户边界）：
+ * - 上下文已足以保证事实/人物状态/因果关系正确 → 直接输出正文，不调工具
+ * - 缺少的信息可能改变上述三项之一 → 调最相关的证据工具查证
+ * - 不为"完成流程"做无必要检索
+ *
+ * 生产路径默认使用此 prompt（不传 retrievalPromptOverride 时）。
+ * eval A/B 对照实验中，A 组通过 retrievalPromptOverride 传入 FORCED_RETRIEVAL_PROMPT
+ * 保持旧强制检索行为，B 组传入 UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT（与此默认一致）。
+ */
+const DEFAULT_UNCERTAINTY_DRIVEN_PROMPT = [
+  "检索决策规则：",
+  "- 如果现有上下文已经足以保证事实、人物状态和因果关系正确，可以直接输出正文，不调用任何工具。",
+  "- 如果缺少的信息可能改变上述三项之一（事实/人物状态/因果关系），先调用最相关的证据工具查证。",
+  '- 不要为了"完成流程"而进行无必要检索。',
+].join("\n");
+
+// ============================================================================
 // NarrativeAgentLoop
 // ============================================================================
 
@@ -340,15 +364,61 @@ export class NarrativeAgentLoop {
         "",
       );
     }
-    // eval-only：retrievalPromptOverride 覆盖默认强制检索 prompt（A/B 对照实验用）。
-    // 生产路径不传此字段，使用默认"请先使用跨源叙事证据检索工具查找..."强制检索 prompt（行为不变）。
+    // Phase 2D（缺口三）：注入已知事实摘要行（从 CompiledContext 提取，≤80字/条，≤12条）。
+    // 让模型知道哪些事实已确认无需再检索，减少无效工具调用。
+    if (plan.known.length > 0) {
+      promptParts.push(
+        "已知事实摘要（以下事实已确认，无需重复检索，可直接用于正文）：",
+        ...plan.known.map((item) => `  - ${item}`),
+        "",
+      );
+    }
+    // Phase 2D（缺口三）：注入模型判定的未知点，引导 Agentic 在正文需要时优先查证。
+    // 这些未知点来自独立 EvidenceDecision 回合（模型参与计划），非系统预判。
+    if (plan.unknown.length > 0) {
+      promptParts.push(
+        "需查证的未知点（若正文需要这些信息且会影响事实/人物状态/因果关系，请优先检索查证）：",
+        ...plan.unknown.map((item) => `  - ${item}`),
+        "",
+      );
+    }
+    // Phase 2D（缺口三修复）：让模型判定的检索计划真正驱动执行。
+    // - needRetrieval=true → 注入具体 query + 深度，引导实际工具调用（消费模型计划）
+    // - needRetrieval=false 且无 mustVerify → 明确告知上下文已充分，不鼓励无谓检索
+    if (plan.needRetrieval) {
+      const depthLabel =
+        ["不检索", "浅层检索", "中层检索", "深度检索"][plan.retrievalDepth] ??
+        "检索";
+      promptParts.push(
+        "检索执行计划（来自本章证据规划）：",
+        `  - 判定：需要检索，深度=${depthLabel}（${plan.retrievalDepth}）`,
+      );
+      if (plan.queries.length > 0) {
+        promptParts.push(
+          `  - 建议检索 query：${plan.queries.map((q) => `"${q}"`).join("、")}`,
+          "  请据此调用最相关的证据工具查证上述 query；若已获得足够证据可提前停止。",
+        );
+      } else {
+        promptParts.push(
+          "  - 未给出具体 query，请根据上述未知点/必须验证点自行构造最相关检索词。",
+        );
+      }
+      promptParts.push("");
+    } else if (plan.mustVerify.length === 0) {
+      promptParts.push(
+        "当前上下文已充分，无需调用证据工具；直接基于本章意图与种子上下文生成正文。",
+        "",
+      );
+    }
+    // Phase 2D（缺口二）：默认使用不确定性驱动的检索决策规则。
+    // eval-only：retrievalPromptOverride 覆盖默认 prompt（A/B 对照实验用）。
+    // - 生产路径不传此字段 → 使用 DEFAULT_UNCERTAINTY_DRIVEN_PROMPT（不确定性驱动）
+    // - eval A 组 → 传入 FORCED_RETRIEVAL_PROMPT（保持旧强制检索行为）
+    // - eval B 组 → 传入 UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT（与默认一致）
     if (input.retrievalPromptOverride) {
       promptParts.push(input.retrievalPromptOverride);
     } else {
-      promptParts.push(
-        "请先使用跨源叙事证据检索工具查找结构化事实证据（世界事实、角色状态、原文片段），",
-        "再按需使用章节原文片段检索工具查证具体原文。证据充分时直接输出正文，不再发出工具调用指令。",
-      );
+      promptParts.push(DEFAULT_UNCERTAINTY_DRIVEN_PROMPT);
     }
     if (coverageRetryPrompt) {
       promptParts.push("", coverageRetryPrompt);

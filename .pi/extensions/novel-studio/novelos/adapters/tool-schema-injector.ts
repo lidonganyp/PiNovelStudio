@@ -52,11 +52,16 @@ const CALLING_CONVENTION_TEXT = [
  *
  * @param systemPrompt 原始 system prompt
  * @param tools 可用工具列表（AgentTool[]）
+ * @param allowedToolNames 工具注入白名单（必填）。集合外的工具一律 fail-closed 拒绝。
+ *   这是注入边界的权威防御（Phase 2D 缺口一）：允许注入的工具必须显式声明，
+ *   任何未声明的工具（诊断/新增/全量注入绕过）都会被拒绝，无法"全量注入"。
+ *   必填参数使该边界不可绕过——调用方无法在不声明白名单的情况下注入任何工具。
  * @returns 注入后的 system prompt（已含约定则原样返回）
  */
 export function injectToolSchemas(
   systemPrompt: string,
   tools: AgentTool[],
+  allowedToolNames: ReadonlySet<string>,
 ): string {
   // 幂等：已注入则不重复
   if (systemPrompt.includes(REACT_CALLING_CONVENTION)) {
@@ -66,6 +71,20 @@ export function injectToolSchemas(
   // 无工具则不注入
   if (!tools || tools.length === 0) {
     return systemPrompt;
+  }
+
+  // Phase 2D 缺口一防御纵深：白名单 fail-closed（必填，不可绕过）。
+  // 只允许注入白名单内的叙事工具；白名单外工具（含"全量注入"绕过）一律拒绝。
+  // 相比"数量上限"，白名单是语义更强的防御：合法工具集恰为 9 个，全量 9 个
+  // 正是允许集合，而任何集合外工具（诊断/新增）都会被拦截。
+  const unknown = tools
+    .map((t) => t.name)
+    .filter((name) => !allowedToolNames.has(name));
+  if (unknown.length > 0) {
+    throw new Error(
+      `injectToolSchemas 拒绝注入白名单外工具：${unknown.join(", ")}。` +
+        "工具集必须为叙事白名单（NARRATIVE_TOOL_NAMES）内的工具，禁止注入集合外/全量工具。",
+    );
   }
 
   const parts: string[] = [systemPrompt, REACT_CALLING_CONVENTION, CALLING_CONVENTION_TEXT];

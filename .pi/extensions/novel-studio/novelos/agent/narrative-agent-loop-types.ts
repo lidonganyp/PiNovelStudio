@@ -63,13 +63,16 @@ export interface AgentLoopInput {
    */
   evidencePlan?: EvidencePlan;
   /**
-   * eval-only：覆盖默认的"强制跨源检索"prompt 决策规则。
+   * eval-only：覆盖默认的检索决策规则 prompt。
    *
-   * 生产路径不传此字段，runAgentTurns 使用默认的"请先使用跨源叙事证据检索工具查找..."
-   * 强制检索 prompt（行为完全不变）。
+   * Phase 2D（2026-08-06）三缺口修复后：
+   * 生产路径不传此字段，runAgentTurns 默认使用不确定性驱动的检索决策规则
+   * （DEFAULT_UNCERTAINTY_DRIVEN_PROMPT：上下文足够则直接生成，缺关键信息才检索）。
    *
-   * eval 路径（如 uncertainty-driven-ablation）传入不确定性驱动的决策规则文本，
-   * 替换默认强制检索 prompt，用于 A/B 对照实验。
+   * eval A/B 对照实验中：
+   * - A 组（baseline）传入 FORCED_RETRIEVAL_PROMPT，保持旧"请先使用跨源..."
+   *   强制检索行为，作为对照基线。
+   * - B 组（treatment）传入 UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT，与生产默认一致。
    *
    * 不暴露思维链，只改变检索决策规则。
    */

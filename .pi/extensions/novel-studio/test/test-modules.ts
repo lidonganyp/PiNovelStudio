@@ -261,5 +261,12 @@ import "../v2/core/candidate-generator.js";
 import "../v2/core/scene-contract-planner.js";
 import "../craft/anti-ai-auto-patch.js";
 
+// PHASE-0-TOOL-BASELINE-1：工具基线盘点与观测。
+// - tools/tool-capability.ts：纯静态能力清单，无运行时引用，仅被测试消费，故显式纳入 dist-test。
+// - trajectory/tool-metrics-tracer.ts：已由 agentic-raw-candidate-source 进入 prod 闭包，
+//   同时保留 dist-test/ 编译供测试直接 import（Phase 0 观测指标纯函数）。
+import "../novelos/tools/tool-capability.js";
+import "../novelos/trajectory/tool-metrics-tracer.js";
+
 // Marker export to prevent tree-shaking from removing side-effect imports
 export const TEST_MODULES_LOADED = true;
