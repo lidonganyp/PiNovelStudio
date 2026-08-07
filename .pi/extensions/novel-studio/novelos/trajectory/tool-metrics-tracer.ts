@@ -52,6 +52,14 @@ export interface ToolCallMetrics {
   estimateTokens: number;
   /** 主证据等级（从 result.details.evidenceLevel 提取） */
   evidenceLevel: EvidenceLevel | undefined;
+  /** Phase 3：结果类型（从 result.details.resultKind 提取） */
+  resultKind: string | undefined;
+  /** Phase 3：本次返回的真实条目/span 数量 */
+  returnedCount: number | undefined;
+  /** Phase 3：结果是否被系统 limit 截断 */
+  truncated: boolean | undefined;
+  /** Phase 3：系统确定性生成的下一查询提示（无则 undefined） */
+  nextQueryHint: string | undefined;
   /** 提取到的 sourceRef 列表（去重） */
   sourceRefs: string[];
   /** sourceRef 数量 */
@@ -201,6 +209,22 @@ export class ToolCallMetricsTracer {
         ? (details as { evidenceLevel?: EvidenceLevel }).evidenceLevel
         : undefined;
     const sourceRefs = collectSourceRefs(details);
+    const resultKind =
+      details && typeof details === "object"
+        ? (details as { resultKind?: string }).resultKind
+        : undefined;
+    const returnedCount =
+      details && typeof details === "object"
+        ? (details as { returnedCount?: number }).returnedCount
+        : undefined;
+    const truncated =
+      details && typeof details === "object"
+        ? (details as { truncated?: boolean }).truncated
+        : undefined;
+    const nextQueryHint =
+      details && typeof details === "object"
+        ? (details as { nextQueryHint?: string | null }).nextQueryHint ?? undefined
+        : undefined;
     const empty = resultChars === 0 && !event.isError;
     const timeout = event.isError && isTimeoutText(resultText);
     const isError = event.isError;
@@ -221,6 +245,10 @@ export class ToolCallMetricsTracer {
       evidenceLevel,
       sourceRefs,
       sourceRefCount: sourceRefs.length,
+      resultKind,
+      returnedCount,
+      truncated,
+      nextQueryHint,
       empty,
       timeout,
       isError,

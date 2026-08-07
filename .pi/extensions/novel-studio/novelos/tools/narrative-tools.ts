@@ -53,6 +53,40 @@ export const NARRATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
 export const RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = NARRATIVE_TOOL_NAMES;
 
 // ============================================================================
+// Phase 3：统一结果格式辅助（resultKind / returnedCount / truncated / nextQueryHint）
+// ============================================================================
+
+/** 列表型查询工具的默认有界上限（宽查询不可无界返回） */
+export const DEFAULT_LIST_LIMIT = 50;
+
+/**
+ * 把所有宽查询的 limit 收束到 [1, DEFAULT_LIST_LIMIT] 有界区间。
+ * 模型可传任意 maxResults/limit，但系统必须拒绝无界返回。
+ */
+function boundedLimit(requested: number | undefined, fallback: number): number {
+  const n = requested ?? fallback;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(Math.floor(n), DEFAULT_LIST_LIMIT));
+}
+
+/**
+ * 用 limit+1 探测是否还有更多结果，再返回前 limit 条。
+ * 避免"达到上限但没有声明截断"：truncated=true 表示 probe 发现 limit+1 条。
+ */
+function probeLimit<T>(items: T[], limit: number): { items: T[]; truncated: boolean } {
+  const truncated = items.length > limit;
+  return { items: items.slice(0, limit), truncated };
+}
+
+/**
+ * 系统确定性生成 nextQueryHint（不接受模型自由填写）。
+ * 仅当结果被截断时给出一条收窄建议；否则 null（无需再检索）。
+ */
+function nextQueryHintFor(truncated: boolean, refineHint: string): string | null {
+  return truncated ? refineHint : null;
+}
+
+// ============================================================================
 // 工具创建工厂：每个工具接收 searchService，返回 ToolProtocol
 // ============================================================================
 
@@ -116,29 +150,47 @@ const searchNarrativeEvidenceFactory: ToolFactory = (ctx) => ({
   timeoutMs: 15_000,
   async execute(_toolCallId, params) {
     const { query, maxResults } = params as { query: string; maxResults?: number };
+    const limit = boundedLimit(maxResults, 10);
+    // limit+1 探测截断：底层若返回超过 limit 条则 truncated=true
     const evidences = searchNarrativeEvidenceWithTokenFallback(
       ctx.searchService,
       query,
-      maxResults ?? 10,
+      limit + 1,
     );
-    if (evidences.length === 0) {
+    const { items, truncated } = probeLimit(evidences, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         `未找到与 "${query}" 相关的结构化证据。`,
-        { sourceRef: "ranked:no-match", evidenceLevel: "inferred", query },
+        {
+          sourceRef: "ranked:no-match",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+          query,
+        },
       );
     }
-    const lines = evidences.map(
+    const lines = items.map(
       (e, i) =>
         `[${i + 1}] (${e.evidenceLevel}, score=${e.relevanceScore.toFixed(2)}, origin=${e.origin})\n` +
         `  ${e.sourceRef}\n  ${e.excerpt.replace(/\n/g, " ")}`,
     );
     return makeNarrativeToolResult(
-      `找到 ${evidences.length} 条排序证据：\n${lines.join("\n")}`,
+      `找到 ${items.length} 条排序证据${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: evidences[0].sourceRef,
-        evidenceLevel: evidences[0].evidenceLevel,
+        sourceRef: items[0].sourceRef,
+        evidenceLevel: items[0].evidenceLevel,
+        resultKind: "ranked_evidence",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "结果可能被截断，请用更具体的查询词收窄范围。",
+        ),
         query,
-        rankedEvidences: evidences,
+        rankedEvidences: items,
       },
     );
   },
@@ -171,28 +223,45 @@ const searchChapterSpanFactory: ToolFactory = (ctx) => ({
       maxChapters?: number;
       maxResults?: number;
     };
+    const limit = boundedLimit(maxResults, 10);
     const spans = ctx.searchService.searchChapterSpan(
       query,
       maxChapters ?? 10,
-      maxResults ?? 10,
+      limit + 1,
     );
-    if (spans.length === 0) {
+    const { items, truncated } = probeLimit(spans, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         `未在历史章节中找到包含 "${query}" 的原文。`,
-        { sourceRef: "search:chapter_span:no-match", evidenceLevel: "inferred", query },
+        {
+          sourceRef: "search:chapter_span:no-match",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+          query,
+        },
       );
     }
-    const lines = spans.map(
+    const lines = items.map(
       (s) =>
         `[${s.chapterId}] ${s.sourceRef}\n  ...${s.excerpt.replace(/\n/g, " ")}...`,
     );
     return makeNarrativeToolResult(
-      `找到 ${spans.length} 处匹配：\n${lines.join("\n")}`,
+      `找到 ${items.length} 处匹配${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: spans[0].sourceRef,
+        sourceRef: items[0].sourceRef,
         evidenceLevel: "confirmed",
+        resultKind: "chapter_spans",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "结果可能被截断，请缩小查询词或增加 maxResults。",
+        ),
         query,
-        spans,
+        spans: items,
       },
     );
   },
@@ -222,23 +291,40 @@ const queryCanonFactory: ToolFactory = (ctx) => ({
   timeoutMs: 10_000,
   async execute(_toolCallId, params) {
     const { category } = params as { category?: string };
+    const limit = DEFAULT_LIST_LIMIT;
     const entries = ctx.searchService.queryCanon(category as any);
-    if (entries.length === 0) {
+    const { items, truncated } = probeLimit(entries, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         `未找到 canon 事实${category ? `（category=${category}）` : ""}。`,
-        { sourceRef: "canon:empty", evidenceLevel: "inferred", category },
+        {
+          sourceRef: "canon:empty",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+          category,
+        },
       );
     }
-    const lines = entries.map(
+    const lines = items.map(
       (e) => `[${e.category}] ${e.fact} (来源: ${e.sourceRef}, 置信度: ${e.confidence})`,
     );
     return makeNarrativeToolResult(
-      `找到 ${entries.length} 条 canon 事实：\n${lines.join("\n")}`,
+      `找到 ${items.length} 条 canon 事实${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: entries[0].sourceRef,
+        sourceRef: items[0].sourceRef,
         evidenceLevel: "confirmed",
+        resultKind: "canon_entries",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "canon 条目较多，请用 category 过滤收窄。",
+        ),
         category,
-        entries,
+        entries: items,
       },
     );
   },
@@ -263,23 +349,40 @@ const queryCharacterStateFactory: ToolFactory = (ctx) => ({
   timeoutMs: 10_000,
   async execute(_toolCallId, params) {
     const { characterId } = params as { characterId?: string };
+    const limit = DEFAULT_LIST_LIMIT;
     const entries = ctx.searchService.queryCharacterState(characterId);
-    if (entries.length === 0) {
+    const { items, truncated } = probeLimit(entries, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         `未找到角色状态${characterId ? `（characterId=${characterId}）` : ""}。`,
-        { sourceRef: "character:empty", evidenceLevel: "inferred", characterId },
+        {
+          sourceRef: "character:empty",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+          characterId,
+        },
       );
     }
-    const lines = entries.map(
+    const lines = items.map(
       (e) => `[${e.characterId}] ${e.field}: ${e.value} (来源: ${e.sourceRef})`,
     );
     return makeNarrativeToolResult(
-      `找到 ${entries.length} 条角色状态：\n${lines.join("\n")}`,
+      `找到 ${items.length} 条角色状态${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: entries[0].sourceRef,
+        sourceRef: items[0].sourceRef,
         evidenceLevel: "confirmed",
+        resultKind: "character_state",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "角色状态较多，请用 characterId 过滤收窄。",
+        ),
         characterId,
-        entries,
+        entries: items,
       },
     );
   },
@@ -299,22 +402,38 @@ const queryTimelineFactory: ToolFactory = (ctx) => ({
   sideEffect: "read_only",
   timeoutMs: 10_000,
   async execute() {
+    const limit = DEFAULT_LIST_LIMIT;
     const entries = ctx.searchService.queryTimeline();
-    if (entries.length === 0) {
+    const { items, truncated } = probeLimit(entries, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         "未找到时间线事件。",
-        { sourceRef: "timeline:empty", evidenceLevel: "inferred" },
+        {
+          sourceRef: "timeline:empty",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+        },
       );
     }
-    const lines = entries.map(
+    const lines = items.map(
       (e) => `${e.fact} (来源: ${e.sourceRef}, 章节: ${e.sourceChapter})`,
     );
     return makeNarrativeToolResult(
-      `找到 ${entries.length} 条时间线事件：\n${lines.join("\n")}`,
+      `找到 ${items.length} 条时间线事件${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: entries[0].sourceRef,
+        sourceRef: items[0].sourceRef,
         evidenceLevel: "confirmed",
-        entries,
+        resultKind: "timeline_events",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "时间线事件较多，请缩小查询范围。",
+        ),
+        entries: items,
       },
     );
   },
@@ -339,23 +458,40 @@ const queryCharacterKnowledgeBoundaryFactory: ToolFactory = (ctx) => ({
   timeoutMs: 10_000,
   async execute(_toolCallId, params) {
     const { characterId } = params as { characterId?: string };
+    const limit = DEFAULT_LIST_LIMIT;
     const entries = ctx.searchService.queryCharacterKnowledgeBoundary(characterId);
-    if (entries.length === 0) {
+    const { items, truncated } = probeLimit(entries, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         `未找到角色知识边界${characterId ? `（characterId=${characterId}）` : ""}。可能 legacy 状态未记录知识边界字段。`,
-        { sourceRef: "knowledge_boundary:empty", evidenceLevel: "inferred", characterId },
+        {
+          sourceRef: "knowledge_boundary:empty",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+          characterId,
+        },
       );
     }
-    const lines = entries.map(
+    const lines = items.map(
       (e) => `[${e.characterId}] ${e.field}: ${e.value} (来源: ${e.sourceRef})`,
     );
     return makeNarrativeToolResult(
-      `找到 ${entries.length} 条知识边界：\n${lines.join("\n")}`,
+      `找到 ${items.length} 条知识边界${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: entries[0].sourceRef,
+        sourceRef: items[0].sourceRef,
         evidenceLevel: "confirmed",
+        resultKind: "character_knowledge_boundary",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "知识边界较多，请用 characterId 过滤收窄。",
+        ),
         characterId,
-        entries,
+        entries: items,
       },
     );
   },
@@ -385,23 +521,40 @@ const queryPromiseLedgerFactory: ToolFactory = (ctx) => ({
   timeoutMs: 10_000,
   async execute(_toolCallId, params) {
     const { status } = params as { status?: string };
+    const limit = DEFAULT_LIST_LIMIT;
     const entries = ctx.searchService.queryPromiseLedger(status as any);
-    if (entries.length === 0) {
+    const { items, truncated } = probeLimit(entries, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         `未找到 promise 条目${status ? `（status=${status}）` : ""}。`,
-        { sourceRef: "promise:empty", evidenceLevel: "inferred", status },
+        {
+          sourceRef: "promise:empty",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+          status,
+        },
       );
     }
-    const lines = entries.map(
+    const lines = items.map(
       (e) => `[${e.status}] ${e.description} (热度: ${e.currentHeat}, 来源: ${e.sourceRef})`,
     );
     return makeNarrativeToolResult(
-      `找到 ${entries.length} 条 promise：\n${lines.join("\n")}`,
+      `找到 ${items.length} 条 promise${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: entries[0].sourceRef,
+        sourceRef: items[0].sourceRef,
         evidenceLevel: "confirmed",
+        resultKind: "promise_entries",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "promise 条目较多，请用 status 过滤收窄。",
+        ),
         status,
-        entries,
+        entries: items,
       },
     );
   },
@@ -432,23 +585,40 @@ const queryPatternMemoryFactory: ToolFactory = (ctx) => ({
   timeoutMs: 10_000,
   async execute(_toolCallId, params) {
     const { patternType } = params as { patternType?: string };
+    const limit = DEFAULT_LIST_LIMIT;
     const entries = ctx.searchService.queryPatternMemory(patternType as any);
-    if (entries.length === 0) {
+    const { items, truncated } = probeLimit(entries, limit);
+    if (items.length === 0) {
       return makeNarrativeToolResult(
         `未找到 pattern 条目${patternType ? `（patternType=${patternType}）` : ""}。legacy 状态无直接对应的 pattern memory，Phase 6 在线学习填充。`,
-        { sourceRef: "pattern:empty", evidenceLevel: "inferred", patternType },
+        {
+          sourceRef: "pattern:empty",
+          evidenceLevel: "inferred",
+          resultKind: "no_match",
+          returnedCount: 0,
+          truncated: false,
+          nextQueryHint: null,
+          patternType,
+        },
       );
     }
-    const lines = entries.map(
+    const lines = items.map(
       (e) => `[${e.patternType}] ${e.description} (出现 ${e.occurrenceCount} 次, 来源: ${e.sourceRef})`,
     );
     return makeNarrativeToolResult(
-      `找到 ${entries.length} 条 pattern：\n${lines.join("\n")}`,
+      `找到 ${items.length} 条 pattern${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
-        sourceRef: entries[0].sourceRef,
+        sourceRef: items[0].sourceRef,
         evidenceLevel: "confirmed",
+        resultKind: "pattern_entries",
+        returnedCount: items.length,
+        truncated,
+        nextQueryHint: nextQueryHintFor(
+          truncated,
+          "pattern 条目较多，请用 patternType 过滤收窄。",
+        ),
         patternType,
-        entries,
+        entries: items,
       },
     );
   },
@@ -481,6 +651,10 @@ const queryVoiceEvidenceFactory: ToolFactory = (_ctx) => ({
       {
         sourceRef: "voice:profile_only:degraded",
         evidenceLevel: "profile_only",
+        resultKind: "voice_evidence",
+        returnedCount: 0,
+        truncated: false,
+        nextQueryHint: null,
         characterId,
         degradedReason: "M1 无 Voice Foundation",
       },

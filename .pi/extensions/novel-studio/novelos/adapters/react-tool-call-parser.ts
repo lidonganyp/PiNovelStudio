@@ -58,6 +58,10 @@ export interface ToolResultView {
   details?: {
     sourceRef?: string;
     evidenceLevel?: string;
+    resultKind?: string;
+    returnedCount?: number;
+    truncated?: boolean;
+    nextQueryHint?: string | null;
     [key: string]: unknown;
   };
 }
@@ -215,7 +219,9 @@ function parseToolCallJson(rawJson: string, index: number): ParsedToolCallBlock 
  * 已检索到的证据：
  * [工具 search_chapter_span 结果]
  * {content text}
+ * (结果类型: {resultKind}, 数量: {returnedCount}, 截断: {是/否})
  * (来源: {sourceRef}, 等级: {evidenceLevel})
+ * (下一查询提示: {nextQueryHint})
  * ...
  * ```
  *
@@ -235,9 +241,22 @@ export function formatToolResultsForPrompt(toolResults: ToolResultView[]): strin
       .join("\n");
     lines.push(localizeLlmText(textContent || "（无文本内容）"));
 
+    const resultKind = toChineseResultKind(result.details?.resultKind);
+    const returnedCount = result.details?.returnedCount;
+    const truncated = result.details?.truncated;
+    const countText =
+      typeof returnedCount === "number" ? String(returnedCount) : "未知";
+    const truncatedText = truncated === true ? "是" : "否";
+    lines.push(`（结果类型：${resultKind}，数量：${countText}，截断：${truncatedText}）`);
+
     const sourceRef = toChineseSourceRef(result.details?.sourceRef);
     const evidenceLevel = toChineseEvidenceLevel(result.details?.evidenceLevel);
     lines.push(`（来源：${sourceRef}，等级：${evidenceLevel}）`);
+
+    const hint = result.details?.nextQueryHint;
+    if (typeof hint === "string" && hint.length > 0) {
+      lines.push(`（下一查询提示：${hint}）`);
+    }
     lines.push("");
   }
 
@@ -258,6 +277,22 @@ function toChineseToolName(name: string): string {
 function toChineseSourceRef(sourceRef: string | undefined): string {
   if (!sourceRef) return "未知";
   return /[A-Za-z]/.test(sourceRef) ? "已记录" : sourceRef;
+}
+
+function toChineseResultKind(kind: string | undefined): string {
+  const map: Record<string, string> = {
+    canon_entries: "世界事实",
+    character_state: "角色状态",
+    character_knowledge_boundary: "角色知识边界",
+    timeline_events: "时间线事件",
+    promise_entries: "承诺条目",
+    pattern_entries: "叙事模式",
+    voice_evidence: "声音证据",
+    chapter_spans: "章节原文片段",
+    ranked_evidence: "排序证据",
+    no_match: "无匹配",
+  };
+  return kind ? (map[kind] ?? "未知") : "未知";
 }
 
 function toChineseEvidenceLevel(level: string | undefined): string {

@@ -333,3 +333,121 @@ describe("NovelOS 工具独立创建（不经 registry）", () => {
     }
   });
 });
+
+// ============================================================================
+
+describe("Phase 3 统一工具结果格式（resultKind/returnedCount/truncated/nextQueryHint）", () => {
+  // 每个工具在此 fixture 下的调用参数与预期 resultKind。
+  // 注意：query_pattern_memory 在 legacy 无 pattern → 空结果统一为 no_match。
+  const TOOL_CALLS = {
+    search_narrative_evidence: { args: { query: "复苏之眼" }, kind: "ranked_evidence" },
+    search_chapter_span: { args: { query: "复苏之眼" }, kind: "chapter_spans" },
+    query_canon: { args: {}, kind: "canon_entries" },
+    query_character_state: { args: {}, kind: "character_state" },
+    query_timeline: { args: {}, kind: "timeline_events" },
+    query_character_knowledge_boundary: { args: {}, kind: "character_knowledge_boundary" },
+    query_promise_ledger: { args: {}, kind: "promise_entries" },
+    query_pattern_memory: { args: {}, kind: "no_match" },
+    query_voice_evidence: { args: {}, kind: "voice_evidence" },
+  };
+
+  async function callTool(name, args) {
+    const tool = registry.getToolProtocol(name);
+    return tool.execute(`tc-phase3-${name}`, args);
+  }
+
+  it("9 个工具均返回 4 个 Phase 3 结构化字段（类型正确 + resultKind 符合预期）", async () => {
+    for (const [name, { args, kind }] of Object.entries(TOOL_CALLS)) {
+      const result = await callTool(name, args);
+      const d = result.details;
+      // resultKind 必须存在且与预期一致（空结果统一 no_match）
+      assert.equal(typeof d.resultKind, "string", `${name} 应返回 resultKind`);
+      assert.equal(d.resultKind, kind, `${name} resultKind 应为 ${kind}，实际 ${d.resultKind}`);
+      // returnedCount 必须是非负整数（基线 fixture 有小结果或空结果）
+      assert.equal(typeof d.returnedCount, "number", `${name} 应返回 returnedCount`);
+      assert.ok(Number.isInteger(d.returnedCount) && d.returnedCount >= 0, `${name} returnedCount 应为非负整数`);
+      // truncated 必须是布尔
+      assert.equal(typeof d.truncated, "boolean", `${name} 应返回 truncated`);
+      // nextQueryHint 必须是 string 或 null
+      assert.ok(d.nextQueryHint === null || typeof d.nextQueryHint === "string", `${name} nextQueryHint 应为 string|null`);
+      // 保留原有字段
+      assert.equal(typeof d.sourceRef, "string", `${name} 应保留 sourceRef`);
+      assert.equal(typeof d.evidenceLevel, "string", `${name} 应保留 evidenceLevel`);
+    }
+  });
+
+  it("空结果统一为 resultKind=no_match + returnedCount=0 + truncated=false", async () => {
+    // query_pattern_memory 在 legacy 无 pattern -> 空结果
+    const result = await callTool("query_pattern_memory", {});
+    assert.equal(result.details.resultKind, "no_match", "空结果 resultKind 应统一为 no_match");
+    assert.equal(result.details.returnedCount, 0, "空结果 returnedCount 应为 0");
+    assert.equal(result.details.truncated, false, "空结果不应截断");
+    assert.equal(result.details.nextQueryHint, null, "空结果不应有 nextQueryHint");
+  });
+
+  it("returnedCount 与 text 中实际条目数一致（列表型工具）", async () => {
+    const result = await callTool("query_canon", {});
+    const d = result.details;
+    assert.ok(d.returnedCount > 0, "query_canon 应命中 skeleton 事件");
+    // content 以 "找到 N 条..." 开头，N 即 returnedCount
+    const match = result.content[0].text.match(/^找到 (\d+) 条/);
+    assert.ok(match, "content 应包含 '找到 N 条' 汇总");
+    assert.equal(Number(match[1]), d.returnedCount, "text 汇总条数应等于 returnedCount");
+  });
+
+  it("宽查询 maxResults 被有界收束（不返回超过 DEFAULT_LIST_LIMIT）", async () => {
+    // 传超大 maxResults，返回数仍应被 limit 约束
+    const result = await callTool("search_chapter_span", {
+      query: "林默",
+      maxResults: 5000,
+    });
+    assert.ok(
+      result.details.returnedCount <= 50,
+      `returnedCount 应受有界 limit 约束，实际 ${result.details.returnedCount}`,
+    );
+  });
+
+  it("截断时 truncated=true 且 nextQueryHint 非空（limit+1 探测）", async () => {
+    // 构造 >50 条 canon 的独立 workspace
+    const bigRoot = mkdtempSync(join(tmpdir(), "novelos-big-canon-"));
+    const wsDir = join(bigRoot, "workspaces", "big-ws");
+    mkdirSync(wsDir, { recursive: true });
+    const events = [];
+    for (let i = 1; i <= 55; i++) {
+      events.push({
+        eventId: `evt-${String(i).padStart(3, "0")}`,
+        type: "discovery",
+        summary: `事件条目 ${i}`,
+        characters: ["角色A"],
+        location: "地点",
+      });
+    }
+    writeFileSync(
+      join(wsDir, "skeleton.json"),
+      JSON.stringify({ chapterId: "ch1", events, locations: ["地点"] }),
+      "utf-8",
+    );
+    const bigService = createNarrativeSearchService({
+      projectRoot: bigRoot,
+      workspaceId: "big-ws",
+      sourceChapter: "ch1",
+    });
+    const bigTools = createNarrativeTools({ searchService: bigService });
+    const tool = bigTools.find((t) => t.name === "query_canon");
+    const result = await tool.execute("tc-big", {});
+    assert.equal(result.details.returnedCount, 50, "应返回有界 limit 50 条");
+    assert.equal(result.details.truncated, true, "55 条 canon 应被判定截断");
+    assert.ok(
+      typeof result.details.nextQueryHint === "string" && result.details.nextQueryHint.length > 0,
+      "截断时应给出 nextQueryHint",
+    );
+    rmSync(bigRoot, { recursive: true, force: true });
+  });
+
+  it("voice_evidence 降级结果返回 resultKind=voice_evidence + returnedCount=0", async () => {
+    const result = await callTool("query_voice_evidence", { characterId: "林默" });
+    assert.equal(result.details.resultKind, "voice_evidence");
+    assert.equal(result.details.returnedCount, 0);
+    assert.equal(result.details.truncated, false);
+  });
+});

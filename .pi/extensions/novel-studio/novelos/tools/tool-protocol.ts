@@ -37,18 +37,64 @@ export type EvidenceLevel =
   | "profile_only";
 
 // ============================================================================
-// 工具结果详情（统一 sourceRef + evidenceLevel）
+// Phase 3：统一结果类型（resultKind）
+// ============================================================================
+
+/**
+ * 工具结果类型（Phase 3 统一工具结果格式）。
+ * 每个叙事工具声明其结果承载的领域数据结构；空结果统一为 "no_match"。
+ *
+ * 映射：
+ * - search_narrative_evidence → "ranked_evidence"
+ * - search_chapter_span      → "chapter_spans"
+ * - query_canon              → "canon_entries"
+ * - query_character_state    → "character_state"
+ * - query_timeline           → "timeline_events"
+ * - query_character_knowledge_boundary → "character_knowledge_boundary"
+ * - query_promise_ledger     → "promise_entries"
+ * - query_pattern_memory     → "pattern_entries"
+ * - query_voice_evidence     → "voice_evidence"
+ * - 任意工具空结果           → "no_match"
+ */
+export type NarrativeResultKind =
+  | "canon_entries"
+  | "character_state"
+  | "character_knowledge_boundary"
+  | "timeline_events"
+  | "promise_entries"
+  | "pattern_entries"
+  | "voice_evidence"
+  | "chapter_spans"
+  | "ranked_evidence"
+  | "no_match";
+
+// ============================================================================
+// 工具结果详情（统一 sourceRef + evidenceLevel + Phase 3 结果格式）
 // ============================================================================
 
 /**
  * 所有叙事工具的 details 必须实现此接口。
  * AgentToolResult.details 字段携带此结构化数据，供 verifier / trajectory 消费。
+ *
+ * Phase 3 新增 resultKind / returnedCount / truncated / nextQueryHint：
+ * - resultKind：结果类型（空结果统一 "no_match"）
+ * - returnedCount：本次返回的真实条目/span 计数（空=0）
+ * - truncated：结果是否被系统 limit 截断（由系统据 limit 判定，非模型声明）
+ * - nextQueryHint：系统确定性生成的下一条检索建议（无则 null，不接受模型自由填写）
  */
 export interface NarrativeToolResultDetails {
   /** 追溯引用，如 "ch17#final.md:120-180" 或 "skeleton.json#evt-003" */
   sourceRef: string;
   /** 证据等级 */
   evidenceLevel: EvidenceLevel;
+  /** 结果类型（Phase 3） */
+  resultKind: NarrativeResultKind;
+  /** 本次返回的真实条目/span 数量（空结果=0） */
+  returnedCount: number;
+  /** 结果是否被系统 limit 截断（由系统据 limit 判定） */
+  truncated: boolean;
+  /** 系统确定性生成的下一条检索建议（无则 null） */
+  nextQueryHint: string | null;
   /** 额外领域数据（工具特定） */
   [key: string]: unknown;
 }
@@ -137,6 +183,14 @@ export function makeEmptyToolResult(
 } {
   return makeNarrativeToolResult(
     `（无结果）${reason}`,
-    { sourceRef, evidenceLevel: "inferred", reason },
+    {
+      sourceRef,
+      evidenceLevel: "inferred",
+      resultKind: "no_match",
+      returnedCount: 0,
+      truncated: false,
+      nextQueryHint: null,
+      reason,
+    },
   );
 }
