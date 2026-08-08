@@ -109,6 +109,11 @@ Phase 4 评估一个假设：**9 个 narrow 工具是否比单个 typed facade �
 - 有效 evidenceLevel 占比（`VALID_EVIDENCE_LEVELS` 内）。
 - sourceRef 有效性（排除 `INVALID_REF_PATTERNS` 黑名单，如 `:no-match` / `:empty` / `voice:profile_only:degraded`）。
 - 结果是否携带完整 `resultKind` / `returnedCount` / `truncated` / `nextQueryHint`。
+- **evidenceLevel 门禁采用累计强度比较**（`evaluateRealGate`→`evidenceLevelsCumulativeNonDegraded`）：沿证据强度排序
+  `confirmed > confirmed_state > exact_chapter_span` 逐级累计命中数，要求 B 在每个累计阈值上的归一化累计命中率
+  均不低于 A（一阶随机占优）。更强的等级可替代/补齐较弱的等级，避免把「B 的 confirmed_state 提升、exact_chapter_span
+  归零」误判为退化；反向（用更弱等级顶替更强等级）仍正确失败。排序常量在 `uncertainty-recall-metrics.ts`
+  的 `EVIDENCE_LEVEL_STRENGTH_ORDER`。
 
 ### 5.6 空结果 / 截断 / 错误 / 超时
 - `empty` / `truncated` / `isError` / `timeout` 计数。
@@ -185,7 +190,8 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 
 **4.3.6 进入实现前的评审前置条件（必须全部满足）**
 
-- [ ] 真实 replay（GLM/Doubao，`fallback=[]`）在**稳定 commit** 上全门禁通过，含修正后 evidenceLevel 口径（`rankedEvidenceLevels`）与 `empty/truncated` 逐场景门禁。
+- [x] 真实 replay（GLM/Doubao，`fallback=[]`）在**稳定 commit** 上全门禁通过，含修正后 evidenceLevel 口径（`rankedEvidenceLevels` + `evidenceLevelsCumulativeNonDegraded` 累计强度比较）与 `empty/truncated` 逐场景门禁。
+  - 2026-08-08：证据等级门禁从逐级独立比较修正为累计强度比较（commit `9702eef`），并在 `reports/phase4-real-glm-full-v3/` 补跑 3 场景 × 3 seed 真实 replay（glm-5.2，`fallback=[]`）→ `allPassed=true`。修正后 real replay 门禁不再阻断，Phase 4.3 设计评审条件满足；**仍不切生产**，生产接入须等独立实现 + 生产 canary + G6 全通过。
 - [ ] 若需把"intent 引导"与"接口形态"解耦，补跑**无 `INTENT_USAGE` 的 B0 facade 对照**，否则结论归属保持"受引导的 facade vs 9 工具"。
 - [ ] 本设计评审通过后，才可进入独立实现 Phase（届时仍须保持"不注册公开工具、不切换统一主链路"直到生产 canary + G6 全通过）。
 
