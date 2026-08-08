@@ -151,6 +151,23 @@ describe("PHASE4-TOOL-AB-REAL-3：结果门槛", () => {
     assert.ok(comparison.gate.invalidSourceRefNotWorsened, comparison.gate.details.invalidSourceRef);
   });
 
+  it("empty/truncated 明确纳入 allPassed（设计文档 §5.6/Phase 4.3 门禁要求失败行为不恶化）", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runRealToolAbReplay();
+    const g = comparison.gate;
+    // 字段存在且为布尔
+    assert.equal(typeof g.emptyResultsNotWorsened, "boolean", "gate 应含 emptyResultsNotWorsened 布尔");
+    assert.equal(typeof g.truncatedNotWorsened, "boolean", "gate 应含 truncatedNotWorsened 布尔");
+    // 聚合层必须暴露 truncated 计数
+    assert.equal(typeof comparison.aggregation.A.truncatedResults, "number", "A 聚合应含 truncatedResults");
+    assert.equal(typeof comparison.aggregation.B.truncatedResults, "number", "B 聚合应含 truncatedResults");
+    // 空结果计数已存在（回归）
+    assert.equal(typeof comparison.aggregation.A.emptyResults, "number", "A 聚合应含 emptyResults");
+    assert.equal(typeof comparison.aggregation.B.emptyResults, "number", "B 聚合应含 emptyResults");
+    // 逐分类 / 逐场景门禁字段存在
+    assert.equal(typeof g.scenarioGatesPassed, "boolean", "gate 应含 scenarioGatesPassed 布尔");
+  });
+
   it("至少一项真实负担指标改善（dry-run 下 schema token 必改善）", async () => {
     const runner = await importRunner();
     const comparison = await runner.runRealToolAbReplay();
@@ -208,6 +225,43 @@ describe("PHASE4-TOOL-AB-REAL-3：结果门槛", () => {
     const runner = await importRunner();
     const comparison = await runner.runRealToolAbReplay();
     assert.ok(comparison.gate.allPassed, `门禁应全部通过：${JSON.stringify(comparison.gate.details)}`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 测试 5：逐场景失败行为门禁（empty/truncated/errors/timeouts 不恶化）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("PHASE4-TOOL-AB-REAL-5：逐场景失败行为门禁", () => {
+  it("每场景携带 scenarioGate，且失败行为（empty/truncated/errors/timeouts/非法工具/解析失败）逐项不恶化", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runRealToolAbReplay();
+    assert.equal(comparison.scenarios.length, 3, "应含 3 高信号场景");
+    for (const p of comparison.scenarios) {
+      assert.ok(p.scenarioGate, `场景 ${p.scenarioId} 应有 scenarioGate`);
+      const sg = p.scenarioGate;
+      for (const key of [
+        "emptyResultsNotWorsened",
+        "truncatedNotWorsened",
+        "errorsNotWorsened",
+        "timeoutsNotWorsened",
+        "invalidToolSelectionsNotWorsened",
+        "parseErrorsNotWorsened",
+        "allFailingNotWorsened",
+      ]) {
+        assert.equal(typeof sg[key], "boolean", `场景 ${p.scenarioId} scenarioGate.${key} 应为布尔`);
+      }
+      assert.ok(sg.details, `场景 ${p.scenarioId} scenarioGate 应含 details`);
+    }
+    // 聚合门禁要求所有逐场景失败门禁通过
+    assert.ok(comparison.gate.scenarioGatesPassed, "聚合 allPassed 应要求逐场景失败门禁全通过");
+  });
+
+  it("scenarioGate 的 empty/truncated 判定与聚合门禁一致（任一场景恶化则整体不通过）", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runRealToolAbReplay();
+    const allScenarioPass = comparison.scenarios.every((s) => s.scenarioGate.allFailingNotWorsened);
+    assert.equal(comparison.gate.scenarioGatesPassed, allScenarioPass, "scenarioGatesPassed 应等于逐场景全通过");
   });
 });
 

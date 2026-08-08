@@ -135,6 +135,8 @@ export interface BaselineScenarioMetrics {
   totalLatencyMs: number;
   avgLatencyMs: number;
   emptyResults: number;
+  /** 结果被系统 limit 截断的调用数（设计文档 §5.6） */
+  truncatedResults: number;
   timeouts: number;
   errors: number;
   evidenceLevels: Record<string, number>;
@@ -604,6 +606,7 @@ export async function runScenarioWithTools(
     totalLatencyMs,
     avgLatencyMs: callMetrics.length > 0 ? Math.round(totalLatencyMs / callMetrics.length) : 0,
     emptyResults: snap.emptyResults,
+    truncatedResults: callMetrics.filter((c) => c.truncated).length,
     timeouts: snap.timeouts,
     errors: snap.errors,
     evidenceLevels,

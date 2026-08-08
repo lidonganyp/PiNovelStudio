@@ -165,6 +165,8 @@ export interface RealToolAbTurn {
   empty: boolean;
   timeout: boolean;
   isError: boolean;
+  /** 结果是否被系统 limit 截断（设计文档 §5.6，失败行为门禁项） */
+  truncated: boolean;
   /** 按语义操作身份判定的重复查询 */
   duplicateQuery: boolean;
   /** 是否为本场景首次有效证据回合 */
@@ -201,6 +203,8 @@ export interface RealToolAbScenarioMetrics {
   parseErrors: number;
   firstValidEvidence: { callIndex: number; cumulativeLatencyMs: number } | null;
   emptyResults: number;
+  /** 结果被系统 limit 截断的调用数（设计文档 §5.6） */
+  truncatedResults: number;
   timeouts: number;
   errors: number;
   sourceRefsValid: number;
@@ -223,6 +227,21 @@ export interface RealToolAbPair {
   category: string;
   A: RealToolAbScenarioMetrics[];
   B: RealToolAbScenarioMetrics[];
+  /** 逐场景失败行为门禁（empty/truncated/errors/timeouts/非法工具/解析失败不恶化） */
+  scenarioGate: RealToolAbScenarioGate;
+}
+
+/** 逐场景失败行为门禁：B 组失败行为不劣于 A 组（跨 seed 求和后逐项比较） */
+export interface RealToolAbScenarioGate {
+  scenarioId: string;
+  emptyResultsNotWorsened: boolean;
+  truncatedNotWorsened: boolean;
+  errorsNotWorsened: boolean;
+  timeoutsNotWorsened: boolean;
+  invalidToolSelectionsNotWorsened: boolean;
+  parseErrorsNotWorsened: boolean;
+  allFailingNotWorsened: boolean;
+  details: Record<string, string>;
 }
 
 /** 单 arm 跨场景聚合 */
@@ -237,6 +256,8 @@ export interface RealToolAbArmAggregation {
   invalidIntents: number;
   parseErrors: number;
   emptyResults: number;
+  /** 结果被系统 limit 截断的调用数（设计文档 §5.6） */
+  truncatedResults: number;
   timeouts: number;
   errors: number;
   sourceRefsValid: number;
@@ -265,10 +286,16 @@ export interface RealToolAbGate {
   errorsNotWorsened: boolean;
   /** 超时（timeout）不恶化 */
   timeoutsNotWorsened: boolean;
+  /** 空结果（emptyResults）不恶化（设计文档 §5.6） */
+  emptyResultsNotWorsened: boolean;
+  /** 结果截断（truncatedResults）不恶化（设计文档 §5.6） */
+  truncatedNotWorsened: boolean;
   /** 非法工具选择（invalidToolSelections）不恶化 */
   invalidToolSelectionsNotWorsened: boolean;
   /** 解析失败（parseErrors）不恶化 */
   parseErrorsNotWorsened: boolean;
+  /** 逐场景失败行为门禁全部通过（每场景 empty/truncated/errors/timeouts/非法工具/解析失败不恶化） */
+  scenarioGatesPassed: boolean;
   burdenImproved: boolean;
   improvedBurdenMetrics: string[];
   allPassed: boolean;
@@ -646,6 +673,7 @@ export async function runRealToolAbScenario(options: {
           empty: true,
           timeout: true,
           isError: true,
+          truncated: false,
           duplicateQuery: false,
           firstValidEvidence: false,
           resultText: msg,
@@ -676,6 +704,7 @@ export async function runRealToolAbScenario(options: {
           empty: false,
           timeout: false,
           isError: false,
+          truncated: false,
           duplicateQuery: false,
           firstValidEvidence: false,
           resultText: decision.text,
@@ -725,12 +754,13 @@ export async function runRealToolAbScenario(options: {
       const resultChars = resultText.length;
       const estimateTokens = Math.ceil(resultChars / 2);
       const details = (result as { details?: unknown } | undefined)?.details as
-        | (Record<string, unknown> & { evidenceLevel?: string; sourceRef?: string })
+        | (Record<string, unknown> & { evidenceLevel?: string; sourceRef?: string; truncated?: boolean })
         | undefined;
       const evidenceLevel = details?.evidenceLevel;
       const sourceRef = details?.sourceRef;
       const sourceRefValid = isValidSourceRef(sourceRef);
       const empty = resultChars === 0 && !isError;
+      const truncated = !isError && details?.truncated === true;
       const timeout = isError && /timeout|超时|aborted|timed out/i.test(resultText);
       const duplicateQuery = dupTracker.check(toolName, decision.arguments);
       const isFirstValid = !firstValidFound && !!evidenceLevel && VALID_EVIDENCE_LEVELS.has(evidenceLevel);
@@ -757,6 +787,7 @@ export async function runRealToolAbScenario(options: {
         empty,
         timeout,
         isError,
+        truncated,
         duplicateQuery,
         firstValidEvidence: isFirstValid,
         resultText,
@@ -844,6 +875,7 @@ function summarizeRealScenario(
   let invalidIntents = 0;
   let parseErrors = 0;
   let emptyResults = 0;
+  let truncatedResults = 0;
   let timeouts = 0;
   let errors = 0;
   let sourceRefsValid = 0;
@@ -869,6 +901,7 @@ function summarizeRealScenario(
     // parseErrors：工具指令 JSON 解析失败（malformed directive；独立于路由错误）。
     if (t.directiveParseError !== null) parseErrors++;
     if (t.empty) emptyResults++;
+    if (t.truncated) truncatedResults++;
     if (t.timeout) timeouts++;
     if (t.isError) errors++;
     if (t.sourceRefValid) sourceRefsValid++;
@@ -900,6 +933,7 @@ function summarizeRealScenario(
     parseErrors,
     firstValidEvidence,
     emptyResults,
+    truncatedResults,
     timeouts,
     errors,
     sourceRefsValid,
@@ -959,6 +993,7 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     invalidIntents: metrics.reduce((s, m) => s + m.invalidIntents, 0),
     parseErrors: metrics.reduce((s, m) => s + m.parseErrors, 0),
     emptyResults: metrics.reduce((s, m) => s + m.emptyResults, 0),
+    truncatedResults: metrics.reduce((s, m) => s + m.truncatedResults, 0),
     timeouts: metrics.reduce((s, m) => s + m.timeouts, 0),
     errors: metrics.reduce((s, m) => s + m.errors, 0),
     sourceRefsValid: metrics.reduce((s, m) => s + m.sourceRefsValid, 0),
@@ -975,8 +1010,12 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
   };
 }
 
-/** 门槛判定：mustVerify/sourceRef/无效分类/错误/超时/非法工具/解析失败逐项不降级 + 至少一项真实负担指标改善 */
-function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregation): RealToolAbGate {
+/** 门槛判定：mustVerify/sourceRef/无效分类/错误/超时/空结果/截断/非法工具/解析失败逐项不降级 + 至少一项真实负担指标改善 */
+function evaluateRealGate(
+  A: RealToolAbArmAggregation,
+  B: RealToolAbArmAggregation,
+  scenarioGates: RealToolAbScenarioGate[],
+): RealToolAbGate {
   const mustVerifyCoverageNotDegraded = B.avgCoverageRatio >= A.avgCoverageRatio - 1e-9;
   const sourceRefCompletenessNotDegraded = B.sourceRefCompleteness >= A.sourceRefCompleteness - 1e-9;
 
@@ -1000,11 +1039,16 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
     (lv) => ((B.evidenceLevelCounts[lv] ?? 0) / bCalls) >= ((A.evidenceLevelCounts[lv] ?? 0) / aCalls) - 1e-9,
   );
 
-  // 失败 / 超时 / 非法工具 / 解析失败逐项不恶化
+  // 失败 / 超时 / 空结果 / 截断 / 非法工具 / 解析失败逐项不恶化（设计文档 §5.6）
   const errorsNotWorsened = B.errors <= A.errors;
   const timeoutsNotWorsened = B.timeouts <= A.timeouts;
+  const emptyResultsNotWorsened = B.emptyResults <= A.emptyResults;
+  const truncatedNotWorsened = B.truncatedResults <= A.truncatedResults;
   const invalidToolSelectionsNotWorsened = B.invalidToolSelections <= A.invalidToolSelections;
   const parseErrorsNotWorsened = B.parseErrors <= A.parseErrors;
+
+  // 逐场景失败行为门禁：每个场景（A/B 跨 seed 求和）失败行为均不恶化
+  const scenarioGatesPassed = scenarioGates.every((sg) => sg.allFailingNotWorsened);
 
   // 负担改善项（至少一项）：schema token / 非法工具选择 / 首证延迟 / 重复查询
   const improvedBurdenMetrics: string[] = [];
@@ -1033,6 +1077,9 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
   const detailCats = categoryKeys
     .map((k) => `${k}:B=${B.invalidSourceRefByCategory[k]}/A=${A.invalidSourceRefByCategory[k]}`)
     .join("，");
+  const detailScenarioGates = scenarioGates
+    .map((sg) => `${sg.scenarioId}:${sg.allFailingNotWorsened ? "PASS" : "FAIL"}`)
+    .join("，");
 
   return {
     mustVerifyCoverageNotDegraded,
@@ -1042,8 +1089,11 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
     evidenceLevelNotDegraded,
     errorsNotWorsened,
     timeoutsNotWorsened,
+    emptyResultsNotWorsened,
+    truncatedNotWorsened,
     invalidToolSelectionsNotWorsened,
     parseErrorsNotWorsened,
+    scenarioGatesPassed,
     burdenImproved,
     improvedBurdenMetrics,
     allPassed:
@@ -1054,8 +1104,11 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
       evidenceLevelNotDegraded &&
       errorsNotWorsened &&
       timeoutsNotWorsened &&
+      emptyResultsNotWorsened &&
+      truncatedNotWorsened &&
       invalidToolSelectionsNotWorsened &&
       parseErrorsNotWorsened &&
+      scenarioGatesPassed &&
       burdenImproved,
     details: {
       mustVerifyCoverage: `B=${B.avgCoverageRatio.toFixed(3)} >= A=${A.avgCoverageRatio.toFixed(3)}`,
@@ -1065,6 +1118,9 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
       evidenceLevel: detailLevels,
       errors: `B=${B.errors} <= A=${A.errors}`,
       timeouts: `B=${B.timeouts} <= A=${A.timeouts}`,
+      emptyResults: `B=${B.emptyResults} <= A=${A.emptyResults}`,
+      truncated: `B=${B.truncatedResults} <= A=${A.truncatedResults}`,
+      scenarioGates: detailScenarioGates,
       invalidToolSelections: `B=${B.invalidToolSelections} <= A=${A.invalidToolSelections}`,
       parseErrors: `B=${B.parseErrors} <= A=${A.parseErrors}`,
       burdenImproved: `改善项：${improvedBurdenMetrics.join(", ") || "无"}`,
@@ -1082,6 +1138,51 @@ export const HIGH_SIGNAL_SCENARIO_IDS = ["SC1-canon-fact", "SC7-multi-tool-mixed
 /** 返回基线高信号场景列表（供 CLI --scenario 过滤/定向诊断）。 */
 export function getBaselineScenarios(): BaselineScenario[] {
   return BASELINE_SCENARIOS.filter((s) => HIGH_SIGNAL_SCENARIO_IDS.includes(s.id));
+}
+
+/** 逐场景失败行为门禁：A/B 各自跨 seed 求和后，逐项比较 empty/truncated/errors/timeouts/非法工具/解析失败不恶化 */
+function evaluateScenarioGate(pair: {
+  scenarioId: string;
+  A: RealToolAbScenarioMetrics[];
+  B: RealToolAbScenarioMetrics[];
+}): RealToolAbScenarioGate {
+  const sum = (list: RealToolAbScenarioMetrics[], k: keyof RealToolAbScenarioMetrics): number =>
+    list.reduce((s, m) => s + (typeof m[k] === "number" ? (m[k] as number) : 0), 0);
+  const sumA = (k: keyof RealToolAbScenarioMetrics) => sum(pair.A, k);
+  const sumB = (k: keyof RealToolAbScenarioMetrics) => sum(pair.B, k);
+
+  const emptyResultsNotWorsened = sumB("emptyResults") <= sumA("emptyResults");
+  const truncatedNotWorsened = sumB("truncatedResults") <= sumA("truncatedResults");
+  const errorsNotWorsened = sumB("errors") <= sumA("errors");
+  const timeoutsNotWorsened = sumB("timeouts") <= sumA("timeouts");
+  const invalidToolSelectionsNotWorsened = sumB("invalidToolSelections") <= sumA("invalidToolSelections");
+  const parseErrorsNotWorsened = sumB("parseErrors") <= sumA("parseErrors");
+  const allFailingNotWorsened =
+    emptyResultsNotWorsened &&
+    truncatedNotWorsened &&
+    errorsNotWorsened &&
+    timeoutsNotWorsened &&
+    invalidToolSelectionsNotWorsened &&
+    parseErrorsNotWorsened;
+
+  return {
+    scenarioId: pair.scenarioId,
+    emptyResultsNotWorsened,
+    truncatedNotWorsened,
+    errorsNotWorsened,
+    timeoutsNotWorsened,
+    invalidToolSelectionsNotWorsened,
+    parseErrorsNotWorsened,
+    allFailingNotWorsened,
+    details: {
+      emptyResults: `B=${sumB("emptyResults")} <= A=${sumA("emptyResults")}`,
+      truncated: `B=${sumB("truncatedResults")} <= A=${sumA("truncatedResults")}`,
+      errors: `B=${sumB("errors")} <= A=${sumA("errors")}`,
+      timeouts: `B=${sumB("timeouts")} <= A=${sumA("timeouts")}`,
+      invalidToolSelections: `B=${sumB("invalidToolSelections")} <= A=${sumA("invalidToolSelections")}`,
+      parseErrors: `B=${sumB("parseErrors")} <= A=${sumA("parseErrors")}`,
+    },
+  };
 }
 
 /**
@@ -1121,13 +1222,18 @@ export async function runRealToolAbReplay(options: {
       category: scenario.category,
       A: armMetrics.A,
       B: armMetrics.B,
+      scenarioGate: evaluateScenarioGate({
+        scenarioId: scenario.id,
+        A: armMetrics.A,
+        B: armMetrics.B,
+      }),
     });
   }
 
   // 跨全部场景 × 全部 seed 聚合（保证 3-seed 都参与门槛判定）
   const A = aggregateRealArm(pairs.flatMap((p) => p.A));
   const B = aggregateRealArm(pairs.flatMap((p) => p.B));
-  const gate = evaluateRealGate(A, B);
+  const gate = evaluateRealGate(A, B, pairs.map((p) => p.scenarioGate));
 
   return {
     schema: "tool-ab-real-comparison/v1",
@@ -1194,11 +1300,23 @@ export function formatRealToolAbMarkdown(comparison: RealToolAbComparison): stri
   lines.push(`| evidenceLevel 命中率不降级 | ${comparison.gate.evidenceLevelNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.evidenceLevel} |`);
   lines.push(`| 失败（errors）不恶化 | ${comparison.gate.errorsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.errors} |`);
   lines.push(`| 超时（timeouts）不恶化 | ${comparison.gate.timeoutsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.timeouts} |`);
+  lines.push(`| 空结果（empty）不恶化 | ${comparison.gate.emptyResultsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.emptyResults} |`);
+  lines.push(`| 结果截断（truncated）不恶化 | ${comparison.gate.truncatedNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.truncated} |`);
   lines.push(`| 非法工具选择不恶化 | ${comparison.gate.invalidToolSelectionsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.invalidToolSelections} |`);
   lines.push(`| 解析失败不恶化 | ${comparison.gate.parseErrorsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.parseErrors} |`);
+  lines.push(`| 逐场景失败门禁全通过 | ${comparison.gate.scenarioGatesPassed ? "✓" : "✗"} | ${comparison.gate.details.scenarioGates} |`);
   lines.push(`| 至少一项负担改善 | ${comparison.gate.burdenImproved ? "✓" : "✗"} | ${comparison.gate.details.burdenImproved} |`);
   lines.push("");
   lines.push(`**全部通过**：${comparison.gate.allPassed ? "是" : "否"}`);
+  lines.push("");
+  lines.push("## 逐场景失败行为门禁");
+  lines.push("");
+  lines.push("| 场景 | empty | truncated | errors | timeouts | 非法工具 | 解析失败 | 通过 |");
+  lines.push("|------|------|-----------|--------|----------|----------|----------|------|");
+  for (const p of comparison.scenarios) {
+    const g = p.scenarioGate;
+    lines.push(`| ${g.scenarioId} | ${g.emptyResultsNotWorsened ? "✓" : "✗"} | ${g.truncatedNotWorsened ? "✓" : "✗"} | ${g.errorsNotWorsened ? "✓" : "✗"} | ${g.timeoutsNotWorsened ? "✓" : "✗"} | ${g.invalidToolSelectionsNotWorsened ? "✓" : "✗"} | ${g.parseErrorsNotWorsened ? "✓" : "✗"} | ${g.allFailingNotWorsened ? "✓" : "✗"} |`);
+  }
   lines.push("");
   lines.push("## 聚合指标");
   lines.push("");
@@ -1216,6 +1334,7 @@ export function formatRealToolAbMarkdown(comparison: RealToolAbComparison): stri
   lines.push(`| 总返回字符 | ${agg.A.totalResultChars} | ${agg.B.totalResultChars} |`);
   lines.push(`| 估算 token | ${agg.A.totalEstimateTokens} | ${agg.B.totalEstimateTokens} |`);
   lines.push(`| 空结果 | ${agg.A.emptyResults} | ${agg.B.emptyResults} |`);
+  lines.push(`| 结果截断 | ${agg.A.truncatedResults} | ${agg.B.truncatedResults} |`);
   lines.push(`| 超时 | ${agg.A.timeouts} | ${agg.B.timeouts} |`);
   lines.push(`| 失败 | ${agg.A.errors} | ${agg.B.errors} |`);
   lines.push(`| 有效 sourceRef | ${agg.A.sourceRefsValid} | ${agg.B.sourceRefsValid} |`);

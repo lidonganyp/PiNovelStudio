@@ -146,10 +146,43 @@ describe("PHASE4-TOOL-AB-2：A/B replay 与门禁", () => {
     );
   });
 
-  it("失败行为不退化：errors/timeouts/empty B <= A", async () => {
+  it("失败行为不退化：errors/timeouts/empty/truncated B <= A", async () => {
     const runner = await importRunner();
     const comparison = await runner.runToolAbReplay();
     assert.ok(comparison.gate.failureNotDegraded, "失败行为不应退化");
+    // 显式门禁字段：empty/truncated 明确纳入 allPassed（设计文档 §5.6/§7）
+    assert.equal(typeof comparison.gate.emptyResultsNotWorsened, "boolean", "gate 应含 emptyResultsNotWorsened");
+    assert.equal(typeof comparison.gate.truncatedNotWorsened, "boolean", "gate 应含 truncatedNotWorsened");
+    // 聚合层暴露 truncated 计数
+    assert.equal(typeof comparison.aggregation.A.totalTruncatedResults, "number", "A 聚合应含 totalTruncatedResults");
+    assert.equal(typeof comparison.aggregation.B.totalTruncatedResults, "number", "B 聚合应含 totalTruncatedResults");
+    assert.ok(comparison.gate.emptyResultsNotWorsened, "空结果不应恶化");
+    assert.ok(comparison.gate.truncatedNotWorsened, "截断不应恶化");
+  });
+
+  it("逐场景失败行为门禁：每场景 empty/truncated/errors/timeouts 不恶化", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runToolAbReplay();
+    assert.equal(comparison.scenarios.length, 7, "确定性 runner 应含全部 7 场景");
+    for (const s of comparison.scenarios) {
+      assert.ok(s.scenarioGate, `场景 ${s.scenarioId} 应有 scenarioGate`);
+      const sg = s.scenarioGate;
+      for (const key of [
+        "emptyResultsNotWorsened",
+        "truncatedNotWorsened",
+        "errorsNotWorsened",
+        "timeoutsNotWorsened",
+        "allFailingNotWorsened",
+      ]) {
+        assert.equal(typeof sg[key], "boolean", `场景 ${s.scenarioId} scenarioGate.${key} 应为布尔`);
+      }
+      assert.ok(sg.details, `场景 ${s.scenarioId} scenarioGate 应含 details`);
+    }
+    // 聚合 allPassed 要求逐场景失败门禁全通过
+    assert.equal(typeof comparison.gate.scenarioGatesPassed, "boolean", "gate 应含 scenarioGatesPassed");
+    const allScenarioPass = comparison.scenarios.every((s) => s.scenarioGate.allFailingNotWorsened);
+    assert.equal(comparison.gate.scenarioGatesPassed, allScenarioPass, "scenarioGatesPassed 应等于逐场景全通过");
+    assert.ok(comparison.gate.scenarioGatesPassed, "逐场景失败门禁应全通过");
   });
 
   it("全部门禁通过", async () => {

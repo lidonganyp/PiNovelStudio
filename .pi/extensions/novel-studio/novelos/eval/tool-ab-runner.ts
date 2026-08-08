@@ -78,6 +78,19 @@ export interface ToolAbScenarioMetrics {
     A: FirstEvidencePoint | null;
     B: FirstEvidencePoint | null;
   };
+  /** 逐场景失败行为门禁：B 组失败行为（空结果/截断/错误/超时）不劣于 A 组（设计文档 §5.6/§7） */
+  scenarioGate: ToolAbScenarioGate;
+}
+
+/** 逐场景失败行为门禁：B 组失败行为不劣于 A 组（设计文档 §5.6） */
+export interface ToolAbScenarioGate {
+  scenarioId: string;
+  emptyResultsNotWorsened: boolean;
+  truncatedNotWorsened: boolean;
+  errorsNotWorsened: boolean;
+  timeoutsNotWorsened: boolean;
+  allFailingNotWorsened: boolean;
+  details: Record<string, string>;
 }
 
 /** 单组聚合指标 */
@@ -88,6 +101,8 @@ export interface ToolAbArmAggregation {
   totalResultChars: number;
   totalEstimateTokens: number;
   totalEmptyResults: number;
+  /** 结果被系统 limit 截断的调用数（设计文档 §5.6） */
+  totalTruncatedResults: number;
   totalTimeouts: number;
   totalErrors: number;
   sourceRefsValid: number;
@@ -106,6 +121,12 @@ export interface ToolAbGate {
   sourceRefCompletenessNotDegraded: boolean;
   burdenReduced: boolean;
   failureNotDegraded: boolean;
+  /** 空结果（emptyResults）不恶化（设计文档 §5.6） */
+  emptyResultsNotWorsened: boolean;
+  /** 结果截断（truncatedResults）不恶化（设计文档 §5.6） */
+  truncatedNotWorsened: boolean;
+  /** 逐场景失败行为门禁全部通过（每场景空结果/截断/错误/超时不恶化） */
+  scenarioGatesPassed: boolean;
   allPassed: boolean;
   details: Record<string, string>;
 }
@@ -178,6 +199,7 @@ function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregatio
   let totalResultChars = 0;
   let totalEstimateTokens = 0;
   let totalEmptyResults = 0;
+  let totalTruncatedResults = 0;
   let totalTimeouts = 0;
   let totalErrors = 0;
   let sourceRefsValid = 0;
@@ -197,6 +219,7 @@ function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregatio
     totalResultChars += s.totalResultChars;
     totalEstimateTokens += s.calls.reduce((sum, c) => sum + (c.estimateTokens ?? 0), 0);
     totalEmptyResults += s.emptyResults;
+    totalTruncatedResults += s.truncatedResults;
     totalTimeouts += s.timeouts;
     totalErrors += s.errors;
     sourceRefsValid += s.sourceRefsValid;
@@ -221,6 +244,7 @@ function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregatio
     totalResultChars,
     totalEstimateTokens,
     totalEmptyResults,
+    totalTruncatedResults,
     totalTimeouts,
     totalErrors,
     sourceRefsValid,
@@ -235,31 +259,49 @@ function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregatio
 // 门禁
 // ============================================================================
 
-function evaluateGate(A: ToolAbArmAggregation, B: ToolAbArmAggregation): ToolAbGate {
+function evaluateGate(
+  A: ToolAbArmAggregation,
+  B: ToolAbArmAggregation,
+  scenarioGates: ToolAbScenarioGate[],
+): ToolAbGate {
   const mustVerifyCoverageNotDegraded = B.avgCoverageRatio >= A.avgCoverageRatio - 1e-9;
   const sourceRefCompletenessNotDegraded = B.sourceRefCompleteness >= A.sourceRefCompleteness - 1e-9;
   // 负担更优：工具面至少显著减少（9→1）；其余负担指标记录但不强制要求（facade 纯透传，结果 token 与 A 相同）
   const burdenReduced = B.toolSurface < A.toolSurface;
+  // 失败行为逐项不恶化（设计文档 §5.6/§7）：错误/超时/空结果/截断
+  const errorsNotWorsened = B.totalErrors <= A.totalErrors;
+  const timeoutsNotWorsened = B.totalTimeouts <= A.totalTimeouts;
+  const emptyResultsNotWorsened = B.totalEmptyResults <= A.totalEmptyResults;
+  const truncatedNotWorsened = B.totalTruncatedResults <= A.totalTruncatedResults;
   const failureNotDegraded =
-    B.totalErrors <= A.totalErrors &&
-    B.totalTimeouts <= A.totalTimeouts &&
-    B.totalEmptyResults <= A.totalEmptyResults;
+    errorsNotWorsened && timeoutsNotWorsened && emptyResultsNotWorsened && truncatedNotWorsened;
+  // 逐场景失败行为门禁：每个场景（A/B 直接执行面）失败行为均不恶化
+  const scenarioGatesPassed = scenarioGates.every((sg) => sg.allFailingNotWorsened);
 
   return {
     mustVerifyCoverageNotDegraded,
     sourceRefCompletenessNotDegraded,
     burdenReduced,
     failureNotDegraded,
+    emptyResultsNotWorsened,
+    truncatedNotWorsened,
+    scenarioGatesPassed,
     allPassed:
       mustVerifyCoverageNotDegraded &&
       sourceRefCompletenessNotDegraded &&
       burdenReduced &&
-      failureNotDegraded,
+      failureNotDegraded &&
+      scenarioGatesPassed,
     details: {
       mustVerifyCoverage: `B=${B.avgCoverageRatio.toFixed(3)} >= A=${A.avgCoverageRatio.toFixed(3)}`,
       sourceRefCompleteness: `B=${B.sourceRefCompleteness.toFixed(3)} >= A=${A.sourceRefCompleteness.toFixed(3)}`,
       burdenReduced: `B.toolSurface=${B.toolSurface} < A.toolSurface=${A.toolSurface}`,
-      failureNotDegraded: `errors B=${B.totalErrors}<=A=${A.totalErrors}, timeouts B=${B.totalTimeouts}<=A=${A.totalTimeouts}, empty B=${B.totalEmptyResults}<=A=${A.totalEmptyResults}`,
+      failureNotDegraded: `errors B=${B.totalErrors}<=A=${A.totalErrors}, timeouts B=${B.totalTimeouts}<=A=${A.totalTimeouts}, empty B=${B.totalEmptyResults}<=A=${A.totalEmptyResults}, truncated B=${B.totalTruncatedResults}<=A=${A.totalTruncatedResults}`,
+      emptyResultsNotWorsened: `B=${B.totalEmptyResults} <= A=${A.totalEmptyResults}`,
+      truncatedNotWorsened: `B=${B.totalTruncatedResults} <= A=${A.totalTruncatedResults}`,
+      scenarioGates: scenarioGates
+        .map((sg) => `${sg.scenarioId}:${sg.allFailingNotWorsened ? "PASS" : "FAIL"}`)
+        .join("，"),
     },
   };
 }
@@ -267,6 +309,35 @@ function evaluateGate(A: ToolAbArmAggregation, B: ToolAbArmAggregation): ToolAbG
 // ============================================================================
 // 主入口
 // ============================================================================
+
+/** 逐场景失败行为门禁：B 组失败行为（空结果/截断/错误/超时）不劣于 A 组（设计文档 §5.6） */
+function evaluateToolAbScenarioGate(
+  scenarioId: string,
+  A: BaselineScenarioMetrics,
+  B: BaselineScenarioMetrics,
+): ToolAbScenarioGate {
+  const emptyResultsNotWorsened = B.emptyResults <= A.emptyResults;
+  const truncatedNotWorsened = B.truncatedResults <= A.truncatedResults;
+  const errorsNotWorsened = B.errors <= A.errors;
+  const timeoutsNotWorsened = B.timeouts <= A.timeouts;
+  const allFailingNotWorsened =
+    emptyResultsNotWorsened && truncatedNotWorsened && errorsNotWorsened && timeoutsNotWorsened;
+
+  return {
+    scenarioId,
+    emptyResultsNotWorsened,
+    truncatedNotWorsened,
+    errorsNotWorsened,
+    timeoutsNotWorsened,
+    allFailingNotWorsened,
+    details: {
+      emptyResults: `B=${B.emptyResults} <= A=${A.emptyResults}`,
+      truncated: `B=${B.truncatedResults} <= A=${A.truncatedResults}`,
+      errors: `B=${B.errors} <= A=${A.errors}`,
+      timeouts: `B=${B.timeouts} <= A=${A.timeouts}`,
+    },
+  };
+}
 
 /**
  * 运行 A/B 确定性 replay（stub/直接驱动工具，零模型调用）。
@@ -297,6 +368,7 @@ export async function runToolAbReplay(
         A: computeFirstValidEvidence(metricsA),
         B: computeFirstValidEvidence(scenarioB),
       },
+      scenarioGate: evaluateToolAbScenarioGate(scenario.id, metricsA, scenarioB),
     });
   }
 
@@ -304,7 +376,7 @@ export async function runToolAbReplay(
     A: aggregateArm(perScenario.map((s) => s.A)),
     B: aggregateArm(perScenario.map((s) => s.B)),
   };
-  const gate = evaluateGate(aggregation.A, aggregation.B);
+  const gate = evaluateGate(aggregation.A, aggregation.B, perScenario.map((s) => s.scenarioGate));
 
   return {
     schema: "tool-ab-comparison/v1",
@@ -340,8 +412,20 @@ export function formatToolAbMarkdown(comparison: ToolAbComparison): string {
   lines.push(`| 有效证据引用率不降级 | ${comparison.gate.sourceRefCompletenessNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.sourceRefCompleteness} |`);
   lines.push(`| 负担更优（工具面减少） | ${comparison.gate.burdenReduced ? "✓" : "✗"} | ${comparison.gate.details.burdenReduced} |`);
   lines.push(`| 失败行为不退化 | ${comparison.gate.failureNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.failureNotDegraded} |`);
+  lines.push(`| 空结果不恶化 | ${comparison.gate.emptyResultsNotWorsened ? "✓" : "✗"} | B=${comparison.gate.details.emptyResultsNotWorsened} |`);
+  lines.push(`| 结果截断不恶化 | ${comparison.gate.truncatedNotWorsened ? "✓" : "✗"} | B=${comparison.gate.details.truncatedNotWorsened} |`);
+  lines.push(`| 逐场景失败门禁全通过 | ${comparison.gate.scenarioGatesPassed ? "✓" : "✗"} | ${comparison.gate.details.scenarioGates} |`);
   lines.push("");
   lines.push(`**全部通过**：${comparison.gate.allPassed ? "是" : "否"}`);
+  lines.push("");
+  lines.push("## 逐场景失败行为门禁");
+  lines.push("");
+  lines.push("| 场景 | empty | truncated | errors | timeouts | 通过 |");
+  lines.push("|------|-------|-----------|--------|----------|------|");
+  for (const s of comparison.scenarios) {
+    const g = s.scenarioGate;
+    lines.push(`| ${g.scenarioId} | ${g.emptyResultsNotWorsened ? "✓" : "✗"} | ${g.truncatedNotWorsened ? "✓" : "✗"} | ${g.errorsNotWorsened ? "✓" : "✗"} | ${g.timeoutsNotWorsened ? "✓" : "✗"} | ${g.allFailingNotWorsened ? "✓" : "✗"} |`);
+  }
   lines.push("");
   lines.push("## 聚合指标");
   lines.push("");
@@ -354,6 +438,7 @@ export function formatToolAbMarkdown(comparison: ToolAbComparison): string {
   lines.push(`| 总返回字符 | ${agg.A.totalResultChars} | ${agg.B.totalResultChars} |`);
   lines.push(`| 估算 token | ${agg.A.totalEstimateTokens} | ${agg.B.totalEstimateTokens} |`);
   lines.push(`| 空结果 | ${agg.A.totalEmptyResults} | ${agg.B.totalEmptyResults} |`);
+  lines.push(`| 结果截断 | ${agg.A.totalTruncatedResults} | ${agg.B.totalTruncatedResults} |`);
   lines.push(`| 超时 | ${agg.A.totalTimeouts} | ${agg.B.totalTimeouts} |`);
   lines.push(`| 失败 | ${agg.A.totalErrors} | ${agg.B.totalErrors} |`);
   lines.push(`| 有效 sourceRef | ${agg.A.sourceRefsValid} | ${agg.B.sourceRefsValid} |`);
@@ -389,6 +474,7 @@ export function formatToolAbMarkdown(comparison: ToolAbComparison): string {
     lines.push(`| 实际调用 | ${s.A.actualCalls} | ${s.B.actualCalls} |`);
     lines.push(`| 重复查询 | ${s.A.duplicateQueries} | ${s.B.duplicateQueries} |`);
     lines.push(`| 空结果 | ${s.A.emptyResults} | ${s.B.emptyResults} |`);
+    lines.push(`| 结果截断 | ${s.A.truncatedResults} | ${s.B.truncatedResults} |`);
     lines.push(`| 失败 | ${s.A.errors} | ${s.B.errors} |`);
     lines.push("");
   }
