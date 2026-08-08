@@ -49,6 +49,12 @@ import {
   SINGLE_CHAPTER_HARD_BUDGET,
 } from "./canary-metrics.mjs";
 
+// Phase 5.1：Bounded-canary 完成态 trace 适配器。
+// 把真实运行结果（CanaryChapterResult[] + toolMode）适配为可被
+// `evolution-cli canary --complete` 消费的完成态 CanaryRunTrace，
+// 补齐 toolMode / 模型指纹 / 失败指标三项证据。
+import { buildCompletionTrace } from "./completion-trace-adapter.mjs";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const SCRIPT_DIR = __dirname;
@@ -73,6 +79,16 @@ function parseArgs(argv) {
     recoverBlockedRaw: false,
     outputDir: null,
     jobId: null,
+    // Phase 5.1 bounded-canary：受控接入工具模式与完成态 trace 绑定证据。
+    toolMode: "auto",          // "auto" | "standard" | "facade"
+    releaseId: null,
+    sourceRunId: null,
+    authorizationId: null,
+    environmentFingerprint: null,
+    approvalRef: null,
+    changeClass: "R2",
+    strategy: "bounded_canary",
+    complete: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
@@ -127,6 +143,42 @@ function parseArgs(argv) {
         args.jobId = next;
         i++;
         break;
+      // Phase 5.1 bounded-canary 标志
+      case "--tool-mode":
+        args.toolMode = next;
+        i++;
+        break;
+      case "--release-id":
+        args.releaseId = next;
+        i++;
+        break;
+      case "--source-run-id":
+        args.sourceRunId = next;
+        i++;
+        break;
+      case "--authorization-id":
+        args.authorizationId = next;
+        i++;
+        break;
+      case "--environment-fingerprint":
+        args.environmentFingerprint = next;
+        i++;
+        break;
+      case "--approval-ref":
+        args.approvalRef = next;
+        i++;
+        break;
+      case "--change-class":
+        args.changeClass = next;
+        i++;
+        break;
+      case "--strategy":
+        args.strategy = next;
+        i++;
+        break;
+      case "--complete":
+        args.complete = true;
+        break;
       case "--help":
       case "-h":
         printHelp();
@@ -139,6 +191,15 @@ function parseArgs(argv) {
   }
   if (args.end < args.start) {
     args.end = args.start;
+  }
+  if (!["auto", "standard", "facade"].includes(args.toolMode)) {
+    throw new Error(`--tool-mode 非法：${args.toolMode}（仅允许 auto|standard|facade）`);
+  }
+  if (!["bounded_canary", "shadow_required"].includes(args.strategy)) {
+    throw new Error(`--strategy 非法：${args.strategy}（仅允许 bounded_canary|shadow_required）`);
+  }
+  if (!["R1", "R2", "R3"].includes(args.changeClass)) {
+    throw new Error(`--change-class 非法：${args.changeClass}（仅允许 R1|R2|R3）`);
   }
   return args;
 }
@@ -165,9 +226,28 @@ function printHelp() {
   --job-id <id>               自定义 runId（默认 canary-YYYYMMDD-HHMMSS）
   --help, -h                  显示本帮助
 
+Phase 5.1 bounded-canary 选项（受控接入）:
+  --tool-mode <mode>          "auto" | "standard" | "facade"（默认 auto）
+                              auto：按 workspace canary 授权解析（facade 授权才启用）
+                              facade：强制受控 under facade（fail-closed，未授权即拒绝运行）
+                              standard：强制 9 专用工具（非全量切换）
+  --release-id <id>           目标 release ID（--complete 用）
+  --source-run-id <id>        先前 canary_started/shadow trace runId（--complete 绑定）
+  --authorization-id <id>     workspace canary 授权 ID（--complete 绑定校验）
+  --environment-fingerprint   release 环境指纹（--complete 绑定）
+  --approval-ref <ref>        审批 artifact 引用（--complete 绑定）
+  --change-class <cls>        R1|R2|R3（默认 R2）
+  --strategy <s>              bounded_canary|shadow_required（默认 bounded_canary）
+  --complete                  产出 completion-trace.json（补齐 toolMode/模型指纹/失败指标证据）
+
 示例:
   # stub 模式快速验证（不调用真实模型）
   node scripts/canary/chapter-canary-runner.mjs --workspace xinmo --start 17 --end 19 --seed 1
+
+  # 隔离 workspace bounded canary（facade 受控，产出完成态 trace）
+  node scripts/canary/chapter-canary-runner.mjs \\
+    --workspace <ws> --start 1 --end 2 --seed 1 \\
+    --tool-mode facade --complete --release-id rel-1 --source-run-id shadow-1 --authorization-id auth-1
 
   # 真实模型 20-30 章 canary
   node scripts/canary/chapter-canary-runner.mjs \\
@@ -183,7 +263,8 @@ function printHelp() {
     ├── report.md
     ├── anonymized-results.json
     ├── blind-eval-pairs.json
-    └── run-metadata.json
+    ├── run-metadata.json
+    └── completion-trace.json           （--complete 时产出）
 `);
 }
 
@@ -212,6 +293,8 @@ async function main() {
   const outputDir = args.outputDir || join(REPORT_DIR, runId);
   const perChapterDir = join(outputDir, "per-chapter");
   mkdirSync(perChapterDir, { recursive: true });
+  // Phase 5.1：bounded-canary 授权解析需要项目根目录。
+  args.projectRoot = REPO_ROOT;
 
   // 收集 git HEAD
   let gitHead = null;
@@ -293,6 +376,45 @@ async function main() {
     process.exit(2);
   }
 
+  // Phase 5.1 bounded-canary：
+  // 动态加载生产闭包中的 fail-closed 授权解析器（与 unified-entry 同源），
+  // 用于把请求的 toolMode 解析为实际暴露模式，并做 bounded 保证。
+  // 解析器不可用（dist 未含该模块）时视为无法确认 facade 授权 → fail-closed 走 standard。
+  let resolveToolModeFromCanaryAuthorization = null;
+  try {
+    const resolverMod = await import(
+      pathToFileURL(
+        resolve(EXT_ROOT, "dist/v2/governance/resolve-tool-mode-from-canary-authorization.js"),
+      ).href,
+    );
+    resolveToolModeFromCanaryAuthorization =
+      resolverMod.resolveToolModeFromCanaryAuthorization ?? null;
+  } catch {
+    resolveToolModeFromCanaryAuthorization = null;
+  }
+
+  // 解析每个 workspace 的有效 toolMode（fail-closed）。
+  // 关键：--complete 是单 workspace bounded canary，强制单 workspace。
+  if (args.complete && args.workspaces.length !== 1) {
+    process.stderr.write(
+      `[Canary] --complete 仅支持单 workspace bounded canary（当前 ${args.workspaces.length} 个）\n`,
+    );
+    process.exit(2);
+  }
+  /** @type {Record<string, "standard"|"facade">} */
+  const effectiveToolModes = {};
+  for (const workspaceId of args.workspaces) {
+    effectiveToolModes[workspaceId] = resolveEffectiveToolMode(
+      workspaceId,
+      args.toolMode,
+      args,
+      resolveToolModeFromCanaryAuthorization,
+    );
+    console.log(
+      `[Canary] toolMode(${workspaceId}) = ${effectiveToolModes[workspaceId]}${args.toolMode === "facade" ? "（bounded 受控，fail-closed 已确认授权）" : ""}`,
+    );
+  }
+
   // 运行所有 (workspace × chapter × seed) 组合
   /** @type {import("./canary-metrics.mjs").CanaryChapterResult[]} */
   const results = [];
@@ -363,6 +485,8 @@ async function main() {
           }
 
           results.push(result);
+          // Phase 5.1：记录本章实际暴露的叙事工具模式（bounded canary 证据）。
+          result.toolMode = effectiveToolModes[workspaceId];
           const icon = result.status === "ok" ? "✅" : result.status === "blocked" ? "🚫" : "❌";
           console.log(`[Canary]   ${icon} ${result.status} / ${result.outcomeType} / ${result.modelCalls.length} calls / ${durationMs}ms`);
 
@@ -400,6 +524,7 @@ async function main() {
             recoverySucceeded: false,
             warnings: [],
             modelVersion: "unknown",
+            toolMode: effectiveToolModes[workspaceId],
           };
           results.push(errorResult);
           const resultFile = join(perChapterDir, `${workspaceId}-ch${ch}-seed${seed}.json`);
@@ -456,6 +581,8 @@ async function main() {
     totalSkipped: skipped,
     modelVersion: results[0]?.modelVersion ?? "unknown",
     singleChapterSoftBudget: SINGLE_CHAPTER_HARD_BUDGET,
+    // Phase 5.1：每个 workspace 实际暴露的叙事工具模式（bounded canary 证据）。
+    toolModes: effectiveToolModes,
     blindEval: {
       pairs: blindPairs.length,
       okChapters: okCount,
@@ -463,6 +590,45 @@ async function main() {
       skippedReasons: blindSkipped,
     },
   };
+
+  // Phase 5.1：完成态 trace 证据（--complete 时产出）。
+  // 用 completion-trace-adapter 把真实运行结果适配为可被 evolution-cli canary --complete
+  // 消费的完成态 CanaryRunTrace，补齐 toolMode / 模型指纹 / 失败指标三项证据。
+  let completionTrace = null;
+  if (args.complete) {
+    const wsId = args.workspaces[0];
+    const wsPath = join(REPO_ROOT, "workspaces", wsId);
+    completionTrace = buildCompletionTrace({
+      runId: `${runId}-complete`,
+      sourceRunId: args.sourceRunId ?? runId,
+      releaseId: args.releaseId ?? `phase5-${wsId}-${runId}`,
+      previousReleaseId: null,
+      workspaceId: wsId,
+      workspacePath: wsPath,
+      toolMode: effectiveToolModes[wsId],
+      authorizationId: args.authorizationId ?? `auth-${wsId}`,
+      environmentFingerprint: args.environmentFingerprint ?? "unknown",
+      approvalRef: args.approvalRef ?? `approval-${runId}`,
+      startedAt,
+      completedAt: finishedAt,
+      changeClass: args.changeClass,
+      currentStatus: "evaluated",
+      strategy: args.strategy,
+      results,
+      healthSnapshot: {
+        status: args.strategy === "bounded_canary" ? "healthy" : "warning",
+        alignmentRate: 0,
+        sampleCount: results.length,
+        rollbackRate: 0,
+        consecutiveNegative: 0,
+      },
+    });
+    writeFileSync(
+      join(outputDir, "completion-trace.json"),
+      JSON.stringify(completionTrace, null, 2),
+      "utf8",
+    );
+  }
 
   // 生成报告
   const report = generateCanaryReport({
@@ -490,6 +656,12 @@ async function main() {
   console.log(`[Canary] Blind eval pairs: ${blindPairs.length}${blindSkipped.length > 0 ? ` (skipped ${blindSkipped.length}/${okCount})` : ""}`);
   console.log(`[Canary] Output: ${outputDir}`);
   console.log(`[Canary] Report: ${join(outputDir, "report.md")}`);
+  if (args.complete && completionTrace) {
+    console.log(`[Canary] Completion trace: ${join(outputDir, "completion-trace.json")}`);
+    console.log(`[Canary]   toolMode=${completionTrace.evidence.toolMode} verdict=${completionTrace.evidence.verdict} observedChapters=${completionTrace.evidence.observedChapters} observedCalls=${completionTrace.evidence.observedCalls}`);
+    console.log(`[Canary]   modelFingerprint.detectedModel=${completionTrace.evidence.modelFingerprint?.detectedModel} modelCalls=${completionTrace.evidence.modelFingerprint?.modelCalls}`);
+    console.log(`[Canary]   failureMetrics: empty=${completionTrace.evidence.failureMetrics?.empty} truncated=${completionTrace.evidence.failureMetrics?.truncated} error=${completionTrace.evidence.failureMetrics?.error} timeout=${completionTrace.evidence.failureMetrics?.timeout} blockRate=${completionTrace.evidence.failureMetrics?.blockRate}`);
+  }
 
   // 退出码：多维度验收门槛（P1-2 修复：不仅检查阻断率，还检查恢复率、trace 留存率、未知失败）
   // 0. 零结果 → 失败（P1 第四轮：canary 未产生任何结果时不能通过验收）
@@ -551,6 +723,45 @@ async function main() {
     console.log(`[Canary] ✅ canary 验收通过：阻断率 ≤ 50%、trace 留存 100%、未知失败 0、恢复率 ≥ 85%`);
   }
   process.exit(exitCode);
+}
+
+// ============================================================================
+// Phase 5.1 bounded-canary toolMode 解析
+// ============================================================================
+
+/**
+ * 解析 workspace 的有效叙事工具暴露模式（bounded canary 受控接入）。
+ *
+ * fail-closed 语义：
+ *   - requestedMode="standard"        → 恒返回 "standard"（9 专用工具，非全量切换）。
+ *   - requestedMode="facade"          → 仅当生产解析器确认该 workspace canary 授权
+ *     明确授予 "facade"（存在、未过期、schema 有效）才返回 "facade"；
+ *     否则抛错拒绝运行（bounded 保证：绝不在地图外跑 facade）。
+ *   - requestedMode="auto"（缺省）    → 按生产解析器决定：授权 facade 则 facade，否则 standard。
+ *   - 解析器不可用（dist 未含该模块）  → 视为无法确认 facade，一律 standard（fail-closed）。
+ *
+ * @param {string} workspaceId
+ * @param {"auto"|"standard"|"facade"} requestedMode
+ * @param {{ projectRoot: string, sourceRunId: string|null, releaseId: string|null, authorizationId: string|null }} args
+ * @param {Function|null} resolver — resolveToolModeFromCanaryAuthorization(projectRoot, workspaceId)
+ * @returns {"standard"|"facade"}
+ */
+function resolveEffectiveToolMode(workspaceId, requestedMode, args, resolver) {
+  if (requestedMode === "standard") return "standard";
+
+  // 生产解析器评估授权（解析器缺失 → 视为未授权 → fail-closed）
+  let granted = "standard";
+  if (resolver) {
+    granted = resolver(args.projectRoot, workspaceId) === "facade" ? "facade" : "standard";
+  }
+
+  if (requestedMode === "facade" && granted !== "facade") {
+    throw new Error(
+      `bounded canary fail-closed: workspace=${workspaceId} 请求 toolMode=facade，` +
+        `但 canary 授权未授予 facade（缺失/未声明/过期/损坏/schema 无效），拒绝在不受控暴露面下运行。`,
+    );
+  }
+  return granted;
 }
 
 // ============================================================================

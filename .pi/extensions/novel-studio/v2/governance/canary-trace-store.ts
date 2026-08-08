@@ -110,6 +110,45 @@ export interface CanaryRunTrace {
     resultArtifactRefs?: string[];
     /** resultArtifactRefs 对应的 SHA-256，防止完成后篡改。 */
     resultArtifactHashes?: Record<string, string>;
+    /**
+     * Phase 5.1：canary 实际暴露的叙事工具模式。
+     * 必须与 workspace 授权 toolMode 一致（"facade" 或 "standard"）。
+     * 用于证明这次 bounded canary 确实在受控暴露面下执行。
+     */
+    toolMode?: "standard" | "facade";
+    /**
+     * Phase 5.1：实际使用的模型指纹（模型版本隔离）。
+     * 记录检测到的模型版本 + 各 provider 调用分布，证明本次 canary 的模型证据可复现。
+     */
+    modelFingerprint?: {
+      /** 检测到的模型版本（detectModelVersion 结果，如 gemini31 / claude / stub） */
+      detectedModel: string;
+      /** provider → 调用次数分布 */
+      providers: Record<string, number>;
+      /** 模型调用总次数 */
+      modelCalls: number;
+    };
+    /**
+     * Phase 5.1：失败指标证据（empty/truncated/errors/timeouts 分桶）。
+     * 证明 canary 不是"只记录成功"——失败证据被显式捕获并冻结。
+     */
+    failureMetrics?: {
+      total: number;
+      /** 空文本失败数 */
+      empty: number;
+      /** 截断失败数 */
+      truncated: number;
+      /** 错误/异常数 */
+      error: number;
+      /** 超时失败数 */
+      timeout: number;
+      /** 阻断率（blocked+error）/ total */
+      blockRate: number;
+      /** 首次成功率 */
+      firstPassSuccessRate: number;
+      /** 恢复成功率（无恢复尝试时为 null） */
+      recoverySuccessRate: number | null;
+    };
   };
   /** 结果 */
   outcome: {

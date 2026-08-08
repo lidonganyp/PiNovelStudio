@@ -35,6 +35,26 @@
 - 新增 `tests/test-style-fingerprint.mjs` 共享测试夹具。
 - 9 个现有测试文件更新为使用 `TEST_STYLE_REFERENCES`（避免 preflight 阻断）。
 
+## Phase 5.1 受控 bounded-canary（2026-08-09）
+
+Phase 5 受控生产接入实现（"guided facade vs 9 工具" 的受控对照，非全量切换）。完成阶段保持默认 9 工具执行面，**未切换生产 active pointer**。
+
+### 新增能力
+- `scripts/canary/chapter-canary-runner.mjs`：新增 `--tool-mode / --release-id / --source-run-id / --authorization-id / --environment-fingerprint / --approval-ref / --change-class / --strategy / --complete`。`--complete` 产出 `completion-trace.json`（bounded-canary 完成态 trace）。
+- `scripts/canary/completion-trace-adapter.mjs`：把真实运行结果适配为完成态 `CanaryRunTrace`，补齐三项证据——`evidence.toolMode`、`evidence.modelFingerprint`（detectedModel + providers + modelCalls）、`evidence.failureMetrics`（empty/truncated/error/timeout + blockRate/firstPass/recovery），并冻结结果 artifact（`resultArtifactRefs` + SHA-256）。
+- `v2/governance/canary-trace-store.ts`：`CanaryRunTrace.evidence` schema 扩展 `toolMode / modelFingerprint / failureMetrics`。
+- fail-closed toolMode 解析：runner 与生产 `resolve-tool-mode-from-canary-authorization.ts` 同源；`--tool-mode facade` 仅当授权文件明确声明 `toolMode="facade"` 且未过期才运行，否则抛错拒绝（不在地图外跑 facade）。
+
+### 真实隔离 workspace replay（stub）
+- 隔离 workspace `workspaces/phase5-bounded-canary-ws` + `canary-authorization.json`（`toolMode=facade`）。
+- `--tool-mode facade --complete` 运行 ch1：`toolMode=facade`（fail-closed 已确认授权）、`verdict=pass`、`observedChapters=1`、`observedCalls=3`、`modelFingerprint.detectedModel=gemini31`、`failureMetrics: empty=0 truncated=1 error=0 timeout=0 blockRate=0`。
+- 产物：`reports/chapter-canary/phase5-1-bounded-canary/`（含 `completion-trace.json`）。
+
+### rollback drill（已通过）
+- 移除 `canary-authorization.json` 后：`resolveToolModeFromCanaryAuthorization` 返回 `undefined`（fail-closed → 默认 standard）；默认 narrative registry 保持 9 工具。
+- `--tool-mode facade` 重跑被 fail-closed 拒绝（exit 1）；`--tool-mode auto` 回落 `standard`（9 工具）正常生成。
+- 结论：授权是 facade 的唯一开关，删除即回退 9 专用工具；生产 active pointer 未切换。
+
 ## 当前架构
 
 - 章节生成只有 `novel_generate_chapter` 一个公开入口，生产运行时统一主链路为：`Preflight → ContextCompiler → ChapterIntent → NovelOS Agentic → FactGuard → 作者风格整章优化 → StoryPreservation → FinalFactRecheck → Completeness → StateCommit → AtomicSave`。
