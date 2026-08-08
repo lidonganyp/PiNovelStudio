@@ -37,6 +37,21 @@ export const VALID_EVIDENCE_LEVELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 证据等级强度排序（从强到弱）。
+ *
+ * 与 tool-protocol.ts EvidenceLevel 对齐：confirmed > confirmed_state > exact_chapter_span
+ * （inferred / profile_only 已不计入有效证据，故不在此列）。
+ *
+ * 用于 evidenceLevel 门禁的**累计强度比较**：更强的等级可替代/补齐较弱的等级，
+ * 因此按此顺序逐级累计命中数进行一阶随机占优比较，而不是逐等级独立比较。
+ */
+export const EVIDENCE_LEVEL_STRENGTH_ORDER: readonly string[] = [
+  "confirmed",
+  "confirmed_state",
+  "exact_chapter_span",
+];
+
+/**
  * 无效 sourceRef 黑名单（正则模式）。
  *
  * 表示"未找到证据"或"降级证据"的 sourceRef 模式。

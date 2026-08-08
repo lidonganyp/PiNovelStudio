@@ -320,6 +320,70 @@ describe("PHASE4-TOOL-AB-REAL-5：逐场景失败行为门禁", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 测试 6：evidenceLevel 累计强度比较（Phase 4.3 收口口径）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("PHASE4-TOOL-AB-REAL-6：evidenceLevel 累计强度比较", () => {
+  it("更强等级替代较弱等级应通过（B 的 confirmed_state 补齐 exact_chapter_span 缺口）", async () => {
+    const runner = await importRunner();
+    // 复现真实 replay 失败对：A 有 exact_chapter_span=0.059，B 无；但 B 的 confirmed_state=1.000 > A=0.824
+    const pass = runner.evidenceLevelsCumulativeNonDegraded(
+      { confirmed: 0, confirmed_state: 0.824 * 100, exact_chapter_span: 0.059 * 100 },
+      100,
+      { confirmed: 0, confirmed_state: 1.0 * 100, exact_chapter_span: 0 },
+      100,
+    );
+    assert.ok(pass, "更强的 confirmed_state 替代较弱的 exact_chapter_span 应判为不降级（通过）");
+  });
+
+  it("反向替代应失败（B 用更弱等级顶替更强等级）", async () => {
+    const runner = await importRunner();
+    // A 有大量 confirmed_state（强），B 只靠 exact_chapter_span（弱）补足总量 → 应失败
+    const fail = runner.evidenceLevelsCumulativeNonDegraded(
+      { confirmed: 0, confirmed_state: 100, exact_chapter_span: 0 },
+      100,
+      { confirmed: 0, confirmed_state: 0, exact_chapter_span: 100 },
+      100,
+    );
+    assert.equal(fail, false, "B 用更弱等级顶替更强等级应判为降级（失败）");
+  });
+
+  it("全等命中率应通过（无差异）", async () => {
+    const runner = await importRunner();
+    const equal = runner.evidenceLevelsCumulativeNonDegraded(
+      { confirmed: 10, confirmed_state: 20, exact_chapter_span: 30 },
+      100,
+      { confirmed: 10, confirmed_state: 20, exact_chapter_span: 30 },
+      100,
+    );
+    assert.ok(equal, "A/B 命中率全等应通过");
+  });
+
+  it("B 总量更高但最强等级缺口更大时应失败（累计占优非总量占优）", async () => {
+    const runner = await importRunner();
+    // A: confirmed=50（强）；B: confirmed=40 但 exact_chapter_span=100（总量更高）
+    const fail = runner.evidenceLevelsCumulativeNonDegraded(
+      { confirmed: 50, confirmed_state: 0, exact_chapter_span: 0 },
+      100,
+      { confirmed: 40, confirmed_state: 0, exact_chapter_span: 100 },
+      100,
+    );
+    assert.equal(fail, false, "B 在最强的 confirmed 累计阈值已低于 A，不能靠更弱等级总量补足");
+  });
+
+  it("B 在更强等级占优、全部累计阈值均不低于 A 时应通过", async () => {
+    const runner = await importRunner();
+    const pass = runner.evidenceLevelsCumulativeNonDegraded(
+      { confirmed: 30, confirmed_state: 30, exact_chapter_span: 30 },
+      100,
+      { confirmed: 35, confirmed_state: 30, exact_chapter_span: 25 },
+      100,
+    );
+    assert.ok(pass, "B 在每个累计阈值均不低于 A 时应通过");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 测试 4：报告 + trajectory
 // ─────────────────────────────────────────────────────────────────────────────
 

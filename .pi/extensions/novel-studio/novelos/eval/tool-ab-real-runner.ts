@@ -49,6 +49,7 @@ import {
   computeMustVerifyCoverage,
   isValidSourceRef,
   VALID_EVIDENCE_LEVELS,
+  EVIDENCE_LEVEL_STRENGTH_ORDER,
 } from "./uncertainty-recall-metrics.js";
 import { classifyInvalidSourceRef, type InvalidSourceRefCategory } from "./tool-ab-runner.js";
 import type { ToolProtocol } from "../tools/tool-protocol.js";
@@ -61,7 +62,7 @@ import type { ToolProtocol } from "../tools/tool-protocol.js";
 export const REAL_DONE_MARKER = "<done>";
 
 /** re-export：供测试引用有效证据等级集合做口径校验 */
-export { VALID_EVIDENCE_LEVELS } from "./uncertainty-recall-metrics.js";
+export { VALID_EVIDENCE_LEVELS, EVIDENCE_LEVEL_STRENGTH_ORDER } from "./uncertainty-recall-metrics.js";
 
 /**
  * 检索决策 system prompt 基底（runner 注入工具 schema 后发送给模型）。
@@ -1046,6 +1047,38 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
 }
 
 /** 门槛判定：mustVerify/sourceRef/无效分类/错误/超时/空结果/截断/非法工具/解析失败逐项不降级 + 至少一项真实负担指标改善 */
+
+/**
+ * 有效 evidenceLevel 累计强度比较（一阶随机占优）。
+ *
+ * 沿 EVIDENCE_LEVEL_STRENGTH_ORDER（从强到弱）逐级累计命中数，要求 B 在每个累计阈值上的
+ * 归一化累计命中率均不低于 A（容差 1e-9）。
+ *
+ * 口径修正意义：更强的等级可替代/补齐较弱的等级。例如 B 的 confirmed_state 命中率高于 A、
+ * 但 exact_chapter_span 低于 A 时，累计到 confirmed_state 阈值 B 已不低于 A，故不被判为退化；
+ * 反向（B 用更弱等级顶替更强等级，如 confirmed_state 缺口仅靠 exact_chapter_span 补足）会在
+ * 更早的累计阈值上低于 A 而正确失败。
+ */
+export function evidenceLevelsCumulativeNonDegraded(
+  countsA: Record<string, number>,
+  callsA: number,
+  countsB: Record<string, number>,
+  callsB: number,
+): boolean {
+  const aCalls = callsA || 1;
+  const bCalls = callsB || 1;
+  let cumA = 0;
+  let cumB = 0;
+  for (const lv of EVIDENCE_LEVEL_STRENGTH_ORDER) {
+    cumA += countsA[lv] ?? 0;
+    cumB += countsB[lv] ?? 0;
+    if (cumB / bCalls < cumA / aCalls - 1e-9) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function evaluateRealGate(
   A: RealToolAbArmAggregation,
   B: RealToolAbArmAggregation,
@@ -1065,13 +1098,15 @@ function evaluateRealGate(
     (k) => B.invalidSourceRefByCategory[k] <= A.invalidSourceRefByCategory[k],
   );
 
-  // 有效 evidenceLevel 逐级命中不降级：B 每个等级命中率（按各自调用次数归一）不显著低于 A。
-  // 用「命中数 / totalCalls」归一，避免 A/B 调用次数不同导致的绝对数量误判。
-  const levelKeys = new Set([...Object.keys(A.evidenceLevelCounts), ...Object.keys(B.evidenceLevelCounts)]);
-  const aCalls = A.totalCalls || 1;
-  const bCalls = B.totalCalls || 1;
-  const evidenceLevelNotDegraded = [...levelKeys].every(
-    (lv) => ((B.evidenceLevelCounts[lv] ?? 0) / bCalls) >= ((A.evidenceLevelCounts[lv] ?? 0) / aCalls) - 1e-9,
+  // 有效 evidenceLevel 累计强度不降级：按证据强度从强到弱累计命中数做一阶随机占优比较。
+  // 修正评测口径（Phase 4.3 收口）：逐等级独立比较会把「更强的 confirmed_state 替代较弱的
+  // exact_chapter_span」误判为退化。改用累计比较后，B 在每个累计阈值上的归一化累计命中数
+  // 均不低于 A 才通过；反向（用更弱等级顶替更强等级）仍会正确失败。
+  const evidenceLevelNotDegraded = evidenceLevelsCumulativeNonDegraded(
+    A.evidenceLevelCounts,
+    A.totalCalls,
+    B.evidenceLevelCounts,
+    B.totalCalls,
   );
 
   // 失败 / 超时 / 空结果 / 截断 / 非法工具 / 解析失败逐项不恶化（设计文档 §5.6）
@@ -1106,8 +1141,12 @@ function evaluateRealGate(
   }
   const burdenImproved = improvedBurdenMetrics.length > 0;
 
-  const detailLevels = levelKeys.size > 0
-    ? [...levelKeys].map((lv) => `${lv}:B=${((B.evidenceLevelCounts[lv] ?? 0) / bCalls).toFixed(3)}/A=${((A.evidenceLevelCounts[lv] ?? 0) / aCalls).toFixed(3)}`).join("，")
+  const aCalls = A.totalCalls || 1;
+  const bCalls = B.totalCalls || 1;
+  const detailLevels = EVIDENCE_LEVEL_STRENGTH_ORDER.length > 0
+    ? EVIDENCE_LEVEL_STRENGTH_ORDER.map(
+        (lv) => `${lv}:B=${((B.evidenceLevelCounts[lv] ?? 0) / bCalls).toFixed(3)}/A=${((A.evidenceLevelCounts[lv] ?? 0) / aCalls).toFixed(3)}`,
+      ).join("，")
     : "（无有效证据等级命中）";
   const detailCats = categoryKeys
     .map((k) => `${k}:B=${B.invalidSourceRefByCategory[k]}/A=${A.invalidSourceRefByCategory[k]}`)
