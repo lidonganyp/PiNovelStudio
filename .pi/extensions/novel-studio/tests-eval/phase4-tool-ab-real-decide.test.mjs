@@ -383,3 +383,199 @@ describe("PHASE4-TOOL-AB-REAL-DECIDE-7：采样/路由 provenance 贯通", () =>
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DECIDE-8：decision-only 注入模式（PHASE4-2-2）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("PHASE4-TOOL-AB-REAL-DECIDE-8：decision-only 注入模式", () => {
+  const TOOL = {
+    name: "query_canon",
+    description: "世界事实查询",
+    parameters: {
+      type: "object",
+      properties: { category: { type: "string", description: "类别" } },
+      required: ["category"],
+    },
+  };
+
+  async function importInjector() {
+    return import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "adapters", "tool-schema-injector.js")}`
+    );
+  }
+
+  it("默认模式保留正文生成指令（生产行为不变）", async () => {
+    const injector = await importInjector();
+    const prompt = injector.injectToolSchemas("SYS", [TOOL], new Set(["query_canon"]));
+    assert.ok(prompt.includes("基于证据生成正文"), "默认模式应保留「基于证据生成正文」");
+    assert.ok(prompt.includes("证据充分时直接输出章节正文"), "默认模式应保留「证据充分时直接输出章节正文」");
+  });
+
+  it("decision-only 模式去除正文诱导，改为只输出终止标记", async () => {
+    const injector = await importInjector();
+    const prompt = injector.injectToolSchemas("SYS", [TOOL], new Set(["query_canon"]), {
+      decisionOnly: true,
+      doneMarker: "<done>",
+    });
+    assert.ok(!prompt.includes("基于证据生成正文"), "decision-only 不应含「基于证据生成正文」");
+    assert.ok(!prompt.includes("证据充分时直接输出章节正文"), "decision-only 不应含「直接输出章节正文」");
+    assert.ok(prompt.includes("只输出终止标记 <done>"), "decision-only 应含「只输出终止标记 <done>」");
+    assert.ok(prompt.includes("禁止生成或输出任何章节正文"), "decision-only 应含禁止生成正文");
+  });
+
+  it("decision-only 只注入白名单内工具（白名单 fail-closed 仍生效）", async () => {
+    const injector = await importInjector();
+    assert.throws(
+      () =>
+        injector.injectToolSchemas("SYS", [TOOL], new Set(["query_narrative"]), {
+          decisionOnly: true,
+          doneMarker: "<done>",
+        }),
+      /拒绝注入白名单外工具/,
+      "decision-only 模式仍应拒绝白名单外工具",
+    );
+  });
+
+  it("eval runner 注入的 system prompt 走 decision-only（无正文诱导）", async () => {
+    const runner = await importRunner();
+    const baseline = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-interface-baseline.js")}`
+    );
+    const scenario = baseline.BASELINE_SCENARIOS.find((s) => s.id === "SC1-canon-fact");
+    assert.ok(scenario, "SC1-canon-fact 场景应存在");
+    // 捕获模型 fn 收到的 systemPrompt，验证 runner 注入的是 decision-only 变体
+    const captured = [];
+    const captureFn = async (ctx) => {
+      captured.push(ctx.systemPrompt);
+      return { kind: "final", text: runner.REAL_DONE_MARKER };
+    };
+    await runner.runRealToolAbScenario({ scenario, arm: "B", seed: 0, modelFn: captureFn });
+    assert.ok(captured.length >= 1, "应捕获至少一次 systemPrompt 注入");
+    const sys = captured[0];
+    assert.ok(!sys.includes("基于证据生成正文"), "runner 注入的 system prompt 不应含正文生成指令");
+    assert.ok(!sys.includes("证据充分时直接输出章节正文"), "runner 注入的 system prompt 不应含输出正文指令");
+    assert.ok(sys.includes(runner.REAL_DONE_MARKER), "runner 注入的 system prompt 应含 <done> 终止标记");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DECIDE-9：真实请求体采样参数透传（PHASE4-2-2）
+// 确认 temperature/seed 确实写入 HTTP 请求体（而非仅 provenance 字段）。
+// 走 createLegacyModelGenerateFn（真实 pilot 同路径）→ callWithFallback →
+// makeOpenAIChatCall → buildOpenAIRequest，mock globalThis.fetch 捕获请求体。
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("PHASE4-TOOL-AB-REAL-DECIDE-9：temperature/seed 写入真实请求体", () => {
+  const originalFetch = globalThis.fetch;
+  const origEnv = {
+    GLM_API_KEY: process.env.GLM_API_KEY,
+    PINOVEL_DISABLE_FALLBACK: process.env.PINOVEL_DISABLE_FALLBACK,
+    PINOVEL_MODEL_MAX_RETRIES: process.env.PINOVEL_MODEL_MAX_RETRIES,
+    PINOVEL_PROJECT_ROOT: process.env.PINOVEL_PROJECT_ROOT,
+  };
+
+  function mockFetchCalls(calls) {
+    globalThis.fetch = async (url, init) => {
+      calls.push({
+        url: String(url),
+        body: JSON.parse(String(init?.body ?? "{}")),
+      });
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers({ "content-type": "application/json" }),
+        text: async () => "",
+        json: async () => ({
+          id: "chatcmpl-test",
+          object: "chat.completion",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "<done>" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      };
+    };
+  }
+
+  function restoreEnv() {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(origEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  it("createLegacyModelGenerateFn 把 temperature/seed 写入请求体（GLM OpenAI 兼容协议）", async () => {
+    process.env.GLM_API_KEY = "test-glm-key";
+    process.env.PINOVEL_DISABLE_FALLBACK = "1";
+    process.env.PINOVEL_MODEL_MAX_RETRIES = "0";
+    process.env.PINOVEL_PROJECT_ROOT = join(EXTENSION_ROOT, "..", "..", "..", "..");
+    const calls = [];
+    mockFetchCalls(calls);
+
+    try {
+      const adapter = await import(
+        `file://${join(EXTENSION_ROOT, "dist-eval", "v2", "adapters", "legacy-model-route-adapter.js")}`
+      );
+      const modelFn = adapter.createLegacyModelGenerateFn();
+      const out = await modelFn({
+        route: "narrator_testing_glm",
+        systemPrompt: "SYS",
+        userPrompt: "USER",
+        kind: "tool_ab_real_decision",
+        maxTokens: 2048,
+        temperature: 0.72,
+        seed: 3,
+      });
+
+      assert.equal(calls.length >= 1, true, "应至少发起一次 HTTP 请求");
+      const body = calls[0].body;
+      // 请求体级断言：temperature/seed 必须实写在 body，而非仅 provenance 字段
+      assert.equal(body.temperature, 0.72, "请求体应含 temperature=0.72");
+      assert.equal(body.seed, 3, "请求体应含 seed=3");
+      assert.equal(body.model, "glm-5.2", "请求体 model 应为 glm-5.2");
+      // 路由级透传：usedProvider 为 glm，seedSupported=true（GLM 支持 seed）
+      assert.equal(out.provider, "glm");
+      assert.equal(out.seedApplied, true, "seedApplied 应为 true（已写入请求体）");
+      assert.equal(out.seedSupported, true, "seedSupported 应为 true（GLM 协议支持 seed）");
+      assert.equal(out.actuallyAppliedTemperature, 0.72);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  it("未传 temperature/seed 时任选其一不写请求体（区别于 provenance 默认值）", async () => {
+    process.env.GLM_API_KEY = "test-glm-key";
+    process.env.PINOVEL_DISABLE_FALLBACK = "1";
+    process.env.PINOVEL_MODEL_MAX_RETRIES = "0";
+    process.env.PINOVEL_PROJECT_ROOT = join(EXTENSION_ROOT, "..", "..", "..", "..");
+    const calls = [];
+    mockFetchCalls(calls);
+
+    try {
+      const adapter = await import(
+        `file://${join(EXTENSION_ROOT, "dist-eval", "v2", "adapters", "legacy-model-route-adapter.js")}`
+      );
+      const modelFn = adapter.createLegacyModelGenerateFn();
+      const out = await modelFn({
+        route: "narrator_testing_glm",
+        systemPrompt: "SYS",
+        userPrompt: "USER",
+        kind: "tool_ab_real_decision",
+        maxTokens: 2048,
+      });
+      const body = calls[0].body;
+      // 未传时：请求体不带 seed（seedApplied=false）；temperature 由 provider 配置默认落下
+      assert.equal(Object.hasOwn(body, "seed"), false, "未传 seed 时请求体不应含 seed 字段");
+      assert.equal(out.seedApplied, false, "未传 seed 时 seedApplied 应为 false");
+    } finally {
+      restoreEnv();
+    }
+  });
+});
