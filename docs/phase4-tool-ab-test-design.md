@@ -131,11 +131,63 @@ Phase 4 评估一个假设：**9 个 narrow 工具是否比单个 typed facade �
 3. 复用确定性阶段指标采集，聚合均值 / 分布。
 4. 产出对比报告，供人工审阅。
 
-### Phase 4.3 — 生产迁移讨论门（Gate）
-仅当 **全部**满足才进入生产迁移讨论：
-- `B.mustVerifyCoverage ≥ A`（不降级）
-- `B.sourceRef/evidenceLevel 完整率 ≥ A`（不降级）
-- B 在**至少一项负担指标**显著更优（工具调用 / 重复查询 / 结果 token / 首证据延迟），且**无失败行为退化**（空结果 / 截断 / 错误 / 超时不劣于 A）。
+### Phase 4.3 — 生产接入设计评审（设计稿，非实现）
+
+> **范围与边界声明（硬约束）**：本阶段是**设计评审**，产出受控接入蓝图，**不实现、不注册、不切换**。
+> - `query_narrative` 保持 **eval-only**（`novelos/eval/typed-facade-tool.ts`），既不进入 `tools/register-tools.ts` 的 6 公开工具，也不进入 `createNarrativeTools`（`novelos/tools/narrative-tools.ts`）。
+> - 统一主链路（`novel_generate_chapter`）**不被切换**；生产 NovelOS Agentic 仍注入 9 专用工具。
+> - 本设计仅作为未来独立接入 Phase 的实现蓝图，须经后续独立 Phase 实现并再次评审后才可落地。
+
+**4.3.1 生产接入点（注入路径）**
+
+生产 NovelOS Agentic 的工具注入点位于 `agentic-raw-candidate-source.ts`：
+
+```
+registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 createNarrativeTools（9 工具）
+  → filter(evidencePlan.allowedTools)  // Phase 2C 白名单收窄
+  → createNovelOSRuntime({ tools, ... })
+```
+
+- 工具集唯一来源是 `narrative-tool-registry.ts`（经 `createNarrativeTools` 注册 9 只读工具）。
+- 若未来接入 facade，有两种等价注入方式（二选一，不并行）：
+  1. **registry 层替换**：在 registry 注册 `query_narrative` 并停用 9 工具，注入面收缩为单工具；
+  2. **白名单收窄**：保持 9 工具注册，`evidencePlan.allowedTools` 仅含 `query_narrative`，注入面同样收缩。
+- 注入边界防御：`tool-schema-injector.ts` 的 `MAX_INJECTED_TOOLS=12` fail-closed 上限会拦截超限注入，防止绕过 `allowedTools` 的全量注入。
+
+**4.3.2 Canary 策略（受控灰度）**
+
+复用既有治理，不新造第二套 release 机制：
+
+1. 变更分级：把"9 工具 → 单 facade"归类为 **changeClass=R2**（接口面显著减少、调用行为变化但事实检索能力等价）。
+2. 策略决策：`canary-policy.ts::decideCanaryStrategy`（changeClass × healthStatus × currentStatus）→ healthy 走 **bounded_canary**，warning/insufficient_data 走 **shadow_required**，auto_hold_eligible/retired_suggestion → **blocked**。
+3. Canary 执行：在独立 workspace 完成 bounded canary run，产出完成态 trace（`canary-trace-store.ts`）。
+4. 晋级门禁：`canary-promotion-gate.ts::evaluateCanaryPromotionGate` 校验 trace 完成态 + 证据 artifact hash + observedChapters/observedCalls 统计一致性 + release 绑定（R2 要求 `bounded_canary` 或 `shadow_required` 策略）。
+5. 生产门禁：`production-release-gate.ts`（G6）全通过才进入 active_prod：`active_prod` + 非空 `approvalRef` 且审批 artifact 真实（`finalVerdict=APPROVE_DEV`）+ 环境指纹匹配 + R2/R3 需 canary 晋级证据事件。
+
+**4.3.3 回滚设计**
+
+- 保持 A 组（9 工具）release 为**独立可切换的 active pointer**；回滚 = 经 `release-pointer-store.ts` 把 active production pointer 切回 A 组 release（既有原子路径，无需新机制）。
+- 触发回滚判定依据（对齐 §5.6 门禁）：**失败行为不得恶化**——`emptyResults` / `truncated` / `errors` / `timeouts` / 非法工具 / 解析失败任一指标在 canary 期间劣于 A 组即触发回滚评估。
+- 回滚后 `novel_generate_chapter` 自动回到 9 工具注入（因为工具集随 registry / release 变化，Gate 不阻断 9 工具这一既有现状）。
+
+**4.3.4 Trace 监控**
+
+- 章节级：`release-health-aggregator.ts` 从 `traces/{chapterId}-quality-trace.json`（`v2_final_selected` gate）聚合模型调用、失败恢复、release 绑定。
+- Canary 级：`canary-trace-store.ts` 留存 canary run 的 started/completed trace 与结果 artifact。
+- 监控口径（与 Phase 4.2 门禁一致）：mustVerify 覆盖率、有效证据引用率、evidenceLevel 命中、`empty/truncated/errors/timeouts/非法工具/解析失败`、schema token 成本、首证据延迟。`empty/truncated` 必须纳入 `allPassed`（Phase 4.2.3 已实现）。
+- 汇报：`reports/generation-blocker-summary.md` 式仪表盘（成功率/首次成功率/恢复后成功率/失败分布）作为生产健康基线。
+
+**4.3.5 模型版本隔离**
+
+- `environment-fingerprint.ts` 将 **tool schema / model routing / runtime files / build artifacts** 纳入环境指纹；facade 接入会改变 tool schema → 指纹变化 → 需重新 `capture release` + 通过审批，防止"未审批的 facade 二进制静默进入生产"。
+- 模型路由真相源 `config/model-routing.json`：facade 接入绑定的模型版本按 release 隔离，canary 期观察数据不污染旧模型信誉（对齐"按模型版本隔离策略信誉"铁律）。
+- 若需在受控组观察，route 使用实验路由（如 `narrator_testing_glm`，`fallback=[]`），不进入生产默认路由。
+
+**4.3.6 进入实现前的评审前置条件（必须全部满足）**
+
+- [ ] 真实 replay（GLM/Doubao，`fallback=[]`）在**稳定 commit** 上全门禁通过，含修正后 evidenceLevel 口径（`rankedEvidenceLevels`）与 `empty/truncated` 逐场景门禁。
+- [ ] 若需把"intent 引导"与"接口形态"解耦，补跑**无 `INTENT_USAGE` 的 B0 facade 对照**，否则结论归属保持"受引导的 facade vs 9 工具"。
+- [ ] 本设计评审通过后，才可进入独立实现 Phase（届时仍须保持"不注册公开工具、不切换统一主链路"直到生产 canary + G6 全通过）。
 
 ---
 
@@ -157,3 +209,7 @@ Phase 4 评估一个假设：**9 个 narrow 工具是否比单个 typed facade �
 | 先确定性后真实模型 | 确定性可复现、可审阅、零成本；真实模型只做受控验证 |
 | mustVerify / sourceRef 覆盖为底线 | 工具形态优化不得以牺牲证据覆盖为代价（对齐项目"事实安全优先"约束） |
 | B 组实现为 guided facade（Phase 4.2.2） | 诊断 SC1 降级时在 facade description 注入 INTENT_USAGE（何时用/优先级/查询构造）。这是**有意**的生产假设，但构成 A/B 混淆变量（intent guidance 与 interface surface 同时变化）；结论归属被限定为"受引导的 facade vs 9 工具"，不推广为"任意单入口 facade 优于 9 工具"。如需解耦须补跑无 INTENT_USAGE 的 B0 对照 |
+| `query_narrative` 暂不注册生产公开工具（Phase 4.3） | 收口审计未完成前不 cutover；保持 6 公开工具契约 + 统一主链路注入 9 工具现状不变。Phase 4.3 仅产出受控接入设计 |
+| 生产接入复用既有 canary/G6 治理，不新造第二套 release 机制（Phase 4.3） | `decideCanaryStrategy`（R2=bounded_canary）+ `evaluateCanaryPromotionGate` + `production-release-gate`（G6）已具备分级灰度/晋级/审批/指纹门禁全套能力；避免重复造轮子 |
+| 回滚 = active pointer 切回 A 组 release（Phase 4.3） | `release-pointer-store.ts` 提供原子切换；失败行为（empty/truncated/errors/timeouts/非法工具/解析失败）任一恶化即触发回滚评估 |
+| 模型版本隔离走 environment-fingerprint + model-routing（Phase 4.3） | 指纹含 tool schema/model-routing，facade 接入改变指纹 → 需重 capture + 审批；模型信誉按 release 隔离，canary 数据不污染旧模型 |
