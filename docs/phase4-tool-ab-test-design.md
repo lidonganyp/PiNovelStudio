@@ -52,6 +52,16 @@ Phase 4 评估一个假设：**9 个 narrow 工具是否比单个 typed facade �
 - **不复制逻辑**：检索、token fallback、limit 截断、nextQueryHint 生成全部由底层工具完成；facade 只做 `intent → tool` 映射与参数整形。
 - **B 组 schema 上下文**：1 个入口 + 1 个意图联合 vs A 组 9 套 schema。目标观测 B 组是否在**模型选择负担**上更优，但需防"单入口 schema 过大反而更重"。
 
+> **实验协议标注（Phase 4.2.2，收口问题 3）**：B 组实现为 **guided facade**，而非"纯接口形态"对照。
+> facade 的工具 `description` 注入了 `INTENT_USAGE`（每个意图的**何时使用 + 优先级 + 查询构造要点**，见 `typed-facade-tool.ts` 的 `QUERY_NARRATIVE_INTENT_GUIDANCE`），
+> 而 A 组 9 个专用工具没有等价的集中式路由引导。因此：
+> - 当前证据严格说是"**9 工具 vs 受引导的 facade**"结果，**不是**"9 工具 vs 纯单入口"的公平对照。
+> - 该引导是**有意为之**的生产假设（统一入口若实现，理应携带意图路由说明），但它是 A/B 之外的**混淆变量**
+>   （`intent guidance` 与 `interface surface` 同时变化），不能单独归因于"接口形态减少"。
+> - 若需把"引导"与"接口形态"解耦，需补跑一个**无 `INTENT_USAGE` 引导的 B0 facade 对照**（B0 仅含类型化 intent 联合，不含"何时用/优先级/查询构造"说明）。
+> - **结论归属**：本报告我只能证明"受引导的 facade ≥ 9 专用工具"在证据覆盖与失败行为上不降级、负担项改善；
+>   不能证明"任意单入口 facade 都优于 9 工具"。生产迁移决策需把本偏差纳入评审。
+
 ---
 
 ## 4. 控制变量（A/B 相同）
@@ -59,8 +69,12 @@ Phase 4 评估一个假设：**9 个 narrow 工具是否比单个 typed facade �
 | 变量 | 固定值 |
 |------|--------|
 | Fixtures | 同一组 eval fixtures（含高风险 mustVerify 正向召回 case） |
-| Prompt | 相同 system / 检索决策规则（B 组不加额外引导话术） |
+| Prompt | 相同 system / 检索决策规则 |
 | 模型路由 | 相同 route / model / sampling（确定性阶段用 stub；真实阶段用同一 route） |
+
+> **控制变量偏差（Phase 4.2.2 收口）**：§4 表"Prompt"原要求"B 组不加额外引导话术"，但为诊断 SC1 降级，
+> B 组 facade 的 `description` 实际注入了 `INTENT_USAGE` 引导（见 §3.2 标注）。因此 `Prompt` 并非严格相等：
+> B 组在工具描述层多了**意图路由引导**，A 组没有。本文档将此偏差显式记录，结论归属见 §3.2 标注。
 | 预算 | 相同 `budgetPolicy`（模型调用软 6 / 硬 10，工具预算一致） |
 | 时间 | 相同 `timeoutMs` |
 | Workspace | 相同 `workspaces/{id}` 数据（canon / character / historical chapters） |
@@ -142,3 +156,4 @@ Phase 4 评估一个假设：**9 个 narrow 工具是否比单个 typed facade �
 | B 组用 typed facade 而非"减少工具数量" | 保持 9 工具检索能力不变，只比较接口形态；facade 是纯路由，零逻辑复制 |
 | 先确定性后真实模型 | 确定性可复现、可审阅、零成本；真实模型只做受控验证 |
 | mustVerify / sourceRef 覆盖为底线 | 工具形态优化不得以牺牲证据覆盖为代价（对齐项目"事实安全优先"约束） |
+| B 组实现为 guided facade（Phase 4.2.2） | 诊断 SC1 降级时在 facade description 注入 INTENT_USAGE（何时用/优先级/查询构造）。这是**有意**的生产假设，但构成 A/B 混淆变量（intent guidance 与 interface surface 同时变化）；结论归属被限定为"受引导的 facade vs 9 工具"，不推广为"任意单入口 facade 优于 9 工具"。如需解耦须补跑无 INTENT_USAGE 的 B0 对照 |
