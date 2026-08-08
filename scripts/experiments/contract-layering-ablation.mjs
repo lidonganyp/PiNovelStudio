@@ -98,6 +98,12 @@ function log(message) {
 }
 
 // ── 构造 intent/context（复用 ceiling-abc-pilot.mjs 逻辑）─────────────────
+// CONTRACT-LAYERING-ABLATION-1 修复：传入 authorChapterContract
+// 理由：第17章 outline-explicit.md（含 authorEventSummaries/authorMustInclude/事件状态变化）
+// 被 buildChapterSeed 自动解析为 seed.authorChapterContract。若不传入 intent input，
+// ChapterIntentBuilder 无法派生 authorEventSummaries/authorMustInclude/authorStateChanges，
+// 导致故事保持率关键词集合为空，B 组（分层渲染）的"章节义务层"无内容可渲染，
+// 实验退化为"A vs A"，无法验证四层映射假设 H1。
 function buildIntentInput(chapterSeed, chapterNumber) {
   return {
     chapterNumber,
@@ -132,6 +138,15 @@ function buildIntentInput(chapterSeed, chapterNumber) {
     ],
     prevContinuationAvailable: chapterSeed.previousChapterContinuation?.available ?? false,
     pendingCosts: chapterSeed.currentPressure?.pendingCosts ?? [],
+    // 传入 authorChapterContract，让 ChapterIntentBuilder 派生
+    // authorEventSummaries / authorMustInclude / authorStateChanges / foreshadowing /
+    // causalRelations / focusCharacterGoals / choicesAndCosts / expectedIrreversibleChange /
+    // causalEndPressure / characterMotivations / relevantCharacters 等字段。
+    authorChapterContract: chapterSeed.authorChapterContract ?? undefined,
+    // 透传 authorChapterContract 中的结构化字段（若存在），供 INTENT-1 派生路径使用
+    choicesAndCosts: chapterSeed.authorChapterContract?.choicesAndCosts,
+    expectedIrreversibleChange: chapterSeed.authorChapterContract?.expectedIrreversibleChange,
+    causalEndPressure: chapterSeed.authorChapterContract?.causalEndPressure,
   };
 }
 
@@ -385,6 +400,56 @@ for (let sampleIndex = 1; sampleIndex <= SAMPLES; sampleIndex++) {
       continue;
     }
 
+    // CONTRACT-LAYERING-ABLATION-1 数据完整性修复：
+    // 强制校验最终交付文本 == agentic candidate（长度 + SHA-256 hash）。
+    // 理由：B3 eval 路径在 FactGuard 失败时会回退 one_shot_raw（unified-orchestrator.ts:1707-1714），
+    // 但 evalAgentic.candidateId 仍非 null，导致 fallback 被误记为有效 agentic 样本。
+    // 仅检查 candidateId/verifierCleared 不足以排除污染——必须确认最终文本确实来自 agentic candidate。
+    // 用户反馈 Sample 3 A/B 最终文本与 agentic candidate 长度/标题不同，即为污染样本。
+    const candidateHash = evalAgentic.candidateHash ?? null;
+    const candidateLength = evalAgentic.candidateLength ?? null;
+    const finalTextHash = sha256(text);
+    const finalTextLength = text.length;
+    const hashMatch = candidateHash !== null && candidateHash === finalTextHash;
+    const lengthMatch = candidateLength !== null && candidateLength === finalTextLength;
+
+    if (!hashMatch || !lengthMatch) {
+      log(`  arm ${arm.id}: FAILED text_candidate_mismatch（最终文本 != agentic candidate，疑似 B3 FactGuard 回退 one_shot_raw）`);
+      log(`    candidateLength=${candidateLength} finalTextLength=${finalTextLength} lengthMatch=${lengthMatch}`);
+      log(`    candidateHash=${candidateHash?.slice(0, 12) ?? "null"}... finalTextHash=${finalTextHash.slice(0, 12)}... hashMatch=${hashMatch}`);
+      log(`    selectedSource=${result.selectedSource} selectedCandidateId=${result.selectedCandidateId ?? "null"} candidateId=${candidateId}`);
+      writeJson(join(armDir, `${arm.id}-failure.json`), {
+        status: "failed_text_candidate_mismatch",
+        reason: "最终交付文本与 agentic candidate 不匹配（长度或 hash 不一致），疑似 B3 FactGuard 回退 one_shot_raw",
+        candidateId,
+        selectedSource: result.selectedSource,
+        selectedCandidateId: result.selectedCandidateId ?? null,
+        candidateLength,
+        finalTextLength,
+        candidateHash,
+        finalTextHash,
+        lengthMatch,
+        hashMatch,
+        failureEnvelope: result.failureEnvelope,
+        durationMs,
+      });
+      sampleResult.arms[arm.id] = {
+        sampleIndex,
+        arm: arm.id,
+        status: "failed",
+        failureReason: "text_candidate_mismatch",
+        candidateId,
+        selectedSource: result.selectedSource,
+        selectedCandidateId: result.selectedCandidateId ?? null,
+        candidateLength,
+        finalTextLength,
+        hashMatch,
+        lengthMatch,
+        durationMs,
+      };
+      continue;
+    }
+
     // 跑 FactGuard + 故事保持率检测
     const factGuardResult = runFactGuardCheck(text);
     const storyPreservation = computeStoryPreservation(text, storyKeywords);
@@ -401,9 +466,11 @@ for (let sampleIndex = 1; sampleIndex <= SAMPLES; sampleIndex++) {
       armLabel: arm.label,
       profile: arm.profile,
       status: result.status,
-      selectedSource: result.selectedSource ?? "agentic_raw",
+      // 显式记录 selectedSource 与 selectedCandidateId，供污染样本排查
+      selectedSource: result.selectedSource,
+      selectedCandidateId: result.selectedCandidateId ?? null,
       textLength: text.length,
-      candidateHash: sha256(text),
+      candidateHash: finalTextHash,
       startedAt,
       durationMs,
       factGuard: factGuardResult,
@@ -417,6 +484,11 @@ for (let sampleIndex = 1; sampleIndex <= SAMPLES; sampleIndex++) {
           trajectoryPath: evalAgentic.trajectoryPath,
           candidateId: evalAgentic.candidateId,
           candidateLength: evalAgentic.candidateLength,
+          candidateHash: evalAgentic.candidateHash ?? null,
+          finalTextHash,
+          finalTextLength,
+          hashMatch,
+          lengthMatch,
           stopReason: evalAgentic.stopReason,
           toolCalls,
           verifierCleared: evalAgentic.verifierCleared,
