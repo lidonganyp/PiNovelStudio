@@ -219,3 +219,61 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 | 生产接入复用既有 canary/G6 治理，不新造第二套 release 机制（Phase 4.3） | `decideCanaryStrategy`（R2=bounded_canary）+ `evaluateCanaryPromotionGate` + `production-release-gate`（G6）已具备分级灰度/晋级/审批/指纹门禁全套能力；避免重复造轮子 |
 | 回滚 = active pointer 切回 A 组 release（Phase 4.3） | `release-pointer-store.ts` 提供原子切换；失败行为（empty/truncated/errors/timeouts/非法工具/解析失败）任一恶化即触发回滚评估 |
 | 模型版本隔离走 environment-fingerprint + model-routing（Phase 4.3） | 指纹含 tool schema/model-routing，facade 接入改变指纹 → 需重 capture + 审批；模型信誉按 release 隔离，canary 数据不污染旧模型 |
+
+---
+
+## 9. Phase 5 — 受控生产接入实现（2026-08-08）
+
+> **范围声明（硬约束）**：Phase 5 是 **受控生产接入实现**，不是全量切换生产。
+> 只实现并验证 **"guided facade vs 9 工具" 的受控对照**，不推广为"任意单入口 facade 更优"。
+> 项目总计划中的"统一主链路切换"Phase 5 已完成，**不在此重复实施**。
+
+### 9.1 目标
+
+在保持默认生产行为完全不变（9 专用工具执行面）的前提下，为**显式 opt-in 的 canary workspace**
+提供一条受控的 facade 生产路径：模型只看到 1 个统一入口 `query_narrative_production`
+（按 intent 路由到 9 个底层专用工具），并复用既有 R2/G6 canary、trace、environment fingerprint
+与 rollback 机制。只有 promotion gate 通过后才允许切换 active pointer；失败立即回到 9 专用工具。
+
+### 9.2 设计要点
+
+- **runtime facade 变体**：`query_narrative_production`（`novelos/tools/query-narrative-facade.ts`）
+  与 eval-only 的 `query_narrative`（`novelos/eval/typed-facade-tool.ts`）**严格区分**。
+  前者进入生产闭包（`tsconfig.prod.json` → `dist/`），后者保持 eval-only（`dist-eval/`），
+  避免把 eval 模块拉进 dist/（依赖边界铁律）。二者共享 **纯数据常量**（intent 路由映射），零逻辑复制。
+- **受控接入开关**：`NarrativeToolMode = "standard" | "facade"`（`evidence-plan.ts`）。
+  - `standard`/缺省：默认生产，9 专用工具（`NARRATIVE_TOOL_NAMES`），行为不变。
+  - `facade`：registry 额外注册 `query_narrative_production`（`enableFacade=true`），
+    `evidencePlan.allowedTools` 收窄为 `[query_narrative_production]`，
+    runtime 注入白名单/检索预算扩为 `NARRATIVE_TOOL_NAMES_WITH_FACADE`。
+- **opt-in 走 workspace canary 授权**：`canary-authorization.json` 新增可选 `toolMode` 字段
+  （`canary-workspace-authorization.ts` schema 校验，可选枚举 `standard|facade`）。
+  `resolve-tool-mode-from-canary-authorization.ts` 以 **fail-closed** 语义解析：
+  仅当授权**明确**声明 `toolMode="facade"` **且未过期**才返回 `"facade"`；
+  授权缺失 / standard / 未声明 / schema 校验失败 / 损坏 JSON / 过期 一律返回 `undefined`（= 默认 9 工具）。
+- **显式 allowedTools 优先于 toolMode**：调用方可精确控制注入工具集，toolMode 仅作默认收窄。
+
+### 9.3 接线
+
+- `unified-entry.ts`：`evalMode/qualityExperiment` 缺省时调用 `resolveToolModeFromCanaryAuthorization(projectRoot, workspaceId)`
+  解析 `toolMode`，only 对显式 opt-in 的 canary workspace 传 `"facade"`，其余 `undefined`（非全量切换）。
+- `unified-orchestrator.ts` → `orchestrator-types.ts`：把 `toolMode` 透传给 `agenticCandidateSource.generate(toolMode)`。
+- `agentic-raw-candidate-source.ts`：`toolMode === "facade"` 时 `enableFacade=true`、注入白名单
+  `NARRATIVE_TOOL_NAMES_WITH_FACADE`、检索预算集合同样扩为含 facade（统一入口调用也计入检索预算）。
+
+### 9.4 验证
+
+- focused 测试：`tests/phase5-facade-controlled-access.test.mjs`（22 断言）覆盖
+  registry facade 注册（默认 9 / facade 10）、evidence-plan 受控注入（facade 收窄 / 显式优先 / 缺省默认）、
+  resolve-tool-mode fail-closed（缺失 / standard / 未声明 / 非法 / 损坏 / 过期 / rollback 删除授权即回退）。
+- 无回归：`npm run build` 通过；受影响模块 focused 测试（canary 授权 / evidence-decision /
+  tool-visibility / retrieval-budget / production-tool-registration / dependency-boundary）79 断言全通过。
+- 依赖边界：`dist/` 不含 eval-only `query_narrative`；`query_narrative_production` 仅在
+  `enableFacade=true` 时注册，默认生产 9 工具执行面不变。
+
+### 9.5 边界与后续
+
+- **不 cutover**：默认生产仍为 9 专用工具；facade 仅对显式 opt-in 的 canary workspace 生效。
+- 后续需独立产线：隔离 workspace bounded canary（R2）→ promotion gate 通过 → 切换 active pointer；
+  任一失败行为（empty/truncated/errors/timeouts/非法工具/解析失败）恶化即回滚 9 专用工具。
+- 若需解耦"意图引导"与"接口形态"，另行补跑**无 `INTENT_USAGE` 的 B0 facade 对照**（延续 §3.2 标注）。
