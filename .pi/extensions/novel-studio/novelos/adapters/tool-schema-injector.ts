@@ -24,8 +24,11 @@ import { localizeLlmText } from "../../utils/llm-language-guard.js";
 /** 幂等检查标记（注入后存在于 systemPrompt 中） */
 export const REACT_CALLING_CONVENTION = "<!-- 工具调用约定 -->";
 
-/** 调用约定文本 */
-const CALLING_CONVENTION_TEXT = [
+/**
+ * 调用约定文本 — 头部（生产与 decision-only 共享）。
+ * 不含「收到证据后生成正文」的指令，该部分由尾部变体决定。
+ */
+const CALLING_CONVENTION_HEAD = [
   "",
   "## 工具调用约定",
   "",
@@ -37,11 +40,36 @@ const CALLING_CONVENTION_TEXT = [
   "规则：",
   "1. 可以在一次回复中发出多个 `<工具调用>` 指令（每个单独一行）",
   "2. 指令外的文字会被保留，但工具调用阶段不要写正文",
+  "",
+].join("\n");
+
+/**
+ * 调用约定文本 — 生产默认尾部：收到证据后生成正文。
+ * 这是生产正文生成链路（统一编排器）的调用约定。
+ */
+const CALLING_CONVENTION_FULL_TAIL = [
   "3. 收到工具结果（『已检索到的证据』块）后，基于证据生成正文",
   "4. 证据不足时可继续调用工具；证据充分时直接输出章节正文（不含任何 `<工具调用>`）",
   "5. 只输出 `<工具调用>` 指令和正文，不要输出分析或注释",
   "",
 ].join("\n");
+
+/**
+ * 调用约定文本 — decision-only 尾部（仅 eval/隔离评测）。
+ *
+ * 评测链路只做「按检索计划决定调用哪个工具、收集证据」，不生产正文。
+ * 收到证据后评估是否充分，充分则只输出终止标记（doneMarker），禁止生成/输出任何正文。
+ * 该模式只允许在 eval 边界显式开启（tool-ab-real-runner），不得改变生产默认行为。
+ */
+const CALLING_CONVENTION_DECISION_ONLY_TAIL = (doneMarker: string) => [
+  "3. 收到工具结果（『已检索到的证据』块）后，评估证据是否充分",
+  `4. 证据不足时可继续调用工具；证据充分时只输出终止标记 ${doneMarker}，禁止生成或输出任何章节正文`,
+  "5. 只输出 `<工具调用>` 指令或终止标记，不要输出分析、注释或正文",
+  "",
+].join("\n");
+
+/** 生产默认调用约定文本（正文生成链路） */
+const CALLING_CONVENTION_TEXT = CALLING_CONVENTION_HEAD + CALLING_CONVENTION_FULL_TAIL;
 
 // ============================================================================
 // injectToolSchemas
@@ -56,12 +84,19 @@ const CALLING_CONVENTION_TEXT = [
  *   这是注入边界的权威防御（Phase 2D 缺口一）：允许注入的工具必须显式声明，
  *   任何未声明的工具（诊断/新增/全量注入绕过）都会被拒绝，无法"全量注入"。
  *   必填参数使该边界不可绕过——调用方无法在不声明白名单的情况下注入任何工具。
+ * @param options 注入选项
+ *   - `decisionOnly`：仅对 eval/隔离评测开启。为 true 时，调用约定尾部替换为
+ *     "只输出终止标记、禁止生成正文" 的 decision-only 指令（Phase 4.2.2），
+ *     去除"基于证据生成正文/证据充分时直接输出章节正文"的正文诱导。
+ *     生产正文生成链路默认全量约定，不受影响（不得直接修改生产默认模式）。
+ *   - `doneMarker`：decision-only 模式下的终止标记（默认 `<done>`）。
  * @returns 注入后的 system prompt（已含约定则原样返回）
  */
 export function injectToolSchemas(
   systemPrompt: string,
   tools: AgentTool[],
   allowedToolNames: ReadonlySet<string>,
+  options?: { decisionOnly?: boolean; doneMarker?: string },
 ): string {
   // 幂等：已注入则不重复
   if (systemPrompt.includes(REACT_CALLING_CONVENTION)) {
@@ -87,7 +122,13 @@ export function injectToolSchemas(
     );
   }
 
-  const parts: string[] = [systemPrompt, REACT_CALLING_CONVENTION, CALLING_CONVENTION_TEXT];
+  // 调用约定：生产默认 = 全量（生成正文）；decision-only（仅 eval）= 只输出终止标记。
+  const tail = options?.decisionOnly
+    ? CALLING_CONVENTION_DECISION_ONLY_TAIL(options?.doneMarker ?? "<done>")
+    : CALLING_CONVENTION_FULL_TAIL;
+  const conventionText = CALLING_CONVENTION_HEAD + tail;
+
+  const parts: string[] = [systemPrompt, REACT_CALLING_CONVENTION, conventionText];
 
   // 工具列表
   parts.push("## 可用工具");

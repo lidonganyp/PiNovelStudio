@@ -592,10 +592,13 @@ export async function runRealToolAbScenario(options: {
     // 按 arm 注入可见工具 schema 到 system prompt（A=9 专用工具，B=facade）。
     // allowedToolNames 白名单 fail-closed：A 用叙事白名单，B 用 facade 名。
     // 修复1：基座 prompt 只要求输出终止标记，不要求生成正文（评测边界）。
+    // Phase 4.2.2：启用 decision-only 注入模式，去除注入器中的正文诱导
+    // （"基于证据生成正文/证据充分时直接输出章节正文"），只允许输出终止标记。
     const systemPrompt = injectToolSchemas(
       REAL_SYSTEM_PROMPT_BASE,
       tools as unknown as AgentTool[],
       arm === "A" ? NARRATIVE_TOOL_NAMES : new Set([QUERY_NARRATIVE_NAME]),
+      { decisionOnly: true, doneMarker: REAL_DONE_MARKER },
     );
     // 修复3：schema token 按「实际注入后的 system prompt」估算，并按模型调用次数累计。
     systemPromptTokens = estimateSystemPromptTokens(systemPrompt);
@@ -1288,6 +1291,9 @@ export function buildRealToolAbTrajectory(comparison: RealToolAbComparison): Rec
           },
         });
         m.turns.forEach((t, idx) => {
+          // Phase 4.2.2：记录每回合实际 arguments/query 及结果摘要，解释 canon:empty 等降级。
+          const args =
+            t.decision.kind === "tool_call" ? t.decision.arguments : undefined;
           entries.push({
             type: "tool_call_metrics",
             timestamp: base + idx,
@@ -1310,6 +1316,11 @@ export function buildRealToolAbTrajectory(comparison: RealToolAbComparison): Rec
               duplicateQuery: t.duplicateQuery,
               firstValidEvidence: t.firstValidEvidence,
               decisionKind: t.decision.kind,
+              // 实际发送给底层工具的 arguments 与 query（b 组含 intent）
+              arguments: args,
+              query: typeof args?.query === "string" ? args.query : undefined,
+              // 结果摘要：截取工具返回文本，解释为何 empty / 命中什么证据
+              resultSummary: t.resultText ? t.resultText.slice(0, 200) : undefined,
             },
           });
         });
