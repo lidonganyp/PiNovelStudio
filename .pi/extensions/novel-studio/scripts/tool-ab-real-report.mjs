@@ -33,6 +33,7 @@ const { values } = parseArgs({
     "route": { type: "string" },
     "samples": { type: "string" },
     "maxTokens": { type: "string" },
+    "scenario": { type: "string" },
     "require-auth": { type: "boolean", default: false },
     "help": { type: "boolean", default: false },
   },
@@ -133,7 +134,20 @@ if (mode === "real") {
 log(`运行 Phase 4.2 模型自主决策 A/B replay（模式=${mode}，dry-run 零 API）...`);
 const seedCount = values.samples ? Math.max(1, parseInt(values.samples, 10)) : 3;
 const seeds = Array.from({ length: seedCount }, (_, i) => i);
-const comparison = await mod.runRealToolAbReplay({ modelFn, seeds });
+
+// --scenario：仅重跑指定高信号场景（如 SC1-canon-fact），用于定向诊断。
+let scenarios;
+if (values.scenario) {
+  const all = mod.getBaselineScenarios ? mod.getBaselineScenarios() : undefined;
+  const ids = values.scenario.split(",").map((s) => s.trim()).filter(Boolean);
+  scenarios = all ? all.filter((s) => ids.includes(s.id)) : undefined;
+  if (scenarios && scenarios.length === 0) {
+    log(`--scenario 未匹配到任何高信号场景：${ids.join(",")}（合法：SC1-canon-fact / SC6-low-risk-no-retrieval / SC7-multi-tool-mixed）`);
+    process.exit(1);
+  }
+}
+
+const comparison = await mod.runRealToolAbReplay({ modelFn, seeds, scenarios });
 
 const trajDir = join(OUTPUT_DIR, "trajectory");
 mkdirSync(trajDir, { recursive: true });

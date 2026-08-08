@@ -1079,6 +1079,11 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
 /** 高信号场景 ID 子集（canon / mixed / low-risk） */
 export const HIGH_SIGNAL_SCENARIO_IDS = ["SC1-canon-fact", "SC7-multi-tool-mixed", "SC6-low-risk-no-retrieval"];
 
+/** 返回基线高信号场景列表（供 CLI --scenario 过滤/定向诊断）。 */
+export function getBaselineScenarios(): BaselineScenario[] {
+  return BASELINE_SCENARIOS.filter((s) => HIGH_SIGNAL_SCENARIO_IDS.includes(s.id));
+}
+
 /**
  * 运行真实模型 A/B replay（dry-run 或真实模型）。
  *
