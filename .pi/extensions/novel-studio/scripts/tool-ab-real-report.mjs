@@ -15,7 +15,9 @@
  *
  * 选项：
  *   --output <dir>   输出目录（默认 <projectRoot>/reports/phase4-tool-ab-real）
- *   --mode <dry-run|real>   执行模式（默认 dry-run；real 需代码层面注入已授权 modelFn）
+ *   --mode <dry-run|real>   执行模式（默认 dry-run；real 需 --require-auth + GLM/Doubao 授权）
+ *   --route <name>   real 模式测试路由（默认 narrator_testing_glm，须在 GLM/Doubao allowlist 内）
+ *   --require-auth   real 模式显式授权开关（未传则拒绝执行）
  *   --help           打印帮助
  */
 
@@ -28,6 +30,10 @@ const { values } = parseArgs({
   options: {
     "output": { type: "string" },
     "mode": { type: "string", default: "dry-run" },
+    "route": { type: "string" },
+    "samples": { type: "string" },
+    "maxTokens": { type: "string" },
+    "require-auth": { type: "boolean", default: false },
     "help": { type: "boolean", default: false },
   },
   allowPositionals: false,
@@ -41,7 +47,11 @@ if (values.help) {
 
 选项：
   --output <dir>   输出目录（默认 <projectRoot>/reports/phase4-tool-ab-real）
-  --mode <dry-run|real>   执行模式（默认 dry-run；real 需授权模型注入）
+  --mode <dry-run|real>   执行模式（默认 dry-run；real 注入真实模型决策 fn，需 GLM/Doubao 授权）
+  --route <name>   real 模式使用的测试路由（默认 narrator_testing_glm）
+  --maxTokens <n>  real 模式单次输出上限 token（默认 2048）
+  --require-auth   real 模式显式授权开关：确认已获 GLM/Doubao 临时调用授权。
+                   必须显式传入，否则 real 模式拒绝执行（默认 dry-run 无需）。
 
 产物：
   real-ab-comparison.json            完整 A/B 对比（JSON）
@@ -72,13 +82,58 @@ function log(message) {
 const mod = await import(MODULE_PATH);
 
 const mode = values.mode === "real" ? "real" : "dry-run";
+let modelFn = undefined;
 if (mode === "real") {
-  log("注意：--mode real 需要代码层面注入已授权的 modelFn（createRealModelDecide）。");
-  log("当前未获得临时模型调用授权，强制回退 dry-run，不执行真实 API 调用。");
+  // 项目记忆硬约束：临时/批量测试只用 GLM/Doubao，必须 PINOVEL_DISABLE_FALLBACK=1
+  // + PINOVEL_BENCHMARK_COST_PROFILE=package_screening（provider allowlist 守卫）。
+  process.env.PINOVEL_PROJECT_ROOT = PROJECT_ROOT;
+  process.env.PINOVEL_DISABLE_FALLBACK = "1";
+  process.env.PINOVEL_BENCHMARK_COST_PROFILE = "package_screening";
+
+  // 显式授权开关：real 模式必须显式 --require-auth 确认 GLM/Doubao 临时授权，
+  // 防止在未授权情况下无意识触发真实模型计费调用。
+  if (!values["require-auth"]) {
+    log("real 模式拒绝执行：未传入 --require-auth 显式授权开关。");
+    log("请确认已获 GLM/Doubao 临时调用授权，并显式加 --require-auth 后重试。");
+    process.exit(1);
+  }
+
+  // route allowlist：仅允许 GLM/Doubao 测试路由（provider-gated），
+  // 禁止用户凭 --route 指定按量模型（GPT/Claude）或其他生产路由。
+  const route = values.route ?? process.env.PINOVEL_TOOL_AB_ROUTE ?? "narrator_testing_glm";
+  const REAL_ROUTE_ALLOWLIST = new Set([
+    "narrator_testing_glm", // glm-5.2
+    "narrator_testing", // doubao-seed-2-1-pro
+    "style_shaper_testing_glm",
+    "chinese_naturalizer_glm",
+    "reference_analyzer_glm",
+    "nb4_generate_glm",
+    "nb4_judge_glm",
+    "nb5_judge_glm",
+    "reference_analyzer_doubao",
+    "nb4_generate_doubao",
+    "nb4_judge_doubao",
+    "nb5_judge_doubao",
+  ]);
+  if (!REAL_ROUTE_ALLOWLIST.has(route)) {
+    log(`real 模式拒绝执行：路由 "${route}" 不在 GLM/Doubao 测试 allowlist 内。`);
+    log(`允许路由：${[...REAL_ROUTE_ALLOWLIST].join(", ")}`);
+    process.exit(1);
+  }
+
+  log(`--mode real：注入真实模型决策 fn（route=${route}，GLM/Doubao 授权，DISABLE_FALLBACK=1）`);
+  modelFn = await mod.createRealToolAbModelDecide({
+    route,
+    maxTokens: values.maxTokens ? Number(values.maxTokens) : 2048,
+    timeoutMs: 120000,
+    temperature: 0.72,
+  });
 }
 
 log(`运行 Phase 4.2 模型自主决策 A/B replay（模式=${mode}，dry-run 零 API）...`);
-const comparison = await mod.runRealToolAbReplay();
+const seedCount = values.samples ? Math.max(1, parseInt(values.samples, 10)) : 3;
+const seeds = Array.from({ length: seedCount }, (_, i) => i);
+const comparison = await mod.runRealToolAbReplay({ modelFn, seeds });
 
 const trajDir = join(OUTPUT_DIR, "trajectory");
 mkdirSync(trajDir, { recursive: true });

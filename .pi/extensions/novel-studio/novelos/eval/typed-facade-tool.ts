@@ -60,6 +60,15 @@ export const TOOL_NAME_TO_INTENT: Record<string, QueryNarrativeIntent> = {
   query_voice_evidence: "voice",
 };
 
+/**
+ * 英文意图 → 中文标签（模型可见，供 schema 注入）。
+ *
+ * B 组 facade 的 intent 值必须保持模型可读的中文标签，避免被 llm-language-guard
+ * 的 localizeLlmText 把英文意图标识（evidence/canon/...）转成乱码占位。
+ * 模型在 `<tool_call>` 中输出中文标签，runner 再经 CHINESE_TO_INTENT_MAP 映射回
+ * 英文协议值路由到底层专用工具。
+ */
+
 /** 全部意图列表（用于 AB 报告与 schema 联合） */
 export const QUERY_NARRATIVE_INTENTS: QueryNarrativeIntent[] = [
   "evidence",
@@ -72,6 +81,32 @@ export const QUERY_NARRATIVE_INTENTS: QueryNarrativeIntent[] = [
   "pattern",
   "voice",
 ];
+
+export const INTENT_CHINESE_LABEL: Record<QueryNarrativeIntent, string> = {
+  evidence: "跨源证据检索",
+  chapter_span: "章节原文检索",
+  canon: "世界事实查询",
+  character_state: "角色状态查询",
+  timeline: "时间线查询",
+  knowledge_boundary: "知识边界查询",
+  promise: "承诺账本查询",
+  pattern: "叙事模式查询",
+  voice: "声音证据查询",
+};
+
+/** 中文标签 → 英文协议值（把模型输出的中文意图映射回底层工具路由） */
+export const CHINESE_TO_INTENT_MAP: Record<string, QueryNarrativeIntent> = (() => {
+  const m: Record<string, QueryNarrativeIntent> = {};
+  for (const [intent, label] of Object.entries(INTENT_CHINESE_LABEL)) {
+    m[label] = intent as QueryNarrativeIntent;
+  }
+  return m;
+})();
+
+/** 以中文标签形式展列的意图列表（用于 schema description 与注入） */
+export const QUERY_NARRATIVE_INTENT_LABELS: string[] = QUERY_NARRATIVE_INTENTS.map(
+  (i) => INTENT_CHINESE_LABEL[i],
+);
 
 /**
  * 创建 B 组 typed facade 工具。
@@ -91,31 +126,35 @@ export function createTypedFacadeTool(ctx: {
   return {
     name: QUERY_NARRATIVE_NAME,
     description:
-      "统一叙事查询入口：按类型化 intent 路由到对应的叙事专用工具。" +
-      "intent 决定查询领域：evidence（跨源结构化检索）/ chapter_span（历史章节原文 span）/ " +
-      "canon（世界设定事实）/ character_state（角色状态）/ timeline（时间线）/ " +
-      "knowledge_boundary（角色知识边界）/ promise（伏笔与读者期待）/ pattern（重复桥段风险）/ " +
-      "voice（声音证据）。返回的结果带 sourceRef 与 evidenceLevel。",
+      "统一叙事查询入口：按查询意图路由到对应的叙事专用工具。" +
+      "意图决定查询领域，可选意图：" +
+      `${QUERY_NARRATIVE_INTENT_LABELS.join("、")}。` +
+      "返回的结果带来源引用与证据等级。",
     label: "Query Narrative (Typed Facade)",
     parameters: Type.Object({
       intent: Type.Union(
         QUERY_NARRATIVE_INTENTS.map((i) => Type.Literal(i)),
-        { description: "查询意图（决定路由到哪个专用工具）" },
+        {
+          description:
+            `查询意图（决定路由到哪个专用工具），可选值：${QUERY_NARRATIVE_INTENT_LABELS.join("、")}`,
+        },
       ),
-      query: Type.Optional(Type.String({ description: "搜索关键词/短语（evidence / chapter_span 意图使用）" })),
-      category: Type.Optional(Type.String({ description: "canon 过滤类别：timeline/location/entity/ability_rule" })),
-      characterId: Type.Optional(Type.String({ description: "角色 ID/名称（character_state / knowledge_boundary / voice 意图使用）" })),
-      status: Type.Optional(Type.String({ description: "promise 过滤状态：open/advancing/fulfilled/broken" })),
-      patternType: Type.Optional(Type.String({ description: "pattern 过滤类型：trope/imagery/sentence_risk/conflict_resolution/hook_type" })),
+      query: Type.Optional(Type.String({ description: "搜索关键词/短语（跨源证据检索、章节原文检索意图使用）" })),
+      category: Type.Optional(Type.String({ description: "世界事实查询过滤类别：时间线/地点/实体/能力规则" })),
+      characterId: Type.Optional(Type.String({ description: "角色标识/名称（角色状态查询、知识边界查询、声音证据查询意图使用）" })),
+      status: Type.Optional(Type.String({ description: "承诺账本查询过滤状态：进行中/推进/已兑现/已破坏" })),
+      patternType: Type.Optional(Type.String({ description: "叙事模式查询过滤类型：桥段/意象/句式风险/冲突解决/钩子类型" })),
       maxResults: Type.Optional(Type.Number({ description: "最大返回数（搜索类意图）", default: 10 })),
-      maxChapters: Type.Optional(Type.Number({ description: "搜索最近多少章（chapter_span 意图）", default: 10 })),
+      maxChapters: Type.Optional(Type.Number({ description: "搜索最近多少章（章节原文检索意图）", default: 10 })),
     }),
     requiredPermission: "workspace_read",
     sideEffect: "read_only",
     timeoutMs: 15_000,
     async execute(_toolCallId, params) {
-      const { intent, ...rest } = params as { intent: QueryNarrativeIntent } & Record<string, unknown>;
-      const toolName = INTENT_TO_TOOL[intent];
+      const { intent, ...rest } = params as { intent?: string } & Record<string, unknown>;
+      // 兼容模型输出中文意图标签（schema 注入展示中文）；映射回英文协议值路由。
+      const protocolIntent = (intent && CHINESE_TO_INTENT_MAP[intent]) || intent;
+      const toolName = protocolIntent ? INTENT_TO_TOOL[protocolIntent as QueryNarrativeIntent] : undefined;
       const tool = toolName ? byName.get(toolName) : undefined;
       if (!tool) {
         throw new Error(`query_narrative: 未知 intent "${String(intent)}" 或底层工具缺失 "${toolName}"`);

@@ -49,6 +49,24 @@ export interface ParsedToolCallOutput {
   toolCalls: ParsedToolCallBlock[];
   /** 是否包含至少一个 toolCall 指令 */
   hasToolCall: boolean;
+  /**
+   * 工具指令 JSON 解析失败列表（malformed directive / 非对象 JSON）。
+   *
+   * 容错解析仍会产出 best-effort toolCall（名称/参数可经 regex salvage 提取），
+   * 但这里如实记录哪些指令的 JSON 本身是坏的，供评测链路统计 parseErrors，
+   * 避免「解析失败静默变成空参数调用、parseErrors 被漏记」。
+   */
+  parseFailures: DirectiveParseFailure[];
+}
+
+/** 单个工具指令的 JSON 解析失败记录 */
+export interface DirectiveParseFailure {
+  /** 指令在输出中的序号（从 0 起） */
+  index: number;
+  /** 原始指令 JSON 文本（截断后用于诊断） */
+  rawJson: string;
+  /** 失败原因 */
+  reason: string;
 }
 
 /** toolResult 消息的简化视图（供 formatToolResultsForPrompt 消费） */
@@ -83,6 +101,7 @@ const CHINESE_TOOL_NAME_MAP: Record<string, string> = {
   承诺账本查询: "query_promise_ledger",
   叙事模式记忆查询: "query_pattern_memory",
   角色声音证据查询: "query_voice_evidence",
+  统一叙事查询: "query_narrative",
 };
 
 const CHINESE_PARAMETER_NAME_MAP: Record<string, string> = {
@@ -96,6 +115,8 @@ const CHINESE_PARAMETER_NAME_MAP: Record<string, string> = {
   承诺标识: "promiseId",
   模式类型: "patternType",
   返回上限: "limit",
+  意图: "intent",
+  状态: "status",
 };
 
 /**
@@ -110,6 +131,7 @@ const CHINESE_PARAMETER_NAME_MAP: Record<string, string> = {
  */
 export function parseToolCallDirectives(text: string): ParsedToolCallOutput {
   const toolCalls: ParsedToolCallBlock[] = [];
+  const parseFailures: DirectiveParseFailure[] = [];
   const proseParts: string[] = [];
   let lastIndex = 0;
 
@@ -126,7 +148,9 @@ export function parseToolCallDirectives(text: string): ParsedToolCallOutput {
     lastIndex = match.index + match[0].length;
 
     const rawJson = match[1] ?? "";
-    const parsed = parseToolCallJson(rawJson, toolIndex);
+    const parsed = parseToolCallJson(rawJson, toolIndex, (reason) => {
+      parseFailures.push({ index: toolIndex, rawJson, reason });
+    });
     toolCalls.push(parsed);
     toolIndex++;
   }
@@ -143,6 +167,7 @@ export function parseToolCallDirectives(text: string): ParsedToolCallOutput {
     textBlocks,
     toolCalls,
     hasToolCall: toolCalls.length > 0,
+    parseFailures,
   };
 }
 
@@ -156,10 +181,16 @@ export function parseToolCallDirectives(text: string): ParsedToolCallOutput {
  * - 优先 JSON.parse
  * - 失败时尝试 regex salvage 提取 name/arguments
  * - 最终 fallback：name="unknown", arguments={}
+ * - JSON 本身坏（parse 抛错 / 不是对象）时调用 onParseFail 记录解析失败，
+ *   供评测链路统计 parseErrors（不静默吞掉 malformed 指令）
  *
  * id 确定性：`tc-{sha8(rawJson+index).slice(0,8)}`
  */
-function parseToolCallJson(rawJson: string, index: number): ParsedToolCallBlock {
+function parseToolCallJson(
+  rawJson: string,
+  index: number,
+  onParseFail: (reason: string) => void,
+): ParsedToolCallBlock {
   const id = `tc-${sha8(`${rawJson}:${index}`).slice(0, 8)}`;
 
   // 优先 JSON.parse
@@ -185,8 +216,11 @@ function parseToolCallJson(rawJson: string, index: number): ParsedToolCallBlock 
         arguments: translateArgumentNames(args),
       };
     }
+    // JSON 合法但不是对象（数组/标量）→ 视为解析失败
+    onParseFail("指令 JSON 不是对象");
   } catch {
-    // fall through to regex salvage
+    // JSON.parse 抛错 → malformed JSON，记录解析失败
+    onParseFail("指令 JSON 解析失败（malformed）");
   }
 
   // Regex salvage：提取 "name":"..." 和 "arguments":{...}

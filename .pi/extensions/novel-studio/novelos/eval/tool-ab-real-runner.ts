@@ -24,14 +24,19 @@
  * eval-only：只注册在 tsconfig.eval.json，不进入生产构建。
  */
 
-import { createNarrativeTools } from "../tools/narrative-tools.js";
+import { createNarrativeTools, NARRATIVE_TOOL_NAMES } from "../tools/narrative-tools.js";
 import {
   createTypedFacadeTool,
   QUERY_NARRATIVE_NAME,
   QUERY_NARRATIVE_INTENTS,
   TOOL_NAME_TO_INTENT,
   INTENT_TO_TOOL,
+  CHINESE_TO_INTENT_MAP,
 } from "./typed-facade-tool.js";
+import { injectToolSchemas } from "../adapters/tool-schema-injector.js";
+import { parseToolCallDirectives } from "../adapters/react-tool-call-parser.js";
+import type { AgentTool } from "../adapters/pi-agent-core-adapter.js";
+import type { ModelGenerateFn } from "../../v2/adapters/legacy-model-route-adapter.js";
 import {
   setupBaselineWorkspace,
   collectConfirmedEvidences,
@@ -49,21 +54,51 @@ import { classifyInvalidSourceRef, type InvalidSourceRefCategory } from "./tool-
 import type { ToolProtocol } from "../tools/tool-protocol.js";
 
 // ============================================================================
+// 评测边界常量
+// ============================================================================
+
+/** 终止标记：模型证据充分时只需输出此标记，禁止生成章节正文（评测边界） */
+export const REAL_DONE_MARKER = "<done>";
+
+/**
+ * 检索决策 system prompt 基底（runner 注入工具 schema 后发送给模型）。
+ *
+ * 铁律：评测链路不得要求模型生成章节正文。模型只负责「按检索计划决定调用哪个工具、
+ * 收集证据」，证据充分后输出终止标记即可，正文由生产统一编排器产出。
+ */
+export const REAL_SYSTEM_PROMPT_BASE =
+  "你是检索驱动的叙事证据决策代理。请根据检索计划与可见工具，自主决定调用哪个工具收集证据；" +
+  `证据充分后只需输出终止标记 ${REAL_DONE_MARKER} 即可，无需生成章节正文。`;
+
+// ============================================================================
 // 模型决策抽象
 // ============================================================================
 
-/** 模型决策：调用工具 或 生成最终正文 */
+/** 模型决策：调用工具 或 输出终止标记（不生成正文） */
 export type ToolAbModelDecision =
-  | { kind: "tool_call"; toolName: string; intent?: string; arguments: Record<string, unknown> }
+  | {
+      kind: "tool_call";
+      toolName: string;
+      intent?: string;
+      arguments: Record<string, unknown>;
+      /** 工具指令 JSON 解析失败原因（malformed directive；有则视为解析失败） */
+      parseError?: string;
+    }
   | { kind: "final"; text: string };
 
 /** 模型函数上下文 */
 export interface ToolAbModelFnCtx {
   /** 检索执行计划 + 上下文 prompt（含 mustVerify 项） */
   prompt: string;
+  /**
+   * 已注入可见工具 schema 的 system prompt（真实模型用；dry-run stub 忽略）。
+   * 由 runner 按 arm 注入（A=9 专用工具，B=query_narrative facade），
+   * 使单一真实模型 fn 可同时服务 A/B 两组。
+   */
+  systemPrompt: string;
   /** 模型可见工具名（A=9 专用，B=query_narrative） */
   visibleTools: string[];
-  /** 已发生的回合观测（供模型参考） */
+  /** 已发生的回合观测（供模型参考，含工具结果文本） */
   history: RealToolAbTurn[];
   /** 当前回合号（0-based） */
   round: number;
@@ -84,15 +119,19 @@ export interface RealToolAbTurn {
   decision: ToolAbModelDecision;
   /** 模型实际选择的工具名（决策里的 toolName） */
   selectedTool: string | null;
+  /** 模型选择的工具名是否在可见工具集内（仅名字，不涉参数） */
+  toolVisible: boolean;
   /** 模型填写的 facade intent（仅 B 组） */
   intent: string | null;
   /** intent 是否合法（B 组 ∈ QUERY_NARRATIVE_INTENTS） */
   intentValid: boolean;
   /** intent 路由到的底层工具名（B 组合法 intent 映射；A 组 = selectedTool） */
   routedTool: string | null;
-  /** 路由是否成功（工具可见 + intent 合法 + 工具存在） */
+  /** 路由是否成功（工具可见 + intent 合法 + 工具存在 + 无 directive 解析失败） */
   routedOk: boolean;
-  /** 参数解析/路由失败原因（无则 null） */
+  /** 工具指令 JSON 解析失败原因（malformed directive；无则 null） */
+  directiveParseError: string | null;
+  /** 路由失败原因（工具不在可见集 / intent 非法；无则 null） */
   parseError: string | null;
   latencyMs: number;
   resultChars: number;
@@ -108,6 +147,12 @@ export interface RealToolAbTurn {
   duplicateQuery: boolean;
   /** 是否为本场景首次有效证据回合 */
   firstValidEvidence: boolean;
+  /**
+   * 本回合产出的文本。
+   * - final 回合：终止标记（REAL_DONE_MARKER），不承载正文
+   * - tool_call 回合：工具执行返回的文本内容（供真实模型下一回合决策连续性参考）
+   */
+  resultText: string;
 }
 
 // ============================================================================
@@ -171,16 +216,31 @@ export interface RealToolAbArmAggregation {
   sourceRefsValid: number;
   sourceRefsInvalid: number;
   invalidSourceRefByCategory: Record<InvalidSourceRefCategory, number>;
+  /** 各有效 evidenceLevel 的命中级计数（逐项门禁依据） */
+  evidenceLevelCounts: Record<string, number>;
   sourceRefCompleteness: number;
   avgCoverageRatio: number;
   firstValidEvidenceLatencyMs: number | null;
 }
 
-/** 门槛判定 */
+/** 门槛判定：逐项不降级 + 至少一项真实负担指标改善 */
 export interface RealToolAbGate {
   mustVerifyCoverageNotDegraded: boolean;
   sourceRefCompletenessNotDegraded: boolean;
+  /** 无效 sourceRef 总数不恶化（保留兼容） */
   invalidSourceRefNotWorsened: boolean;
+  /** 无效 sourceRef 逐分类（no_match/profile_only/empty/other）均不恶化 */
+  invalidSourceRefCategoriesNotWorsened: boolean;
+  /** 有效 evidenceLevel 逐级命中不降级（confirmed 等各等级 B 不显著低于 A） */
+  evidenceLevelNotDegraded: boolean;
+  /** 失败（isError）不恶化 */
+  errorsNotWorsened: boolean;
+  /** 超时（timeout）不恶化 */
+  timeoutsNotWorsened: boolean;
+  /** 非法工具选择（invalidToolSelections）不恶化 */
+  invalidToolSelectionsNotWorsened: boolean;
+  /** 解析失败（parseErrors）不恶化 */
+  parseErrorsNotWorsened: boolean;
   burdenImproved: boolean;
   improvedBurdenMetrics: string[];
   allPassed: boolean;
@@ -221,6 +281,18 @@ export function estimateToolSchemaTokens(tools: ToolProtocol[]): number {
     total += Math.ceil(s.length / 2);
   }
   return total;
+}
+
+/**
+ * 估算**实际注入后**的 system prompt 的 token 开销（按 ~2 字符/token 中文近似）。
+ *
+ * 与 estimateToolSchemaTokens（按原始工具 schema 估算）不同，这里度量的是
+ * `injectToolSchemas` 产出的完整 system prompt（基座 + 调用约定 + 工具描述），
+ * 是模型每回合真实支付的输入上下文成本。该成本需**按模型调用次数累计**（每回合
+ * 模型都重新消费 system prompt），见 runRealToolAbScenario 的 schemaTokenCost 计算。
+ */
+export function estimateSystemPromptTokens(systemPrompt: string): number {
+  return Math.ceil(systemPrompt.length / 2);
 }
 
 // ============================================================================
@@ -278,7 +350,7 @@ function buildRealPrompt(scenario: BaselineScenario): string {
 export function createDryRunModel(scenario: BaselineScenario, arm: "A" | "B"): ToolAbModelFn {
   return async (ctx) => {
     if (ctx.round >= scenario.calls.length) {
-      return { kind: "final", text: "（dry-run 生成正文）" };
+      return { kind: "final", text: REAL_DONE_MARKER };
     }
     const call = scenario.calls[ctx.round];
     if (arm === "A") {
@@ -293,6 +365,135 @@ export function createDryRunModel(scenario: BaselineScenario, arm: "A" | "B"): T
       arguments: { intent, ...call.args },
     };
   };
+}
+
+// ============================================================================
+// 真实模型决策（ReAct text 指令，需授权后启用）
+// ============================================================================
+
+/** createRealModelDecide 选项 */
+export interface RealModelDecideOptions {
+  /** 真实模型调用函数（Sub2API/GLM/Doubao，经授权） */
+  modelFn: ModelGenerateFn;
+  /** 模型路由名（如 narrator_testing_glm） */
+  route: string;
+  /** 输出上限 token */
+  maxTokens?: number;
+  /** 单次调用超时 ms */
+  timeoutMs?: number;
+  /** 采样温度 */
+  temperature?: number;
+}
+
+/**
+ * 把真实模型调用包装成 ToolAbModelFn（ReAct text 指令协议）。
+ *
+ * 与 dry-run 一致地使用 `<tool_call>{...}</tool_call>` 文本指令：
+ * - system prompt = runner 注入的可见工具 schema（ctx.systemPrompt）
+ * - user prompt = 检索计划 + 已发生回合（含工具结果文本，供决策连续性）
+ * - 模型输出经 parseToolCallDirectives 解析：
+ *   - 含指令 → 返回 tool_call 决策（facade 时提取 intent）
+ *   - 无指令 → 返回 final 正文
+ *
+ * 授权边界：本函数只包装模型调用，不触发生成；真实 API 由调用方经 modelFn 授权。
+ */
+export function createRealModelDecide(options: RealModelDecideOptions): ToolAbModelFn {
+  return async (ctx): Promise<ToolAbModelDecision> => {
+    const systemPrompt = ctx.systemPrompt || "你是检索驱动的叙事证据决策代理。";
+    const userPrompt = buildRealUserPrompt(ctx);
+    const out = await options.modelFn({
+      route: options.route,
+      systemPrompt,
+      userPrompt,
+      kind: "tool_ab_real_decision",
+      maxTokens: options.maxTokens,
+      timeoutMs: options.timeoutMs,
+      temperature: options.temperature,
+      seed: ctx.seed,
+    });
+
+    const parsed = parseToolCallDirectives(out.text);
+    if (parsed.hasToolCall) {
+      const call = parsed.toolCalls[0];
+      const args = call.arguments;
+      // facade 场景：从 arguments 提取 intent 供 runner 校验 + 路由。
+      // 模型经 schema 注入看到的是中文意图标签，需映射回英文协议值，
+      // 使 runner 的 QUERY_NARRATIVE_INTENTS 校验与底层 INTENT_TO_TOOL 路由成立。
+      const rawIntent = typeof args.intent === "string" ? args.intent.trim() : undefined;
+      const intent =
+        rawIntent && CHINESE_TO_INTENT_MAP[rawIntent]
+          ? CHINESE_TO_INTENT_MAP[rawIntent]
+          : rawIntent;
+      // 若工具指令 JSON 解析失败（malformed directive），把失败原因透传给 runner 记录 parseErrors。
+      const parseError =
+        parsed.parseFailures.length > 0
+          ? `第 ${parsed.parseFailures[0].index + 1} 个工具调用指令 JSON 解析失败：` +
+            `${parsed.parseFailures[0].rawJson.slice(0, 80) || "（无法定位指令内容）"}`
+          : undefined;
+      return {
+        kind: "tool_call",
+        toolName: call.name,
+        intent,
+        arguments: intent !== rawIntent ? { ...args, intent } : args,
+        parseError,
+      };
+    }
+    // 无工具指令 → 证据充分，只返回终止标记，不生成正文（评测边界）。
+    return { kind: "final", text: REAL_DONE_MARKER };
+  };
+}
+
+/**
+ * 便捷工厂：用 legacy ModelGenerateFn 构造真实模型决策 fn。
+ *
+ * 动态 import legacy-model-route-adapter（经 Sub2API/GLM fallback 网关），
+ * 默认路由 narrator_testing_glm（glm-5.2）。临时/批量测试须显式
+ * PINOVEL_DISABLE_FALLBACK=1 且只允许 GLM/Doubao，禁止 fallback 到按量模型。
+ */
+export async function createRealToolAbModelDecide(options: {
+  route?: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+  temperature?: number;
+} = {}): Promise<ToolAbModelFn> {
+  const { createLegacyModelGenerateFn } = await import(
+    "../../v2/adapters/legacy-model-route-adapter.js"
+  );
+  const modelFn = createLegacyModelGenerateFn();
+  return createRealModelDecide({
+    modelFn,
+    route: options.route ?? process.env.PINOVEL_TOOL_AB_ROUTE ?? "narrator_testing_glm",
+    maxTokens: options.maxTokens,
+    timeoutMs: options.timeoutMs,
+    temperature: options.temperature,
+  });
+}
+
+/**
+ * 从 ctx 构建 user prompt：检索计划 + 已发生回合（模型决策 + 工具结果文本）。
+ *
+ * 真实模型是 text-only，看不到结构化 toolResult，必须把工具结果文本回灌到
+ * user prompt，模型才能基于证据继续决策（决策连续性）。
+ */
+export function buildRealUserPrompt(ctx: ToolAbModelFnCtx): string {
+  const lines: string[] = [ctx.prompt];
+  for (const t of ctx.history) {
+    lines.push(`-- 第 ${t.round + 1} 回合 --`);
+    if (t.decision.kind === "final") {
+      lines.push(`模型已输出终止标记（证据充分）。`);
+      continue;
+    }
+    lines.push(`工具调用：${t.selectedTool ?? "?"}`);
+    if (t.intent) lines.push(`intent：${t.intent}`);
+    if (t.parseError) {
+      lines.push(`结果：错误（${t.parseError}）`);
+    } else if (t.resultText) {
+      lines.push(`结果：\n${t.resultText}`);
+    } else {
+      lines.push(`结果：（空）`);
+    }
+  }
+  return lines.join("\n");
 }
 
 // ============================================================================
@@ -328,8 +529,9 @@ export async function runRealToolAbScenario(options: {
   // 场景全部 calls 的 mustVerify 项（独立于模型 round 顺序，真实模型不会严格按 call 索引调用）
   const mustVerifyItems: string[] = scenario.calls.flatMap((c) => c.mustVerify ?? []);
   let firstValidFound = false;
-  let schemaTokenCost = 0;
   let injectedToolCount = 0;
+  // 修复3：schema token = 实际注入 systemPrompt 的估算 token；在 try 内赋值，try 外汇总使用。
+  let systemPromptTokens = 0;
 
   try {
     const searchService = createNarrativeSearchService({
@@ -344,31 +546,83 @@ export async function runRealToolAbScenario(options: {
         : [createTypedFacadeTool({ searchService })];
     const toolByName = new Map(tools.map((t) => [t.name, t]));
     const visibleTools = tools.map((t) => t.name).sort();
-    schemaTokenCost = estimateToolSchemaTokens(tools);
     injectedToolCount = tools.length;
+
+    // 按 arm 注入可见工具 schema 到 system prompt（A=9 专用工具，B=facade）。
+    // allowedToolNames 白名单 fail-closed：A 用叙事白名单，B 用 facade 名。
+    // 修复1：基座 prompt 只要求输出终止标记，不要求生成正文（评测边界）。
+    const systemPrompt = injectToolSchemas(
+      REAL_SYSTEM_PROMPT_BASE,
+      tools as unknown as AgentTool[],
+      arm === "A" ? NARRATIVE_TOOL_NAMES : new Set([QUERY_NARRATIVE_NAME]),
+    );
+    // 修复3：schema token 按「实际注入后的 system prompt」估算，并按模型调用次数累计。
+    systemPromptTokens = estimateSystemPromptTokens(systemPrompt);
 
     const prompt = buildRealPrompt(scenario);
 
     for (let round = 0; round < maxModelCalls; round++) {
-      const decision = await modelFn({
-        prompt,
-        visibleTools: [...visibleTools],
-        history: [...turns],
-        round,
-        seed,
-      });
+      // 修复4b：timeoutMs 真正包住模型决策调用（而非仅工具执行）。
+      let decision: ToolAbModelDecision;
+      const decisionStart = Date.now();
+      try {
+        decision = await withTimeout(
+          modelFn({
+            prompt,
+            systemPrompt,
+            visibleTools: [...visibleTools],
+            history: [...turns],
+            round,
+            seed,
+          }),
+          timeoutMs,
+          `模型决策第 ${round + 1} 回合`,
+        );
+      } catch (err) {
+        // 模型决策超时：记录为 timeout 回合并终止本场景（模型卡死无法继续）。
+        const msg = err instanceof Error ? err.message : String(err);
+        turns.push({
+          round,
+          decision: { kind: "tool_call", toolName: "", arguments: {}, parseError: msg },
+          selectedTool: null,
+          toolVisible: false,
+          intent: null,
+          intentValid: false,
+          routedTool: null,
+          routedOk: false,
+          directiveParseError: null,
+          parseError: msg,
+          latencyMs: Date.now() - decisionStart,
+          resultChars: 0,
+          estimateTokens: 0,
+          evidenceLevel: undefined,
+          sourceRef: undefined,
+          sourceRefValid: false,
+          sourceRefInvalidCategory: "empty",
+          empty: true,
+          timeout: true,
+          isError: true,
+          duplicateQuery: false,
+          firstValidEvidence: false,
+          resultText: msg,
+        });
+        break;
+      }
 
       if (decision.kind === "final") {
+        // 核对：final 只承载终止标记，不返回正文（评测边界）。
         turns.push({
           round,
           decision,
           selectedTool: null,
+          toolVisible: false,
           intent: null,
           intentValid: false,
           routedTool: null,
           routedOk: true,
+          directiveParseError: null,
           parseError: null,
-          latencyMs: 0,
+          latencyMs: Date.now() - decisionStart,
           resultChars: decision.text.length,
           estimateTokens: Math.ceil(decision.text.length / 2),
           evidenceLevel: undefined,
@@ -380,6 +634,7 @@ export async function runRealToolAbScenario(options: {
           isError: false,
           duplicateQuery: false,
           firstValidEvidence: false,
+          resultText: decision.text,
         });
         break;
       }
@@ -391,22 +646,27 @@ export async function runRealToolAbScenario(options: {
       const start = Date.now();
       let isError = false;
       let result: unknown = null;
-      let parseError: string | null = null;
-      let routedOk = tool !== undefined;
+      const toolVisible = tool !== undefined;
+      // 修复4a：directive JSON 解析失败（malformed）独立记录为 directiveParseError，
+      // 与「工具不在可见集 / intent 非法」的路由 parseError 分开，避免 parseErrors 被漏记。
+      const directiveParseError = decision.parseError ?? null;
+      let routedOk = toolVisible && directiveParseError === null;
 
-      // 校验：工具可见性 + B 组 intent 合法性
-      if (!tool) {
-        parseError = `工具 "${toolName}" 不在可见工具集内（可见：${visibleTools.join(", ")}）`;
+      // 路由校验：工具可见性 + B 组 intent 合法性。directive 解析失败时不进路由。
+      let routeParseError: string | null = null;
+      if (!toolVisible) {
+        routeParseError = `工具 "${toolName}" 不在可见工具集内（可见：${visibleTools.join(", ")}）`;
         routedOk = false;
       } else if (
         arm === "B" &&
         (intent === null || !QUERY_NARRATIVE_INTENTS.includes(intent as (typeof QUERY_NARRATIVE_INTENTS)[number]))
       ) {
-        parseError = `facade intent "${String(intent)}" 非法（应在 ${QUERY_NARRATIVE_INTENTS.join("|")} 内）`;
+        routeParseError = `facade intent "${String(intent)}" 非法（应在 ${QUERY_NARRATIVE_INTENTS.join("|")} 内）`;
         routedOk = false;
       }
+      const parseError = directiveParseError ?? routeParseError;
 
-      // 执行（仅当路由成功）
+      // 执行（仅当路由成功且 directive 解析成功）
       if (routedOk && tool) {
         try {
           result = await tool.execute(toolCallId, decision.arguments);
@@ -436,10 +696,12 @@ export async function runRealToolAbScenario(options: {
         round,
         decision,
         selectedTool: toolName,
+        toolVisible,
         intent,
         intentValid: arm === "B" ? intent !== null && QUERY_NARRATIVE_INTENTS.includes(intent as (typeof QUERY_NARRATIVE_INTENTS)[number]) : true,
         routedTool: arm === "B" && intent ? (INTENT_TO_TOOL[intent as IntentKey] ?? null) : toolName,
         routedOk,
+        directiveParseError,
         parseError,
         latencyMs,
         resultChars,
@@ -453,6 +715,7 @@ export async function runRealToolAbScenario(options: {
         isError,
         duplicateQuery,
         firstValidEvidence: isFirstValid,
+        resultText,
       });
 
       if (routedOk && result) {
@@ -469,7 +732,7 @@ export async function runRealToolAbScenario(options: {
     arm,
     seed,
     turns,
-    schemaTokenCost,
+    systemPromptTokens,
     mustVerifyItems,
     allConfirmed,
     injectedToolCount,
@@ -478,6 +741,23 @@ export async function runRealToolAbScenario(options: {
 
 // INTENT_TO_TOOL 已在文件顶部导入；此处仅定义 IntentKey 类型别名
 type IntentKey = keyof typeof INTENT_TO_TOOL;
+
+/** 给 Promise 加超时：超时则 reject（供包住模型决策调用，防止无限等待） */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} 超时（${ms}ms）`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
 
 // ============================================================================
 // 汇总
@@ -503,12 +783,15 @@ function summarizeRealScenario(
   arm: "A" | "B",
   seed: number,
   turns: RealToolAbTurn[],
-  schemaTokenCost: number,
+  systemPromptTokens: number,
   mustVerifyItems: string[],
   allConfirmed: ConfirmedEvidence[],
   injectedToolCount: number,
 ): RealToolAbScenarioMetrics {
   const toolSurface = injectedToolCount;
+  // 修复3：schema token 成本 = 实际注入 system prompt 的 token × 模型调用次数。
+  // 每个回合（含 final 终止回合）模型都重新消费 system prompt，故按 turns.length 累计。
+  const schemaTokenCost = systemPromptTokens * turns.length;
   let totalCalls = 0;
   let totalDuplicateQueries = 0;
   let totalResultChars = 0;
@@ -536,9 +819,11 @@ function summarizeRealScenario(
     totalDuplicateQueries += t.duplicateQuery ? 1 : 0;
     totalResultChars += t.resultChars;
     totalEstimateTokens += t.estimateTokens;
-    if (t.selectedTool === null || !t.routedOk) invalidToolSelections++;
+    // invalidToolSelections：选择的工具名不在可见集内（非法工具，不含 directive 解析失败）。
+    if (t.selectedTool !== null && !t.toolVisible) invalidToolSelections++;
     if (t.intent !== null && !t.intentValid) invalidIntents++;
-    if (t.parseError) parseErrors++;
+    // parseErrors：工具指令 JSON 解析失败（malformed directive；独立于路由错误）。
+    if (t.directiveParseError !== null) parseErrors++;
     if (t.empty) emptyResults++;
     if (t.timeout) timeouts++;
     if (t.isError) errors++;
@@ -597,6 +882,7 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     empty: 0,
     other: 0,
   };
+  const evidenceLevelCounts: Record<string, number> = {};
   const firstLatency: number[] = [];
   let avgCoverageSum = 0;
 
@@ -604,14 +890,20 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     for (const [k, v] of Object.entries(m.invalidSourceRefByCategory)) {
       invalidByCategory[k as InvalidSourceRefCategory] += v;
     }
+    // evidenceLevel 逐级聚合：只统计有效证据等级（VALID_EVIDENCE_LEVELS 内的命中）。
+    for (const t of m.turns) {
+      if (t.decision.kind === "final") continue;
+      if (t.evidenceLevel && VALID_EVIDENCE_LEVELS.has(t.evidenceLevel)) {
+        evidenceLevelCounts[t.evidenceLevel] = (evidenceLevelCounts[t.evidenceLevel] ?? 0) + 1;
+      }
+    }
     if (m.firstValidEvidence !== null) firstLatency.push(m.firstValidEvidence.cumulativeLatencyMs);
     avgCoverageSum += m.mustVerify.coverageRatio;
-    void m.schemaTokenCost;
   }
 
   return {
     toolSurface: metrics[0]?.toolSurface ?? 0,
-    schemaTokenCost: metrics[0]?.schemaTokenCost ?? 0,
+    schemaTokenCost: metrics.reduce((s, m) => s + m.schemaTokenCost, 0),
     totalCalls: metrics.reduce((s, m) => s + m.totalCalls, 0),
     totalDuplicateQueries: metrics.reduce((s, m) => s + m.totalDuplicateQueries, 0),
     totalResultChars: metrics.reduce((s, m) => s + m.totalResultChars, 0),
@@ -625,6 +917,7 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     sourceRefsValid: metrics.reduce((s, m) => s + m.sourceRefsValid, 0),
     sourceRefsInvalid: metrics.reduce((s, m) => s + m.sourceRefsInvalid, 0),
     invalidSourceRefByCategory: invalidByCategory,
+    evidenceLevelCounts,
     sourceRefCompleteness:
       metrics.reduce((s, m) => s + m.sourceRefsValid, 0) /
       (metrics.reduce((s, m) => s + m.totalCalls, 0) || 1),
@@ -634,15 +927,33 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
   };
 }
 
-/** 门槛判定：mustVerify/sourceRef/无效分类不降级 + 至少一项真实负担指标改善 */
+/** 门槛判定：mustVerify/sourceRef/无效分类/错误/超时/非法工具/解析失败逐项不降级 + 至少一项真实负担指标改善 */
 function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregation): RealToolAbGate {
   const mustVerifyCoverageNotDegraded = B.avgCoverageRatio >= A.avgCoverageRatio - 1e-9;
   const sourceRefCompletenessNotDegraded = B.sourceRefCompleteness >= A.sourceRefCompleteness - 1e-9;
-  const invalidTotalA =
-    A.invalidSourceRefByCategory.no_match + A.invalidSourceRefByCategory.profile_only + A.invalidSourceRefByCategory.empty;
-  const invalidTotalB =
-    B.invalidSourceRefByCategory.no_match + B.invalidSourceRefByCategory.profile_only + B.invalidSourceRefByCategory.empty;
+
+  // 无效 sourceRef 总数（4 分类口径）
+  const categoryKeys: InvalidSourceRefCategory[] = ["no_match", "profile_only", "empty", "other"];
+  const invalidTotalA = categoryKeys.reduce((s, k) => s + A.invalidSourceRefByCategory[k], 0);
+  const invalidTotalB = categoryKeys.reduce((s, k) => s + B.invalidSourceRefByCategory[k], 0);
   const invalidSourceRefNotWorsened = invalidTotalB <= invalidTotalA;
+
+  // 无效 sourceRef 逐分类均不恶化（不一致则门禁失败）
+  const invalidSourceRefCategoriesNotWorsened = categoryKeys.every(
+    (k) => B.invalidSourceRefByCategory[k] <= A.invalidSourceRefByCategory[k],
+  );
+
+  // 有效 evidenceLevel 逐级命中不降级：B 每个等级命中数不显著低于 A
+  const levelKeys = new Set([...Object.keys(A.evidenceLevelCounts), ...Object.keys(B.evidenceLevelCounts)]);
+  const evidenceLevelNotDegraded = [...levelKeys].every(
+    (lv) => (B.evidenceLevelCounts[lv] ?? 0) >= (A.evidenceLevelCounts[lv] ?? 0),
+  );
+
+  // 失败 / 超时 / 非法工具 / 解析失败逐项不恶化
+  const errorsNotWorsened = B.errors <= A.errors;
+  const timeoutsNotWorsened = B.timeouts <= A.timeouts;
+  const invalidToolSelectionsNotWorsened = B.invalidToolSelections <= A.invalidToolSelections;
+  const parseErrorsNotWorsened = B.parseErrors <= A.parseErrors;
 
   // 负担改善项（至少一项）：schema token / 非法工具选择 / 首证延迟 / 重复查询
   const improvedBurdenMetrics: string[] = [];
@@ -665,21 +976,46 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
   }
   const burdenImproved = improvedBurdenMetrics.length > 0;
 
+  const detailLevels = levelKeys.size > 0
+    ? [...levelKeys].map((lv) => `${lv}:B=${B.evidenceLevelCounts[lv] ?? 0}/A=${A.evidenceLevelCounts[lv] ?? 0}`).join("，")
+    : "（无有效证据等级命中）";
+  const detailCats = categoryKeys
+    .map((k) => `${k}:B=${B.invalidSourceRefByCategory[k]}/A=${A.invalidSourceRefByCategory[k]}`)
+    .join("，");
+
   return {
     mustVerifyCoverageNotDegraded,
     sourceRefCompletenessNotDegraded,
     invalidSourceRefNotWorsened,
+    invalidSourceRefCategoriesNotWorsened,
+    evidenceLevelNotDegraded,
+    errorsNotWorsened,
+    timeoutsNotWorsened,
+    invalidToolSelectionsNotWorsened,
+    parseErrorsNotWorsened,
     burdenImproved,
     improvedBurdenMetrics,
     allPassed:
       mustVerifyCoverageNotDegraded &&
       sourceRefCompletenessNotDegraded &&
       invalidSourceRefNotWorsened &&
+      invalidSourceRefCategoriesNotWorsened &&
+      evidenceLevelNotDegraded &&
+      errorsNotWorsened &&
+      timeoutsNotWorsened &&
+      invalidToolSelectionsNotWorsened &&
+      parseErrorsNotWorsened &&
       burdenImproved,
     details: {
       mustVerifyCoverage: `B=${B.avgCoverageRatio.toFixed(3)} >= A=${A.avgCoverageRatio.toFixed(3)}`,
       sourceRefCompleteness: `B=${B.sourceRefCompleteness.toFixed(3)} >= A=${A.sourceRefCompleteness.toFixed(3)}`,
       invalidSourceRef: `B=${invalidTotalB} <= A=${invalidTotalA}`,
+      invalidSourceRefCategories: detailCats,
+      evidenceLevel: detailLevels,
+      errors: `B=${B.errors} <= A=${A.errors}`,
+      timeouts: `B=${B.timeouts} <= A=${A.timeouts}`,
+      invalidToolSelections: `B=${B.invalidToolSelections} <= A=${A.invalidToolSelections}`,
+      parseErrors: `B=${B.parseErrors} <= A=${A.parseErrors}`,
       burdenImproved: `改善项：${improvedBurdenMetrics.join(", ") || "无"}`,
     },
   };

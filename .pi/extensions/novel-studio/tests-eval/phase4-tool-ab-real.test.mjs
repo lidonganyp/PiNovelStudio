@@ -173,6 +173,37 @@ describe("PHASE4-TOOL-AB-REAL-3：结果门槛", () => {
     }
   });
 
+  it("门禁逐项字段存在且为布尔（evidenceLevel/错误/超时/非法工具/解析失败）", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runRealToolAbReplay();
+    const g = comparison.gate;
+    for (const key of [
+      "mustVerifyCoverageNotDegraded",
+      "sourceRefCompletenessNotDegraded",
+      "invalidSourceRefNotWorsened",
+      "invalidSourceRefCategoriesNotWorsened",
+      "evidenceLevelNotDegraded",
+      "errorsNotWorsened",
+      "timeoutsNotWorsened",
+      "invalidToolSelectionsNotWorsened",
+      "parseErrorsNotWorsened",
+      "burdenImproved",
+      "allPassed",
+    ]) {
+      assert.equal(typeof g[key], "boolean", `门禁 ${key} 应为布尔`);
+    }
+    for (const key of [
+      "evidenceLevel",
+      "invalidSourceRefCategories",
+      "errors",
+      "timeouts",
+      "invalidToolSelections",
+      "parseErrors",
+    ]) {
+      assert.ok(g.details[key] !== undefined, `details 应含 ${key}`);
+    }
+  });
+
   it("全部门禁通过", async () => {
     const runner = await importRunner();
     const comparison = await runner.runRealToolAbReplay();
