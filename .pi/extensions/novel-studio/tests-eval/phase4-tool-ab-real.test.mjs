@@ -221,6 +221,60 @@ describe("PHASE4-TOOL-AB-REAL-3：结果门槛", () => {
     }
   });
 
+  it("evidenceLevel 口径修正：rankedEvidenceLevels 记录单回合全部有效证据等级（折叠计数）", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runRealToolAbReplay();
+    // 1) 每个 tool_call 回合都应携带 rankedEvidenceLevels（至少为数组；无有效等级时为空）
+    for (const p of comparison.scenarios) {
+      for (const arm of ["A", "B"]) {
+        for (const m of arm === "A" ? p.A : p.B) {
+          for (const t of m.turns) {
+            assert.ok(Array.isArray(t.rankedEvidenceLevels), `回合应含 rankedEvidenceLevels 数组`);
+            for (const lv of t.rankedEvidenceLevels) {
+              assert.ok(
+                runner.VALID_EVIDENCE_LEVELS.has(lv),
+                `rankedEvidenceLevels 只应含有效证据等级，实际=${lv}`,
+              );
+            }
+          }
+        }
+      }
+    }
+    // 2) 聚合 evidenceLevelCounts 必须 >= 按首条 evidenceLevel 统计的命中（折叠等级被计入）
+    for (const arm of ["A", "B"]) {
+      const agg = comparison.aggregation[arm];
+      const aggCount = Object.values(agg.evidenceLevelCounts).reduce((s, n) => s + n, 0);
+      // 逐 fetch 首条统计（旧口径）
+      let firstOnlyCount = 0;
+      for (const p of comparison.scenarios) {
+        for (const m of arm === "A" ? p.A : p.B) {
+          for (const t of m.turns) {
+            if (t.decision.kind === "final") continue;
+            if (t.evidenceLevel && runner.VALID_EVIDENCE_LEVELS.has(t.evidenceLevel)) {
+              firstOnlyCount++;
+            }
+          }
+        }
+      }
+      assert.ok(
+        aggCount >= firstOnlyCount,
+        `${arm} 聚合 evidenceLevelCounts=${aggCount} 应 >= 首条口径=${firstOnlyCount}（折叠等级被计入）`,
+      );
+    }
+    // 3) 至少存在一个回合折叠了 >=2 个证据等级（证明口径修正有实际对象）
+    let multiLevelTurn = 0;
+    for (const p of comparison.scenarios) {
+      for (const arm of ["A", "B"]) {
+        for (const m of arm === "A" ? p.A : p.B) {
+          for (const t of m.turns) {
+            if (t.rankedEvidenceLevels.length > 1) multiLevelTurn++;
+          }
+        }
+      }
+    }
+    assert.ok(multiLevelTurn > 0, `应至少存在一个折叠多等级的回合，实际=${multiLevelTurn}`);
+  });
+
   it("全部门禁通过", async () => {
     const runner = await importRunner();
     const comparison = await runner.runRealToolAbReplay();

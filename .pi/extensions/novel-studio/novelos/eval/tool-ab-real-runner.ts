@@ -60,6 +60,9 @@ import type { ToolProtocol } from "../tools/tool-protocol.js";
 /** 终止标记：模型证据充分时只需输出此标记，禁止生成章节正文（评测边界） */
 export const REAL_DONE_MARKER = "<done>";
 
+/** re-export：供测试引用有效证据等级集合做口径校验 */
+export { VALID_EVIDENCE_LEVELS } from "./uncertainty-recall-metrics.js";
+
 /**
  * 检索决策 system prompt 基底（runner 注入工具 schema 后发送给模型）。
  *
@@ -159,6 +162,15 @@ export interface RealToolAbTurn {
   resultChars: number;
   estimateTokens: number;
   evidenceLevel: string | undefined;
+  /**
+   * 本回合工具返回的**全部**有效证据等级（去重，来自 details.rankedEvidences）。
+   *
+   * 修正评测口径（Phase 4.3 收口）：单次调用可能折叠多个证据等级（如 confirmed_state +
+   * exact_chapter_span 同回合返回），仅用 evidenceLevel 首条会低估 B 组折叠能力，
+   * 造成 evidenceLevelNotDegraded 门禁在 exact_chapter_span 上误判降级。
+   * 聚合 evidenceLevelCounts 时以本集合为准；无 rankedEvidences 时回退为 [evidenceLevel]。
+   */
+  rankedEvidenceLevels: string[];
   sourceRef: string | undefined;
   sourceRefValid: boolean;
   sourceRefInvalidCategory: InvalidSourceRefCategory | null;
@@ -667,6 +679,7 @@ export async function runRealToolAbScenario(options: {
           resultChars: 0,
           estimateTokens: 0,
           evidenceLevel: undefined,
+          rankedEvidenceLevels: [],
           sourceRef: undefined,
           sourceRefValid: false,
           sourceRefInvalidCategory: "empty",
@@ -698,6 +711,7 @@ export async function runRealToolAbScenario(options: {
           resultChars: decision.text.length,
           estimateTokens: Math.ceil(decision.text.length / 2),
           evidenceLevel: undefined,
+          rankedEvidenceLevels: [],
           sourceRef: undefined,
           sourceRefValid: false,
           sourceRefInvalidCategory: null,
@@ -754,7 +768,12 @@ export async function runRealToolAbScenario(options: {
       const resultChars = resultText.length;
       const estimateTokens = Math.ceil(resultChars / 2);
       const details = (result as { details?: unknown } | undefined)?.details as
-        | (Record<string, unknown> & { evidenceLevel?: string; sourceRef?: string; truncated?: boolean })
+        | (Record<string, unknown> & {
+            evidenceLevel?: string;
+            sourceRef?: string;
+            truncated?: boolean;
+            rankedEvidences?: Array<{ evidenceLevel?: string }>;
+          })
         | undefined;
       const evidenceLevel = details?.evidenceLevel;
       const sourceRef = details?.sourceRef;
@@ -765,6 +784,20 @@ export async function runRealToolAbScenario(options: {
       const duplicateQuery = dupTracker.check(toolName, decision.arguments);
       const isFirstValid = !firstValidFound && !!evidenceLevel && VALID_EVIDENCE_LEVELS.has(evidenceLevel);
       if (isFirstValid) firstValidFound = true;
+
+      // 修正评测口径：收集本回合返回的**全部**有效证据等级（去重）。
+      // 单次调用可能折叠多个等级（如 confirmed_state + exact_chapter_span 同回合返回）；
+      // 用 rankedEvidences 完整列表，避免仅首条 evidenceLevel 低估 B 组折叠能力。
+      const rankedEvidenceLevels = Array.from(
+        new Set(
+          (details?.rankedEvidences ?? [])
+            .map((e) => e.evidenceLevel)
+            .filter((lv): lv is string => !!lv && VALID_EVIDENCE_LEVELS.has(lv)),
+        ),
+      );
+      if (rankedEvidenceLevels.length === 0 && evidenceLevel && VALID_EVIDENCE_LEVELS.has(evidenceLevel)) {
+        rankedEvidenceLevels.push(evidenceLevel);
+      }
 
       turns.push({
         round,
@@ -781,6 +814,7 @@ export async function runRealToolAbScenario(options: {
         resultChars,
         estimateTokens,
         evidenceLevel,
+        rankedEvidenceLevels,
         sourceRef,
         sourceRefValid,
         sourceRefInvalidCategory: sourceRefValid ? null : classifyInvalidSourceRef(sourceRef),
@@ -971,11 +1005,12 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     for (const [k, v] of Object.entries(m.invalidSourceRefByCategory)) {
       invalidByCategory[k as InvalidSourceRefCategory] += v;
     }
-    // evidenceLevel 逐级聚合：只统计有效证据等级（VALID_EVIDENCE_LEVELS 内的命中）。
+    // evidenceLevel 逐级聚合：按本回合返回的**全部**有效证据等级（去重，来自 rankedEvidenceLevels）。
+    // 修正评测口径：单次调用可能折叠多个等级（如 confirmed_state + exact_chapter_span）。
     for (const t of m.turns) {
       if (t.decision.kind === "final") continue;
-      if (t.evidenceLevel && VALID_EVIDENCE_LEVELS.has(t.evidenceLevel)) {
-        evidenceLevelCounts[t.evidenceLevel] = (evidenceLevelCounts[t.evidenceLevel] ?? 0) + 1;
+      for (const lv of t.rankedEvidenceLevels) {
+        evidenceLevelCounts[lv] = (evidenceLevelCounts[lv] ?? 0) + 1;
       }
     }
     if (m.firstValidEvidence !== null) firstLatency.push(m.firstValidEvidence.cumulativeLatencyMs);
