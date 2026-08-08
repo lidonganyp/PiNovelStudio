@@ -65,6 +65,39 @@ export interface RankedEvidence {
 }
 
 // ============================================================================
+// 查询-事实匹配（Phase 4.2.2 修复）
+// ============================================================================
+
+/**
+ * 判断 query 是否匹配目标文本。
+ *
+ * 1. 先做精确子串包含（含双向），保持既有行为。
+ * 2. 中文模型构造查询时经常省略句法功能词（如「有」），导致「青鱼嘴水域暗流」
+ *    无法作为「青鱼嘴水域有暗流」的连续子串命中。作为保守回退，检查 query 中
+ *    是否存在 ≥4 字的中文连续片段出现在目标文本中。
+ *
+ * 保守性：仅要求连续片段（非任意字符集合），且 4 字下限避免以短词/人名造成
+ * 过度匹配——与 must-verify-coverage-gate 的 extractKeyPhrases（length>=4）口径一致，
+ * 保证「相似但错误」的结果不会被当作已确认证据。
+ */
+function matchesQuery(query: string, text: string): boolean {
+  const q = query?.trim() ?? "";
+  if (!q || !text) return false;
+  if (text.includes(q) || q.includes(text)) return true;
+  const segments = q.match(/[\u4e00-\u9fff]+/gu) ?? [];
+  for (const segment of segments) {
+    if (segment.length < 4) continue;
+    // 从长到短找任意 ≥4 字连续片段是否出现在目标文本
+    for (let length = segment.length; length >= 4; length -= 1) {
+      for (let index = 0; index + length <= segment.length; index += 1) {
+        if (text.includes(segment.slice(index, index + length))) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// ============================================================================
 // NarrativeSearchService
 // ============================================================================
 
@@ -287,7 +320,7 @@ export class NarrativeSearchService {
     const canonEntries = this.queryCanon(options?.category);
     for (const entry of canonEntries) {
       if (!query) continue;
-      if (entry.fact.includes(query) || query.includes(entry.fact)) {
+      if (matchesQuery(query, entry.fact)) {
         evidences.push({
           sourceRef: `canon:${entry.id}`,
           excerpt: entry.fact,
@@ -303,7 +336,7 @@ export class NarrativeSearchService {
     for (const entry of charEntries) {
       const text = `${entry.field}:${entry.value}`;
       if (!query) continue;
-      if (text.includes(query) || query.includes(entry.value)) {
+      if (matchesQuery(query, text) || query.includes(entry.value)) {
         evidences.push({
           sourceRef: `character:${entry.characterId}:${entry.field}`,
           excerpt: text,

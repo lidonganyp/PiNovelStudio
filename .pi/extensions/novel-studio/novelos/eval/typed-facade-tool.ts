@@ -104,20 +104,27 @@ export const CHINESE_TO_INTENT_MAP: Record<string, QueryNarrativeIntent> = (() =
 })();
 
 /**
- * 每个意图的使用说明：何时使用 + 优先级（一行式，尽可能紧凑）。
+ * 每个意图的使用说明：何时使用 + 优先级 + 查询构造要点（一行式，尽可能紧凑）。
  *
- * Phase 4.2.2：给 facade intent 明确的「何时使用、优先级」语义，
- * 尤其明确**事实核验优先使用 evidence**，帮助模型在统一入口下做出更准的路由决策，
- * 避免在 9 个窄工具 schema 间或意图之间盲目切换（诊断 SC1-canon 的 canon:empty 降级）。
+ * Phase 4.2.2：给 facade intent 明确的「何时使用、优先级、查询构造」语义，
+ * 尤其明确**事实核验优先使用 evidence**，并给出查询构造指引，帮助模型在统一入口下
+ * 做出更准的路由决策，避免在 9 个窄工具 schema 间或意图之间盲目切换
+ * （诊断 SC1-canon 的 canon:empty / ranked:no-match 降级）。
+ *
+ * 查询构造要点（检索按子串匹配事实）：
+ * - evidence / chapter_span 的 query 尽量**复用待验证事实的原文短语**，不随意改写/删字，
+ *   否则子串匹配失败 → no-match / empty。
+ * - canon 意图传 `category`（timeline/location/entity/ability_rule）即可返回该类别全部
+ *   事实，**无需精确 query**，比构造易失配的长短语更稳（对齐 A 组 query_canon 的稳健用法）。
  *
  * 设计约束：本说明只注入**工具 description 一处**（INTENT_USAGE 不进 intent 参数
  * schema，避免重复膨胀 B 组 schema token 反超 A 组，破坏"facade 降低上下文负担"门禁）。
  * 各意图参数（query/characterId/category/...）已在 parameters schema 中声明，此处不重复。
  */
 export const INTENT_USAGE: Record<QueryNarrativeIntent, string> = {
-  evidence: "核心事实/情节元素跨源交叉核验（默认首选，最高优先级）",
-  chapter_span: "查看章节原文措辞/前后文（中优先级）",
-  canon: "世界设定/既定事实冲突核验（高优先级）",
+  evidence: "核心事实跨源核验（默认首选，最高优先级）；query 复用待验证事实原文短语",
+  chapter_span: "查看章节原文措辞/前后文（中优先级）；query 复用原文短语",
+  canon: "世界设定/既定事实核验（高优先级）；传 category 返回该类别全部事实，无需精确短语",
   character_state: "角色当前状态/经历/情感（中优先级）",
   timeline: "事件先后顺序/时间点核验（中优先级）",
   knowledge_boundary: "角色知道什么/不该知道什么（中优先级）",
@@ -157,7 +164,9 @@ export function createTypedFacadeTool(ctx: {
     description:
       "统一叙事查询入口：按查询意图路由到对应的叙事专用工具。" +
       "事实核验类查询**优先使用「跨源证据检索」意图**；返回的结果带来源引用与证据等级。\n" +
-      `各意图「何时使用/优先级」：\n${QUERY_NARRATIVE_INTENT_GUIDANCE}`,
+      `各意图「何时使用/优先级」：\n${QUERY_NARRATIVE_INTENT_GUIDANCE}\n` +
+      "查询构造：evidence/chapter_span 的 query 复用待验证事实原文短语（检索按子串匹配）；" +
+      "canon 意图传 category 返回该类全部事实。证据充分后立即输出终止标记，每回合只查一个事实。",
     label: "Query Narrative (Typed Facade)",
     parameters: Type.Object({
       intent: Type.Union(
