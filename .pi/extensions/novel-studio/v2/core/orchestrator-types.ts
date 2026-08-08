@@ -21,6 +21,7 @@ import type { StrategyPolicyStore } from "../learning/strategy-policy-store.js";
 import type { ContextualStrategySelector } from "../learning/contextual-strategy-selector.js";
 import type { StrategyOutcomeRecorder } from "../learning/strategy-outcome-recorder.js";
 import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-candidate-source.js";
+import type { NarrativeToolMode } from "../../novelos/agent/evidence-plan.js";
 import type { ContextSafetyResult } from "./context-safety.js";
 import type { TrustedControlPlane } from "./control-plane.js";
 import type { SceneSolutionCard } from "./scene-solution-search.js";
@@ -312,6 +313,18 @@ export interface UnifiedOrchestratorInput {
    * 但 SOFT 检查排除 agentic 调用（kind=AGENTIC_RAW_KIND="agentic_raw"），确保 shadow 不影响 editorial 路径。
    */
   agenticCandidateSource?: AgenticRawCandidateSource;
+  /**
+   * Phase 5 受控接入：叙事工具暴露模式。
+   *
+   * 由 unified-entry 从 workspace canary 授权解析（resolveToolModeFromCanaryAuthorization），
+   * 只对显式 opt-in 的 canary workspace 设为 "facade"；其余 workspace 不传（undefined）=
+   * 默认 "standard"（9 专用工具执行面不变，非全量切换）。
+   *
+   * "facade" 时编排器把 ATTRIBUTE 透传给 agenticCandidateSource.generate(input.toolMode)，
+   * registry 额外注册 query_narrative_production，evidencePlan.allowedTools 收窄为该统一入口。
+   * 这是 "guided facade vs 9 工具" 的受控对照；失败或 promotion gate 不通过即回退 9 专用工具。
+   */
+  toolMode?: NarrativeToolMode;
   /**
    * Eval mode（NB-4 Generation Matrix 用）：控制主链路在哪个阶段提前 return，
    * 让 B0-B4 五层共享同一 `orchestrate` 入口，禁止独立正文生成器。

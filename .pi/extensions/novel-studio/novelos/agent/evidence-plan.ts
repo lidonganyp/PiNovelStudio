@@ -20,6 +20,24 @@
 
 import type { ChapterIntent } from "../../v2/core/chapter-intent-builder.js";
 import type { CompiledContext } from "../../v2/core/types.js";
+import { QUERY_NARRATIVE_PRODUCTION_NAME } from "../tools/narrative-tools.js";
+
+// ============================================================================
+// NarrativeToolMode（Phase 5 受控接入）
+// ============================================================================
+
+/**
+ * Phase 5 受控接入：叙事工具暴露模式。
+ *
+ * - "standard"：默认生产。模型看到 9 个专用叙事工具（由 inferAllowedToolsFromIntent /
+ *   allowedTools 收窄到子集）。
+ * - "facade"：canary workspace 显式 opt-in。模型只看到 1 个统一入口
+ *   query_narrative_production（按 intent 路由到 9 个底层专用工具）。
+ *   这是 "guided facade vs 9 工具" 的受控对照，不推广为"任意单入口 facade 更优"。
+ *
+ * 仅当 workspace canary 授权解析为 facade 时启用；默认 standard 行为不变（非全量切换）。
+ */
+export type NarrativeToolMode = "standard" | "facade";
 
 // ============================================================================
 // StopConditions
@@ -104,6 +122,16 @@ export interface CreateEvidencePlanInput {
   bridgeContextAvailable?: boolean;
   /** 允许使用的工具名（默认全部 9 工具） */
   allowedTools?: string[];
+  /**
+   * Phase 5 受控接入：叙事工具暴露模式。
+   *
+   * - "facade"：allowedTools 默认收窄为 [query_narrative_production]（统一入口按 intent
+   *   路由到 9 个底层专用工具）。仅 canary workspace 显式 opt-in 时设置。
+   * - "standard" / 缺省：默认行为（intent 推断 or 全量 9 工具）。
+   *
+   * 注意：显式传入 allowedTools 时优先于 toolMode（调用方可精确控制）。
+   */
+  toolMode?: NarrativeToolMode;
   /** 停止条件覆盖 */
   stopConditions?: Partial<StopConditions>;
 }
@@ -326,11 +354,15 @@ export function createEvidencePlan(input: CreateEvidencePlanInput): EvidencePlan
     ? extractMustVerifyFromIntent(input.intent)
     : extractMustVerifyItems(input.chapterIntent, input.seedContext);
 
-  // allowedTools：优先用 intent 推断（缺口一：收窄工具集），回退到全量
+  // allowedTools：Phase 5 facade 模式收窄为统一入口；否则优先用 intent 推断（缺口一：
+  // 收窄工具集），回退到全量。
+  // 显式传入 allowedTools 优先于 toolMode（调用方可精确控制）。
   const allowedTools = input.allowedTools
-    ?? (input.intent
-      ? inferAllowedToolsFromIntent(input.intent, input.bridgeContextAvailable)
-      : [...ALL_NARRATIVE_TOOLS]);
+    ?? (input.toolMode === "facade"
+      ? [QUERY_NARRATIVE_PRODUCTION_NAME]
+      : (input.intent
+        ? inferAllowedToolsFromIntent(input.intent, input.bridgeContextAvailable)
+        : [...ALL_NARRATIVE_TOOLS]));
 
   // known：只在 intent + compiledContext 同时提供时提取摘要行（缺口三：注入已知摘要）
   // 不传时为空数组（M1 行为：seed context 已在 prompt 中，不单独标记 known）

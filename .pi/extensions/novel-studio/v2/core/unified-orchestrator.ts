@@ -819,6 +819,9 @@ export class UnifiedOrchestrator {
             writerPromptProfile: input.rawPromptProfile,
             // eval-only：A/B 对照实验用，覆盖 Agentic 检索决策规则（生产 undefined = 默认强制检索）
             retrievalPromptOverride: input.retrievalPromptOverride,
+            // Phase 5 受控接入：透传 toolMode（facade 时 registry 注册统一入口、
+            // allowedTools 收窄、runtime 白名单/检索预算扩展；undefined = 默认 standard）
+            toolMode: input.toolMode,
           }),
         );
       } catch (error: unknown) {
@@ -1665,6 +1668,8 @@ export class UnifiedOrchestrator {
             writerPromptProfile: input.rawPromptProfile,
             // eval-only：A/B 对照实验用，覆盖 Agentic 检索决策规则（生产 undefined = 默认强制检索）
             retrievalPromptOverride: input.retrievalPromptOverride,
+            // Phase 5 受控接入：透传 toolMode（受控接入同样适用于 evalMode 对照实验）
+            toolMode: input.toolMode,
           })
         );
         agenticCandidate = agenticResult.candidate;
@@ -1830,6 +1835,8 @@ export class UnifiedOrchestrator {
             fewshotSelection: input.fewshotSelection,
             // CONTRACT-LAYERING-ABLATION-1：透传渲染策略（shadow 路径 undefined = 平铺）
             writerPromptProfile: input.rawPromptProfile,
+            // Phase 5 受控接入：透传 toolMode（shadow 路径同样受控）
+            toolMode: input.toolMode,
           })
         );
         stageResults.novelos = {

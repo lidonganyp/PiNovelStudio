@@ -16,6 +16,7 @@ import type { ToolProtocol, ToolPermission } from "../tools/tool-protocol.js";
 import type { Role, PermissionPolicy } from "../security/permission-policy.js";
 import type { TSchema } from "typebox";
 import { createNarrativeTools } from "../tools/narrative-tools.js";
+import { createQueryNarrativeProductionFacadeTool } from "../tools/query-narrative-facade.js";
 import type { NarrativeSearchService } from "./narrative-search-service.js";
 
 // ============================================================================
@@ -25,6 +26,14 @@ import type { NarrativeSearchService } from "./narrative-search-service.js";
 export interface NarrativeToolRegistryOptions {
   searchService: NarrativeSearchService;
   permissionPolicy: PermissionPolicy;
+  /**
+   * Phase 5 受控接入：是否额外注册 query_narrative_production（facade runtime 变体）。
+   *
+   * 仅当 workspace canary 授权 opt-in（toolMode="facade"）时为 true；默认 false =
+   * 只注册 9 个专用叙事工具（生产默认行为不变）。facade 不改变 9 工具本身，
+   * 只是新增一个按 intent 路由的统一入口，作为 "guided facade vs 9 工具" 的受控对照。
+   */
+  enableFacade?: boolean;
 }
 
 export class NarrativeToolRegistry {
@@ -33,10 +42,18 @@ export class NarrativeToolRegistry {
 
   constructor(options: NarrativeToolRegistryOptions) {
     this.permissionPolicy = options.permissionPolicy;
-    // 注册 8 个内置叙事工具
+    // 注册 9 个内置叙事工具
     const tools = createNarrativeTools({ searchService: options.searchService });
     for (const tool of tools) {
       this.register(tool);
+    }
+    // Phase 5 受控接入：仅 when enableFacade=true 额外注册 facade runtime 变体。
+    // 默认（非 canary workspace）不注册，保持 9 专用工具执行面不变。
+    if (options.enableFacade === true) {
+      const facade = createQueryNarrativeProductionFacadeTool({
+        searchService: options.searchService,
+      });
+      this.register(facade);
     }
   }
 

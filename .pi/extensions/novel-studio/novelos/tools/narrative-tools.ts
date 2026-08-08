@@ -25,6 +25,9 @@ import type { ToolProtocol, NarrativeToolResultDetails } from "./tool-protocol.j
 import { makeNarrativeToolResult } from "./tool-protocol.js";
 import type { NarrativeSearchService } from "../agent/narrative-search-service.js";
 
+/** facade runtime 变体工具名（单一来源；query-narrative-facade.ts 从这引用，避免环形依赖） */
+export const QUERY_NARRATIVE_PRODUCTION_NAME = "query_narrative_production";
+
 // ============================================================================
 // 叙事工具白名单（Phase 2D 缺口一防御纵深 2026-08-07）
 // ============================================================================
@@ -51,6 +54,21 @@ export const NARRATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
 
 /** 检索类工具子集（全部 9 个叙事工具都是只读检索/查询工具） */
 export const RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = NARRATIVE_TOOL_NAMES;
+
+/**
+ * Phase 5 受控接入：facade 模式下的注入白名单。
+ *
+ * = NARRATIVE_TOOL_NAMES（9 专用工具）+ query_narrative_production（facade runtime 变体）。
+ * 仅当 workspace canary 授权 opt-in（toolMode="facade"）时使用；默认生产仍为
+ * NARRATIVE_TOOL_NAMES（9 工具），受控接入不改变既有行为（非全量切换）。
+ *
+ * 仍是 fail-closed 权威白名单：facade 模式下允许注入的合法工具集恰好为
+ * {9 专用工具, query_narrative_production}，集合外工具一律拒绝。
+ */
+export const NARRATIVE_TOOL_NAMES_WITH_FACADE: ReadonlySet<string> = new Set([
+  ...NARRATIVE_TOOL_NAMES,
+  QUERY_NARRATIVE_PRODUCTION_NAME,
+]);
 
 // ============================================================================
 // Phase 3：统一结果格式辅助（resultKind / returnedCount / truncated / nextQueryHint）

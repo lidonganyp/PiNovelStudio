@@ -215,6 +215,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   query_pattern_memory: "叙事模式记忆查询",
   query_voice_evidence: "角色声音证据查询",
   query_narrative: "统一叙事查询",
+  query_narrative_production: "统一叙事查询（受控接入）",
 };
 
 const PARAMETER_NAME_MAP: Record<string, string> = {

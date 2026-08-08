@@ -54,6 +54,18 @@ export interface CanaryAuthorization {
   expiresAt: string;
   /** 签发者 */
   issuer: string;
+  /**
+   * Phase 5 受控接入：该 workspace canary 的叙事工具暴露模式。
+   *
+   * - "facade"：显式 opt-in 统一入口 query_narrative_production（受控对照实验）。
+   *   仅当授权含 toolMode="facade" 时，unified-entry 才把 toolMode 传给编排器，
+   *   registry 额外注册 facade、allowedTools 收窄、runtime 白名单/检索预算扩展。
+   * - 缺省 / "standard"：默认生产（9 专用工具执行面不变，非全量切换）。
+   *
+   * 这是 "guided facade vs 9 工具" 的受控接入，不推广为"任意单入口 facade 更优"；
+   * 失败或 promotion gate 不通过即回退 9 专用工具。
+   */
+  toolMode?: "standard" | "facade";
   /** 可选备注 */
   notes?: string;
 }
@@ -195,6 +207,23 @@ export function validateCanaryAuthorization(
         code: "invalid_field_value",
         path: "$.budget",
         message: "budget 必须包含 maxChapters 和 maxCalls（均为 number）",
+      },
+    };
+  }
+
+  // toolMode（可选，Phase 5 受控接入）：若存在必须为 "standard" 或 "facade"。
+  if (
+    obj.toolMode !== undefined &&
+    obj.toolMode !== null &&
+    (typeof obj.toolMode !== "string" ||
+      (obj.toolMode !== "standard" && obj.toolMode !== "facade"))
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_field_value",
+        path: "$.toolMode",
+        message: 'toolMode 必须为 "standard" 或 "facade"（可选）',
       },
     };
   }

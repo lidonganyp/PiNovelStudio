@@ -75,6 +75,7 @@ import { createContextualStrategySelector } from "../learning/contextual-strateg
 import { createStrategyOutcomeRecorder } from "../learning/strategy-outcome-recorder.js";
 // Step 5：NovelOS agentic_raw 候选源（shadow 模式，PINOVEL_NOVELOS_SHADOW=1 时启用）
 import { createAgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-candidate-source.js";
+import { resolveToolModeFromCanaryAuthorization } from "../governance/resolve-tool-mode-from-canary-authorization.js";
 import { createBlockedRawRecovery } from "./blocked-raw-recovery.js";
 import {
   buildTrustedControlPlane,
@@ -1819,6 +1820,13 @@ export async function runUnifiedPipeline(
     || qualityExperiment
     ? undefined
     : "agentic_style" as const;
+  // Phase 5 受控接入：从 workspace canary 授权解析叙事工具暴露模式。
+  // 只对显式 opt-in 的 canary workspace（canary-authorization.json 声明 toolMode="facade"
+  // 且未过期）返回 "facade"；其余返回 undefined（= 默认 9 专用工具 standard 行为，非全量切换）。
+  // evalMode / qualityExperiment / fullPipelinePreview 仅作只读预览，不启用 facade 受控接入。
+  const toolMode = evalMode === undefined && qualityExperiment === undefined
+    ? resolveToolModeFromCanaryAuthorization(projectRoot, workspaceId)
+    : undefined;
   // 推送 pipeline_start：前端尽早感知工具已启动，进入编排器后 timeAsync/timeSync 接管阶段进度
   emitTopProgress("pipeline", "start", "统一主链路编排开始（Preflight → Agentic → 风格优化 → 复检 → 保存）");
   const orchestrator = new UnifiedOrchestrator();
@@ -1828,6 +1836,7 @@ export async function runUnifiedPipeline(
     chapterNumber,
     projectRoot,
     productionFlow,
+    toolMode,
     intent: contextSafety.workingIntent,
     context: contextSafety.workingContext,
     constitution: context.constitution ?? null,

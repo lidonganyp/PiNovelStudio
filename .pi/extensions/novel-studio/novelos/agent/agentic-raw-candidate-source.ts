@@ -45,7 +45,8 @@ import {
   buildFewshotPromptBlock,
   type AgenticFewshotSelection,
 } from "./agentic-fewshot-prompt.js";
-import { NARRATIVE_TOOL_NAMES, RETRIEVAL_TOOL_NAMES } from "../tools/narrative-tools.js";
+import { NARRATIVE_TOOL_NAMES, NARRATIVE_TOOL_NAMES_WITH_FACADE, RETRIEVAL_TOOL_NAMES } from "../tools/narrative-tools.js";
+import type { NarrativeToolMode } from "./evidence-plan.js";
 import {
   runEvidenceDecisionRound,
   retrievalCallBudgetForDepth,
@@ -133,6 +134,17 @@ export interface AgenticRawSourceInput {
    * 不暴露思维链，只改变检索决策规则。
    */
   retrievalPromptOverride?: string;
+  /**
+   * Phase 5 受控接入：叙事工具暴露模式。
+   *
+   * - "facade"：canary workspace 显式 opt-in。registry 额外注册 query_narrative_production，
+   *   evidencePlan.allowedTools 收窄为该统一入口，runtime 注入白名单用
+   *   NARRATIVE_TOOL_NAMES_WITH_FACADE。模型只看到 1 个按 intent 路由的统一入口。
+   * - "standard" / 缺省：默认生产行为（9 专用工具执行面不变）。
+   *
+   * 这是 "guided facade vs 9 工具" 的受控对照，非全量切换；失败即可回退到 9 专用工具。
+   */
+  toolMode?: NarrativeToolMode;
 }
 
 /**
@@ -298,6 +310,7 @@ export function createAgenticRawCandidateSource(
         fewshotSelection,
         writerPromptProfile,
         retrievalPromptOverride,
+        toolMode,
       } = input;
 
       // ── 0. P1-5 修复：包装 modelGenerate 捕获真实模型名 ──────────────
@@ -344,9 +357,14 @@ export function createAgenticRawCandidateSource(
         sessionId,
       });
 
+      const facadeEnabled = toolMode === "facade";
+
       const registry = createNarrativeToolRegistry({
         searchService,
         permissionPolicy,
+        // Phase 5 受控接入：仅 canary workspace opt-in（toolMode="facade"）时
+        // 额外注册 query_narrative_production facade runtime 变体；默认不注册。
+        enableFacade: facadeEnabled,
       });
 
       const candidateWorkspace = createCandidateWorkspace({
@@ -403,6 +421,9 @@ export function createAgenticRawCandidateSource(
         intent,
         compiledContext: context,
         bridgeContextAvailable: context.bridgeContext?.available ?? false,
+        // Phase 5 受控接入：facade 模式下将 allowedTools 收窄为 [query_narrative_production]，
+        // 模型只看到 1 个按 intent 路由的统一入口；standard 不影响 intent 推断。
+        toolMode,
       });
 
       // ── 4b. 缺口三：模型参与的 EvidenceDecision 回合 ──────────────────
@@ -454,11 +475,15 @@ export function createAgenticRawCandidateSource(
           tools,
           // 缺口一防御纵深：注入边界白名单 = 全部叙事工具。
           // 即使未来绕过 evidencePlan.allowedTools 过滤，集合外工具也无法注入。
-          allowedToolNames: NARRATIVE_TOOL_NAMES,
+          // Phase 5 受控接入：facade 模式下白名单扩为 {9 专用工具, query_narrative_production}，
+          // 使统一入口可被注入；默认生产仍为 NARRATIVE_TOOL_NAMES（9 工具），行为不变。
+          allowedToolNames: facadeEnabled ? NARRATIVE_TOOL_NAMES_WITH_FACADE : NARRATIVE_TOOL_NAMES,
           // 缺口三执行：把检索深度推导的调用次数预算传给 runtime。
           // runtime 统计检索工具调用并在达到预算时经 afterToolCall 停止 loop，
           // 使"retrievalDepth → 工具调用次数/停止逻辑"成为系统强制约束（非仅 prompt 建议）。
-          retrievalToolNames: RETRIEVAL_TOOL_NAMES,
+          // Phase 5 受控接入：facade 模式下 query_narrative_production 也是检索工具，
+          // 需计入检索预算（否则统一入口调用次数不受 budget 约束）；standard 用 9 工具集合。
+          retrievalToolNames: facadeEnabled ? NARRATIVE_TOOL_NAMES_WITH_FACADE : RETRIEVAL_TOOL_NAMES,
           retrievalBudget: retrievalCallBudgetForDepth(evidencePlan.retrievalDepth),
           budget,
           trajectory,
