@@ -83,8 +83,30 @@ export type ToolAbModelDecision =
       arguments: Record<string, unknown>;
       /** 工具指令 JSON 解析失败原因（malformed directive；有则视为解析失败） */
       parseError?: string;
+      /** 本次模型调用的真实采样/路由 provenance（真实模型；dry-run 无） */
+      provenance?: ModelCallProvenance;
     }
-  | { kind: "final"; text: string };
+  | { kind: "final"; text: string; provenance?: ModelCallProvenance };
+
+/** 真实模型调用的采样/路由证据（PHASE4-2-1-1 provenance） */
+export interface ModelCallProvenance {
+  /** 实际使用的 provider（如 glm / doubao） */
+  provider?: string;
+  /** 实际使用的模型名 */
+  model?: string;
+  /** 请求路由（requested route） */
+  route?: string;
+  /** 实际生效的采样温度 */
+  temperature?: number;
+  /** seed 是否被透传并写入请求体 */
+  seedApplied?: boolean;
+  /** seed 是否被 provider 协议支持（支持才可能生效） */
+  seedSupported?: boolean;
+  /** 输出上限 token */
+  maxTokens?: number;
+  /** fallback 是否被关闭 */
+  fallbackDisabled?: boolean;
+}
 
 /** 模型函数上下文 */
 export interface ToolAbModelFnCtx {
@@ -153,6 +175,8 @@ export interface RealToolAbTurn {
    * - tool_call 回合：工具执行返回的文本内容（供真实模型下一回合决策连续性参考）
    */
   resultText: string;
+  /** 本回合模型调用的真实采样/路由 provenance（真实模型；dry-run 无） */
+  provenance?: ModelCallProvenance;
 }
 
 // ============================================================================
@@ -189,6 +213,8 @@ export interface RealToolAbScenarioMetrics {
     coverageRatio: number;
     uncoveredItems: string[];
   };
+  /** 本场景真实模型调用的采样/路由 provenance（首个非空回合；dry-run 无） */
+  provenance?: ModelCallProvenance;
 }
 
 /** 每场景 A/B 成对结果（每 arm 持有每个 seed 的独立 metrics，供 3-seed 聚合与逐 seed 展示） */
@@ -221,6 +247,8 @@ export interface RealToolAbArmAggregation {
   sourceRefCompleteness: number;
   avgCoverageRatio: number;
   firstValidEvidenceLatencyMs: number | null;
+  /** 本 arm 真实模型调用的采样/路由 provenance（真实模式；dry-run 无） */
+  provenance?: ModelCallProvenance;
 }
 
 /** 门槛判定：逐项不降级 + 至少一项真实负担指标改善 */
@@ -320,7 +348,7 @@ class SemanticDupTracker {
 // ============================================================================
 
 /** 从场景 calls 聚合 mustVerify 项，构造检索执行计划 prompt */
-function buildRealPrompt(scenario: BaselineScenario): string {
+export function buildRealPrompt(scenario: BaselineScenario): string {
   const plan = scenario.calls
     .flatMap((c) => c.mustVerify ?? [])
     .map((q) => `- ${q}`)
@@ -329,7 +357,8 @@ function buildRealPrompt(scenario: BaselineScenario): string {
     "本章需要验证以下事实（mustVerify）：",
     plan.length > 0 ? plan : "（无强制验证项）",
     "",
-    "请根据你可见的工具，检索所需证据后生成正文。",
+    "请根据你可见的工具检索所需证据；证据收集完成后只输出终止标记 " +
+      `${REAL_DONE_MARKER}，禁止生成或输出任何章节正文。`,
   ].join("\n");
 }
 
@@ -413,6 +442,17 @@ export function createRealModelDecide(options: RealModelDecideOptions): ToolAbMo
     });
 
     const parsed = parseToolCallDirectives(out.text);
+    // 真实采样/路由 provenance：从模型输出透传（provider/model/route/effective temperature/seed 支持）。
+    const provenance: ModelCallProvenance = {
+      provider: out.provider,
+      model: out.model,
+      route: out.route,
+      temperature: out.actuallyAppliedTemperature ?? options.temperature,
+      maxTokens: out.maxTokens ?? options.maxTokens,
+      seedApplied: out.seedApplied,
+      seedSupported: out.seedSupported,
+      fallbackDisabled: out.fallbackDisabled,
+    };
     if (parsed.hasToolCall) {
       const call = parsed.toolCalls[0];
       const args = call.arguments;
@@ -436,10 +476,11 @@ export function createRealModelDecide(options: RealModelDecideOptions): ToolAbMo
         intent,
         arguments: intent !== rawIntent ? { ...args, intent } : args,
         parseError,
+        provenance,
       };
     }
     // 无工具指令 → 证据充分，只返回终止标记，不生成正文（评测边界）。
-    return { kind: "final", text: REAL_DONE_MARKER };
+    return { kind: "final", text: REAL_DONE_MARKER, provenance };
   };
 }
 
@@ -868,6 +909,9 @@ function summarizeRealScenario(
       coverageRatio: coverage.coverageRatio,
       uncoveredItems: coverage.uncoveredItems,
     },
+    // 首个携带 provenance 的回合的采样/路由证据（真实模型；dry-run 无）。
+    // 模型 fn 返回的整个 decision（含 provenance）保存在 turn.decision 上。
+    provenance: turns.find((t) => t.decision?.provenance)?.decision?.provenance,
   };
 }
 
@@ -924,6 +968,7 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     avgCoverageRatio: metrics.length > 0 ? avgCoverageSum / metrics.length : 0,
     firstValidEvidenceLatencyMs:
       firstLatency.length > 0 ? firstLatency.reduce((a, b) => a + b, 0) / firstLatency.length : null,
+    provenance: metrics.find((m) => m.provenance)?.provenance,
   };
 }
 
@@ -943,10 +988,13 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
     (k) => B.invalidSourceRefByCategory[k] <= A.invalidSourceRefByCategory[k],
   );
 
-  // 有效 evidenceLevel 逐级命中不降级：B 每个等级命中数不显著低于 A
+  // 有效 evidenceLevel 逐级命中不降级：B 每个等级命中率（按各自调用次数归一）不显著低于 A。
+  // 用「命中数 / totalCalls」归一，避免 A/B 调用次数不同导致的绝对数量误判。
   const levelKeys = new Set([...Object.keys(A.evidenceLevelCounts), ...Object.keys(B.evidenceLevelCounts)]);
+  const aCalls = A.totalCalls || 1;
+  const bCalls = B.totalCalls || 1;
   const evidenceLevelNotDegraded = [...levelKeys].every(
-    (lv) => (B.evidenceLevelCounts[lv] ?? 0) >= (A.evidenceLevelCounts[lv] ?? 0),
+    (lv) => ((B.evidenceLevelCounts[lv] ?? 0) / bCalls) >= ((A.evidenceLevelCounts[lv] ?? 0) / aCalls) - 1e-9,
   );
 
   // 失败 / 超时 / 非法工具 / 解析失败逐项不恶化
@@ -977,7 +1025,7 @@ function evaluateRealGate(A: RealToolAbArmAggregation, B: RealToolAbArmAggregati
   const burdenImproved = improvedBurdenMetrics.length > 0;
 
   const detailLevels = levelKeys.size > 0
-    ? [...levelKeys].map((lv) => `${lv}:B=${B.evidenceLevelCounts[lv] ?? 0}/A=${A.evidenceLevelCounts[lv] ?? 0}`).join("，")
+    ? [...levelKeys].map((lv) => `${lv}:B=${((B.evidenceLevelCounts[lv] ?? 0) / bCalls).toFixed(3)}/A=${((A.evidenceLevelCounts[lv] ?? 0) / aCalls).toFixed(3)}`).join("，")
     : "（无有效证据等级命中）";
   const detailCats = categoryKeys
     .map((k) => `${k}:B=${B.invalidSourceRefByCategory[k]}/A=${A.invalidSourceRefByCategory[k]}`)
@@ -1101,13 +1149,45 @@ export function formatRealToolAbMarkdown(comparison: RealToolAbComparison): stri
   lines.push(`**阶段**：${comparison.phase}`);
   lines.push(`**模式**：${comparison.mode === "dry-run" ? "dry-run（确定性 stub，零 API）" : "real（真实模型，需授权）"}`);
   lines.push("");
+
+  // 真实模式：采样/路由 provenance（requested route / provider / model / effective sampling）
+  if (comparison.mode === "real") {
+    lines.push("## 采样与路由 provenance");
+    lines.push("");
+    lines.push("| 项目 | A 组（9 专用工具） | B 组（typed facade） |");
+    lines.push("|------|------|------|");
+    const prov = (arm: "A" | "B") => comparison.aggregation[arm].provenance;
+    const pA = prov("A");
+    const pB = prov("B");
+    lines.push(`| requested route | ${pA?.route ?? "unmeasured"} | ${pB?.route ?? "unmeasured"} |`);
+    lines.push(`| actual provider | ${pA?.provider ?? "unmeasured"} | ${pB?.provider ?? "unmeasured"} |`);
+    lines.push(`| actual model | ${pA?.model ?? "unmeasured"} | ${pB?.model ?? "unmeasured"} |`);
+    lines.push(`| effective temperature | ${pA?.temperature ?? "unmeasured"} | ${pB?.temperature ?? "unmeasured"} |`);
+    lines.push(`| seed 透传 | ${pA?.seedApplied ? "是" : "否"} | ${pB?.seedApplied ? "是" : "否"} |`);
+    lines.push(`| seed 被支持 | ${pA?.seedSupported ? "是" : "否"} | ${pB?.seedSupported ? "是" : "否"} |`);
+    lines.push(`| maxTokens | ${pA?.maxTokens ?? "unmeasured"} | ${pB?.maxTokens ?? "unmeasured"} |`);
+    lines.push(`| fallback 关闭 | ${pA?.fallbackDisabled ? "是" : "否"} | ${pB?.fallbackDisabled ? "是" : "否"} |`);
+    lines.push("");
+    const seedNote = pA?.seedSupported === false || pB?.seedSupported === false
+      ? "> ⚠️ 当前 provider 协议不支持 seed：\"3 seed\"仅作标签，实际为非确定性配对实验，不能视为受控复现。"
+      : "> seed 被 provider 支持并透传：3 seed 为受控复现采样。";
+    lines.push(seedNote);
+    lines.push("");
+  }
+
   lines.push("## 门禁结论");
   lines.push("");
   lines.push("| 门禁 | 结论 | 详情 |");
   lines.push("|------|------|------|");
   lines.push(`| mustVerify 覆盖率不降级 | ${comparison.gate.mustVerifyCoverageNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.mustVerifyCoverage} |`);
   lines.push(`| 有效证据引用率不降级 | ${comparison.gate.sourceRefCompletenessNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.sourceRefCompleteness} |`);
-  lines.push(`| 无效 sourceRef 分类不恶化 | ${comparison.gate.invalidSourceRefNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.invalidSourceRef} |`);
+  lines.push(`| 无效 sourceRef 总数不恶化 | ${comparison.gate.invalidSourceRefNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.invalidSourceRef} |`);
+  lines.push(`| 无效 sourceRef 分类不恶化 | ${comparison.gate.invalidSourceRefCategoriesNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.invalidSourceRefCategories} |`);
+  lines.push(`| evidenceLevel 命中率不降级 | ${comparison.gate.evidenceLevelNotDegraded ? "✓" : "✗"} | ${comparison.gate.details.evidenceLevel} |`);
+  lines.push(`| 失败（errors）不恶化 | ${comparison.gate.errorsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.errors} |`);
+  lines.push(`| 超时（timeouts）不恶化 | ${comparison.gate.timeoutsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.timeouts} |`);
+  lines.push(`| 非法工具选择不恶化 | ${comparison.gate.invalidToolSelectionsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.invalidToolSelections} |`);
+  lines.push(`| 解析失败不恶化 | ${comparison.gate.parseErrorsNotWorsened ? "✓" : "✗"} | ${comparison.gate.details.parseErrors} |`);
   lines.push(`| 至少一项负担改善 | ${comparison.gate.burdenImproved ? "✓" : "✗"} | ${comparison.gate.details.burdenImproved} |`);
   lines.push("");
   lines.push(`**全部通过**：${comparison.gate.allPassed ? "是" : "否"}`);

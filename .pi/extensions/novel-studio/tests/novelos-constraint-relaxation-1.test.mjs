@@ -487,10 +487,10 @@ test("P0-3 #10：同一语义 finding 最多触发1次局部修复", async () =>
 // ============================================================================
 
 test("P0-2 #11：第17章真实候选完整回放 hardCount=0（heuristic 不再阻断）", () => {
-  // inc-5 修复：使用真实 NovelOS 会话的完整 chapterIntent（4041 字符）替换 271 字符压缩版。
+  // inc-5 修复：使用真实 NovelOS 会话的完整 chapterIntent（4055 字符）替换 271 字符压缩版。
   // fixture 来源：workspaces/xinmo/novelos-sessions/novelos-17-f97db599/
-  //   - draft.md（2607 字符，NovelOS Agentic 生成的真实初稿）
-  //   - trajectory.jsonl 中提取的完整 chapterIntent（4041 字符，包含本章功能/读者体验目标/
+  //   - draft.md（2723 字符，NovelOS Agentic 生成的真实初稿）
+  //   - trajectory.jsonl 中提取的完整 chapterIntent（4055 字符，包含本章功能/读者体验目标/
   //     作者章纲必须包含/作者章纲状态变化/作者章纲章末目标 五个结构化字段）
   // 该会话在旧 verifier 下产生 8 个 hard intent_omission findings（误报），
   // 修复后所有 heuristic findings 应为 review + uncertain，不触发 hard block。
@@ -506,17 +506,17 @@ test("P0-2 #11：第17章真实候选完整回放 hardCount=0（heuristic 不再
   const text = fs.readFileSync(draftPath, "utf8");
   const chapterIntent = fs.readFileSync(intentPath, "utf8");
 
-  // 验证 fixture 数据完整性：draft=2607, intent=4041
-  assert.equal(text.length, 2607,
-    `真实 draft 应为 2607 字符，实际：${text.length}`);
-  assert.equal(chapterIntent.length, 4041,
-    `真实 chapterIntent 应为 4041 字符，实际：${chapterIntent.length}`);
+  // 验证 fixture 数据完整性：draft=2723, intent=4055
+  assert.equal(text.length, 2723,
+    `真实 draft 应为 2723 字符，实际：${text.length}`);
+  assert.equal(chapterIntent.length, 4055,
+    `真实 chapterIntent 应为 4055 字符，实际：${chapterIntent.length}`);
   assert.ok(chapterIntent.includes("作者章纲必须包含"),
     `真实 chapterIntent 应包含"作者章纲必须包含"`);
   assert.ok(chapterIntent.includes("作者章纲状态变化"),
-    `真实 chapterIntent 应包含"作者章纲状态变化"（完整 4041 字符 fixture）`);
+    `真实 chapterIntent 应包含"作者章纲状态变化"（完整 4055 字符 fixture）`);
   assert.ok(chapterIntent.includes("作者章纲章末目标"),
-    `真实 chapterIntent 应包含"作者章纲章末目标"（完整 4041 字符 fixture）`);
+    `真实 chapterIntent 应包含"作者章纲章末目标"（完整 4055 字符 fixture）`);
 
   const verifier = createNarrativeVerifierSuite();
   const report = verifier.verify({

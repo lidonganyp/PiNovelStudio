@@ -169,6 +169,48 @@ describe("PHASE4-TOOL-AB-2：A/B replay 与门禁", () => {
     assert.ok(sc1.firstValidEvidence.A.cumulativeLatencyMs >= 0);
     assert.ok(sc1.firstValidEvidence.B.cumulativeLatencyMs >= 0);
   });
+
+  it("无效 sourceRef 分类：仅含预期分类（no_match），不含其他/失败", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runToolAbReplay();
+    const catA = comparison.aggregation.A.invalidSourceRefByCategory;
+    const catB = comparison.aggregation.B.invalidSourceRefByCategory;
+    // 无效数 = 各分类之和
+    const sumA = catA.no_match + catA.profile_only + catA.empty + catA.other;
+    assert.equal(sumA, comparison.aggregation.A.sourceRefsInvalid, `A 组无效分类和=${sumA} 应等于无效总数=${comparison.aggregation.A.sourceRefsInvalid}`);
+    const sumB = catB.no_match + catB.profile_only + catB.empty + catB.other;
+    assert.equal(sumB, comparison.aggregation.B.sourceRefsInvalid, `B 组无效分类和=${sumB} 应等于无效总数=${comparison.aggregation.B.sourceRefsInvalid}`);
+    // 无效分类应全部落在预期分类（no_match/profile_only/empty），other 应为 0
+    assert.equal(catA.other, 0, "A 组不应有未分类的无效 sourceRef");
+    assert.equal(catB.other, 0, "B 组不应有未分类的无效 sourceRef");
+    // 有效证据引用率在 [0,1]
+    assert.ok(comparison.aggregation.A.sourceRefCompleteness >= 0 && comparison.aggregation.A.sourceRefCompleteness <= 1);
+    assert.ok(comparison.aggregation.B.sourceRefCompleteness >= 0 && comparison.aggregation.B.sourceRefCompleteness <= 1);
+  });
+
+  it("trajectory 副本：每场景每 arm 含 tool_visibility + tool_call_metrics", async () => {
+    const runner = await importRunner();
+    const comparison = await runner.runToolAbReplay();
+    const traj = runner.buildToolAbTrajectory(comparison);
+    // 7 场景 × A/B = 14 个 key
+    assert.equal(Object.keys(traj).length, comparison.scenarios.length * 2);
+    for (const s of comparison.scenarios) {
+      const keyA = `${s.scenarioId}:A`;
+      const keyB = `${s.scenarioId}:B`;
+      assert.ok(traj[keyA], `${keyA} 应存在`);
+      assert.ok(traj[keyB], `${keyB} 应存在`);
+      // 首条为 tool_visibility
+      assert.equal(traj[keyA][0].type, "tool_visibility");
+      assert.equal(traj[keyB][0].type, "tool_visibility");
+      // 后续为 tool_call_metrics，数量 = 实际调用数
+      assert.equal(traj[keyA].length - 1, s.A.actualCalls, `${keyA} 调用条目数`);
+      assert.equal(traj[keyB].length - 1, s.B.actualCalls, `${keyB} 调用条目数`);
+      // JSONL 可解析
+      const jsonl = runner.formatTrajectoryJsonl(traj[keyA]);
+      const lines = jsonl.trim().split("\n");
+      assert.equal(lines.length, traj[keyA].length);
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

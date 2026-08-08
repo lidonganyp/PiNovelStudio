@@ -252,3 +252,134 @@ describe("PHASE4-TOOL-AB-REAL-DECIDE-5：模型决策超时被 timeoutMs 包住"
     assert.ok(metrics.turns.some((t) => t.timeout), "应有 timeout 回合");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DECIDE-6：正文诱导 prompt 边界（PHASE4-2-1-1 F1 回归）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("PHASE4-TOOL-AB-REAL-DECIDE-6：正文诱导 prompt 边界", () => {
+  it("buildRealPrompt 要求只输出终止标记，禁止生成正文", async () => {
+    const runner = await importRunner();
+    const baseline = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-interface-baseline.js")}`
+    );
+    const scenario = baseline.BASELINE_SCENARIOS.find((s) => s.id === "SC1-canon-fact");
+    assert.ok(scenario, "SC1-canon-fact 场景应存在");
+    const prompt = runner.buildRealPrompt(scenario);
+    // 必须包含终止标记；不得再诱导生成正文
+    assert.ok(prompt.includes(runner.REAL_DONE_MARKER), "prompt 应包含 <done> 终止标记");
+    assert.ok(!prompt.includes("生成正文"), "prompt 不得包含「生成正文」诱导");
+    assert.ok(!/输出正文|生成.{0,6}正文/.test(prompt), "prompt 不得诱导输出正文");
+  });
+
+  it("真实模型 user prompt 走 buildRealPrompt（含终止标记、无正文诱导）", async () => {
+    const runner = await importRunner();
+    const baseline = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-interface-baseline.js")}`
+    );
+    const scenario = baseline.BASELINE_SCENARIOS.find((s) => s.id === "SC1-canon-fact");
+    assert.ok(scenario, "SC1-canon-fact 场景应存在");
+    const model = stubModel("");
+    const decide = runner.createRealModelDecide({ modelFn: model, route: "narrator_testing_glm" });
+    // 用 runner 的 buildRealPrompt 构造 ctx.prompt，模拟真实主链路 prompt 来源
+    const ctx = makeCtx({ prompt: runner.buildRealPrompt(scenario) });
+    await decide(ctx);
+    const input = model.calls[0];
+    assert.ok(input.userPrompt.includes(runner.REAL_DONE_MARKER), "user prompt 应含终止标记");
+    assert.ok(!input.userPrompt.includes("生成正文"), "user prompt 不得诱导生成正文");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DECIDE-7：真实模型采样/路由 provenance（PHASE4-2-1-1 F2/F3/F4）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("PHASE4-TOOL-AB-REAL-DECIDE-7：采样/路由 provenance 贯通", () => {
+  it("createRealModelDecide 从模型输出透传 provider/model/route/temperature/seed/fallback", async () => {
+    const runner = await importRunner();
+    const model = stubModel("");
+    // 模拟真实 legacy 输出携带 provenance 字段
+    model.impl = async (input) => ({
+      text: "",
+      model: "glm-5.2",
+      route: "narrator_testing_glm",
+      provider: "glm",
+      durationMs: 1,
+      maxTokens: 2048,
+      actuallyAppliedTemperature: 0.72,
+      seedApplied: true,
+      seedSupported: true,
+      fallbackDisabled: true,
+    });
+    const decide = runner.createRealModelDecide({
+      modelFn: async (input) => model.impl(input),
+      route: "narrator_testing_glm",
+      temperature: 0.7,
+      maxTokens: 2048,
+    });
+    const decision = await decide(makeCtx());
+    assert.equal(decision.kind, "final");
+    assert.equal(decision.provenance?.provider, "glm");
+    assert.equal(decision.provenance?.model, "glm-5.2");
+    assert.equal(decision.provenance?.route, "narrator_testing_glm");
+    assert.equal(decision.provenance?.temperature, 0.72, "应透传实际生效温度");
+    assert.equal(decision.provenance?.seedApplied, true);
+    assert.equal(decision.provenance?.seedSupported, true);
+    assert.equal(decision.provenance?.maxTokens, 2048);
+    assert.equal(decision.provenance?.fallbackDisabled, true);
+  });
+
+  it("runRealToolAbReplay real 模式聚合携带 provenance，dry-run 不携带", async () => {
+    const runner = await importRunner();
+    const baseline = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-interface-baseline.js")}`
+    );
+    const scenario = baseline.BASELINE_SCENARIOS.find((s) => s.id === "SC1-canon-fact");
+    assert.ok(scenario, "SC1-canon-fact 场景应存在");
+    // 真实模型 fn：返回 final + provenance
+    const realFn = async () => ({
+      kind: "final",
+      text: runner.REAL_DONE_MARKER,
+      provenance: {
+        provider: "glm",
+        model: "glm-5.2",
+        route: "narrator_testing_glm",
+        temperature: 0.72,
+        seedApplied: true,
+        seedSupported: true,
+        maxTokens: 2048,
+        fallbackDisabled: true,
+      },
+    });
+    const realCmp = await runner.runRealToolAbReplay({ modelFn: realFn, seeds: [0] });
+    assert.equal(realCmp.mode, "real", "传入 modelFn 应标记 real 模式");
+    assert.equal(realCmp.aggregation.A.provenance?.provider, "glm");
+    assert.equal(realCmp.aggregation.B.provenance?.provider, "glm");
+    // Markdown provenance 区块应出现
+    const md = runner.formatRealToolAbMarkdown(realCmp);
+    assert.ok(md.includes("采样与路由 provenance"), "Markdown 应含 provenance 区块");
+    assert.ok(md.includes("actual provider"), "Markdown 应含 actual provider");
+    assert.ok(md.includes("seed 被支持"), "Markdown 应含 seed 支持状态");
+
+    // dry-run 不带 provenance
+    const dryCmp = await runner.runRealToolAbReplay();
+    assert.equal(dryCmp.mode, "dry-run");
+    assert.equal(dryCmp.aggregation.A.provenance, undefined, "dry-run 不应携带 provenance");
+  });
+
+  it("全部门禁字段在 Markdown 中展示（含 evidenceLevel/错误/超时/非法工具/解析失败）", async () => {
+    const runner = await importRunner();
+    const cmp = await runner.runRealToolAbReplay();
+    const md = runner.formatRealToolAbMarkdown(cmp);
+    for (const label of [
+      "无效 sourceRef 分类不恶化",
+      "evidenceLevel 命中率不降级",
+      "失败（errors）不恶化",
+      "超时（timeouts）不恶化",
+      "非法工具选择不恶化",
+      "解析失败不恶化",
+    ]) {
+      assert.ok(md.includes(label), `Markdown 应展示门禁字段「${label}」`);
+    }
+  });
+});

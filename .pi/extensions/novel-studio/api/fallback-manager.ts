@@ -91,6 +91,8 @@ type ChatCallOptions = {
   thinking?: ProviderRequestOptions["thinking"];
   timeoutMs?: number;
   stream?: boolean;
+  /** 采样种子（受控复现实验）。仅透传给支持 seed 的 OpenAI 兼容协议；不支持则调用方标记 unsupported。 */
+  seed?: number;
 };
 
 function supportsSamplingParameters(providerKey: string, model: string): boolean {
@@ -99,6 +101,18 @@ function supportsSamplingParameters(providerKey: string, model: string): boolean
     return false;
   }
   return !/^claude(?:[-_]|$)/i.test(model);
+}
+
+/**
+ * 判断是否向 OpenAI 兼容请求透传 seed 采样种子。
+ *
+ * seed 仅对支持该参数的 OpenAI 兼容 provider 生效（如 glm / doubao / openai /
+ * 其他 OpenAI 兼容端点）。Claude 协议不支持 seed，须显式标记 unsupported，
+ * 不能静默忽略。此函数只决定「是否写入请求体」，实际是否生效由 provider 决定，
+ * 调用方需结合 provider 能力记录 effective sampling 状态。
+ */
+function supportsSeedParameter(providerKey: string, model: string): boolean {
+  return supportsSamplingParameters(providerKey, model);
 }
 
 const DEFAULT_RETRY_OPTIONS: RetryOptions = {
@@ -1384,6 +1398,11 @@ export class APIFallbackManager {
 
     if (supportsSamplingParameters(providerKey, model)) {
       request.temperature = options?.temperature ?? 0.7;
+    }
+
+    // 受控采样种子：仅对支持 seed 的 OpenAI 兼容 provider 透传。
+    if (options?.seed !== undefined && supportsSeedParameter(providerKey, model)) {
+      request.seed = options.seed;
     }
 
     const thinking = options?.thinking ?? requestOptions?.thinking;

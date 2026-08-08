@@ -253,6 +253,11 @@ export async function runEvalLayer(
   characterNames?: string[],
   /** MODEL-PROMPT-ADAPTER-1：显式覆盖为 generic 或模型专用 profile，供消融实验。 */
   promptProfile?: WriterPromptProfile,
+  /**
+   * eval-only：覆盖 Agentic loop 的"强制跨源检索"prompt 决策规则。
+   * undefined = A 组（默认强制检索 prompt）；传入决策规则文本 = B 组（不确定性驱动）。
+   */
+  retrievalPromptOverride?: string,
 ): Promise<EvalLayerOutput> {
   const start = Date.now();
   const workspaceId = `eval-${genCase.caseId}`;
@@ -300,6 +305,8 @@ export async function runEvalLayer(
       evalPromptProfile: promptProfile ?? resolveWriterPromptProfile({ route: generateRoute }),
       // DEMO-3-R2.4：传入已知角色名，使 StoryPreservationGate 的 knownEntities 非空
       evalCharacterNames: characterNames,
+      // eval-only：A/B 对照实验用，覆盖 Agentic 检索决策规则（undefined = A 组默认强制检索）
+      retrievalPromptOverride,
       // seed 通过环境变量传递（orchestrate 不直接接受 seed 参数在 V2Input 中）
       // 注意：seed 用于 judge 匿名化映射，由 orchestrate 内部处理
     });

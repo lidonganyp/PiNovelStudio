@@ -149,6 +149,12 @@ export interface UnifiedOrchestratorInput {
   allowAutomaticLiterarySelection?: boolean;
   /** 正文模型提示词表达层；生产入口按实际生成 provider 解析，eval 可显式覆盖。 */
   rawPromptProfile?: WriterPromptProfile;
+  /**
+   * eval-only：覆盖 Agentic loop 的"强制跨源检索"prompt 决策规则。
+   * 生产路径不传（undefined），loop 用默认强制检索 prompt（行为不变）。
+   * eval 路径传入不确定性驱动决策规则，用于 A/B 对照实验。
+   */
+  retrievalPromptOverride?: string;
   /** 编译后的上下文（ContextCompiler 输出） */
   context: CompiledContext;
   /** 作品宪法快照（可空） */

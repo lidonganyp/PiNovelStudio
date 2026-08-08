@@ -171,6 +171,110 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function appendQualitativeField(
+  guidance: string[],
+  section: string,
+  label: string,
+  value: unknown,
+): void {
+  if (typeof value === "string" && value.trim()) {
+    guidance.push(`[${section}] ${label}：${value.trim()}`);
+    return;
+  }
+  for (const item of stringList(value)) {
+    guidance.push(`[${section}] ${label}：${item}`);
+  }
+}
+
+/**
+ * Shared profiles created before explicit editorialGuidance used a structured
+ * fingerprint schema. Convert only its qualitative fields into advisory
+ * guidance; observed ratios, densities, lengths, and other numeric metrics are
+ * intentionally excluded from the model prompt.
+ */
+function collectLegacyQualitativeGuidance(payload: Record<string, unknown>): string[] {
+  const guidance: string[] = [];
+  const sentence = recordValue(payload.sentence);
+  const narrative = recordValue(payload.narrative);
+  const emotion = recordValue(payload.emotion);
+  const imagery = recordValue(payload.imagery);
+  const rhythm = recordValue(payload.rhythm);
+  const lexicon = recordValue(payload.lexicon);
+
+  if (sentence) {
+    appendQualitativeField(guidance, "句法", "签名模式", sentence.signaturePatterns);
+  }
+  if (narrative) {
+    for (const [key, label] of [
+      ["povStyle", "视角"],
+      ["viewpoint", "视点"],
+      ["viewpointAnchor", "视点锚定"],
+      ["expositionStyle", "信息揭示"],
+      ["timeFlow", "时间流动"],
+      ["sceneTransitionStyle", "场景转场"],
+      ["coreEmotionAnchors", "核心情绪锚点"],
+    ] as const) {
+      appendQualitativeField(guidance, "叙事", label, narrative[key]);
+    }
+  }
+  if (emotion) {
+    for (const [key, label] of [
+      ["baseline", "情绪基线"],
+      ["peakType", "情绪峰值"],
+      ["valleyType", "情绪低谷"],
+      ["escalationPattern", "升级方式"],
+      ["coolDownPattern", "冷却方式"],
+      ["behavioralOverVerbal", "行为优先于直白解释"],
+    ] as const) {
+      appendQualitativeField(guidance, "情绪", label, emotion[key]);
+    }
+  }
+  if (imagery) {
+    for (const [key, label] of [
+      ["primaryMetaphors", "主要隐喻"],
+      ["visualStyle", "视觉质感"],
+      ["spatialSense", "空间感"],
+      ["timeImagery", "时间意象"],
+      ["powerVisualization", "力量呈现"],
+      ["environmentStyle", "环境写法"],
+      ["fightChoreography", "动作编排"],
+      ["metaphorSource", "隐喻来源"],
+      ["sensoryEmphasis", "感官重点"],
+    ] as const) {
+      appendQualitativeField(guidance, "意象", label, imagery[key]);
+    }
+  }
+  if (rhythm) {
+    for (const [key, label] of [
+      ["sentenceRhythm", "句子节奏"],
+      ["paragraphRhythm", "段落节奏"],
+      ["chapterRhythm", "章节节奏"],
+      ["breathPoints", "呼吸点"],
+      ["accelerationTriggers", "加速触发"],
+      ["decelerationTriggers", "减速触发"],
+      ["actionScenePace", "动作场景速度"],
+      ["dialogueScenePace", "对话场景速度"],
+      ["descriptionScenePace", "描写场景速度"],
+    ] as const) {
+      appendQualitativeField(guidance, "节奏", label, rhythm[key]);
+    }
+  }
+  if (lexicon) {
+    appendQualitativeField(guidance, "词汇", "标志性短语", lexicon.signaturePhrases);
+    appendQualitativeField(guidance, "词汇", "避免用语", lexicon.avoidWords);
+    appendQualitativeField(guidance, "词汇", "偏好过渡", lexicon.preferredTransitions);
+    appendQualitativeField(guidance, "词汇", "专业词汇", lexicon.specializedTerms);
+  }
+
+  return guidance;
+}
+
 export function collectAuthorStyleGuidance(
   context: CompiledContext,
   relevantCharacters: string[],
@@ -183,7 +287,11 @@ export function collectAuthorStyleGuidance(
     const payload = parseStyleReference(reference);
     if (!payload) continue;
     referenceIds.push(reference.id);
-    guidance.push(...stringList(payload.editorialGuidance).map((item) => `[通用] ${item}`));
+    const explicitGuidance = stringList(payload.editorialGuidance);
+    guidance.push(...explicitGuidance.map((item) => `[通用] ${item}`));
+    if (explicitGuidance.length === 0) {
+      guidance.push(...collectLegacyQualitativeGuidance(payload));
+    }
 
     const voices = payload.characterVoiceGuidance;
     if (voices && typeof voices === "object" && !Array.isArray(voices)) {
@@ -215,6 +323,35 @@ export function collectAuthorStyleGuidance(
 function buildUserPrompt(input: AuthorStyleOptimizationInput, guidance: ParsedStyleGuidance): string {
   const parts: string[] = [];
   parts.push(`请优化第 ${input.chapterNumber} 章完整正文。`);
+  const contractLines: string[] = [];
+  const eventSummaries = input.intent.authorEventSummaries ?? [];
+  const mustInclude = input.intent.authorMustInclude ?? [];
+  const stateChanges = input.intent.authorStateChanges ?? [];
+  const causalRelations = input.intent.causalRelations ?? [];
+  const endingTarget = input.intent.endingTarget ?? [];
+  if (eventSummaries.length > 0) {
+    contractLines.push("事件顺序：");
+    contractLines.push(...eventSummaries.slice(0, 8).map((item, index) => `${index + 1}. ${item}`));
+  }
+  if (mustInclude.length > 0) {
+    contractLines.push(`必须保留：${mustInclude.slice(0, 8).join("；")}`);
+  }
+  if (stateChanges.length > 0) {
+    contractLines.push(`状态变化：${stateChanges.slice(0, 8).join("；")}`);
+  }
+  if (causalRelations.length > 0) {
+    contractLines.push(`因果关系：${causalRelations.slice(0, 8).join("；")}`);
+  }
+  if (endingTarget.length > 0) {
+    contractLines.push(`章末承接：${endingTarget.slice(0, 8).join("；")}`);
+  }
+  if (contractLines.length > 0) {
+    parts.push(
+      "【本章事件与因果契约（只允许改写表达）】\n" +
+      contractLines.join("\n") + "\n" +
+      "不得调换、删除或合并导致事件结果变化；必须保持每个事件的先后顺序、因果关系和状态变化。",
+    );
+  }
   // Drift retry：把事件保持约束放在 prompt 最前面（初稿之前），提高模型对约束的注意力。
   // canary 证据（canary-real-drift-feedback-20260730）：driftFeedback 块放在 prompt 中段时，
   // Gemini 3.1 Pro Preview 忽略约束，重试稿与首次漂移完全相同（ch1: "看向万永福" 被替换为

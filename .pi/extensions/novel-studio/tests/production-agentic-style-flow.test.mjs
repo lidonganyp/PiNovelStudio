@@ -33,6 +33,11 @@ const STYLED_TEXT = [
 function makeIntent() {
   return {
     chapterFunction: "发现采样任务中的人为异常并主动预警",
+    authorEventSummaries: ["林一凡在仓库门外确认采样箱异常", "脚步声逼近后他选择先通知研究员"],
+    authorMustInclude: ["采样箱少了一只", "脚步声从楼梯下方逼近"],
+    authorStateChanges: ["林一凡从观察转为主动预警"],
+    causalRelations: ["采样箱缺失导致林一凡暂缓进门并发送消息"],
+    endingTarget: ["脚步声逼近，下一章必须承接危险压力"],
     readerExperience: ["安静压力逐步逼近"],
     currentPressure: ["采样箱失踪，楼下有人接近"],
     meaningfulChoices: ["先预警研究员，再留在门口观察"],
@@ -188,6 +193,9 @@ test("生产主链路强制执行 Agentic + 作者风格优化，且不调用机
     assert.equal(result.stageResults.judgeArbitration.skipped, true);
     assert.match(stylePrompt, /作者风格档案/);
     assert.match(stylePrompt, /情绪优先通过身体反应、静默或动作呈现/);
+    assert.match(stylePrompt, /本章事件与因果契约/);
+    assert.match(stylePrompt, /林一凡在仓库门外确认采样箱异常/);
+    assert.match(stylePrompt, /不得调换、删除或合并导致事件结果变化/);
     assert.doesNotMatch(stylePrompt, /medianCnChars|p75CnChars|observedRatio|对白比例/);
 
     assert.ok(result.chapterFilePath);

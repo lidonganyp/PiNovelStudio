@@ -332,6 +332,7 @@ test("发布代理审批实际网络载荷只含中文协议", async () => {
 });
 
 test("工具循环向模型展示中文工具协议并把中文调用映射回内部名称", () => {
+  // allowedToolNames 为必填白名单（缺口一防御纵深）：仅允许注入叙事白名单内工具。
   const injected = injectToolSchemas("你是网文作家。", [{
     name: "search_narrative_evidence",
     description: "跨源检索结构化叙事证据。",
@@ -343,7 +344,7 @@ test("工具循环向模型展示中文工具协议并把中文调用映射回�
       },
       required: ["query"],
     },
-  }]);
+  }], new Set(["search_narrative_evidence"]));
   assertNoEnglish("工具系统提示词", injected);
 
   const evidence = formatToolResultsForPrompt([{

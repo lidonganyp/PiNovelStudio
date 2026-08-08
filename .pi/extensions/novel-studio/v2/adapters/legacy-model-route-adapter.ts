@@ -108,6 +108,17 @@ export interface ModelGenerateOutput {
    * - undefined：stub 路径未设置，orchestrator 兜底为 "unknown"
    */
   tokenUsage?: { in: number; out: number } | "unknown";
+  /**
+   * PHASE4-2-1-1 provenance：实际生效的采样温度（透传给 fallback 请求体的值）。
+   * 与 input.temperature 区分：仅记录「确实写入了请求」的 temperature。
+   */
+  actuallyAppliedTemperature?: number;
+  /** PHASE4-2-1-1 provenance：seed 是否被透传（写入请求体）。 */
+  seedApplied?: boolean;
+  /** PHASE4-2-1-1 provenance：seed 是否被 provider 协议支持（支持才可能生效）。 */
+  seedSupported?: boolean;
+  /** PHASE4-2-1-1 provenance：fallback 是否被关闭（DISABLE_FALLBACK=1 或 package_screening）。 */
+  fallbackDisabled?: boolean;
 }
 
 export type ModelGenerateFn = (input: ModelGenerateInput) => Promise<ModelGenerateOutput>;
@@ -455,6 +466,8 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
       messages,
       {
         ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
+        ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
+        ...(input.seed === undefined ? {} : { seed: input.seed }),
         timeoutMs: candidateTimeoutMs,
         ...(STREAMING_JUDGE_ROUTES.has(input.route) ? { stream: true } : {}),
       },
@@ -463,6 +476,11 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
     const finishReason = extractFinishReasonFromFallbackResult(result);
     // P0-2：从 provider 响应抽取真实 token 用量，替代 orchestrator 硬编码 "unknown"
     const tokenUsage = extractTokenUsageFromFallbackResult(result);
+    // F3：seed 是否被透传并实际支持——provider 协议不支持 seed 时显式标记，
+    // 而非静默忽略。fallback 关闭 = PINOVEL_DISABLE_FALLBACK=1 或 package_screening 配置。
+    const fallbackDisabled =
+      process.env.PINOVEL_DISABLE_FALLBACK === "1" ||
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE === "package_screening";
     return {
       text,
       model: result.usedModel ?? "unknown",
@@ -473,8 +491,26 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       tokenUsage,
       durationMs: Date.now() - start,
+      // PHASE4-2-1-1 provenance：真实采样与路由证据，供报告记录 effective sampling。
+      actuallyAppliedTemperature: input.temperature,
+      seedApplied: input.seed !== undefined,
+      seedSupported: input.seed !== undefined && supportsSeedOnProvider(result.usedProvider),
+      fallbackDisabled,
+      requestedRoute: input.route,
     };
   };
+}
+
+/**
+ * 判断 provider 协议是否支持 seed 采样种子（用于 provenance 记录）。
+ *
+ * Claude 协议不支持 seed；OpenAI 兼容 provider（glm/doubao/gpt 等）支持。
+ * 与 fallback-manager 的请求体透传保持口径一致：provider 不支持时显式标记
+ * seedSupported=false，弃用"3 seed"受控复现、改用非确定性配对实验，不静默忽略。
+ */
+function supportsSeedOnProvider(provider?: string): boolean {
+  if (!provider) return false;
+  return !/^claude(?:[-_]|$)/i.test(provider);
 }
 
 function extractTextFromFallbackResult(result: any): string {

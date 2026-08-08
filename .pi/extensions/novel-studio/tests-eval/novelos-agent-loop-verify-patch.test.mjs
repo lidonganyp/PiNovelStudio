@@ -191,6 +191,7 @@ function setupVerifyPatchLoop(opts = {}) {
     modelGenerate,
     route: "narrator_primary",
     tools,
+    allowedToolNames: new Set(tools.map((t) => t.name)),
     budget,
     trajectory,
     kind: "novelos_agentic",

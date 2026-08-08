@@ -125,6 +125,37 @@ describe("MUST-VERIFY-COVERAGE-GATE-2: real coverage gate", () => {
     );
   });
 
+  it("passes when confirmed evidence is persisted as ranked_evidence", async () => {
+    const mod = await importModule();
+    withTrajectory(
+      [
+        {
+          type: "ranked_evidence",
+          data: {
+            query: "lin-mo injury",
+            evidences: [
+              {
+                sourceRef: "character:lin-mo:leftArmStatus",
+                evidenceLevel: "confirmed_state",
+                excerpt: `${makeInput().evidencePlan.mustVerify[0]}已经稳定`,
+              },
+            ],
+          },
+        },
+      ],
+      (trajectoryPath) => {
+        const result = mod.checkMustVerifyCoverage(
+          makeInput({ trajectoryPath }),
+        );
+        assert.equal(result.passed, true);
+        assert.equal(
+          result.confirmedItems[0].matchedEvidence,
+          "character:lin-mo:leftArmStatus",
+        );
+      },
+    );
+  });
+
   it("blocks an uncovered P0/P1 item with a recoverable failure envelope", async () => {
     const mod = await importModule();
     const result = mod.checkMustVerifyCoverage(

@@ -4,11 +4,12 @@
  * 实验目标：验证"不确定性驱动的检索决策"是否能在不增加事实硬伤的前提下
  * 减少无效检索，且文学质量不下降。
  *
- * A 组（baseline）：当前逻辑——强制跨源检索 prompt（retrievalPromptOverride 不传）
- * B 组（treatment）：不确定性驱动——retrievalPromptOverride 覆盖决策规则
+ * Phase 2D（2026-08-06）三缺口修复后：
+ * A 组（baseline）：强制跨源检索 prompt（retrievalPromptOverride=FORCED_RETRIEVAL_PROMPT）
+ * B 组（treatment）：不确定性驱动（retrievalPromptOverride=UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT）
  *
  * 控制变量：同 workspace、同 chapter、同 model、同 budget、同 timeout
- * 差异变量：retrievalPromptOverride 是否传入（A=undefined, B=决策规则文本）
+ * 差异变量：retrievalPromptOverride 传入的决策规则文本（A=强制检索, B=不确定性驱动）
  *
  * 指标（从 V2Output + stageResults + trajectory 提取）：
  * - 工具调用次数（toolCalls）
@@ -24,7 +25,8 @@
  * - B 组必需事实召回率 ≥ A 组（不漏关键事实）
  * - 人工盲测文学质量不下降（用户裁决）
  *
- * 不改生产链路：retrievalPromptOverride 生产路径全链路 undefined，行为不变。
+ * Phase 2D 后生产链路已默认使用不确定性驱动 prompt（DEFAULT_UNCERTAINTY_DRIVEN_PROMPT），
+ * 与 B 组一致；A 组显式传入 FORCED_RETRIEVAL_PROMPT 复现修复前行为作为对照基线。
  * eval-only 模块，需在 tsconfig.eval.json 注册。
  */
 
@@ -62,16 +64,34 @@ import {
 import { join } from "node:path";
 
 // ============================================================================
-// B 组决策规则 prompt
+// A/B 组决策规则 prompt
 // ============================================================================
 
 /**
- * B 组的检索决策规则 prompt（替换 A 组的"请先使用跨源叙事证据检索工具查找..."）。
+ * A 组的检索决策规则 prompt（baseline：旧的强制跨源检索行为）。
+ *
+ * Phase 2D（2026-08-06）三缺口修复后，生产默认 prompt 已改为不确定性驱动
+ * （narrative-agent-loop.ts 的 DEFAULT_UNCERTAINTY_DRIVEN_PROMPT）。
+ * 为保持 A/B 对照实验有效性，A 组必须显式传入此旧 prompt，复现修复前的
+ * "先检索再生成"强制行为，作为对照基线。
+ *
+ * 文本与修复前 narrative-agent-loop.ts 的默认 prompt 完全一致。
+ */
+export const FORCED_RETRIEVAL_PROMPT = [
+  "请先使用跨源叙事证据检索工具查找结构化事实证据（世界事实、角色状态、原文片段），",
+  "再按需使用章节原文片段检索工具查证具体原文。证据充分时直接输出正文，不再发出工具调用指令。",
+].join("\n");
+
+/**
+ * B 组的检索决策规则 prompt（treatment：不确定性驱动，与生产默认一致）。
  *
  * 不暴露思维链，只改变决策规则：
  * - 上下文足够 → 直接输出正文，不调工具
  * - 缺少可能改变事实/人物状态/因果关系的信息 → 调最相关工具
  * - 不为"完成流程"做无必要检索
+ *
+ * Phase 2D 后此 prompt 与 narrative-agent-loop.ts 的 DEFAULT_UNCERTAINTY_DRIVEN_PROMPT
+ * 文本一致；B 组显式传入是为了实验可追溯（即使生产默认已切换）。
  */
 export const UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT = [
   "检索决策规则：",
@@ -182,6 +202,8 @@ export interface ArmMetrics {
   failureReason?: string;
   /** 风险等级（low/high，用于报告中区分 case 难度） */
   riskLevel: "low" | "high";
+  /** agent loop 修复轮数（verifier 发现问题后触发 repair 的次数） */
+  repairRounds: number;
 }
 
 /** 单臂结果 */
@@ -231,6 +253,16 @@ export interface AggregatedMetrics {
   totalTokenOut: number | "unknown";
   completenessPassRate: number;
   avgIrrelevantEvidenceRatio: number;
+  /** 平均修复轮数（verifier 触发 repair 的次数） */
+  avgRepairRounds: number;
+  /** gate 通过率：factGuardErrors=0 AND completenessPassed=true */
+  gatePassRate: number;
+  /** 阻断率：success=false 的 case 占比 */
+  blockRate: number;
+  /** P0 召回率：高风险 case（mustVerifyCount>0）的平均 mustVerifyCoverage */
+  avgMustVerifyCoverage: number;
+  /** 高风险 case 数（mustVerifyCount>0） */
+  highRiskCaseCount: number;
 }
 
 // ============================================================================
@@ -517,6 +549,7 @@ export function extractMetrics(
     toolCalls?: number;
     failureReason?: string | null;
     trajectoryPath?: string;
+    repairRounds?: number;
   };
 
   // 从 stageResults.finalTextCompleteness 提取完整性
@@ -607,6 +640,7 @@ export function extractMetrics(
     irrelevantEvidenceRatio,
     failureReason: success ? undefined : (evalAgentic.failureReason ?? "生成失败"),
     riskLevel: caseData?.riskLevel ?? "low",
+    repairRounds: evalAgentic.repairRounds ?? 0,
   };
 }
 
@@ -617,8 +651,12 @@ export function extractMetrics(
 /**
  * 跑单臂（A 或 B）。
  *
- * A 组：retrievalPromptOverride=undefined（默认强制检索 prompt）
- * B 组：retrievalPromptOverride=UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT
+ * Phase 2D（2026-08-06）三缺口修复后：
+ * A 组：retrievalPromptOverride=FORCED_RETRIEVAL_PROMPT（显式复现旧强制检索行为）
+ * B 组：retrievalPromptOverride=UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT（与生产默认一致）
+ *
+ * 修复前 A 组传 undefined 是因为生产默认就是强制检索；修复后生产默认已切换为
+ * 不确定性驱动，A 组必须显式传入 FORCED_RETRIEVAL_PROMPT 才能保持对照基线。
  *
  * evalMode="B2"：启用 Agentic + 检索，不启用验证（A/B 差异只在检索决策规则）。
  *
@@ -633,8 +671,9 @@ export async function runAblationArm(
   generateRoute: string,
   timeoutMs: number,
 ): Promise<ArmResult> {
-  const retrievalPromptOverride =
-    arm === "B" ? UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT : undefined;
+  const retrievalPromptOverride = arm === "B"
+    ? UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT
+    : FORCED_RETRIEVAL_PROMPT;
   const start = Date.now();
 
   const intent = buildFullIntent(caseData);
@@ -896,6 +935,13 @@ export function aggregateMetrics(metrics: ArmMetrics[]): AggregatedMetrics {
     totalTokenOut,
     completenessPassRate: metrics.filter((m) => m.completenessPassed).length / n,
     avgIrrelevantEvidenceRatio: metrics.reduce((s, m) => s + m.irrelevantEvidenceRatio, 0) / n,
+    avgRepairRounds: metrics.reduce((s, m) => s + m.repairRounds, 0) / n,
+    gatePassRate: metrics.filter((m) => m.factGuardErrors === 0 && m.completenessPassed).length / n,
+    blockRate: metrics.filter((m) => !m.success).length / n,
+    highRiskCaseCount: metrics.filter((m) => m.mustVerifyCount > 0).length,
+    avgMustVerifyCoverage: metrics.filter((m) => m.mustVerifyCount > 0).length > 0
+      ? metrics.filter((m) => m.mustVerifyCount > 0).reduce((s, m) => s + m.mustVerifyCoverage, 0) / metrics.filter((m) => m.mustVerifyCount > 0).length
+      : 0,
   };
 }
 

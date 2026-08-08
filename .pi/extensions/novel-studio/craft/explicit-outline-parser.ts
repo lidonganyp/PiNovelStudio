@@ -330,7 +330,13 @@ export function parseExplicitOutline(outline: string): ParsedExplicitOutline {
       extractOutlineField(section, "场景类型");
 
     // P27新增：结构化契约字段提取（全部 optional，缺失则对应字段为 undefined/[]）
-    const summaryRaw = extractOutlineField(section, "内容摘要");
+    // Legacy explicit outlines often put the narrative contract in 必须包含
+    // or 事件结果 without a separate 内容摘要 field. Preserve fail-closed
+    // behavior for truly empty events while accepting those equivalent sources.
+    const summaryRaw =
+      extractOutlineField(section, "内容摘要") ||
+      extractOutlineField(section, "事件结果") ||
+      extractOutlineField(section, "必须包含");
     const conflictLevelRaw = extractOutlineField(section, "冲突等级");
     const emotionalArcRaw = extractOutlineField(section, "情绪弧");
     const foreshadowingRaw = extractOutlineField(section, "伏笔埋设");

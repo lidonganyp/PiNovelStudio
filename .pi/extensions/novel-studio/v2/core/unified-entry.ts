@@ -252,6 +252,12 @@ export interface UnifiedPipelineEvalInput {
   evalMode?: "B0" | "B1" | "B2" | "B3" | "B4";
   /** Eval prefix（前文，续写评估用）：作为 raw prompt 的"【前文】"段 */
   evalPrefix?: string;
+  /**
+   * eval-only：覆盖 Agentic loop 的"强制跨源检索"prompt 决策规则。
+   * 生产路径不传（undefined），loop 用默认强制检索 prompt（行为不变）。
+   * eval 路径传入不确定性驱动决策规则，用于 A/B 对照实验。
+   */
+  retrievalPromptOverride?: string;
   /** Eval intent（跳过 ChapterIntentBuilder）；B0/B1 用空 intent，B2/B3/B4 用完整 intent */
   evalIntent?: ChapterIntent;
   /** Eval context（跳过 ContextCompiler）；B0 用空 context，B1/B2/B3/B4 用含 worldRules 的 context */
@@ -1264,6 +1270,7 @@ export async function runUnifiedPipeline(
     evalArbitratorModelGenerate,
     evalPromptProfile,
     evalCharacterNames,
+    retrievalPromptOverride,
     sceneSolution,
     craftGenes,
     promptPatternIds,
@@ -1374,6 +1381,7 @@ export async function runUnifiedPipeline(
       timeoutMs: candidateTimeoutMs,
       evalMode,
       evalPrefix,
+      retrievalPromptOverride,
       agenticCandidateSource: evalAgenticSource,
       controlPlane: evalControlPlane,
       onUpdate,

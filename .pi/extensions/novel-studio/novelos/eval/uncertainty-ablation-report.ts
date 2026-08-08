@@ -61,6 +61,19 @@ export function generateComparisonReport(result: AblationResult): string {
   lines.push(
     `| token 输出总量 | ${a.totalTokenOut} | ${b.totalTokenOut} | ${a.totalTokenOut === "unknown" || b.totalTokenOut === "unknown" ? "(部分 unknown)" : ""} |`,
   );
+  // Step 4 新增聚合指标：gate 通过率 / 阻断率 / 重试率 / P0 召回率
+  lines.push(
+    `| gate 通过率（FactGuard=0 ∧ 完整性通过） | ${(a.gatePassRate * 100).toFixed(1)}% | ${(b.gatePassRate * 100).toFixed(1)}% | ${((b.gatePassRate - a.gatePassRate) * 100).toFixed(1)}% |`,
+  );
+  lines.push(
+    `| 阻断率（success=false） | ${(a.blockRate * 100).toFixed(1)}% | ${(b.blockRate * 100).toFixed(1)}% | ${((b.blockRate - a.blockRate) * 100).toFixed(1)}% |`,
+  );
+  lines.push(
+    `| 平均修复轮数（repairRounds） | ${a.avgRepairRounds.toFixed(2)} | ${b.avgRepairRounds.toFixed(2)} | ${b.avgRepairRounds - a.avgRepairRounds >= 0 ? "+" : ""}${(b.avgRepairRounds - a.avgRepairRounds).toFixed(2)} |`,
+  );
+  lines.push(
+    `| P0 召回率（高风险 case mustVerify 覆盖率，${a.highRiskCaseCount} cases） | ${(a.avgMustVerifyCoverage * 100).toFixed(1)}% | ${(b.avgMustVerifyCoverage * 100).toFixed(1)}% | ${((b.avgMustVerifyCoverage - a.avgMustVerifyCoverage) * 100).toFixed(1)}% |`,
+  );
   lines.push("");
 
   // 每 case 明细
@@ -74,8 +87,11 @@ export function generateComparisonReport(result: AblationResult): string {
     lines.push(`| success | ${c.armA.metrics.success} | ${c.armB.metrics.success} |`);
     lines.push(`| textLength | ${c.armA.metrics.textLength} | ${c.armB.metrics.textLength} |`);
     lines.push(`| toolCalls | ${c.armA.metrics.toolCalls} | ${c.armB.metrics.toolCalls} |`);
+    lines.push(`| repairRounds | ${c.armA.metrics.repairRounds} | ${c.armB.metrics.repairRounds} |`);
     lines.push(`| sourceRefsCount | ${c.armA.metrics.sourceRefsCount} | ${c.armB.metrics.sourceRefsCount} |`);
     lines.push(`| mustVerifyCount | ${c.armA.metrics.mustVerifyCount} | ${c.armB.metrics.mustVerifyCount} |`);
+    lines.push(`| mustVerifyCoverage | ${(c.armA.metrics.mustVerifyCoverage * 100).toFixed(1)}% | ${(c.armB.metrics.mustVerifyCoverage * 100).toFixed(1)}% |`);
+    lines.push(`| riskLevel | ${c.armA.metrics.riskLevel} | ${c.armB.metrics.riskLevel} |`);
     lines.push(`| factGuardErrors | ${c.armA.metrics.factGuardErrors} | ${c.armB.metrics.factGuardErrors} |`);
     lines.push(`| completenessPassed | ${c.armA.metrics.completenessPassed} | ${c.armB.metrics.completenessPassed} |`);
     lines.push(`| irrelevantEvidenceRatio | ${c.armA.metrics.irrelevantEvidenceRatio.toFixed(3)} | ${c.armB.metrics.irrelevantEvidenceRatio.toFixed(3)} |`);

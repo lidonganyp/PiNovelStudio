@@ -108,6 +108,7 @@ function setupRuntime(overrides = {}) {
     modelGenerate,
     route: "narrator_primary",
     tools: [queryCanon],
+    allowedToolNames: new Set(["query_canon"]),
     budget,
     trajectory,
     kind: "novelos_agentic",

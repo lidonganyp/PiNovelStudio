@@ -167,6 +167,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   query_promise_ledger: "承诺账本查询",
   query_pattern_memory: "叙事模式记忆查询",
   query_voice_evidence: "角色声音证据查询",
+  query_narrative: "统一叙事查询",
 };
 
 const PARAMETER_NAME_MAP: Record<string, string> = {
@@ -180,6 +181,8 @@ const PARAMETER_NAME_MAP: Record<string, string> = {
   promiseId: "承诺标识",
   patternType: "模式类型",
   limit: "返回上限",
+  intent: "意图",
+  status: "状态",
 };
 
 function toChineseToolName(name: string): string {

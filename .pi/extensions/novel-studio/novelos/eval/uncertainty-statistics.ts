@@ -189,7 +189,8 @@ export interface MultiSeedStatistics {
  * 多 seed 聚合统计输入结构（与 AblationResult 对齐，但只取需要的字段）。
  *
  * 兼容真实 AblationResult（aggregate.armA/armB + passCriteria.overallPassed）
- * 和测试 mock。avgCoverage 可选（真实 AggregatedMetrics 暂无此字段时回退 0）。
+ * 和测试 mock。avgCoverage 可选（兼容旧 mock）；
+ * 真实 AggregatedMetrics 用 avgMustVerifyCoverage（优先读取，回退 avgCoverage）。
  */
 interface SeedResultLike {
   aggregate: {
@@ -197,11 +198,13 @@ interface SeedResultLike {
       avgToolCalls: number;
       avgFactGuardErrors: number;
       avgCoverage?: number;
+      avgMustVerifyCoverage?: number;
     };
     armB: {
       avgToolCalls: number;
       avgFactGuardErrors: number;
       avgCoverage?: number;
+      avgMustVerifyCoverage?: number;
     };
   };
   passCriteria: {
@@ -258,8 +261,8 @@ export function computeMultiSeedStatistics(
   const bToolCalls = seedResults.map((s) => s.aggregate.armB.avgToolCalls);
   const aFg = seedResults.map((s) => s.aggregate.armA.avgFactGuardErrors);
   const bFg = seedResults.map((s) => s.aggregate.armB.avgFactGuardErrors);
-  const aCov = seedResults.map((s) => s.aggregate.armA.avgCoverage ?? 0);
-  const bCov = seedResults.map((s) => s.aggregate.armB.avgCoverage ?? 0);
+  const aCov = seedResults.map((s) => s.aggregate.armA.avgMustVerifyCoverage ?? s.aggregate.armA.avgCoverage ?? 0);
+  const bCov = seedResults.map((s) => s.aggregate.armB.avgMustVerifyCoverage ?? s.aggregate.armB.avgCoverage ?? 0);
 
   // B 优于 A 的 seed 数
   const toolCallsWins = seedResults.filter(
@@ -270,7 +273,8 @@ export function computeMultiSeedStatistics(
   ).length;
   const covWins = seedResults.filter(
     (s) =>
-      (s.aggregate.armB.avgCoverage ?? 0) > (s.aggregate.armA.avgCoverage ?? 0),
+      (s.aggregate.armB.avgMustVerifyCoverage ?? s.aggregate.armB.avgCoverage ?? 0) >
+      (s.aggregate.armA.avgMustVerifyCoverage ?? s.aggregate.armA.avgCoverage ?? 0),
   ).length;
 
   // 单侧符号检验 P(X >= wins)（B 优于 A 方向）

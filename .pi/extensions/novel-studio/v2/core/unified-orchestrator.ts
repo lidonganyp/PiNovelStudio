@@ -815,6 +815,10 @@ export class UnifiedOrchestrator {
             fullPipelinePreview: input.fullPipelinePreview,
             // P1 修复：few-shot 黄金示例透传给 Agentic prompt
             fewshotSelection: input.fewshotSelection,
+            // CONTRACT-LAYERING-ABLATION-1：透传渲染策略（生产路径 undefined = 平铺）
+            writerPromptProfile: input.rawPromptProfile,
+            // eval-only：A/B 对照实验用，覆盖 Agentic 检索决策规则（生产 undefined = 默认强制检索）
+            retrievalPromptOverride: input.retrievalPromptOverride,
           }),
         );
       } catch (error: unknown) {
@@ -1657,6 +1661,10 @@ export class UnifiedOrchestrator {
             // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
             fullPipelinePreview: input.fullPipelinePreview,
             fewshotSelection: input.fewshotSelection,
+            // CONTRACT-LAYERING-ABLATION-1：透传渲染策略（evalMode 实验用）
+            writerPromptProfile: input.rawPromptProfile,
+            // eval-only：A/B 对照实验用，覆盖 Agentic 检索决策规则（生产 undefined = 默认强制检索）
+            retrievalPromptOverride: input.retrievalPromptOverride,
           })
         );
         agenticCandidate = agenticResult.candidate;
@@ -1665,6 +1673,13 @@ export class UnifiedOrchestrator {
           trajectoryPath: agenticResult.trajectoryPath,
           candidateId: agenticCandidate?.id ?? null,
           candidateLength: agenticCandidate?.text.length ?? 0,
+          // CONTRACT-LAYERING-ABLATION-1 数据完整性修复：
+          // 记录 agentic candidate 的 SHA-256，供 eval 调用方校验最终交付文本
+          // 是否确实等于 agentic candidate（B3 FactGuard 失败会回退 one_shot_raw，
+          // 但 evalAgentic.candidateId 仍非 null，导致 fallback 被误记为有效样本）。
+          candidateHash: agenticCandidate
+            ? createHash("sha256").update(agenticCandidate.text, "utf8").digest("hex")
+            : null,
           stopReason: agenticResult.stopReason,
           failureReason: agenticResult.failureReason ?? null,
           toolCalls: agenticResult.toolCalls,
@@ -1813,6 +1828,8 @@ export class UnifiedOrchestrator {
             // P0-1 修复：预览模式透传给 CandidateWorkspace/TrajectoryStore
             fullPipelinePreview: input.fullPipelinePreview,
             fewshotSelection: input.fewshotSelection,
+            // CONTRACT-LAYERING-ABLATION-1：透传渲染策略（shadow 路径 undefined = 平铺）
+            writerPromptProfile: input.rawPromptProfile,
           })
         );
         stageResults.novelos = {
