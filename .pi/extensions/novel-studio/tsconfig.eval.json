@@ -42,6 +42,7 @@
     "novelos/eval/compressed-context-builder.ts",
     "novelos/eval/context-ab-fixtures.ts",
     "novelos/eval/context-ab-runner.ts",
+    "novelos/eval/context-ab-gate.ts",
     "novelos/eval/final-decision.ts",
     "novelos/agent/must-verify-coverage-gate.ts",
     "v2/core/replay-provenance-guard.ts",

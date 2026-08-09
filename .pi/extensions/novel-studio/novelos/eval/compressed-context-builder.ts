@@ -19,6 +19,12 @@ export interface CompressionParams {
   summaryCharLimit: number;
   /** 最大条目数（A=48, B=24） */
   maxItems: number;
+  /** 是否注入 CanonState */
+  injectCanon: boolean;
+  /** 是否注入 CharacterState */
+  injectCharacter: boolean;
+  /** 是否注入 PromiseLedger */
+  injectPromise: boolean;
   /** 是否注入 PatternMemory */
   injectPattern: boolean;
   /** 是否注入 Expectation（读者期待） */
@@ -31,6 +37,9 @@ export interface CompressionParams {
 export const FULL_PARAMS: CompressionParams = {
   summaryCharLimit: 160,
   maxItems: 48,
+  injectCanon: true,
+  injectCharacter: true,
+  injectPromise: true,
   injectPattern: true,
   injectExpectation: true,
   injectPlanned: true,
@@ -40,6 +49,9 @@ export const FULL_PARAMS: CompressionParams = {
 export const COMPRESSED_PARAMS: CompressionParams = {
   summaryCharLimit: 80,
   maxItems: 24,
+  injectCanon: true,
+  injectCharacter: true,
+  injectPromise: true,
   injectPattern: false,
   injectExpectation: true,
   injectPlanned: false,
@@ -49,9 +61,20 @@ export const COMPRESSED_PARAMS: CompressionParams = {
 export const NONE_PARAMS: CompressionParams = {
   summaryCharLimit: 0,
   maxItems: 0,
+  injectCanon: false,
+  injectCharacter: false,
+  injectPromise: false,
   injectPattern: false,
   injectExpectation: false,
   injectPlanned: false,
+};
+
+/** Phase 6.2：逐类单因素消融参数（只排除一类状态，其他参数与 A 组一致） */
+export const ABLATION_PARAMS: Record<string, CompressionParams> = {
+  "A-Canon":     { summaryCharLimit: 160, maxItems: 48, injectCanon: false, injectCharacter: true,  injectPromise: true,  injectPattern: true,  injectExpectation: true,  injectPlanned: true  },
+  "A-Character": { summaryCharLimit: 160, maxItems: 48, injectCanon: true,  injectCharacter: false, injectPromise: true,  injectPattern: true,  injectExpectation: true,  injectPlanned: true  },
+  "A-Promise":   { summaryCharLimit: 160, maxItems: 48, injectCanon: true,  injectCharacter: true,  injectPromise: false, injectPattern: true,  injectExpectation: true,  injectPlanned: true  },
+  "A-Pattern":   { summaryCharLimit: 160, maxItems: 48, injectCanon: true,  injectCharacter: true,  injectPromise: true,  injectPattern: false, injectExpectation: true,  injectPlanned: true  },
 };
 
 // ── 上下文块构建 ──────────────────────────────────────────────────────────
@@ -84,29 +107,35 @@ export function buildContextBlock(
 
   const truncate = (s: string): string => s.slice(0, params.summaryCharLimit);
 
-  // CanonState（P0 不可丢弃，始终注入）
-  for (const entry of snapshot.canon) {
-    if (itemCount >= params.maxItems) break;
-    lines.push(`[canon] ${truncate(entry.fact)} (来源: ${entry.sourceChapter})`);
-    itemCount++;
+  // CanonState（Phase 6.2：消融时可排除）
+  if (params.injectCanon) {
+    for (const entry of snapshot.canon) {
+      if (itemCount >= params.maxItems) break;
+      lines.push(`[canon] ${truncate(entry.fact)} (来源: ${entry.sourceChapter})`);
+      itemCount++;
+    }
   }
 
-  // CharacterState（P1 相关角色，始终注入）
-  for (const entry of snapshot.character) {
-    if (itemCount >= params.maxItems) break;
-    lines.push(
-      `[character] ${entry.characterId}.${entry.field}=${truncate(entry.value)} (来源: ${entry.sourceChapter})`,
-    );
-    itemCount++;
+  // CharacterState（Phase 6.2：消融时可排除）
+  if (params.injectCharacter) {
+    for (const entry of snapshot.character) {
+      if (itemCount >= params.maxItems) break;
+      lines.push(
+        `[character] ${entry.characterId}.${entry.field}=${truncate(entry.value)} (来源: ${entry.sourceChapter})`,
+      );
+      itemCount++;
+    }
   }
 
-  // PromiseLedger（P1 选中伏笔，始终注入）
-  for (const entry of snapshot.promise) {
-    if (itemCount >= params.maxItems) break;
-    lines.push(
-      `[promise] ${truncate(entry.description)} [status=${entry.status}, heat=${entry.currentHeat}] (来源: ${entry.sourceChapter})`,
-    );
-    itemCount++;
+  // PromiseLedger（Phase 6.2：消融时可排除）
+  if (params.injectPromise) {
+    for (const entry of snapshot.promise) {
+      if (itemCount >= params.maxItems) break;
+      lines.push(
+        `[promise] ${truncate(entry.description)} [status=${entry.status}, heat=${entry.currentHeat}] (来源: ${entry.sourceChapter})`,
+      );
+      itemCount++;
+    }
   }
 
   // PatternMemory（P3 可丢弃，B 组排除）
@@ -186,15 +215,21 @@ export function breakdownContextTokens(
 
   const estimate = (s: string): number => Math.ceil(s.length / 2) + 8;
 
-  const canonTokens = snapshot.canon.reduce((sum, e) => sum + estimate(e.fact), 0);
-  const characterTokens = snapshot.character.reduce(
-    (sum, e) => sum + estimate(`${e.characterId}.${e.field}=${e.value}`),
-    0,
-  );
-  const promiseTokens = snapshot.promise.reduce(
-    (sum, e) => sum + estimate(`${e.description}[${e.status},${e.currentHeat}]`),
-    0,
-  );
+  const canonTokens = params.injectCanon
+    ? snapshot.canon.reduce((sum, e) => sum + estimate(e.fact), 0)
+    : 0;
+  const characterTokens = params.injectCharacter
+    ? snapshot.character.reduce(
+        (sum, e) => sum + estimate(`${e.characterId}.${e.field}=${e.value}`),
+        0,
+      )
+    : 0;
+  const promiseTokens = params.injectPromise
+    ? snapshot.promise.reduce(
+        (sum, e) => sum + estimate(`${e.description}[${e.status},${e.currentHeat}]`),
+        0,
+      )
+    : 0;
   const patternTokens = params.injectPattern
     ? snapshot.pattern.reduce((sum, e) => sum + estimate(`${e.description}[${e.patternType}]`), 0)
     : 0;

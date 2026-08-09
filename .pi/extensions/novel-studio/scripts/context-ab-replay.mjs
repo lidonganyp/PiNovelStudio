@@ -60,6 +60,11 @@ console.log(`[context-ab] 变体：A(完整) / B(压缩) / C(无状态)`);
 const runner = await import(
   `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "context-ab-runner.js")}`
 );
+// Phase 6.1.1 收口：从 gate 模块导入 aggregate/evaluateGate，消除同步漂移
+const gateMod = await import(
+  `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "context-ab-gate.js")}`
+);
+const { aggregate, evaluateGate } = gateMod;
 
 const scenarios = runner.getContextAbScenarios();
 const variants = [
@@ -150,103 +155,6 @@ async function runOne(scenario, seed, variant) {
       firstValidEvidenceCall: -1, provenance: null,
     };
   }
-}
-
-// ── 聚合 ──
-function aggregate(entries) {
-  const n = entries.length || 1;
-  const s = (k) => entries.reduce((sum, r) => sum + (r[k] ?? 0), 0);
-  return {
-    avgCoverage: s("coverage") / n,
-    stopRate: s("stopped") / n,
-    avgSourceRef: s("sourceRefCompleteness") / n,
-    totalChars: s("totalResultChars"),
-    totalCalls: s("totalCalls"),
-    totalEmpty: s("emptyResults"),
-    totalErrors: s("errors"),
-    totalTimeouts: s("timeouts"),
-    totalParseErrors: s("parseErrors"),
-    totalInvalidTool: s("invalidToolSelections"),
-    totalInvalidIntents: s("invalidIntents"),
-    totalTruncated: s("truncatedResults"), // Phase 6.1.1 修复：aggregate 缺少 totalTruncated
-    totalDuplicateQueries: s("totalDuplicateQueries"),
-    schemaTokenCost: s("schemaTokenCost"),
-    // Phase 6 专属聚合
-    totalContextBlockTokens: s("contextBlockTokens"),
-    avgContextBlockTokens: s("contextBlockTokens") / n,
-    totalContextBlockChars: s("contextBlockChars"),
-    avgContextItemCount: s("contextItemCount") / n,
-    totalCanonTokens: s("contextCanonTokens"),
-    totalCharacterTokens: s("contextCharacterTokens"),
-    totalPromiseTokens: s("contextPromiseTokens"),
-    totalPatternTokens: s("contextPatternTokens"),
-    totalExpectationTokens: s("contextExpectationTokens"),
-    totalPlannedTokens: s("contextPlannedTokens"),
-    avgFirstValidEvidenceCall: s("firstValidEvidenceCall") / n,
-    // Phase 6.1.1 修复：首证据延迟只统计有有效证据的场景（callIndex >= 0），
-    // 避免 -1 拉低均值导致"虚假提前"。
-    avgFirstValidEvidenceCallValid: entries.filter((e) => e.firstValidEvidenceCall >= 0).length > 0
-      ? entries.filter((e) => e.firstValidEvidenceCall >= 0).reduce((sum, e) => sum + e.firstValidEvidenceCall, 0) / entries.filter((e) => e.firstValidEvidenceCall >= 0).length
-      : -1,
-    noEvidenceCount: entries.filter((e) => e.firstValidEvidenceCall < 0).length,
-    count: entries.length,
-  };
-}
-
-// ── 门禁 ──
-function evaluateGate(bAgg, cAgg, aAgg) {
-  // B 组门禁（压缩不降级）
-  const coverageGteA = bAgg.avgCoverage >= aAgg.avgCoverage - 1e-9;
-  const sourceRefGteA = bAgg.avgSourceRef >= aAgg.avgSourceRef - 1e-9;
-  // Phase 6.1.1 修复：失败门禁补充 empty/invTool/truncated/invIntents 检查
-  const failuresNotWorseThanA =
-    bAgg.totalErrors <= aAgg.totalErrors &&
-    bAgg.totalTimeouts <= aAgg.totalTimeouts &&
-    bAgg.totalParseErrors <= aAgg.totalParseErrors &&
-    bAgg.totalEmpty <= aAgg.totalEmpty &&
-    bAgg.totalInvalidTool <= aAgg.totalInvalidTool &&
-    bAgg.totalTruncated <= aAgg.totalTruncated &&
-    bAgg.totalInvalidIntents <= aAgg.totalInvalidIntents;
-  const stopRateNotDegraded = bAgg.stopRate >= aAgg.stopRate - 0.05;
-  // token 成本下降 > 10%
-  const tokenReduction = aAgg.totalContextBlockTokens > 0
-    ? 1 - (bAgg.totalContextBlockTokens / aAgg.totalContextBlockTokens)
-    : 0;
-  const tokenReduced = tokenReduction > 0.10;
-  // 首证据延迟 <= A + 1（Phase 6.1.1：使用只统计有效证据的均值）
-  const aFirstValid = aAgg.avgFirstValidEvidenceCallValid ?? -1;
-  const bFirstValid = bAgg.avgFirstValidEvidenceCallValid ?? -1;
-  const firstEvidenceNotDelayed = aFirstValid < 0 || bFirstValid < 0
-    ? true // 无有效证据时不做延迟判定（记录但不阻断）
-    : bFirstValid <= aFirstValid + 1;
-
-  const allPassed = coverageGteA && sourceRefGteA && failuresNotWorseThanA &&
-    stopRateNotDegraded && tokenReduced && firstEvidenceNotDelayed;
-
-  // C 组 delta（记录不阻断）
-  const cCoverageDelta = aAgg.avgCoverage - cAgg.avgCoverage;
-  const cSourceRefDelta = aAgg.avgSourceRef - cAgg.avgSourceRef;
-  const cTokenDelta = aAgg.totalContextBlockTokens - cAgg.totalContextBlockTokens;
-  const cMarginalValueInsufficient = cCoverageDelta < 0.05;
-
-  return {
-    bGate: {
-      coverageGteA,
-      sourceRefGteA,
-      failuresNotWorseThanA,
-      stopRateNotDegraded,
-      tokenReduced,
-      tokenReductionPct: (tokenReduction * 100).toFixed(1) + "%",
-      firstEvidenceNotDelayed,
-      allPassed,
-    },
-    cDelta: {
-      coverageDelta: cCoverageDelta,
-      sourceRefDelta: cSourceRefDelta,
-      tokenDelta: cTokenDelta,
-      marginalValueInsufficient: cMarginalValueInsufficient,
-    },
-  };
 }
 
 // ── 多批次执行 ──
@@ -400,7 +308,7 @@ const md = [
   "|--------|------|------|",
   `| 覆盖率 >= A | ${gate.bGate.coverageGteA ? "PASS" : "FAIL"} | ${fmt(crossB.avgCoverage)} vs ${fmt(crossA.avgCoverage)} |`,
   `| sourceRef >= A | ${gate.bGate.sourceRefGteA ? "PASS" : "FAIL"} | ${fmt(crossB.avgSourceRef)} vs ${fmt(crossA.avgSourceRef)} |`,
-  `| 失败不劣于 A | ${gate.bGate.failuresNotWorseThanA ? "PASS" : "FAIL"} | errors/timeouts/parse |`,
+  `| 失败不劣于 A | ${gate.bGate.failuresNotWorseThanA ? "PASS" : "FAIL"} | errors/timeouts/parse/empty/invTool/truncated/invIntents |`,
   `| 停止率不降级 | ${gate.bGate.stopRateNotDegraded ? "PASS" : "FAIL"} | ${pct(crossB.stopRate)} vs ${pct(crossA.stopRate)} |`,
   `| token 下降 >10% | ${gate.bGate.tokenReduced ? "PASS" : "FAIL"} | ${gate.bGate.tokenReductionPct} |`,
   `| 首证据不延迟 | ${gate.bGate.firstEvidenceNotDelayed ? "PASS" : "FAIL"} | ${fmt(crossB.avgFirstValidEvidenceCall, 1)} vs ${fmt(crossA.avgFirstValidEvidenceCall, 1)} |`,

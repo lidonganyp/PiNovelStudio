@@ -25,6 +25,7 @@ import {
   FULL_PARAMS,
   COMPRESSED_PARAMS,
   NONE_PARAMS,
+  ABLATION_PARAMS,
   type CompressionParams,
   type ContextTokenBreakdown,
 } from "./compressed-context-builder.js";
@@ -32,7 +33,10 @@ import { deriveSnapshotFromScenario } from "./context-ab-fixtures.js";
 
 // ── 类型 ──────────────────────────────────────────────────────────────────
 
-export type ContextAbArm = "A" | "B" | "C";
+export type ContextAbArm = "A" | "B" | "C" | "A-Canon" | "A-Character" | "A-Promise" | "A-Pattern";
+
+/** Phase 6.2 消融 arm 列表 */
+export const ABLATION_ARMS: ContextAbArm[] = ["A-Canon", "A-Character", "A-Promise", "A-Pattern"];
 
 export interface ContextAbScenarioMetrics extends RealToolAbScenarioMetrics {
   /** 上下文压缩 arm（A=完整/B=压缩/C=无） */
@@ -63,6 +67,10 @@ export function compressionParamsOfArm(arm: ContextAbArm): CompressionParams {
     case "A": return FULL_PARAMS;
     case "B": return COMPRESSED_PARAMS;
     case "C": return NONE_PARAMS;
+    case "A-Canon": return ABLATION_PARAMS["A-Canon"];
+    case "A-Character": return ABLATION_PARAMS["A-Character"];
+    case "A-Promise": return ABLATION_PARAMS["A-Promise"];
+    case "A-Pattern": return ABLATION_PARAMS["A-Pattern"];
   }
 }
 
@@ -105,13 +113,13 @@ export async function runContextAbScenario(
   const contextBlockTokens = estimateContextBlockTokens(contextBlock);
   const contextBlockChars = contextBlock.length;
   const contextTokenBreakdown = breakdownContextTokens(snapshot, params);
-  // 注入的状态条目数
+  // 注入的状态条目数（Phase 6.2：使用完整注入控制字段）
   const contextItemCount =
     (arm === "C" || !snapshot) ? 0 : Math.min(
       params.maxItems,
-      snapshot.canon.length +
-        snapshot.character.length +
-        snapshot.promise.length +
+      (params.injectCanon ? snapshot.canon.length : 0) +
+        (params.injectCharacter ? snapshot.character.length : 0) +
+        (params.injectPromise ? snapshot.promise.length : 0) +
         (params.injectPattern ? snapshot.pattern.length : 0) +
         (params.injectExpectation && snapshot.expectation ? snapshot.expectation.length : 0) +
         (params.injectPlanned && snapshot.planned ? snapshot.planned.length : 0),

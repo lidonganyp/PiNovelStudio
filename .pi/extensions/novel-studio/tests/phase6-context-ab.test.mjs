@@ -9,45 +9,22 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+// Phase 6.1.1 收口：从 gate 模块导入，消除同步漂移
+const gateMod = await import(
+  `file://${join(process.cwd(), "dist-eval", "novelos", "eval", "context-ab-gate.js")}`
+);
+const { aggregate, evaluateGate } = gateMod;
 
 // ── 门禁逻辑测试 ──────────────────────────────────────────────────────────
 
-describe("Phase 6.1.1 门禁逻辑", () => {
-  // 复制 replay 脚本中的 evaluateGate 逻辑进行测试
-  function evaluateGate(bAgg, cAgg, aAgg) {
-    const coverageGteA = bAgg.avgCoverage >= aAgg.avgCoverage - 1e-9;
-    const sourceRefGteA = bAgg.avgSourceRef >= aAgg.avgSourceRef - 1e-9;
-    // Phase 6.1.1 修复：补充 empty/invTool/truncated/invIntents 检查
-    const failuresNotWorseThanA =
-      bAgg.totalErrors <= aAgg.totalErrors &&
-      bAgg.totalTimeouts <= aAgg.totalTimeouts &&
-      bAgg.totalParseErrors <= aAgg.totalParseErrors &&
-      bAgg.totalEmpty <= aAgg.totalEmpty &&
-      bAgg.totalInvalidTool <= aAgg.totalInvalidTool &&
-      bAgg.totalTruncated <= aAgg.totalTruncated &&
-      bAgg.totalInvalidIntents <= aAgg.totalInvalidIntents;
-    const stopRateNotDegraded = bAgg.stopRate >= aAgg.stopRate - 0.05;
-    const tokenReduction = aAgg.totalContextBlockTokens > 0
-      ? 1 - (bAgg.totalContextBlockTokens / aAgg.totalContextBlockTokens)
-      : 0;
-    const tokenReduced = tokenReduction > 0.10;
-    const aFirstValid = aAgg.avgFirstValidEvidenceCallValid ?? -1;
-    const bFirstValid = bAgg.avgFirstValidEvidenceCallValid ?? -1;
-    const firstEvidenceNotDelayed = aFirstValid < 0 || bFirstValid < 0
-      ? true
-      : bFirstValid <= aFirstValid + 1;
-    const allPassed = coverageGteA && sourceRefGteA && failuresNotWorseThanA &&
-      stopRateNotDegraded && tokenReduced && firstEvidenceNotDelayed;
-    return { coverageGteA, sourceRefGteA, failuresNotWorseThanA, stopRateNotDegraded, tokenReduced, firstEvidenceNotDelayed, allPassed };
-  }
-
+describe("Phase 6.1.1 门禁逻辑（从 gate 模块导入）", () => {
   it("B 组 empty > A 时 failuresNotWorseThanA 应为 false", () => {
     const aAgg = { avgCoverage: 0.9, avgSourceRef: 0.8, totalErrors: 0, totalTimeouts: 0, totalParseErrors: 0, totalEmpty: 0, totalInvalidTool: 0, totalTruncated: 0, totalInvalidIntents: 0, stopRate: 0.8, totalContextBlockTokens: 1000, avgFirstValidEvidenceCallValid: 0.5 };
     const bAgg = { avgCoverage: 0.9, avgSourceRef: 0.8, totalErrors: 0, totalTimeouts: 0, totalParseErrors: 0, totalEmpty: 5, totalInvalidTool: 0, totalTruncated: 0, totalInvalidIntents: 0, stopRate: 0.8, totalContextBlockTokens: 500, avgFirstValidEvidenceCallValid: 0.5 };
     const cAgg = { avgCoverage: 0.8, avgSourceRef: 0.7, totalContextBlockTokens: 0 };
     const gate = evaluateGate(bAgg, cAgg, aAgg);
-    assert.equal(gate.failuresNotWorseThanA, false, "B 组 empty=5 > A empty=0 应判定为失败");
-    assert.equal(gate.allPassed, false);
+    assert.equal(gate.bGate.failuresNotWorseThanA, false, "B 组 empty=5 > A empty=0 应判定为失败");
+    assert.equal(gate.bGate.allPassed, false);
   });
 
   it("B 组 invTool > A 时 failuresNotWorseThanA 应为 false", () => {
@@ -55,7 +32,7 @@ describe("Phase 6.1.1 门禁逻辑", () => {
     const bAgg = { avgCoverage: 0.9, avgSourceRef: 0.8, totalErrors: 0, totalTimeouts: 0, totalParseErrors: 0, totalEmpty: 0, totalInvalidTool: 5, totalTruncated: 0, totalInvalidIntents: 0, stopRate: 0.8, totalContextBlockTokens: 500, avgFirstValidEvidenceCallValid: 0.5 };
     const cAgg = { avgCoverage: 0.8, avgSourceRef: 0.7, totalContextBlockTokens: 0 };
     const gate = evaluateGate(bAgg, cAgg, aAgg);
-    assert.equal(gate.failuresNotWorseThanA, false, "B 组 invTool=5 > A invTool=0 应判定为失败");
+    assert.equal(gate.bGate.failuresNotWorseThanA, false, "B 组 invTool=5 > A invTool=0 应判定为失败");
   });
 
   it("B 组全部指标不劣于 A 时 failuresNotWorseThanA 应为 true", () => {
@@ -63,8 +40,8 @@ describe("Phase 6.1.1 门禁逻辑", () => {
     const bAgg = { avgCoverage: 0.9, avgSourceRef: 0.8, totalErrors: 0, totalTimeouts: 0, totalParseErrors: 0, totalEmpty: 0, totalInvalidTool: 0, totalTruncated: 0, totalInvalidIntents: 0, stopRate: 0.8, totalContextBlockTokens: 500, avgFirstValidEvidenceCallValid: 0.5 };
     const cAgg = { avgCoverage: 0.8, avgSourceRef: 0.7, totalContextBlockTokens: 0 };
     const gate = evaluateGate(bAgg, cAgg, aAgg);
-    assert.equal(gate.failuresNotWorseThanA, true);
-    assert.equal(gate.allPassed, true);
+    assert.equal(gate.bGate.failuresNotWorseThanA, true);
+    assert.equal(gate.bGate.allPassed, true);
   });
 
   it("首证据 -1（无有效证据）时不阻断门禁", () => {
@@ -72,7 +49,7 @@ describe("Phase 6.1.1 门禁逻辑", () => {
     const bAgg = { avgCoverage: 0.9, avgSourceRef: 0.8, totalErrors: 0, totalTimeouts: 0, totalParseErrors: 0, totalEmpty: 0, totalInvalidTool: 0, totalTruncated: 0, totalInvalidIntents: 0, stopRate: 0.8, totalContextBlockTokens: 500, avgFirstValidEvidenceCallValid: -1 };
     const cAgg = { avgCoverage: 0.8, avgSourceRef: 0.7, totalContextBlockTokens: 0 };
     const gate = evaluateGate(bAgg, cAgg, aAgg);
-    assert.equal(gate.firstEvidenceNotDelayed, true, "无有效证据时不应阻断门禁");
+    assert.equal(gate.bGate.firstEvidenceNotDelayed, true, "无有效证据时不应阻断门禁");
   });
 });
 
