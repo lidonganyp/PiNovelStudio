@@ -407,6 +407,92 @@ Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生�
 
 - **不调整生产 ContextCompiler 参数**：当前 maxItems 24-48 / 摘要 160 字符在工具决策 replay 中表现良好，但不等于生产链路已完整验证
 - **B 组压缩方案暂不采用**：门禁结果不稳定（FAIL/PASS），需多次 replay 确认稳定性后再决策
-- **Phase 6.2 逐类消融**：采用单因素消融（只排除某一类状态，其他参数不变），测量每类状态的边际贡献
+- **Phase 6.2 逐类消融**：已完成，见 §13
 - **生产链路 integration replay（可选）**：补做真正的 `ContextCompiler/runUnifiedPipeline` integration replay
 - **真实 workspace 验证（可选）**：当前使用从 BaselineScenario 派生的模拟状态，可在真实生产 workspace 验证
+
+---
+
+## 13. Phase 6.2 逐类单因素消融结果（2026-08-09）
+
+> **状态**：已完成。5 arm × 3 场景 × 3 seed × 3 批次 = 135 次场景运行，GLM 5.2，`fallback=[]`。
+> **提交**：`da1e9f2`。
+
+### 13.1 实验设计
+
+单因素消融：每个 arm 只排除一类状态，其他参数与 A 组一致（maxItems 48, 摘要 160 字符）。
+
+| Arm | 排除的状态类 | 其他参数 |
+|-----|------------|---------|
+| A | 无（基线） | 完整 |
+| A-Canon | CanonState | 其他全注入 |
+| A-Character | CharacterState | 其他全注入 |
+| A-Promise | PromiseLedger | 其他全注入 |
+| A-Pattern | PatternMemory | 其他全注入 |
+
+### 13.2 跨批次聚合对比
+
+| 指标 | A 完整 | A-Canon | A-Character | A-Promise | A-Pattern |
+|------|--------|---------|-------------|-----------|-----------|
+| 覆盖率 | 0.988 | 0.988 | **0.914** | 0.951 | 0.951 |
+| 停止率 | 67% | 74% | **52%** | 56% | **44%** |
+| sourceRef | 0.821 | 0.806 | **0.718** | 0.791 | 0.800 |
+| 空结果 | 2 | 0 | 1 | 1 | **5** |
+| 非法工具 | 2 | 0 | 1 | 1 | **5** |
+| 上下文 token | 2844 | 2709 | 2079 | 2592 | 1764 |
+
+### 13.3 消融门禁（各 arm vs A 不降级）
+
+| Arm | 覆盖率>=A | sourceRef>=A | 失败不劣于A | 停止率不降级 | 覆盖率 delta | 显著贡献 | 门禁 |
+|-----|-----------|-------------|------------|-------------|-------------|---------|------|
+| A-Canon | PASS | **FAIL** | PASS | PASS | 0.000 | 否 | FAIL |
+| A-Character | **FAIL** | **FAIL** | PASS | **FAIL** | **0.074** | **是** | FAIL |
+| A-Promise | **FAIL** | **FAIL** | PASS | **FAIL** | 0.037 | 否 | FAIL |
+| A-Pattern | **FAIL** | **FAIL** | **FAIL** | **FAIL** | 0.037 | 否 | FAIL |
+
+### 13.4 结论
+
+**核心结论：CharacterState 是边际贡献最大的状态类；CanonState 对覆盖率无贡献；PatternMemory 排除后失败行为显著恶化。**
+
+各类状态的边际贡献排序：
+
+1. **CharacterState（delta=7.4%，显著）**：
+   - 去除后覆盖率降级 7.4%（唯一超过 5% 显著性门槛）
+   - 停止率降级 15pp（67% -> 52%）
+   - sourceRef 降级 10.3pp（0.821 -> 0.718）
+   - **CharacterState 是最重要的状态类，不可压缩**
+
+2. **PromiseLedger（delta=3.7%，不显著）**：
+   - 去除后覆盖率降级 3.7%，停止率降级 11pp
+   - 有正贡献但低于 5% 显著性门槛
+   - **PromiseLedger 有价值但边际贡献中等**
+
+3. **PatternMemory（delta=3.7%，不显著）**：
+   - 去除后覆盖率降级 3.7%，但空结果从 2 增到 5、非法工具从 2 增到 5
+   - **PatternMemory 对覆盖率影响不大，但对失败行为有显著影响**
+   - 这回答了 Phase 6.1 的问题：PatternMemory 单独排除的因果效果是 delta=3.7%（不是 B 组多变量混合的 13%）
+
+4. **CanonState（delta=0.000，无贡献）**：
+   - 去除后覆盖率不变，但 sourceRef 降级 1.5pp
+   - 门禁 FAIL 仅因 sourceRef 微降
+   - **CanonState 在工具决策 replay 中对覆盖率无边际贡献**
+   - 可能原因：CanonState 的事实信息已通过工具检索获得，prompt 注入是冗余的
+
+### 13.5 与 Phase 6.1 B 组的对比
+
+| 对比 | B 组（多变量） | A-Pattern（单变量） |
+|------|-------------|-----------------|
+| 变化 | 摘要 80 字符 + maxItems 24 + 排除 Pattern + 排除 Planned | 只排除 Pattern |
+| 覆盖率 delta | -13%（Run 1）/ +1.2%（Run 2） | -3.7% |
+| 空结果 | +5（Run 1）/ 0（Run 2） | +3 |
+| 非法工具 | +5（Run 1）/ 0（Run 2） | +3 |
+
+**结论**：B 组的 13% 降级是多变量联合效应，不能单独归因于 PatternMemory。PatternMemory 单独排除的因果效果是 3.7%。
+
+### 13.6 后续
+
+- **不调整生产参数**：所有消融 arm 都 FAIL，当前完整注入（A 组）是最优配置
+- **CharacterState 不可压缩**：边际贡献 7.4%，远超显著性门槛
+- **CanonState 可能有优化空间**：在工具决策 replay 中对覆盖率无贡献，可考虑在生产链路中验证是否冗余
+- **PatternMemory 对失败行为有影响**：虽然覆盖率 delta 不显著，但空结果和非法工具显著增加
+- **生产链路 integration replay 仍是待办**：当前结论限于工具决策层面
