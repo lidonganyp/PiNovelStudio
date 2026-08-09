@@ -444,8 +444,9 @@ PINOVEL_DISABLE_FALLBACK=1 node scripts/tool-ab-real-report.mjs --envelope --mod
 
 ## 12. Phase 5.3.3 B-safe 混合接口设计（2026-08-09）
 
-> **状态**：已实现 + 4 次独立真实 replay 完成（glm-5.2，`fallback=[]`）。
-> **结论**：B-safe 未通过门禁，不作为生产方案。保留 9 专用工具为默认。
+> **状态**：已收口（2026-08-09）。4 次真实 replay 全部未通过门禁，生产不采用。
+> 协议纠正机制保留为 eval-only 资产。生产仍为 `rel-000`，9 专用工具默认执行面未改变。
+> 提交 `88a5fa4` 包含实现、测试和设计结论。Phase 5.3.3 正式收口，进入 Phase 6。
 
 ### 12.1 动机
 

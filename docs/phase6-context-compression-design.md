@@ -1,0 +1,303 @@
+# Phase 6 - 上下文压缩与记忆层设计
+
+> **状态**：设计评审（未改生产代码）
+> **前置**：Phase 5.3.3 B-safe 已收口（`88a5fa4`，2026-08-09），生产仍为 `rel-000`，9 专用工具默认执行面未改变。
+> **范围**：eval-only A/B 基线，不修改生产 ContextCompiler。真实模型 replay 通过前不切换。
+
+---
+
+## 1. 背景与目标
+
+### 1.1 当前现状
+
+统一主链路的上下文注入由 `ContextCompiler`（`v2/core/context-compiler.ts`）负责，经 `context-safety.ts` 做 token 预算裁剪后传入编排器。当前上下文包含以下层：
+
+| 层 | 来源 | 注入路径 | 当前预算 |
+|---|------|---------|---------|
+| 事实（facts） | ChapterSeed 派生 | `deriveFacts()` | 无独立上限，受 ContextSafety P3 裁剪 |
+| 角色状态（characterStates） | ChapterSeed 派生 | `deriveCharacterStates()` | 无独立上限 |
+| 开放回路（openLoops） | ChapterSeed 派生 | `deriveOpenLoops()` | 无独立上限 |
+| 世界规则（worldRules） | ChapterSeed 派生 | `deriveWorldRules()` | 无独立上限 |
+| 风格参考（styleReferences） | 风格指纹文件 | `loadStyleProfile()` | P4 可丢弃 |
+| 作品宪法（constitution） | CreativeConstitution | `deriveConstitution()` | P0/P1 保护 |
+| **长期状态（longTermState）** | narrative-state-store.json | `deriveLongTermState()` -> JIT 检索 | maxItems=24-48，摘要 160 字符/条 |
+
+四类长期叙事状态（CanonState / CharacterState / PromiseLedger / PatternMemory）通过 JIT 检索（`retrieveNarrativeContext()`）注入，已有三层预算控制：
+
+1. **maxItems 动态缩放**：`Math.min(48, Math.max(24, floor(total / 4)))` — 下限 24、上限 48
+2. **promptItems 摘要截断**：每条摘要最多 160 字符
+3. **ContextSafety 分层裁剪**：P0（canon）不可丢弃，P1（相关角色/promise）不可丢弃，P3（非相关）可丢弃
+
+### 1.2 问题
+
+当前预算参数（maxItems 24-48、摘要 160 字符）是基于经验设定的，**未经过真实模型 A/B 验证**。以下问题待解答：
+
+- 长期状态注入的 **边际价值** 是多少？（完全不注入 vs 当前注入量）
+- 当前 maxItems 24-48 是否 **过大或过小**？（压缩到 12-24 是否降级覆盖率？）
+- 摘要 160 字符是否 **信息损失过大**？（扩展到 240 字符是否提升覆盖率？）
+- 四类状态的 **相对价值** 如何？（CanonState vs PatternMemory 的边际贡献差异）
+
+### 1.3 目标
+
+在 **eval-only** 隔离下，建立"完整上下文 vs 压缩上下文"的 A/B 基线，量化：
+
+1. 长期状态注入的边际价值（A vs C）
+2. 压缩参数对证据覆盖的影响（A vs B）
+3. 各类状态的相对贡献（逐类消融）
+4. 上下文 token 成本与证据覆盖的帕累托前沿
+
+**不降级底线**：mustVerify 覆盖率、sourceRef 完整率、事实/时间线冲突率。
+
+---
+
+## 2. 设计约束（铁律）
+
+1. **eval-only**：所有压缩变体只生活在 `dist-eval/`（`tsconfig.eval.json`），不进入 `tsconfig.prod.json` / `dist/`。
+2. **不改生产 ContextCompiler**：通过 `evalContext` 注入压缩后的 `CompiledContext`，复用 `runUnifiedPipeline` 的 eval 路径。
+3. **复用现有 fixtures/workspace**：使用与 Phase 4/5 相同的 eval workspace 和 mustVerify 场景。
+4. **固定对照**：A/B/C 使用相同模型路由（GLM 5.2）、相同 seed/temperature、相同 9 专用工具。
+5. **先确定性后真实模型**：先跑 stub 确定性 replay（零成本），再跑真实模型 replay（受控预算）。
+6. **不降级底线优先**：mustVerify 覆盖率与 sourceRef 完整率是底线，token 成本是优化目标。
+
+---
+
+## 3. A/B/C 组定义
+
+### 3.1 A 组：完整上下文（当前生产基线）
+
+- 使用当前 `ContextCompiler.compile()` 的完整输出。
+- maxItems = `computeMaxItems(totalEntries)`（24-48）
+- promptItems 摘要 = 160 字符/条
+- ContextSafety 分层裁剪 P0-P4（默认参数）
+- **这是当前生产的真实行为，作为不降级基线。**
+
+### 3.2 B 组：压缩上下文
+
+对长期状态注入施加更激进的压缩参数：
+
+| 参数 | A 组（当前） | B 组（压缩） | 理由 |
+|------|------------|-------------|------|
+| maxItems | 24-48 | **12-24** | 测试更小工作集是否降级覆盖 |
+| 摘要字符上限 | 160 | **80** | 测试更短摘要是否损失关键信息 |
+| perKindFloor | min(4, itemLimit/4) | **min(2, itemLimit/6)** | 收窄每类保底名额 |
+| 非相关角色状态 | P3 可丢弃 | **不注入** | 只注入 relevantCharacters 命中的角色状态 |
+| 非选中 openLoops | P3 可丢弃 | **不注入** | 只注入 selectedPromiseIds 命中的伏笔 |
+| PatternMemory | P3 可丢弃 | **不注入** | 叙事模式非硬事实，测试其边际价值 |
+
+B 组保持 P0（canon 不可违背事实）和 P1（相关角色/选中伏笔）不变，只压缩 P3/P4 层。
+
+### 3.3 C 组：无长期状态基线
+
+- `CompiledContext.longTermState = null`
+- 完全不注入四类长期叙事状态
+- **测量长期状态注入的边际价值**（A vs C 的 delta）
+
+### 3.4 逐类消融（可选，Phase 6.2）
+
+若 A/B/C 基线证明压缩有正收益，进一步逐类消融：
+
+| 变体 | 注入状态 | 排除状态 |
+|------|---------|---------|
+| B-canon | CanonState | CharacterState / PromiseLedger / PatternMemory |
+| B-character | CharacterState | CanonState / PromiseLedger / PatternMemory |
+| B-promise | PromiseLedger | CanonState / CharacterState / PatternMemory |
+| B-pattern | PatternMemory | CanonState / CharacterState / PromiseLedger |
+
+---
+
+## 4. 控制变量（A/B/C 相同）
+
+| 变量 | 固定值 |
+|------|--------|
+| Fixtures | 与 Phase 4/5 相同的 eval workspace（含 mustVerify 场景） |
+| 工具集 | 9 专用工具（NARRATIVE_TOOL_NAMES），不使用 facade |
+| 模型路由 | `narrator_testing_glm`（GLM 5.2，`fallback=[]`） |
+| Prompt | 相同 system / 检索决策规则 |
+| seed / temperature | 0/1/2 × 0.72 |
+| 预算 | 相同 `budgetPolicy`（模型调用软 6 / 硬 10） |
+| Workspace | 相同 `workspaces/{id}` 数据 |
+
+**唯一差异**：长期状态的注入量（maxItems / 摘要长度 / 注入范围）。
+
+---
+
+## 5. 对比指标
+
+### 5.1 不降级底线（必须通过）
+
+| 指标 | 口径 | 目标 |
+|------|------|------|
+| mustVerify 覆盖率 | `computeMustVerifyCoverage` 逐场景计算 | B/C >= A（不降级） |
+| sourceRef 完整率 | 有效 sourceRef 占比 | B/C >= A |
+| 事实/时间线冲突 | FactGuard 检测的冲突数 | B/C <= A |
+
+### 5.2 优化目标
+
+| 指标 | 口径 | 目标 |
+|------|------|------|
+| 上下文 token 成本 | `estimateTokens(longTermState promptItems)` | B < A（显著下降） |
+| 首次有效证据延迟 | 首次 confirmed 证据的工具调用序号 | B <= A（不延迟） |
+| 总工具调用次数 | `totalCalls` | B <= A（不增加） |
+| 空结果数 | `emptyResults` | B <= A |
+| 停止率 | `stopped / total` | B >= A - 5%（不显著下降） |
+
+### 5.3 章节连续性
+
+| 指标 | 口径 | 目标 |
+|------|------|------|
+| StoryPreservation Gate | full_entities 覆盖率（0.25/3 阈值） | B/C 不新增 block |
+| 实体保持率 | knownEntities 命中率 | B/C >= A |
+| 重复查询数 | `duplicateQueries` | B <= A |
+
+### 5.4 上下文成本明细
+
+| 指标 | 口径 |
+|------|------|
+| longTermState token | `estimateTokens(promptItems 全部拼接)` |
+| canon token | CanonState 条目 token 小计 |
+| character token | CharacterState 条目 token 小计 |
+| promise token | PromiseLedger 条目 token 小计 |
+| pattern token | PatternMemory 条目 token 小计 |
+| 总上下文 token | ContextBudgetReport.estimatedRetainedTokens |
+
+---
+
+## 6. 实现方案
+
+### 6.1 eval-only 压缩上下文构建器
+
+新增 `novelos/eval/compressed-context-builder.ts`（eval-only）：
+
+```typescript
+export interface CompressionParams {
+  maxItemsScale: number;       // maxItems 乘数，如 0.5 表示压缩到一半
+  summaryCharLimit: number;    // 摘要字符上限
+  perKindFloorScale: number;   // perKindFloor 乘数
+  injectNonRelevantCharacters: boolean;  // 是否注入非相关角色状态
+  injectNonSelectedPromises: boolean;     // 是否注入非选中伏笔
+  injectPatternMemory: boolean;           // 是否注入 PatternMemory
+}
+
+export function buildCompressedContext(
+  fullContext: CompiledContext,
+  params: CompressionParams,
+): CompiledContext;
+```
+
+- 接收 A 组的完整 `CompiledContext`，按 `params` 重建 `longTermState`
+- 不修改 `facts` / `characterStates` / `worldRules` / `constitution` 等非长期状态层
+- 返回新的 `CompiledContext`，保持类型不变
+
+### 6.2 A/B/C replay runner
+
+新增 `novelos/eval/context-ab-runner.ts`（eval-only）：
+
+- 复用 `runRealToolAbScenario` 的场景/seed/模型路由框架
+- 对每个场景 × seed，运行 3 个 arm：
+  - A: `ContextCompiler.compile()` 完整输出
+  - B: `buildCompressedContext(A, B_PARAMS)` 压缩输出
+  - C: `{ ...A, longTermState: null }` 无状态输出
+- 通过 `evalContext` 注入到 `runUnifiedPipeline(evalMode="B0", evalContext=...)`
+- 采集 §5 全部指标
+
+### 6.3 压缩参数预设
+
+```typescript
+const B_COMPRESSION: CompressionParams = {
+  maxItemsScale: 0.5,        // 24-48 -> 12-24
+  summaryCharLimit: 80,      // 160 -> 80
+  perKindFloorScale: 0.5,    // min(4, n/4) -> min(2, n/8)
+  injectNonRelevantCharacters: false,
+  injectNonSelectedPromises: false,
+  injectPatternMemory: false,
+};
+```
+
+---
+
+## 7. 执行计划
+
+### Phase 6.1a - 确定性 replay（stub model，零 API 调用）
+
+1. 实现 `compressed-context-builder.ts`（eval-only 压缩构建器）
+2. 实现 `context-ab-runner.ts`（A/B/C runner）
+3. 跑确定性 stub replay，验证框架正确性
+4. 从 trajectory 提取 §5 全部指标，生成 `reports/phase6-context-ab/` 对比报告
+5. 断言底线：`B.mustVerifyCoverage >= A` 且 `C.mustVerifyCoverage <= A`（验证 C 组确实测量到边际价值）
+
+### Phase 6.1b - 小规模真实模型 replay
+
+1. 固定场景子集（SC2/SC5/SC7）、固定 seed/temperature
+2. A/B/C 各跑 3 批次 × 3 seed
+3. 聚合均值/分布，产出对比报告
+4. 评估 token 成本下降是否显著、覆盖率是否降级
+
+### Phase 6.1c - 结论与后续
+
+- 若 B 组 token 显著下降且覆盖不降级 -> 压缩参数可作 Phase 6.2 生产 canary 候选
+- 若 C 组覆盖显著降级 -> 长期状态注入有正收益，当前注入量合理
+- 若 C 组覆盖不降级 -> 长期状态注入无边际价值，需重新评估注入策略
+- **无论结论如何，不直接切换生产 ContextCompiler**
+
+---
+
+## 8. 门禁（预注册）
+
+### 8.1 B 组门禁（压缩不降级）
+
+| 门禁 | 口径 | 容差 |
+|------|------|------|
+| mustVerify 覆盖率 >= A | 跨批次聚合 | 0（严格不降级） |
+| sourceRef 完整率 >= A | 跨批次聚合 | 0 |
+| 事实冲突数 <= A | FactGuard | 0 |
+| 停止率 >= A - 5% | 跨批次聚合 | 0.05 |
+| token 成本下降 > 10% | longTermState token | 10% |
+| 首证据延迟 <= A + 1 | 首次 confirmed 调用序号 | +1 |
+
+### 8.2 C 组门禁（无状态基线，记录不阻断）
+
+C 组是测量边际价值的基线，**不设通过/失败门禁**，只记录 A-C 的 delta：
+- 覆盖率 delta（A - C）
+- sourceRef delta（A - C）
+- token 成本 delta（A - C）
+
+若 C 组覆盖率 delta < 5%，标记"长期状态注入边际价值不足"。
+
+---
+
+## 9. 验收产物
+
+- [ ] `novelos/eval/compressed-context-builder.ts`（eval-only，压缩构建器）
+- [ ] `novelos/eval/context-ab-runner.ts`（eval-only，A/B/C runner）
+- [ ] `scripts/context-ab-replay.mjs`（replay 脚本）
+- [ ] `tests-eval/phase6-context-ab.test.mjs`（确定性断言）
+- [ ] `reports/phase6-context-ab/`（对比报告，JSON + MD）
+- [ ] 本设计评审通过后，才可进入实现 Phase
+
+---
+
+## 10. 与 Phase 4/5 的关系
+
+| 维度 | Phase 4/5 | Phase 6 |
+|------|----------|---------|
+| 研究问题 | 工具接口形态（9 工具 vs facade） | 上下文压缩与记忆注入量 |
+| A 组 | 9 专用工具 | 完整上下文（当前 ContextCompiler） |
+| B 组 | facade 变体 | 压缩上下文 |
+| 工具集 | 变化（9 vs facade） | **固定**（9 专用工具） |
+| 上下文 | 固定 | **变化**（完整 vs 压缩 vs 无） |
+| 模型路由 | GLM 5.2 | GLM 5.2（一致） |
+| 门禁口径 | 覆盖率/sourceRef/失败行为 | 覆盖率/sourceRef/token 成本/连续性 |
+
+Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生产注入），只变化上下文注入量。两个 Phase 正交。
+
+---
+
+## 11. 风险与缓解
+
+| 风险 | 缓解 |
+|------|------|
+| 压缩参数过于激进，覆盖率降级 | 先跑确定性 stub 验证框架，真实 replay 从温和参数开始 |
+| GLM 5.2 模型变异性（Phase 5.3.3 教训） | 跑 3 批次 × 3 seed，跨批次聚合；单次结果不做最终判定 |
+| evalContext 注入路径与生产行为不一致 | A 组使用与生产完全相同的 `ContextCompiler.compile()` 输出，确保基线一致 |
+| 压缩构建器引入新的 bug | 确定性 stub replay 先验证 `buildCompressedContext` 输出的 `CompiledContext` 结构完整 |
+| 四类状态交互效应 | Phase 6.1 先做整体压缩（B 组），Phase 6.2 再做逐类消融 |
