@@ -28,7 +28,6 @@ const __dirname = dirname(__filename);
 const SCRIPT_DIR = __dirname;
 const EXT_ROOT = join(SCRIPT_DIR, "..");
 const PROJECT_ROOT = join(EXT_ROOT, "..", "..", "..");
-const REPORT_DIR = join(PROJECT_ROOT, "reports", "phase6-context-ab");
 
 // ── 参数解析 ──
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -44,6 +43,10 @@ if (!DRY_RUN && process.env.PINOVEL_DISABLE_FALLBACK !== "1") {
   console.error("[context-ab] 真实模型模式必须设置 PINOVEL_DISABLE_FALLBACK=1");
   process.exit(1);
 }
+
+// Phase 6.1.1 修复：real/dry-run 使用不同输出目录，禁止 dry-run 覆盖 real 产物
+const MODE_DIR = DRY_RUN ? "dry-run" : "real";
+const REPORT_DIR = join(PROJECT_ROOT, "reports", "phase6-context-ab", MODE_DIR);
 
 const MODEL_ROUTE = process.env.PINOVEL_TOOL_AB_ROUTE ?? "narrator_testing_glm";
 const TEMPERATURE = 0.72;
@@ -165,6 +168,7 @@ function aggregate(entries) {
     totalParseErrors: s("parseErrors"),
     totalInvalidTool: s("invalidToolSelections"),
     totalInvalidIntents: s("invalidIntents"),
+    totalTruncated: s("truncatedResults"), // Phase 6.1.1 修复：aggregate 缺少 totalTruncated
     totalDuplicateQueries: s("totalDuplicateQueries"),
     schemaTokenCost: s("schemaTokenCost"),
     // Phase 6 专属聚合
@@ -179,6 +183,12 @@ function aggregate(entries) {
     totalExpectationTokens: s("contextExpectationTokens"),
     totalPlannedTokens: s("contextPlannedTokens"),
     avgFirstValidEvidenceCall: s("firstValidEvidenceCall") / n,
+    // Phase 6.1.1 修复：首证据延迟只统计有有效证据的场景（callIndex >= 0），
+    // 避免 -1 拉低均值导致"虚假提前"。
+    avgFirstValidEvidenceCallValid: entries.filter((e) => e.firstValidEvidenceCall >= 0).length > 0
+      ? entries.filter((e) => e.firstValidEvidenceCall >= 0).reduce((sum, e) => sum + e.firstValidEvidenceCall, 0) / entries.filter((e) => e.firstValidEvidenceCall >= 0).length
+      : -1,
+    noEvidenceCount: entries.filter((e) => e.firstValidEvidenceCall < 0).length,
     count: entries.length,
   };
 }
@@ -188,18 +198,27 @@ function evaluateGate(bAgg, cAgg, aAgg) {
   // B 组门禁（压缩不降级）
   const coverageGteA = bAgg.avgCoverage >= aAgg.avgCoverage - 1e-9;
   const sourceRefGteA = bAgg.avgSourceRef >= aAgg.avgSourceRef - 1e-9;
+  // Phase 6.1.1 修复：失败门禁补充 empty/invTool/truncated/invIntents 检查
   const failuresNotWorseThanA =
     bAgg.totalErrors <= aAgg.totalErrors &&
     bAgg.totalTimeouts <= aAgg.totalTimeouts &&
-    bAgg.totalParseErrors <= aAgg.totalParseErrors;
+    bAgg.totalParseErrors <= aAgg.totalParseErrors &&
+    bAgg.totalEmpty <= aAgg.totalEmpty &&
+    bAgg.totalInvalidTool <= aAgg.totalInvalidTool &&
+    bAgg.totalTruncated <= aAgg.totalTruncated &&
+    bAgg.totalInvalidIntents <= aAgg.totalInvalidIntents;
   const stopRateNotDegraded = bAgg.stopRate >= aAgg.stopRate - 0.05;
   // token 成本下降 > 10%
   const tokenReduction = aAgg.totalContextBlockTokens > 0
     ? 1 - (bAgg.totalContextBlockTokens / aAgg.totalContextBlockTokens)
     : 0;
   const tokenReduced = tokenReduction > 0.10;
-  // 首证据延迟 <= A + 1
-  const firstEvidenceNotDelayed = bAgg.avgFirstValidEvidenceCall <= aAgg.avgFirstValidEvidenceCall + 1;
+  // 首证据延迟 <= A + 1（Phase 6.1.1：使用只统计有效证据的均值）
+  const aFirstValid = aAgg.avgFirstValidEvidenceCallValid ?? -1;
+  const bFirstValid = bAgg.avgFirstValidEvidenceCallValid ?? -1;
+  const firstEvidenceNotDelayed = aFirstValid < 0 || bFirstValid < 0
+    ? true // 无有效证据时不做延迟判定（记录但不阻断）
+    : bFirstValid <= aFirstValid + 1;
 
   const allPassed = coverageGteA && sourceRefGteA && failuresNotWorseThanA &&
     stopRateNotDegraded && tokenReduced && firstEvidenceNotDelayed;

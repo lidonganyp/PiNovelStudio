@@ -342,11 +342,11 @@ Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生�
 |--------|------|------|
 | 覆盖率 >= A | **FAIL** | 0.827 < 0.951（-13%） |
 | sourceRef >= A | **FAIL** | 0.702 < 0.769（-9%） |
-| 失败不劣于 A | PASS | errors/timeouts/parse 均 0 |
+| 失败不劣于 A | **FAIL** | Phase 6.1.1 修复：补充 empty(5>0)/invTool(5>0) 检查 |
 | 停止率不降级 | **FAIL** | 63% < 76%（81%-5%容差） |
 | token 下降 >10% | PASS | 38.0% |
 | 首证据不延迟 | PASS | 0.11 <= 1.44 |
-| **整体门禁** | **FAIL** | 覆盖率/sourceRef/停止率三项降级 |
+| **整体门禁** | **FAIL** | 覆盖率/sourceRef/失败/停止率四项降级 |
 
 ### 12.4 C 组 delta（无状态基线）
 
@@ -359,7 +359,13 @@ Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生�
 
 ### 12.5 结论与归因
 
-**核心结论：长期状态注入有正收益，当前注入量（A 组参数）合理，B 组压缩过于激进不采用。**
+> **实验范围声明（Phase 6.1.1 收口修正）**：本实验是**工具决策 replay**，
+> 不是完整生产 `ContextCompiler -> runUnifiedPipeline -> 正文生成` 链路验证。
+> runner 在 `context-ab-runner.ts` 中把模拟上下文直接前置到工具决策 prompt，
+> 再调用 `runRealToolAbScenario`。它验证的是"长期状态对叙事证据检索决策的影响"，
+> 不能扩大为"生产 ContextCompiler 参数已被完整验证"。
+
+**核心结论：长期状态对叙事证据检索决策有明显收益，B 组压缩过于激进不采用。**
 
 归因分析：
 
@@ -369,29 +375,31 @@ Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生�
    - 无状态时模型不知道已有什么，倾向于持续检索（calls=88 vs A=61）
 
 2. **B 组压缩导致降级**：
-   - 覆盖率从 0.951 降到 0.827（-13%），主要因为排除 PatternMemory
-   - PatternMemory 占 A 组 token 的 26%，但对模型决策有正贡献
+   - 覆盖率从 0.951 降到 0.827（-13%）
    - 停止率从 81% 降到 63%（-18%），压缩后模型缺少足够信息判断收敛
    - 空结果从 0 增到 5，非法工具从 0 增到 5，压缩引入查询精度下降
+   - **注意**：B 组同时改变了摘要长度、maxItems、PatternMemory、Planned 等多个变量，
+     无法单独归因于某一因素。降级是多个压缩参数的联合效应。
 
 3. **token 成本可接受**：
    - A 组 2844 tokens（约 2.8K），相对 128K 窗口占比 2.2%
    - B 组下降 38% 至 1764 tokens，但代价是覆盖率降级 13%
    - **token 节省不值得以覆盖率降级为代价**
 
-4. **PatternMemory 是关键贡献者**：
-   - 占 A 组 token 26%，但排除后覆盖率降级 13%
-   - 叙事模式信息帮助模型理解"已用过什么手法"，影响工具选择精度
-   - 不应为了节省 token 而排除
+4. **PatternMemory 因果关系为待验证假设**：
+   - PatternMemory 占 A 组 token 26%，B 组排除了它（同时改变其他参数）
+   - "PatternMemory 单独造成 13% 覆盖率下降"目前**不能成立**，只能作为待验证假设
+   - 需 Phase 6.2 单因素消融（只排除 PatternMemory，其他参数不变）才能确认因果
 
-5. **当前 maxItems 24-48 / 摘要 160 字符是合理的**：
+5. **当前注入参数在工具决策 replay 中表现良好**：
    - A 组覆盖率 0.951、停止率 81%、零空结果、零非法工具
    - 压缩到 maxItems 12-24 / 摘要 80 字符后全面降级
-   - 不建议调整当前参数
+   - **但**：这只是工具决策层面的验证，生产 ContextCompiler 的完整链路验证仍需补做
 
 ### 12.6 后续
 
-- **不调整生产 ContextCompiler 参数**：当前 maxItems 24-48 / 摘要 160 字符已验证合理
+- **不调整生产 ContextCompiler 参数**：当前 maxItems 24-48 / 摘要 160 字符在工具决策 replay 中表现良好，但不等于生产链路已完整验证
 - **B 组压缩方案不采用**：覆盖率降级 13%，代价过大
-- **Phase 6.2 逐类消融（可选）**：若需进一步优化，可逐类测量 CanonState/CharacterState/PromiseLedger/PatternMemory 的边际贡献，寻找更精细的压缩空间
-- **真实 workspace 验证（可选）**：当前使用从 BaselineScenario 派生的模拟状态，可在真实生产 workspace（含 100+ 章积累的状态）上验证 token 成本与覆盖率的 trade-off
+- **Phase 6.2 逐类消融**：采用单因素消融（只排除某一类状态，其他参数不变），测量每类状态的边际贡献
+- **生产链路 integration replay（可选）**：补做真正的 `ContextCompiler/runUnifiedPipeline` integration replay，验证完整生产链路中的上下文压缩效果
+- **真实 workspace 验证（可选）**：当前使用从 BaselineScenario 派生的模拟状态，可在真实生产 workspace（含 100+ 章积累的状态）上验证
