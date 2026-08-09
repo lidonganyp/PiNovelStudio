@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Phase 5 紧凑结果 envelope — renderCompactEnvelope 边界 focused 测试
  *
  * 覆盖 docs/phase4-tool-ab-test-design.md §10 的四类字段边界：
@@ -22,6 +22,7 @@ import {
   renderCompactEnvelope,
   ENVELOPE_MAX_REFS,
   ENVELOPE_SUMMARY_MAX_CHARS,
+  ENVELOPE_CONTENT_MAX_CHARS,
 } from "../dist/novelos/tools/tool-protocol.js";
 
 // ============================================================================
@@ -174,10 +175,99 @@ describe("PHASE5-COMPACT-ENVELOPE-5：guard N4（returnedCount>0 条目缺失不
     assert.ok(text.includes("命中 3 条"), "应输出命中摘要");
   });
 
-  it("returnedCount 缺失但条目数组存在 → 以条目数兜底", () => {
+  it("returnedCount 缺失但条目数组存在 -> 以条目数兜底", () => {
     const details = makeDetails();
     delete details.returnedCount;
     const text = renderCompactEnvelope(details);
     assert.ok(text.includes("命中 3 条"), "returnedCount 缺失时应以条目数兜底");
+  });
+});
+
+// ============================================================================
+// Phase 5.3.1 回归测试：envelope 内容摘要（防止 stopRate=0%、duplicateQueries 激增）
+// ============================================================================
+
+describe("PHASE5-3-1-ENVELOPE-CONTENT：内容摘要回归", () => {
+  it("rankedEvidences 条目的 excerpt 出现在 ref 行中", () => {
+    const details = {
+      sourceRef: "ch1#final.md:10-20",
+      evidenceLevel: "confirmed",
+      resultKind: "ranked_evidence",
+      returnedCount: 1,
+      truncated: false,
+      nextQueryHint: null,
+      rankedEvidences: [
+        { sourceRef: "ch1#final.md:10-20", evidenceLevel: "confirmed", excerpt: "老周说这水底有暗流" },
+      ],
+    };
+    const text = renderCompactEnvelope(details);
+    assert.ok(text.includes("老周说这水底有暗流"), "envelope 应包含 excerpt 内容摘要");
+    assert.ok(text.includes("[confirmed] ch1#final.md:10-20"), "ref 行格式正确");
+  });
+
+  it("entries 条目的 value/field 出现在 ref 行中", () => {
+    const details = {
+      sourceRef: "narrative-state.json#characterUpdates",
+      evidenceLevel: "confirmed",
+      resultKind: "character_state",
+      returnedCount: 1,
+      truncated: false,
+      nextQueryHint: null,
+      entries: [
+        { sourceRef: "narrative-state.json#characterUpdates", field: "desire", value: "想找到失踪的弟弟" },
+      ],
+    };
+    const text = renderCompactEnvelope(details);
+    assert.ok(text.includes("desire: 想找到失踪的弟弟"), "envelope 应包含 field: value 内容摘要");
+  });
+
+  it("canon entries 的 fact 出现在 ref 行中", () => {
+    const details = {
+      sourceRef: "canon:evt-003",
+      evidenceLevel: "confirmed",
+      resultKind: "canon_entries",
+      returnedCount: 1,
+      truncated: false,
+      nextQueryHint: null,
+      entries: [
+        { sourceRef: "canon:evt-003", fact: "血玉是上古遗物" },
+      ],
+    };
+    const text = renderCompactEnvelope(details);
+    assert.ok(text.includes("血玉是上古遗物"), "envelope 应包含 fact 内容摘要");
+  });
+
+  it("内容摘要截断到 ENVELOPE_CONTENT_MAX_CHARS", () => {
+    const longExcerpt = "A".repeat(200);
+    const details = {
+      sourceRef: "ch1#final.md:1-100",
+      evidenceLevel: "confirmed",
+      resultKind: "chapter_span",
+      returnedCount: 1,
+      truncated: false,
+      nextQueryHint: null,
+      spans: [
+        { sourceRef: "ch1#final.md:1-100", excerpt: longExcerpt },
+      ],
+    };
+    const text = renderCompactEnvelope(details);
+    const aCount = text.match(/A/g)?.length ?? 0;
+    assert.equal(aCount, ENVELOPE_CONTENT_MAX_CHARS, `内容摘要应截断到 ${ENVELOPE_CONTENT_MAX_CHARS} 字符`);
+  });
+
+  it("无内容字段的条目不附加内容摘要", () => {
+    const details = {
+      sourceRef: "unknown:1",
+      evidenceLevel: "inferred",
+      resultKind: "unknown",
+      returnedCount: 1,
+      truncated: false,
+      nextQueryHint: null,
+      entries: [
+        { sourceRef: "unknown:1" },
+      ],
+    };
+    const text = renderCompactEnvelope(details);
+    assert.ok(!text.includes(" - "), "无内容时不应附加 ' - ' 分隔符");
   });
 });

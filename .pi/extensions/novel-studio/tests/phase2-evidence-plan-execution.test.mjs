@@ -15,8 +15,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import {
   createEvidencePlan,
@@ -26,8 +25,6 @@ import {
   ALL_NARRATIVE_TOOLS,
   DEFAULT_STOP_CONDITIONS,
 } from "../dist-test/novelos/agent/evidence-plan.js";
-
-const SOURCE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ============================================================================
 // 1. createEvidencePlan 基础行为
@@ -145,7 +142,7 @@ test("Phase 2C · 显式 '作者章纲必须包含：' 优先提取", () => {
 
 test("Phase 2C · narrative-agent-loop.ts 源码包含 mustVerify 注入逻辑", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "narrative-agent-loop.ts"),
+    join(process.cwd(), "novelos", "agent", "narrative-agent-loop.ts"),
     "utf8",
   );
   assert.match(source, /plan\.mustVerify/, "应引用 plan.mustVerify");
@@ -154,7 +151,7 @@ test("Phase 2C · narrative-agent-loop.ts 源码包含 mustVerify 注入逻辑",
 
 test("Phase 2C · narrative-agent-loop.ts 源码用 plan.stopConditions.maxStagnantRounds 驱动停止", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "narrative-agent-loop.ts"),
+    join(process.cwd(), "novelos", "agent", "narrative-agent-loop.ts"),
     "utf8",
   );
   assert.match(
@@ -171,7 +168,7 @@ test("Phase 2C · narrative-agent-loop.ts 源码用 plan.stopConditions.maxStagn
 
 test("Phase 2C · agentic-raw-candidate-source.ts 源码用 plan.allowedTools 过滤工具集", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "agentic-raw-candidate-source.ts"),
+    join(process.cwd(), "novelos", "agent", "agentic-raw-candidate-source.ts"),
     "utf8",
   );
   assert.match(source, /createEvidencePlan/, "应在 runtime 创建前创建 EvidencePlan");
@@ -189,7 +186,7 @@ test("Phase 2C · agentic-raw-candidate-source.ts 源码用 plan.allowedTools �
 
 test("Phase 2C · agentic-raw-candidate-source.ts 把 evidencePlan 传给 loop.run", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "agentic-raw-candidate-source.ts"),
+    join(process.cwd(), "novelos", "agent", "agentic-raw-candidate-source.ts"),
     "utf8",
   );
   assert.match(
@@ -201,7 +198,7 @@ test("Phase 2C · agentic-raw-candidate-source.ts 把 evidencePlan 传给 loop.r
 
 test("Phase 2C · AgentLoopInput 类型包含 evidencePlan 可选字段", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "narrative-agent-loop-types.ts"),
+    join(process.cwd(), "novelos", "agent", "narrative-agent-loop-types.ts"),
     "utf8",
   );
   assert.match(source, /evidencePlan\?\s*:\s*EvidencePlan/, "AgentLoopInput 应有 evidencePlan 可选字段");
@@ -560,7 +557,7 @@ test("Phase 2D · createEvidencePlan bridgeContextAvailable 传入时影响 allo
 
 test("Phase 2D · narrative-agent-loop.ts 注入 plan.known 已知事实摘要", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "narrative-agent-loop.ts"),
+    join(process.cwd(), "novelos", "agent", "narrative-agent-loop.ts"),
     "utf8",
   );
   assert.match(source, /plan\.known/, "应引用 plan.known");
@@ -569,7 +566,7 @@ test("Phase 2D · narrative-agent-loop.ts 注入 plan.known 已知事实摘要",
 
 test("Phase 2D · narrative-agent-loop.ts 默认使用不确定性驱动 prompt（缺口二）", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "narrative-agent-loop.ts"),
+    join(process.cwd(), "novelos", "agent", "narrative-agent-loop.ts"),
     "utf8",
   );
   assert.match(source, /DEFAULT_UNCERTAINTY_DRIVEN_PROMPT/, "应定义不确定性驱动 prompt 常量");
@@ -585,7 +582,7 @@ test("Phase 2D · narrative-agent-loop.ts 默认使用不确定性驱动 prompt�
 
 test("Phase 2D · agentic-raw-candidate-source.ts 传入 intent + compiledContext + bridgeContextAvailable", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "agent", "agentic-raw-candidate-source.ts"),
+    join(process.cwd(), "novelos", "agent", "agentic-raw-candidate-source.ts"),
     "utf8",
   );
   assert.match(source, /intent,\s*$/m, "应传入 intent 给 createEvidencePlan");
@@ -595,7 +592,7 @@ test("Phase 2D · agentic-raw-candidate-source.ts 传入 intent + compiledContex
 
 test("Phase 2D · uncertainty-driven-ablation.ts 导出 FORCED_RETRIEVAL_PROMPT 常量", () => {
   const source = readFileSync(
-    join(SOURCE_DIR, "novelos", "eval", "uncertainty-driven-ablation.ts"),
+    join(process.cwd(), "novelos", "eval", "uncertainty-driven-ablation.ts"),
     "utf8",
   );
   assert.match(source, /export const FORCED_RETRIEVAL_PROMPT/, "应导出 FORCED_RETRIEVAL_PROMPT");

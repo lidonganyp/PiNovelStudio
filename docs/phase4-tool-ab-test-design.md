@@ -225,6 +225,7 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 | eating-canary: 修复"早终止诱发覆盖回归"后，受引导 facade 在 SC1 覆盖恢复 1.000（Phase 4.2，2026-08-09） | 根因：facade 收尾句"证据充分后立即输出终止标记"与 guidance 的"evidence=最高优先级"叠加，使模型拿到 e1 高等级证据后过早收敛，漏掉 mustVerify 其余项（SC1 seed1 0.500）。修复：改为强制"逐项遍历 mustVerify 全部待验证事实、全部覆盖后再输出终止标记"。`reports/phase4-real-glm-b0-v2/`（glm-5.2，SC1×3 seed×A/B/B0）显示 B 覆盖 0.833→**1.000**（全 seed），停止率仍 100%，引用率 1.000，失败行为门禁全过，schema token 6273 < A 6824。**"高停止率诱发覆盖回归"已消除**；B 唯一未过项为 evidenceLevel 的 `exact_chapter_span` 命中率（B=0.000 < A=0.200），属引导偏好差异（引导模型优先 evidence 而非 chapter_span），非覆盖缺陷 |
 | eating-canary: SC1 修复后受引导 facade 达到"全覆盖 + 高停止率 + 低负担"三优，但需全场景复验方能晋级（Phase 4.2） | SC1 定向重跑证明早终止问题已解决；但本轮仅重跑 SC1（1 场景），未覆盖 SC6/SC7。B0 在 v2 仍全面恶化（引用率 0.667、空结果 3、非法工具 3、停止率 0%），纯单入口界面仍不成立。**9 工具仍为默认**；是否晋级 facade 需对 SC6/SC7 全场景真实 canary 复验，且评估 evidenceLevel 偏好差异是否可接受 |
 | eating-canary: 全场景复验最终结论——**保留 9 专用工具为默认**，受控 opt-in facade 已无覆盖回归风险（Phase 4.2，2026-08-09） | 合并 `phase4-real-glm-b0-v2`（SC1）+ `v3`（SC6/SC7）全 3 场景真实 canary（glm-5.2×3 seed×A/B/B0）：修复后 B 的 mustVerify 覆盖**全场景全 seed 稳定 1.000 = A**（不再回归），停止率与 A 持平（SC1=100%、SC6/SC7=67%），失败行为（空结果/截断/错误/超时/非法工具）全部不恶化。但 B 在 SC7 有效证据引用率略逊 A（0.727 vs 0.833）、无效 sourceRef 微增（no_match 3 vs 1），系引导让模型对无需检索项也发起 evidence 查询的**查询精度差异，非覆盖缺陷**；SC1 的 `exact_chapter_span` 命中率差异同为引导偏好。B0 无引导在全部场景仍全面恶化（引用率 0.500、空结果/非法工具 3、SC7 门禁 FAIL）→ 纯单入口界面不成立，**引导是 facade 价值的必要前提**。决策：**保留 9 专用工具为默认生产注入**；修复后的受控 opt-in facade 因覆盖稳定可作显式选用的复用路径，但无数据支持晋升为默认或混合结构 |
+| eating-canary: B-safe 混合接口未通过门禁，协议纠正收益不稳定（Phase 5.3.3，2026-08-09） | B-safe = B0 facade（无引导）+ 协议层纠正（3 层策略：已知工具名映射 / 未知工具名+args含合法intent路由 / 工具名合法但intent非法→`inferIntentFromArgs`推断）+ 空结果 bounded retry。4 次独立 replay（glm-5.2，3 场景×3 seed×3 arm×3 批次）覆盖率高度波动（0.926/0.951/0.778/0.877），平均 0.883 ≈ B0 0.877（+0.6%），未证明稳定正向收益。门禁 4/4 FAIL：Run3 覆盖率/sourceRef 降级（0.778<0.877），Run4 invalidIntents 超容差（4>1+1）。协议纠正被触发（correctedToolSelections 2-5）但无法稳定通过门禁。结论：**B-safe 不作为生产方案**，保留 9 专用工具为默认 |
 
 ---
 
@@ -438,3 +439,133 @@ PINOVEL_DISABLE_FALLBACK=1 node scripts/tool-ab-real-report.mjs --envelope --mod
   `rel-phase5b` 保持 held），默认仍为 9 专用工具。
 - 真实 canary 稳定后才评审：是否默认启用 envelope、是否与 facade 组合、是否进入上下文压缩模块。
 - 任一门槛失败（单场景/单调用膨胀、覆盖/引用/停止率降级、失败恶化）即视为 envelope 需回退或修正。
+
+---
+
+## 12. Phase 5.3.3 B-safe 混合接口设计（2026-08-09）
+
+> **状态**：已实现 + 4 次独立真实 replay 完成（glm-5.2，`fallback=[]`）。
+> **结论**：B-safe 未通过门禁，不作为生产方案。保留 9 专用工具为默认。
+
+### 12.1 动机
+
+Phase 5.3 的真实 envelope replay（§11）显示 B0（无引导 facade）在覆盖率上优于 A（9 专用工具），
+但 B0 存在结构性问题：facade arm 模型只看到 1 个 `query_narrative`，容易产生：
+- **非法工具名**（乱码字符、中文变体、幻觉名称）
+- **非法 intent**（工具名合法但 intent 字段非合法枚举值）
+- **空结果**（intent 路由不精确导致无匹配）
+
+B-safe 假设：**在不引入 prompt 引导的前提下，通过协议层结构化纠正和 bounded retry，
+既保留 B0 的查询覆盖能力，又消除非法工具选择和空结果。**
+
+### 12.2 设计
+
+B-safe = B0 facade（`includeIntentGuidance=false`）+ 协议层纠正 + 空结果 bounded retry。
+与 B0 的唯一差异是协议层机制，工具面完全相同。
+
+#### 12.2.1 协议层纠正（三层策略互补覆盖）
+
+1. **策略 1：已知底层工具名映射** — 模型输出 `search_narrative_evidence` 等已知底层工具名
+   时，通过 `TOOL_NAME_TO_INTENT` 映射到对应 intent，路由到 `query_narrative`。
+2. **策略 2：未知工具名 + args 含合法 intent** — 模型输出幻觉工具名（如中文变体、乱码）时，
+   从 args 中提取 intent 字段，若为合法 intent 或中文变体（`CHINESE_TO_INTENT_MAP`），
+   路由到 `query_narrative` + 转换后的英文 intent。
+3. **策略 3：工具名合法但 intent 非法** — 模型输出 `query_narrative` 但 intent 非法时，
+   调用 `inferIntentFromArgs(args)` 从参数字段推断合法 intent：
+   - `status` 字段 → `promise`（唯一判别，高置信）
+   - `patternType` 字段 → `pattern`（唯一判别，高置信）
+   - `category` 字段 → `canon`（唯一判别，高置信）
+   - `query` + `maxChapters` 组合 → `chapter_span`（高置信）
+   - `query` 单字段 → `evidence`（中置信，默认首选）
+   - `characterId` 字段 → `character_state`（低置信，三义性取最高优先级）
+   - 无判别字段 → 推断失败，保留非法 intent，计入 `invalidIntents`
+
+纠正和重试**不计入失败指标**，单独记录为 `correctedToolSelections` 和 `emptyResultRetried`。
+
+#### 12.2.2 空结果 bounded retry
+
+对 `evidence` / `chapter_span` / `voice` 意图的首次空结果（含 `no_match`），
+用 query 前 4 字符简化重试一次。重试结果替换原空结果。
+
+### 12.3 实验结果
+
+4 次独立真实 replay（glm-5.2，`narrator_testing_glm` route，`fallback=[]`，
+temp=0.72，3 场景 SC2/SC5/SC7 × 3 seed × 3 arm × 3 批次）。
+
+#### 12.3.1 四次独立 replay 覆盖率波动
+
+| Run | B-safe 覆盖率 | B0 覆盖率 | B-safe vs B0 | 门禁结果 |
+|-----|--------------|----------|-------------|---------|
+| 1 | 0.926 | — | — | — |
+| 2 | 0.951 | — | — | — |
+| 3 | 0.778 | 0.877 | -0.099 | FAIL（覆盖率/sourceRef 降级） |
+| 4 | 0.877 | 0.877 | +0.000 | FAIL（invalidIntents 超容差） |
+| **平均** | **0.883** | **0.877** | **+0.006** | **4/4 FAIL** |
+
+B-safe 覆盖率高度波动（0.778–0.951），平均 0.883 ≈ B0 0.877（+0.6%），
+**未证明有稳定正向收益**。门禁 4/4 FAIL，但失败原因在不同运行间变化。
+
+#### 12.3.2 Run 3 vs Run 4 跨批次聚合对比（详细数据）
+
+| 指标 | Run3 B-safe | Run3 B0 | Run4 B-safe | Run4 B0 |
+|------|------------|---------|------------|---------|
+| 平均覆盖率 | 0.778 | 0.877 | 0.877 | 0.877 |
+| sourceRef 完整率 | 0.678 | 0.760 | 0.775 | 0.726 |
+| 停止率 | 41% | 41% | 33% | 30% |
+| 总字符 | 7011 | 7326 | 7786 | 7244 |
+| 空结果数 | 10 | 9 | 10 | 15 |
+| 非法工具选择 | 10 | 9 | 10 | 15 |
+| 非法 intent | 2 | 0 | 4 | 1 |
+| 协议纠正数 | 2 | — | 5 | — |
+| schema token 成本 | 50540 | 51072 | 51604 | 52136 |
+
+**关键观察**：
+- Run 4 中 B-safe 在覆盖率/sourceRef/空结果/非法工具上**与 B0 持平或更优**，
+  但 invalidIntents=4 > B0 1+容差 1 = 2，导致 `failuresNotWorseThanB0` FAIL。
+- 协议纠正在 Run 4 更活跃（correctedToolSelections=5 vs Run3=2），
+  减少了空结果（10 vs B0 15）和非法工具（10 vs B0 15）。
+- 但策略 3 推断失败也更多（invalidIntents=4 vs Run3=2），成为门禁短板。
+
+#### 12.3.3 门禁评估（B-safe vs B0 不降级，Run 4）
+
+| 门禁项 | Run 3 | Run 4 | 说明 |
+|--------|-------|-------|------|
+| 覆盖率 >= B0 | **FAIL** (0.778<0.877) | PASS (0.877=0.877) | Run4 持平 |
+| sourceRef >= B0 | **FAIL** (0.678<0.760) | PASS (0.775>0.726) | Run4 更优 |
+| 停止率不降级 | PASS | PASS | 容差 0.15 |
+| 字符不膨胀 | PASS | PASS | 余量 20% |
+| 失败不劣于 B0 | **FAIL** | **FAIL** | Run3: invTool 10>9; Run4: invIntents 4>1+1 |
+| 失败不劣于 A | PASS | PASS | errors/timeouts/parse 均 0 |
+| **整体门禁** | **FAIL** | **FAIL** | 不同失败原因 |
+
+### 12.4 结论与归因
+
+**B-safe 混合接口未通过门禁**（4/4 FAIL），不作为生产方案。
+
+归因分析：
+1. **模型行为高变异性**：GLM 5.2 在 temp=0.72 下覆盖率波动大（0.778–0.951），
+   单次消融实验结果不足以做最终判定。协议纠正的收益被模型随机性淹没。
+2. **门禁失败原因不稳定**：Run3 因覆盖率/sourceRef 降级 FAIL，Run4 因 invalidIntents
+   超容差 FAIL。B-safe 无法在任何单次运行中同时通过所有门禁项。
+3. **协议纠正部分有效**：correctedToolSelections=2-5 证明纠正机制生效，能减少空结果
+   和非法工具（Run4: B-safe empty/invTool=10 < B0=15）。但纠正效果被 invalidIntents
+   残留抵消。
+4. **策略 3 推断是短板**：`inferIntentFromArgs` 对某些参数组合推断失败，残留
+   invalidIntents=2-4，超过容差 +1。策略 3 的"尽力而为"语义无法保证 invalidIntents
+   稳定在容差内。
+5. **空结果重试未被 exercise**：`emptyResultRetried=0`（4 次均未触发），该路径未被验证。
+6. **结构性不公平**：facade arm 的 invalidTool/empty/invalidIntents 结构性高于
+   specialized arm（A），与 A 对比是"苹果比橘子"；与 B0（同 facade arm）对比才公平，
+   但 B-safe 在失败行为上无法稳定优于 B0。
+
+### 12.5 后续
+
+- **B-safe 不进入生产**：保留 9 专用工具为默认生产注入。
+- **协议纠正机制保留为 eval-only 资产**：`inferIntentFromArgs` 与三层纠正策略
+  已实现并测试（`tests/b-safe-protocol-correction.test.mjs`，16 断言），
+  可供未来模型升级后重新评估。
+- **模型变异性是主要瓶颈**：在固定温度/seed 下重跑仍波动（0.778–0.951），
+  说明 GLM 5.2 的工具选择行为本身不稳定；协议纠正无法弥补模型层面的不稳定性。
+- **若需改进 B-safe**：优先优化策略 3 `inferIntentFromArgs` 的推断覆盖率（减少
+  invalidIntents 残留），或放宽 invalidIntents 容差（需论证合理性）。
+- **若未来模型（如 GPT/Claude）工具选择更稳定**，可重新评估 B-safe 是否有正收益。

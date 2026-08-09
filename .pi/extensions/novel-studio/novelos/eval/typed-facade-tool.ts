@@ -77,6 +77,22 @@ export const TOOL_NAME_TO_INTENT: Record<string, QueryNarrativeIntent> = {
 
 /** 全部意图列表（用于 AB 报告与 schema 联合） */
 export const QUERY_NARRATIVE_INTENTS: QueryNarrativeIntent[] = [
+  "chapter_span",
+  "canon",
+  "character_state",
+  "evidence",
+  "timeline",
+  "knowledge_boundary",
+  "promise",
+  "pattern",
+  "voice",
+];
+
+/**
+ * Phase 5.3.2 消融：旧版意图顺序（evidence 在首位，标记为"默认首选"）。
+ * 通过 PINOVEL_FACADE_GUIDANCE_VARIANT=old 切换。
+ */
+const QUERY_NARRATIVE_INTENTS_OLD: QueryNarrativeIntent[] = [
   "evidence",
   "chapter_span",
   "canon",
@@ -128,6 +144,21 @@ export const CHINESE_TO_INTENT_MAP: Record<string, QueryNarrativeIntent> = (() =
  * 各意图参数（query/characterId/category/...）已在 parameters schema 中声明，此处不重复。
  */
 export const INTENT_USAGE: Record<QueryNarrativeIntent, string> = {
+  evidence: "跨源检索（无法确定具体来源时使用）；query 复用待验证事实原文短语",
+  chapter_span: "章节原文措辞/前后文核验（查询章节内文时首选）；query 复用原文短语",
+  canon: "世界设定/既定事实核验（查询世界设定时首选）；传 category 返回该类别全部事实，无需精确短语",
+  character_state: "角色当前状态/经历/情感（中优先级）",
+  timeline: "事件先后顺序/时间点核验（中优先级）",
+  knowledge_boundary: "角色知道什么/不该知道什么（中优先级）",
+  promise: "伏笔/承诺建立与兑现状态（中优先级）",
+  pattern: "叙事模式/桥段/意象用法（低优先级，非硬事实）",
+  voice: "角色声音/说话习惯证据（低优先级）",
+};
+
+/**
+ * Phase 5.3.2 消融：旧版 INTENT_USAGE（evidence 为"默认首选，最高优先级"）。
+ */
+const INTENT_USAGE_OLD: Record<QueryNarrativeIntent, string> = {
   evidence: "核心事实跨源核验（默认首选，最高优先级）；query 复用待验证事实原文短语",
   chapter_span: "查看章节原文措辞/前后文（中优先级）；query 复用原文短语",
   canon: "世界设定/既定事实核验（高优先级）；传 category 返回该类别全部事实，无需精确短语",
@@ -139,14 +170,32 @@ export const INTENT_USAGE: Record<QueryNarrativeIntent, string> = {
   voice: "角色声音/说话习惯证据（低优先级）",
 };
 
+/**
+ * Phase 5.3.2 消融：按 PINOVEL_FACADE_GUIDANCE_VARIANT 选择引导变体。
+ * - "old"：旧版（evidence 首位，"默认首选"）
+ * - "new"（默认）：新版（chapter_span/canon 首位，evidence "无法确定具体来源时使用"）
+ */
+export function resolveGuidanceVariant(): {
+  intents: QueryNarrativeIntent[];
+  usage: Record<QueryNarrativeIntent, string>;
+  variant: string;
+} {
+  const variant = process.env.PINOVEL_FACADE_GUIDANCE_VARIANT ?? "new";
+  if (variant === "old") {
+    return { intents: QUERY_NARRATIVE_INTENTS_OLD, usage: INTENT_USAGE_OLD, variant };
+  }
+  return { intents: QUERY_NARRATIVE_INTENTS, usage: INTENT_USAGE, variant };
+}
+
 /** 拼接单个意图的「何时使用 + 优先级」说明 */
 export function describeIntentUsage(intent: QueryNarrativeIntent): string {
+  const { usage } = resolveGuidanceVariant();
   const label = INTENT_CHINESE_LABEL[intent];
-  return `${label}：${INTENT_USAGE[intent]}`;
+  return `${label}：${usage[intent]}`;
 }
 
 /** 全部意图的「何时使用 + 优先级」说明（仅用于工具 description，不重复注入参数 schema） */
-export const QUERY_NARRATIVE_INTENT_GUIDANCE: string = QUERY_NARRATIVE_INTENTS.map(
+export const QUERY_NARRATIVE_INTENT_GUIDANCE: string = resolveGuidanceVariant().intents.map(
   (i) => `- ${describeIntentUsage(i)}`,
 ).join("\n");
 
@@ -169,14 +218,25 @@ export function createTypedFacadeTool(ctx: {
   searchService: NarrativeSearchService;
   includeIntentGuidance?: boolean;
   useCompactEnvelope?: boolean;
+  /** Phase 5.3.2 消融：显式指定引导变体，不依赖环境变量 */
+  guidanceVariant?: "old" | "new";
 }): ToolProtocol {
   const includeGuidance = ctx.includeIntentGuidance !== false;
   const useEnvelope = ctx.useCompactEnvelope === true;
+  const variant = ctx.guidanceVariant ?? process.env.PINOVEL_FACADE_GUIDANCE_VARIANT ?? "new";
   const underlyingTools = createNarrativeTools({ searchService: ctx.searchService });
   const byName = new Map(underlyingTools.map((t) => [t.name, t]));
 
+  // Phase 5.3.2：按 variant 解析引导文本和 intent 顺序
+  const { intents, usage } = variant === "old"
+    ? { intents: QUERY_NARRATIVE_INTENTS_OLD, usage: INTENT_USAGE_OLD }
+    : { intents: QUERY_NARRATIVE_INTENTS, usage: INTENT_USAGE };
+  const guidanceText = intents.map(
+    (i) => `- ${INTENT_CHINESE_LABEL[i]}：${usage[i]}`,
+  ).join("\n");
+
   const guidanceBlock = includeGuidance
-    ? `\n各意图「何时使用/优先级」：\n${QUERY_NARRATIVE_INTENT_GUIDANCE}\n`
+    ? `\n各意图「何时使用/优先级」：\n${guidanceText}\n`
     : "\n";
 
   return {
@@ -191,7 +251,7 @@ export function createTypedFacadeTool(ctx: {
     label: "Query Narrative (Typed Facade)",
     parameters: Type.Object({
       intent: Type.Union(
-        QUERY_NARRATIVE_INTENTS.map((i) => Type.Literal(i)),
+        intents.map((i) => Type.Literal(i)),
         {
           description:
             "查询意图（决定路由到哪个专用工具）。事实核验优先选择「跨源证据检索」。各意图用法见工具说明。",

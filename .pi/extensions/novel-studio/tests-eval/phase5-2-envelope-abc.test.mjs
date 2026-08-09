@@ -82,7 +82,7 @@ describe("PHASE5-2-ENVELOPE-ABC-2：envelope 收益与不降级底线", () => {
     );
     // 逐场景：envelope 面向「带全文 excerpt 的检索结果」压缩；对已是最精简的事实列表
     // （如角色状态），摘要行会引入少量开销。故逐场景只断言不出现病态膨胀（>1.5x），
-    // 不做强制收缩——收益以聚合门禁为准（见 runner 的 resultCharsReduced）。
+    // 不做强制收缩--收益以聚合门禁为准（见 runner 的 resultCharsReduced）。
     for (const s of comparison.scenarios) {
       assert.ok(
         s.C.totalResultChars <= s.B.totalResultChars * 1.5 + 1,

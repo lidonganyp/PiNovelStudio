@@ -32,6 +32,7 @@ import {
   TOOL_NAME_TO_INTENT,
   INTENT_TO_TOOL,
   CHINESE_TO_INTENT_MAP,
+  type QueryNarrativeIntent,
 } from "./typed-facade-tool.js";
 import { injectToolSchemas } from "../adapters/tool-schema-injector.js";
 import { parseToolCallDirectives } from "../adapters/react-tool-call-parser.js";
@@ -73,6 +74,55 @@ export { VALID_EVIDENCE_LEVELS, EVIDENCE_LEVEL_STRENGTH_ORDER } from "./uncertai
 export const REAL_SYSTEM_PROMPT_BASE =
   "你是检索驱动的叙事证据决策代理。请根据检索计划与可见工具，自主决定调用哪个工具收集证据；" +
   `证据充分后只需输出终止标记 ${REAL_DONE_MARKER} 即可，无需生成章节正文。`;
+
+// ============================================================================
+// B-safe Phase 5.3.3 策略3：从 args 字段推断 facade intent
+// ============================================================================
+
+/**
+ * B-safe Phase 5.3.3 策略3：当模型已正确调用 `query_narrative`（工具名合法）但 intent
+ * 字段非法（缺失/拼写错误/中文变体未命中）时，从 args 中的其他字段反推最可能的 intent。
+ *
+ * 策略1/2 只覆盖"工具名非法"的情形（directTool 不存在时进入）；策略3 补充"工具名合法
+ * 但 intent 非法"的覆盖缺口（directTool 存在但 intent 不在 QUERY_NARRATIVE_INTENTS 内）。
+ *
+ * 推断优先级（基于 typed-facade-tool.ts 的参数 schema，越靠前置信度越高）：
+ *   1. `status` 字段 → `promise`（唯一判别，仅 promise_ledger 使用 status 枚举）
+ *   2. `patternType` 字段 → `pattern`（唯一判别，仅 pattern_memory 使用 patternType 枚举）
+ *   3. `category` 字段 → `canon`（唯一判别，仅 canon 使用 category 枚举）
+ *   4. `query` + `maxChapters` → `chapter_span`（maxChapters 仅 chapter_span 暴露）
+ *   5. `query`（无 maxChapters）→ `evidence`（中置信，事实核验优先，默认首选）
+ *   6. `characterId`（无其他判别字段）→ `character_state`（低置信，三义性中优先级最高）
+ *   7. 无任何判别字段 → `null`（推断失败，保留非法 intent，计入 invalidIntents）
+ *
+ * 设计权衡：策略3 是"错误恢复"而非"精确路由"。当 intent 非法时，路由到错误工具的
+ * 风险已被 facade 抛错（当前行为）所包含；推断成功则纠正错误，是净收益。推断失败时
+ * 返回 null（不强制路由），让非法 intent 保留并计入 invalidIntents，保持门禁可观测性。
+ *
+ * @param args 模型原始决策的 arguments（可能含 query/category/characterId/status/patternType/maxChapters 等）
+ * @returns 推断出的合法 intent，或 null（推断失败）
+ */
+export function inferIntentFromArgs(args: Record<string, unknown>): QueryNarrativeIntent | null {
+  // 1. 唯一判别字段（高置信）：枚举字段仅被一个底层工具使用
+  if (typeof args.status === "string" && args.status.length > 0) return "promise";
+  if (typeof args.patternType === "string" && args.patternType.length > 0) return "pattern";
+  if (typeof args.category === "string" && args.category.length > 0) return "canon";
+
+  // 2. query + maxChapters 组合（高置信）：maxChapters 仅 chapter_span 暴露
+  const hasQuery = typeof args.query === "string" && (args.query as string).length > 0;
+  const hasMaxChapters = typeof args.maxChapters === "number";
+  if (hasQuery && hasMaxChapters) return "chapter_span";
+  if (hasQuery) return "evidence"; // 中置信，默认首选（事实核验优先）
+
+  // 3. characterId（低置信）：character_state / knowledge_boundary / voice 三义性，
+  //    character_state 优先级最高（INTENT_USAGE 标"中优先级"，其余中/低）
+  if (typeof args.characterId === "string" && args.characterId.length > 0) {
+    return "character_state";
+  }
+
+  // 4. 无任何判别字段 → 推断失败（保留非法 intent，计入 invalidIntents）
+  return null;
+}
 
 // ============================================================================
 // 模型决策抽象
@@ -184,6 +234,10 @@ export interface RealToolAbTurn {
   duplicateQuery: boolean;
   /** 是否为本场景首次有效证据回合 */
   firstValidEvidence: boolean;
+  /** B-safe Phase 5.3.3：非法工具名是否被协议层纠正为 query_narrative + intent */
+  toolSelectionCorrected: boolean;
+  /** B-safe Phase 5.3.3：空结果是否触发 bounded retry（查询简化重试，最多 1 次） */
+  emptyResultRetried: boolean;
   /**
    * 本回合产出的文本。
    * - final 回合：终止标记（REAL_DONE_MARKER），不承载正文
@@ -199,11 +253,11 @@ export interface RealToolAbTurn {
 // ============================================================================
 
 /** 单场景单 arm 单 seed 执行结果 */
-export type RealToolAbArm = "A" | "B" | "B0" | "C";
+export type RealToolAbArm = "A" | "B" | "B0" | "C" | "B-safe";
 
-/** 是否为 facade 形态 arm（B=受引导，B0=无引导，C=受引导+compact envelope；都走类型化 intent 联合） */
-export function isFacadeArm(arm: RealToolAbArm): arm is "B" | "B0" | "C" {
-  return arm === "B" || arm === "B0" || arm === "C";
+/** 是否为 facade 形态 arm（B=受引导，B0=无引导，C=受引导+compact envelope，B-safe=无引导+协议纠正） */
+export function isFacadeArm(arm: RealToolAbArm): arm is "B" | "B0" | "C" | "B-safe" {
+  return arm === "B" || arm === "B0" || arm === "C" || arm === "B-safe";
 }
 
 /** 工具模式：A=9 专用工具，B/B0/C=facade 单入口 */
@@ -236,6 +290,10 @@ export interface RealToolAbScenarioMetrics {
   totalResultChars: number;
   totalEstimateTokens: number;
   invalidToolSelections: number;
+  /** B-safe Phase 5.3.3：协议层纠正的非法工具选择数（不计入 invalidToolSelections） */
+  correctedToolSelections: number;
+  /** B-safe Phase 5.3.3：空结果触发 bounded retry 的回合数（不计入 emptyResults 失败） */
+  emptyResultRetried: number;
   invalidIntents: number;
   parseErrors: number;
   firstValidEvidence: { callIndex: number; cumulativeLatencyMs: number } | null;
@@ -304,6 +362,10 @@ export interface RealToolAbArmAggregation {
   totalResultChars: number;
   totalEstimateTokens: number;
   invalidToolSelections: number;
+  /** B-safe Phase 5.3.3：协议层纠正的非法工具选择数（聚合，不计入 invalidToolSelections） */
+  correctedToolSelections: number;
+  /** B-safe Phase 5.3.3：空结果触发 bounded retry 的回合数（聚合） */
+  emptyResultRetried: number;
   invalidIntents: number;
   parseErrors: number;
   emptyResults: number;
@@ -534,7 +596,9 @@ export function createDryRunModel(scenario: BaselineScenario, arm: RealToolAbArm
     if (arm === "A") {
       return { kind: "tool_call", toolName: call.tool, arguments: call.args };
     }
-    // B / B0 组：intent 由 TOOL_NAME_TO_INTENT 决定（stub 模拟模型理解 facade 语义）
+    // B / B0 / B-safe 组：intent 由 TOOL_NAME_TO_INTENT 决定（stub 模拟模型理解 facade 语义）。
+    // B-safe 的协议纠正（非法工具名映射）与空结果 bounded retry 仅在真实模型犯错时触发，
+    // dry-run stub 不犯错，故 B-safe dry-run 行为与 B0 一致（协议纠正路径不被 exercised）。
     const intent = call.tool in TOOL_NAME_TO_INTENT ? TOOL_NAME_TO_INTENT[call.tool] : undefined;
     return {
       kind: "tool_call",
@@ -707,6 +771,8 @@ export async function runRealToolAbScenario(options: {
   modelFn: ToolAbModelFn;
   maxModelCalls?: number;
   timeoutMs?: number;
+  /** Phase 5.3.2 消融：显式指定引导变体（透传到 createTypedFacadeTool） */
+  guidanceVariant?: "old" | "new";
 }): Promise<RealToolAbScenarioMetrics> {
   const { scenario, arm, seed, modelFn } = options;
   const maxModelCalls = options.maxModelCalls ?? scenario.calls.length;
@@ -740,6 +806,7 @@ export async function runRealToolAbScenario(options: {
               searchService,
               includeIntentGuidance: arm === "B" || arm === "C",
               useCompactEnvelope: arm === "C",
+              guidanceVariant: options.guidanceVariant,
             }),
           ];
     const toolByName = new Map(tools.map((t) => [t.name, t]));
@@ -807,6 +874,8 @@ export async function runRealToolAbScenario(options: {
           truncated: false,
           duplicateQuery: false,
           firstValidEvidence: false,
+          toolSelectionCorrected: false,
+          emptyResultRetried: false,
           resultText: msg,
         });
         break;
@@ -839,25 +908,92 @@ export async function runRealToolAbScenario(options: {
           truncated: false,
           duplicateQuery: false,
           firstValidEvidence: false,
+          toolSelectionCorrected: false,
+          emptyResultRetried: false,
           resultText: decision.text,
         });
         break;
       }
 
-      const toolName = decision.toolName;
-      const intent = decision.intent ?? null;
-      const tool = toolByName.get(toolName);
+      const rawToolName = decision.toolName;
+      const rawIntent = decision.intent ?? null;
+      const directiveParseError = decision.parseError ?? null;
       const toolCallId = `real-${scenario.id}-${arm}-${seed}-${round}`;
       const start = Date.now();
       let isError = false;
       let result: unknown = null;
+
+      // B-safe Phase 5.3.3：协议层纠正——非法工具名/非法 intent 自动映射到 query_narrative + 合法 intent
+      // 三层纠正策略（互补覆盖"工具名非法"与"工具名合法但 intent 非法"两种情形）：
+      //   1. 已知底层工具名（TOOL_NAME_TO_INTENT）：直接映射到对应 intent（工具名非法 → 合法）
+      //   2. 未知工具名（幻觉/中文变体）：若参数中含合法 intent，用该 intent 路由到 query_narrative；
+      //      否则不纠正（保留非法工具名，计入 invalidToolSelections）
+      //   3. 工具名合法（query_narrative）但 intent 非法：先尝试中文变体转换，仍非法则从 args 字段推断
+      //      （inferIntentFromArgs）；推断失败则保留非法 intent，计入 invalidIntents
+      let toolName = rawToolName;
+      let intent = rawIntent;
+      let args = decision.arguments;
+      let toolSelectionCorrected = false;
+      // B-safe Phase 5.3.3：空结果 bounded retry（查询简化重试，最多 1 次）
+      let emptyResultRetried = false;
+
+      if (arm === "B-safe" && directiveParseError === null) {
+        const directTool = toolByName.get(rawToolName);
+        if (!directTool) {
+          // 策略1：已知底层工具名映射
+          const mappedIntent = TOOL_NAME_TO_INTENT[rawToolName];
+          if (mappedIntent) {
+            toolName = QUERY_NARRATIVE_NAME;
+            intent = mappedIntent;
+            args = { ...decision.arguments, intent: mappedIntent };
+            toolSelectionCorrected = true;
+          } else {
+            // 策略2：未知工具名但参数含合法 intent → 用 intent 路由
+            const argsIntent = typeof (decision.arguments as { intent?: unknown }).intent === "string"
+              ? (decision.arguments as { intent: string }).intent
+              : undefined;
+            const protocolIntent = argsIntent && CHINESE_TO_INTENT_MAP[argsIntent]
+              ? CHINESE_TO_INTENT_MAP[argsIntent]
+              : argsIntent;
+            if (protocolIntent && QUERY_NARRATIVE_INTENTS.includes(protocolIntent as (typeof QUERY_NARRATIVE_INTENTS)[number])) {
+              toolName = QUERY_NARRATIVE_NAME;
+              intent = protocolIntent;
+              args = { ...decision.arguments, intent: protocolIntent };
+              toolSelectionCorrected = true;
+            }
+          }
+        } else {
+          // 策略3：工具名合法（query_narrative）但 intent 非法 → 先尝试中文变体转换，仍非法则从 args 推断
+          // 覆盖策略1/2 的缺口：directTool 存在时策略1/2 不进入，但 intent 可能非法
+          const protocolIntent = rawIntent && CHINESE_TO_INTENT_MAP[rawIntent]
+            ? CHINESE_TO_INTENT_MAP[rawIntent]
+            : rawIntent;
+          const isIntentValid = protocolIntent !== null &&
+            QUERY_NARRATIVE_INTENTS.includes(protocolIntent as (typeof QUERY_NARRATIVE_INTENTS)[number]);
+          if (!isIntentValid) {
+            // intent 非法（非合法英文 intent，也非中文变体）→ 从 args 字段推断
+            const inferredIntent = inferIntentFromArgs(decision.arguments);
+            if (inferredIntent) {
+              intent = inferredIntent;
+              args = { ...decision.arguments, intent: inferredIntent };
+              toolSelectionCorrected = true;
+            }
+            // 推断失败 → 保留非法 intent，计入 invalidIntents（保持门禁可观测性）
+          } else if (protocolIntent !== rawIntent) {
+            // intent 是中文变体，转换成功 → 用转换后的英文 intent
+            intent = protocolIntent;
+            args = { ...decision.arguments, intent: protocolIntent };
+            toolSelectionCorrected = true;
+          }
+          // rawIntent 已是合法英文 intent → 不纠正
+        }
+      }
+
+      const tool = toolByName.get(toolName);
       const toolVisible = tool !== undefined;
-      // 修复4a：directive JSON 解析失败（malformed）独立记录为 directiveParseError，
-      // 与「工具不在可见集 / intent 非法」的路由 parseError 分开，避免 parseErrors 被漏记。
-      const directiveParseError = decision.parseError ?? null;
       let routedOk = toolVisible && directiveParseError === null;
 
-      // 路由校验：工具可见性 + facade（B/B0）intent 合法性。directive 解析失败时不进路由。
+      // 路由校验：工具可见性 + facade（B/B0/B-safe）intent 合法性。directive 解析失败时不进路由。
       let routeParseError: string | null = null;
       if (!toolVisible) {
         routeParseError = `工具 "${toolName}" 不在可见工具集内（可见：${visibleTools.join(", ")}）`;
@@ -874,10 +1010,49 @@ export async function runRealToolAbScenario(options: {
       // 执行（仅当路由成功且 directive 解析成功）
       if (routedOk && tool) {
         try {
-          result = await tool.execute(toolCallId, decision.arguments);
+          result = await tool.execute(toolCallId, args);
         } catch {
           isError = true;
           result = { content: [{ type: "text", text: "tool execution error" }], details: {} };
+        }
+      }
+
+      // B-safe Phase 5.3.3：空结果 bounded retry。
+      // 仅对 query 类意图（evidence/chapter_span/voice）的"无命中"结果做一次简化重试：
+      //   - 触发条件：结果文本为空，或 details.resultKind === "no_match"（工具对不匹配查询返回非空提示文本）。
+      //   - 将原 query 缩短为前 4 个字符（拓宽子串匹配范围）。
+      //   - 重试成功（非空且非 no_match）则覆盖 result；重试仍无命中则保留首次结果，emptyResultRetried 仍记 true。
+      // 不对 category/characterId/status 等枚举参数做简化（无语义可拓）。
+      if (
+        arm === "B-safe" &&
+        routedOk &&
+        !isError &&
+        intent !== null &&
+        (intent === "evidence" || intent === "chapter_span" || intent === "voice") &&
+        typeof (args as { query?: unknown }).query === "string"
+      ) {
+        const firstText = extractResultText(result);
+        const firstDetails = (result as { details?: { resultKind?: string } } | undefined)?.details;
+        const isNoMatch = firstText.length === 0 || firstDetails?.resultKind === "no_match";
+        if (isNoMatch) {
+          const originalQuery = (args as { query: string }).query;
+          const simplifiedQuery = originalQuery.slice(0, Math.min(4, originalQuery.length));
+          if (simplifiedQuery.length > 0 && simplifiedQuery !== originalQuery) {
+            emptyResultRetried = true;
+            const retryArgs = { ...args, query: simplifiedQuery };
+            try {
+              const retryResult = await tool!.execute(`${toolCallId}-retry`, retryArgs);
+              const retryText = extractResultText(retryResult);
+              const retryDetails = (retryResult as { details?: { resultKind?: string } } | undefined)?.details;
+              const retryIsNoMatch = retryText.length === 0 || retryDetails?.resultKind === "no_match";
+              // 重试有命中（非空且非 no_match）才覆盖；否则保留首次结果。
+              if (!retryIsNoMatch) {
+                result = retryResult;
+              }
+            } catch {
+              // 重试失败：保留首次结果，不升级为 isError（首次执行本身未报错）。
+            }
+          }
         }
       }
 
@@ -942,6 +1117,8 @@ export async function runRealToolAbScenario(options: {
         truncated,
         duplicateQuery,
         firstValidEvidence: isFirstValid,
+        toolSelectionCorrected,
+        emptyResultRetried,
         resultText,
       });
 
@@ -1024,6 +1201,8 @@ function summarizeRealScenario(
   let totalResultChars = 0;
   let totalEstimateTokens = 0;
   let invalidToolSelections = 0;
+  let correctedToolSelections = 0;
+  let emptyResultRetried = 0;
   let invalidIntents = 0;
   let parseErrors = 0;
   let emptyResults = 0;
@@ -1048,7 +1227,10 @@ function summarizeRealScenario(
     totalResultChars += t.resultChars;
     totalEstimateTokens += t.estimateTokens;
     // invalidToolSelections：选择的工具名不在可见集内（非法工具，不含 directive 解析失败）。
-    if (t.selectedTool !== null && !t.toolVisible) invalidToolSelections++;
+    // B-safe 协议纠正的回合不计入非法（toolSelectionCorrected=true）。
+    if (t.selectedTool !== null && !t.toolVisible && !t.toolSelectionCorrected) invalidToolSelections++;
+    if (t.toolSelectionCorrected) correctedToolSelections++;
+    if (t.emptyResultRetried) emptyResultRetried++;
     if (t.intent !== null && !t.intentValid) invalidIntents++;
     // parseErrors：工具指令 JSON 解析失败（malformed directive；独立于路由错误）。
     if (t.directiveParseError !== null) parseErrors++;
@@ -1081,6 +1263,8 @@ function summarizeRealScenario(
     totalResultChars,
     totalEstimateTokens,
     invalidToolSelections,
+    correctedToolSelections,
+    emptyResultRetried,
     invalidIntents,
     parseErrors,
     firstValidEvidence,
@@ -1156,6 +1340,8 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     totalResultChars: metrics.reduce((s, m) => s + m.totalResultChars, 0),
     totalEstimateTokens: metrics.reduce((s, m) => s + m.totalEstimateTokens, 0),
     invalidToolSelections: metrics.reduce((s, m) => s + m.invalidToolSelections, 0),
+    correctedToolSelections: metrics.reduce((s, m) => s + m.correctedToolSelections, 0),
+    emptyResultRetried: metrics.reduce((s, m) => s + m.emptyResultRetried, 0),
     invalidIntents: metrics.reduce((s, m) => s + m.invalidIntents, 0),
     parseErrors: metrics.reduce((s, m) => s + m.parseErrors, 0),
     emptyResults: metrics.reduce((s, m) => s + m.emptyResults, 0),
@@ -1536,7 +1722,10 @@ export async function runRealToolAbReplay(options: {
       B: [],
       B0: [],
       C: [],
+      "B-safe": [],
     };
+    // B-safe 作为独立验证 arm（Phase 5.3.3），不参与主对比门禁；
+    // 主对比循环只跑 A/B/B0/C，B-safe 由独立 replay 脚本驱动。
     for (const seed of seeds) {
       for (const arm of ["A", "B", "B0", "C"] as const) {
         const modelFn = providedModelFn ?? createDryRunModel(scenario, arm);

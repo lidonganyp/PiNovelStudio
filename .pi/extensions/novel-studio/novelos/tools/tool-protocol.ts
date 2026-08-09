@@ -214,6 +214,9 @@ export const ENVELOPE_MAX_REFS = 3;
 /** envelope 摘要最大字符数 */
 export const ENVELOPE_SUMMARY_MAX_CHARS = 120;
 
+/** envelope 每条 ref 行的内容摘要最大字符数（Phase 5.3.1） */
+export const ENVELOPE_CONTENT_MAX_CHARS = 50;
+
 /** 取某条证据对象的 sourceRef（兼容 rankedEvidences / spans / entries 结构） */
 function refOf(item: unknown): string | undefined {
   if (!item || typeof item !== "object") return undefined;
@@ -230,20 +233,39 @@ function levelOf(item: unknown, fallback: EvidenceLevel | undefined): EvidenceLe
     : fallback;
 }
 
+/** 取某条证据对象的内容文本（兼容 excerpt / fact / value 字段名） */
+function contentOf(item: unknown): string | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  const obj = item as Record<string, unknown>;
+  if (typeof obj.excerpt === "string" && obj.excerpt.trim()) return obj.excerpt.trim();
+  if (typeof obj.fact === "string" && obj.fact.trim()) return obj.fact.trim();
+  if (typeof obj.value === "string" && obj.value.trim()) {
+    const field = typeof obj.field === "string" ? obj.field : undefined;
+    return field ? `${field}: ${obj.value}` : obj.value;
+  }
+  if (typeof obj.text === "string" && obj.text.trim()) return obj.text.trim();
+  return undefined;
+}
+
 /** 从 details 中提取证据条目列表（兼容各类 resultKind 的字段名） */
 function collectEvidenceItems(details: Record<string, unknown>): Array<{
   sourceRef: string;
   evidenceLevel?: EvidenceLevel;
+  content?: string;
 }> {
   const rawList = (details.rankedEvidences ??
     details.spans ??
     details.entries) as unknown;
   if (!Array.isArray(rawList)) return [];
-  const items: Array<{ sourceRef: string; evidenceLevel?: EvidenceLevel }> = [];
+  const items: Array<{ sourceRef: string; evidenceLevel?: EvidenceLevel; content?: string }> = [];
   for (const item of rawList) {
     const ref = refOf(item);
     if (!ref) continue;
-    items.push({ sourceRef: ref, evidenceLevel: levelOf(item, details.evidenceLevel as EvidenceLevel | undefined) });
+    items.push({
+      sourceRef: ref,
+      evidenceLevel: levelOf(item, details.evidenceLevel as EvidenceLevel | undefined),
+      content: contentOf(item),
+    });
   }
   return items;
 }
@@ -253,9 +275,11 @@ function collectEvidenceItems(details: Record<string, unknown>): Array<{
  *
  * 边界（见 docs/phase4-tool-ab-test-design.md §10）：
  * - 摘要：一行 ≤ ENVELOPE_SUMMARY_MAX_CHARS，说明命中数/最高等级/最强 ref。
- * - 来源 + 证据等级：只输出最强前 ENVELOPE_MAX_REFS 条的 `[等级] ref`，不贴全文 excerpt。
+ * - 来源 + 证据等级 + 内容摘要：只输出最强前 ENVELOPE_MAX_REFS 条的 `[等级] ref - 内容摘要`，
+ *   内容摘要截取前 ENVELOPE_CONTENT_MAX_CHARS 字符（不贴全文 excerpt），使模型能判断
+ *   证据是否匹配 mustVerify 项（Phase 5.3.1 修复：真实模型 replay 中内容缺失导致
+ *   stopRate=0%、duplicateQueries 激增）。
  * - 继续查询提示：仅 truncated=true 时透传系统生成的 nextQueryHint。
- * - 摘要优先于全文：绝不在 envelope 里输出完整 excerpt。
  *
  * 纯函数：不读文件、不检索、不排序重判（等级判定权在底层工具），只做呈现。
  */
@@ -294,10 +318,14 @@ export function renderCompactEnvelope(details: NarrativeToolResultDetails): stri
     ? summary.slice(0, ENVELOPE_SUMMARY_MAX_CHARS)
     : summary;
 
-  // 来源 + 证据等级（每项一行，只列最强前 N 条 ref）
-  const refLines = top.map(
-    (item) => `[${item.evidenceLevel ?? "unknown"}] ${item.sourceRef}`,
-  );
+  // 来源 + 证据等级 + 内容摘要（每项一行，只列最强前 N 条 ref）
+  // Phase 5.3.1：附上内容摘要使模型能判断证据匹配性，防止 stopRate=0% 和重复查询
+  const refLines = top.map((item) => {
+    const base = `[${item.evidenceLevel ?? "unknown"}] ${item.sourceRef}`;
+    if (!item.content) return base;
+    const snippet = item.content.replace(/\n/g, " ").slice(0, ENVELOPE_CONTENT_MAX_CHARS);
+    return `${base} - ${snippet}`;
+  });
 
   const parts = [summaryText, ...refLines];
   if (truncated && details.nextQueryHint) {
