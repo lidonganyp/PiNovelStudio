@@ -38,24 +38,42 @@ async function importRunner() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("PHASE4-TOOL-AB-REAL-1：工具面与 seed 聚合", () => {
-  it("A 组 9 专用工具，B 组 1 facade；3 场景 × 3 seed × A/B", async () => {
+  it("A 组 9 专用工具，B/B0/C 各 1 facade；3 场景 × 3 seed × A/B/B0/C", async () => {
     const runner = await importRunner();
     const comparison = await runner.runRealToolAbReplay();
     assert.equal(comparison.mode, "dry-run");
     assert.equal(comparison.aggregation.A.toolSurface, 9);
     assert.equal(comparison.aggregation.B.toolSurface, 1);
+    assert.equal(comparison.aggregation.B0.toolSurface, 1);
+    assert.equal(comparison.aggregation.C.toolSurface, 1, "C 组应为 1 facade 工具面");
+    // 工具/渲染模式
+    assert.equal(comparison.aggregation.A.toolMode, "specialized");
+    assert.equal(comparison.aggregation.C.toolMode, "facade");
+    assert.equal(comparison.aggregation.A.renderMode, "raw");
+    assert.equal(comparison.aggregation.C.renderMode, "compact_envelope", "C 组应为 compact_envelope 渲染");
     // 3 高信号场景
     assert.equal(comparison.scenarios.length, 3);
     // 每场景每 arm 3 个 seed 的 metrics（seed 聚合必须保留全部 seed）
     for (const p of comparison.scenarios) {
       assert.equal(p.A.length, 3, `场景 ${p.scenarioId} A 组应有 3 seed`);
       assert.equal(p.B.length, 3, `场景 ${p.scenarioId} B 组应有 3 seed`);
+      assert.equal(p.C.length, 3, `场景 ${p.scenarioId} C 组应有 3 seed`);
       // 每个 seed 的 schema token 成本一致（同工具注入）
       const aSchema = new Set(p.A.map((m) => m.schemaTokenCost));
       const bSchema = new Set(p.B.map((m) => m.schemaTokenCost));
+      const cSchema = new Set(p.C.map((m) => m.schemaTokenCost));
       assert.equal(aSchema.size, 1, "A 组各 seed schema token 应一致");
       assert.equal(bSchema.size, 1, "B 组各 seed schema token 应一致");
+      assert.equal(cSchema.size, 1, "C 组各 seed schema token 应一致");
+      // 每个 seed 的 toolMode/renderMode 正确
+      for (const m of p.C) {
+        assert.equal(m.toolMode, "facade", "C 组场景 toolMode 应为 facade");
+        assert.equal(m.renderMode, "compact_envelope", "C 组场景 renderMode 应为 compact_envelope");
+      }
     }
+    // envelope 门禁与 C 组门禁已计算
+    assert.ok(comparison.gateC, "应含 gateC（A vs C）");
+    assert.ok(comparison.envelopeGate, "应含 envelopeGate（C vs B）");
   });
 
   it("B 组 schema token 显著低于 A 组（9 工具 vs 1 facade）", async () => {
@@ -396,6 +414,22 @@ describe("PHASE4-TOOL-AB-REAL-4：报告与 trajectory 副本", () => {
     assert.ok(md.includes("不是普通失败率"), "应含无效分类非失败率说明");
     assert.ok(md.includes("| seed |"), "应含逐 seed 表");
     assert.ok(md.includes("SC1-canon-fact"), "应含各场景详情");
+    // B0 对照：报告应含 B0 列、B0 门禁段与 guidanceDelta 段
+    assert.ok(md.includes("B0 组（无引导 facade）"), "聚合表应含 B0 组列");
+    assert.ok(md.includes("B0 门禁（无引导 facade vs A）"), "应含 B0 门禁段");
+    assert.ok(md.includes("描述引导收益（guidanceDelta"), "应含 guidanceDelta 段");
+    assert.ok(md.includes("B−B0"), "guidanceDelta 表应含差异列");
+    // JSON 结构：B0 聚合 / gateB0 / guidanceDelta 存在
+    assert.ok(comparison.aggregation.B0, "aggregation 应含 B0 聚合");
+    assert.ok(comparison.gateB0, "应含 gateB0（A vs B0）");
+    assert.ok(comparison.guidanceDelta, "应含 guidanceDelta（B vs B0）");
+    assert.equal(comparison.aggregation.B0.toolSurface, 1, "B0 应为 1 facade 工具面");
+    // 停止率观测：聚合应含 stopRate/stopCount/scenarioCount，报告应含停止率行与 guidanceDelta 停止率
+    assert.equal(typeof comparison.aggregation.A.stopRate, "number", "A 应含 stopRate");
+    assert.equal(typeof comparison.aggregation.B0.stopRate, "number", "B0 应含 stopRate");
+    assert.equal(comparison.aggregation.A.scenarioCount, comparison.aggregation.B0.scenarioCount, "A 与 B0 场景数应一致");
+    assert.ok(md.includes("停止率（主动收敛）"), "报告应含停止率行");
+    assert.ok(md.includes("停止率（主动收敛）"), "guidanceDelta 应含停止率差异行");
   });
 
   it("JSON roundtrip 保留 seed 数组与聚合", async () => {
@@ -413,19 +447,23 @@ describe("PHASE4-TOOL-AB-REAL-4：报告与 trajectory 副本", () => {
     const runner = await importRunner();
     const comparison = await runner.runRealToolAbReplay();
     const traj = runner.buildRealToolAbTrajectory(comparison);
-    // 3 场景 × 2 arm × 3 seed = 18 个 key
-    const expectedKeys = comparison.scenarios.length * 2 * 3;
+    // 3 场景 × 4 arm × 3 seed = 36 个 key
+    const expectedKeys = comparison.scenarios.length * 4 * 3;
     assert.equal(Object.keys(traj).length, expectedKeys, `trajectory key 数应为 ${expectedKeys}`);
     for (const p of comparison.scenarios) {
-      for (const arm of ["A", "B"]) {
+      for (const arm of ["A", "B", "B0", "C"]) {
         for (let seed = 0; seed < 3; seed++) {
           const key = `${p.scenarioId}:${arm}:${seed}`;
           assert.ok(traj[key], `${key} 应存在`);
           assert.equal(traj[key][0].type, "tool_visibility", `${key} 首条应为 tool_visibility`);
           // 后续条目为 tool_call_metrics
-          const m = arm === "A" ? p.A[seed] : p.B[seed];
+          const m = arm === "A" ? p.A[seed] : arm === "B" ? p.B[seed] : arm === "B0" ? p.B0[seed] : p.C[seed];
           const callCount = m.turns.filter((t) => t.decision.kind === "tool_call").length;
           assert.equal(traj[key].length - 1, callCount, `${key} 调用条目数`);
+          // C 组 trajectory 应记录 renderMode=compact_envelope
+          if (arm === "C") {
+            assert.equal(traj[key][0].data.renderMode, "compact_envelope", `${key} 应记录 compact_envelope 渲染`);
+          }
           // JSONL 可解析
           const jsonl = runner.formatRealTrajectoryJsonl(traj[key]);
           const lines = jsonl.trim().split("\n");

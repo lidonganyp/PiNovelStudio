@@ -71,6 +71,39 @@ export const NARRATIVE_TOOL_NAMES_WITH_FACADE: ReadonlySet<string> = new Set([
 ]);
 
 // ============================================================================
+// 专用工具过滤枚举（单一来源）
+// ============================================================================
+
+/**
+ * query_canon 的 category 过滤枚举。作为专用工具 schema 与 facade schema 的
+ * 单一来源（零逻辑复制）：facade 的 category 参数必须与 query_canon 完全一致，
+ * 避免"facade 用自由文本、专用工具用枚举"的 schema 不一致。
+ */
+export const CANON_CATEGORY_VALUES = ["timeline", "location", "entity", "ability_rule"] as const;
+export type CanonCategory = (typeof CANON_CATEGORY_VALUES)[number];
+
+/**
+ * query_promise_ledger 的 status 过滤枚举（open/advancing/fulfilled/broken）。
+ * 与 CANON_CATEGORY_VALUES 同理，作为专用工具与 facade 的共享约束。
+ */
+export const PROMISE_STATUS_VALUES = ["open", "advancing", "fulfilled", "broken"] as const;
+export type PromiseStatus = (typeof PROMISE_STATUS_VALUES)[number];
+
+/**
+ * query_pattern_memory 的 patternType 过滤枚举
+ * （trope/imagery/sentence_risk/conflict_resolution/hook_type）。
+ * 与上述枚举同理，作为专用工具与 facade 的共享约束。
+ */
+export const PATTERN_TYPE_VALUES = [
+  "trope",
+  "imagery",
+  "sentence_risk",
+  "conflict_resolution",
+  "hook_type",
+] as const;
+export type PatternType = (typeof PATTERN_TYPE_VALUES)[number];
+
+// ============================================================================
 // Phase 3：统一结果格式辅助（resultKind / returnedCount / truncated / nextQueryHint）
 // ============================================================================
 
@@ -310,12 +343,10 @@ const queryCanonFactory: ToolFactory = (ctx) => ({
   label: "Query Canon",
   parameters: Type.Object({
     category: Type.Optional(
-      Type.Union([
-        Type.Literal("timeline"),
-        Type.Literal("location"),
-        Type.Literal("entity"),
-        Type.Literal("ability_rule"),
-      ], { description: "过滤类别" }),
+      Type.Union(
+        CANON_CATEGORY_VALUES.map((v) => Type.Literal(v)),
+        { description: "过滤类别" },
+      ),
     ),
   }),
   requiredPermission: "workspace_read",
@@ -540,12 +571,10 @@ const queryPromiseLedgerFactory: ToolFactory = (ctx) => ({
   label: "Query Promise Ledger",
   parameters: Type.Object({
     status: Type.Optional(
-      Type.Union([
-        Type.Literal("open"),
-        Type.Literal("advancing"),
-        Type.Literal("fulfilled"),
-        Type.Literal("broken"),
-      ], { description: "过滤状态" }),
+      Type.Union(
+        PROMISE_STATUS_VALUES.map((v) => Type.Literal(v)),
+        { description: "过滤状态" },
+      ),
     ),
   }),
   requiredPermission: "workspace_read",
@@ -603,13 +632,10 @@ const queryPatternMemoryFactory: ToolFactory = (ctx) => ({
   label: "Query Pattern Memory",
   parameters: Type.Object({
     patternType: Type.Optional(
-      Type.Union([
-        Type.Literal("trope"),
-        Type.Literal("imagery"),
-        Type.Literal("sentence_risk"),
-        Type.Literal("conflict_resolution"),
-        Type.Literal("hook_type"),
-      ], { description: "过滤模式类型" }),
+      Type.Union(
+        PATTERN_TYPE_VALUES.map((v) => Type.Literal(v)),
+        { description: "过滤模式类型" },
+      ),
     ),
   }),
   requiredPermission: "workspace_read",

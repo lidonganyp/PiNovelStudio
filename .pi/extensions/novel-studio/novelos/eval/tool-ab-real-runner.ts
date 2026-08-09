@@ -199,10 +199,34 @@ export interface RealToolAbTurn {
 // ============================================================================
 
 /** 单场景单 arm 单 seed 执行结果 */
+export type RealToolAbArm = "A" | "B" | "B0" | "C";
+
+/** 是否为 facade 形态 arm（B=受引导，B0=无引导，C=受引导+compact envelope；都走类型化 intent 联合） */
+export function isFacadeArm(arm: RealToolAbArm): arm is "B" | "B0" | "C" {
+  return arm === "B" || arm === "B0" || arm === "C";
+}
+
+/** 工具模式：A=9 专用工具，B/B0/C=facade 单入口 */
+export type RealToolAbToolMode = "specialized" | "facade";
+
+/** 渲染模式：A/B/B0=raw 原始 content，C=compact envelope（调用 renderCompactEnvelope 剪裁 content） */
+export type RealToolAbRenderMode = "raw" | "compact_envelope";
+
+/** 由 arm 推导工具模式 */
+export function toolModeOfArm(arm: RealToolAbArm): RealToolAbToolMode {
+  return arm === "A" ? "specialized" : "facade";
+}
+
+/** 由 arm 推导渲染模式 */
+export function renderModeOfArm(arm: RealToolAbArm): RealToolAbRenderMode {
+  return arm === "C" ? "compact_envelope" : "raw";
+}
+
+/** 单场景单 arm 单 seed 执行结果 */
 export interface RealToolAbScenarioMetrics {
   scenarioId: string;
   category: string;
-  arm: "A" | "B";
+  arm: RealToolAbArm;
   seed: number;
   turns: RealToolAbTurn[];
   toolSurface: number;
@@ -220,6 +244,8 @@ export interface RealToolAbScenarioMetrics {
   truncatedResults: number;
   timeouts: number;
   errors: number;
+  /** 本场景是否由模型主动输出终止标记收敛（true）或预算耗尽被迫终止（false） */
+  stopped: boolean;
   sourceRefsValid: number;
   sourceRefsInvalid: number;
   invalidSourceRefByCategory: Record<InvalidSourceRefCategory, number>;
@@ -232,16 +258,28 @@ export interface RealToolAbScenarioMetrics {
   };
   /** 本场景真实模型调用的采样/路由 provenance（首个非空回合；dry-run 无） */
   provenance?: ModelCallProvenance;
+  /** 本场景工具模式（A=specialized / B/B0/C=facade） */
+  toolMode: RealToolAbToolMode;
+  /** 本场景渲染模式（A/B/B0=raw / C=compact_envelope） */
+  renderMode: RealToolAbRenderMode;
 }
 
-/** 每场景 A/B 成对结果（每 arm 持有每个 seed 的独立 metrics，供 3-seed 聚合与逐 seed 展示） */
+/** 每场景 A/B/B0/C 成对结果（每 arm 持有每个 seed 的独立 metrics，供 3-seed 聚合与逐 seed 展示） */
 export interface RealToolAbPair {
   scenarioId: string;
   category: string;
   A: RealToolAbScenarioMetrics[];
   B: RealToolAbScenarioMetrics[];
-  /** 逐场景失败行为门禁（empty/truncated/errors/timeouts/非法工具/解析失败不恶化） */
+  /** B0 无 INTENT_USAGE 引导的 facade（单入口收益 vs 描述引导收益解耦） */
+  B0: RealToolAbScenarioMetrics[];
+  /** C 受引导 facade + compact envelope（仅剪裁模型可见 content，details 与 B 一致） */
+  C: RealToolAbScenarioMetrics[];
+  /** 逐场景失败行为门禁（B vs A：empty/truncated/errors/timeouts/非法工具/解析失败不恶化） */
   scenarioGate: RealToolAbScenarioGate;
+  /** 逐场景失败行为门禁（B0 vs A） */
+  scenarioGateB0: RealToolAbScenarioGate;
+  /** 逐场景失败行为门禁（C vs A：envelope facade 失败行为不劣于 9 专用工具） */
+  scenarioGateC: RealToolAbScenarioGate;
 }
 
 /** 逐场景失败行为门禁：B 组失败行为不劣于 A 组（跨 seed 求和后逐项比较） */
@@ -281,8 +319,20 @@ export interface RealToolAbArmAggregation {
   sourceRefCompleteness: number;
   avgCoverageRatio: number;
   firstValidEvidenceLatencyMs: number | null;
+  /** 场景总数（停止率分母） */
+  scenarioCount: number;
+  /** 模型主动输出终止标记收敛的场景数 */
+  stopCount: number;
+  /** 停止率 = stopCount / scenarioCount（观察模型是否在证据充分后收敛而非预算耗尽） */
+  stopRate: number;
   /** 本 arm 真实模型调用的采样/路由 provenance（真实模式；dry-run 无） */
   provenance?: ModelCallProvenance;
+  /** 本 arm 工具模式（A=specialized / B/B0/C=facade） */
+  toolMode?: RealToolAbToolMode;
+  /** 本 arm 渲染模式（A/B/B0=raw / C=compact_envelope） */
+  renderMode?: RealToolAbRenderMode;
+  /** 本 arm 真实模型指纹：`provider:model:route`（来自首个非空 provenance；dry-run 无） */
+  fingerprint?: string;
 }
 
 /** 门槛判定：逐项不降级 + 至少一项真实负担指标改善 */
@@ -315,15 +365,73 @@ export interface RealToolAbGate {
   details: Record<string, string>;
 }
 
-/** 完整真实模型 A/B 对比 */
+/**
+ * Phase 5.3 预注册：单场景/单调用结果膨胀门槛（envelope C vs B）。
+ *
+ * 用户核查指出（Phase 5.2 结论）：聚合 resultChars 下降可能掩盖局部膨胀（如 SC2 C=281>B=270、
+ * SC5 C=274>B=228）。真实模型 replay 前必须把「单场景/单调用不可明显变长」纳入门禁，
+ * 不能只看聚合下降。这里预注册因子与缓冲，replay 时逐场景/逐调用校验。
+ *
+ * 语义：C 的字符数允许略高于 B（envelope 对精简列表/短 span 有少量摘要开销），但
+ * 不得超过 `factor × B + buffer`。超过即判定该场景/调用「明显膨胀」，门禁失败。
+ */
+export const ENVELOPE_EXPANSION_FACTOR = 1.5;
+export const ENVELOPE_EXPANSION_BUFFER = 1;
+
+/** envelope 门禁（C vs B）：结果文本不膨胀 + 证据覆盖与失败不降级 */
+export interface EnvelopeRealGate {
+  /** 契约：C 总返回字符 < B（envelope 收益，聚合口径，允许不膨胀） */
+  resultCharsNotWorsened: boolean;
+  /** 单场景膨胀门槛：每个场景 C.totalResultChars <= B.totalResultChars × factor + buffer */
+  noScenarioExpansion: boolean;
+  /** 单调用膨胀门槛：每个场景 C 最大单回合字符 <= B 最大单回合字符 × factor + buffer */
+  noSingleCallExpansion: boolean;
+  /** C mustVerify 覆盖率不降级（>= B） */
+  coverageNotDegraded: boolean;
+  /** C 有效证据引用率不降级（>= B） */
+  sourceRefNotDegraded: boolean;
+  /** C 停止率不显著低于 B（模型是否仍能在证据充分后主动收敛） */
+  stopRateNotDegraded: boolean;
+  /** C 失败行为（errors/timeouts/empty/truncated/非法工具/解析失败）不恶化 */
+  failureNotDegraded: boolean;
+  allPassed: boolean;
+  details: Record<string, string>;
+}
+
+/** 完整真实模型 A/B/B0/C 对比 */
 export interface RealToolAbComparison {
   schema: string;
   timestamp: string;
   phase: string;
   mode: "dry-run" | "real";
   scenarios: RealToolAbPair[];
-  aggregation: { A: RealToolAbArmAggregation; B: RealToolAbArmAggregation };
+  aggregation: {
+    A: RealToolAbArmAggregation;
+    B: RealToolAbArmAggregation;
+    B0: RealToolAbArmAggregation;
+    C: RealToolAbArmAggregation;
+  };
+  /** B vs A 门禁（受引导 facade vs 9 工具） */
   gate: RealToolAbGate;
+  /** B0 vs A 门禁（无引导 facade vs 9 工具，隔离"单入口收益"） */
+  gateB0: RealToolAbGate;
+  /** C vs A 门禁（envelope facade vs 9 工具，隔离"compact envelope 形态"收益） */
+  gateC: RealToolAbGate;
+  /** envelope 门禁（C vs B）：结果文本不膨胀（含单场景/单调用）+ 证据覆盖与失败不降级 */
+  envelopeGate: EnvelopeRealGate;
+  /** 引导收益：B（受引导）与 B0（无引导）的负担/失败差异摘要 */
+  guidanceDelta: {
+    schemaTokenCost: { B: number; B0: number };
+    invalidIntents: { B: number; B0: number };
+    invalidToolSelections: { B: number; B0: number };
+    totalCalls: { B: number; B0: number };
+    totalDuplicateQueries: { B: number; B0: number };
+    avgCoverageRatio: { B: number; B0: number };
+    firstValidEvidenceLatencyMs: { B: number | null; B0: number | null };
+    emptyResults: { B: number; B0: number };
+    errors: { B: number; B0: number };
+    stopRate: { B: number; B0: number };
+  };
 }
 
 // ============================================================================
@@ -410,13 +518,14 @@ export function buildRealPrompt(scenario: BaselineScenario): string {
  * 创建 dry-run 模型函数：确定性地按场景 calls 顺序生成工具调用决策。
  *
  * - A 组：toolName = call.tool（专用工具名），arguments = call.args
- * - B 组：toolName = query_narrative，intent = TOOL_NAME_TO_INTENT[call.tool]，
+ * - B / B0 组：toolName = query_narrative，intent = TOOL_NAME_TO_INTENT[call.tool]，
  *   arguments = { intent, ...call.args }
  *
  * 所有 calls 结束后返回 final。该 stub 验证 runner 框架（注入/校验/路由/指标），
- * 不代表真实模型质量结论。
+ * 不代表真实模型质量结论。B 与 B0 在 dry-run 下路由行为一致（都是 facade 形态），
+ * 区别仅在 injected schema 的 description 是否含 INTENT_USAGE 引导。
  */
-export function createDryRunModel(scenario: BaselineScenario, arm: "A" | "B"): ToolAbModelFn {
+export function createDryRunModel(scenario: BaselineScenario, arm: RealToolAbArm): ToolAbModelFn {
   return async (ctx) => {
     if (ctx.round >= scenario.calls.length) {
       return { kind: "final", text: REAL_DONE_MARKER };
@@ -425,7 +534,7 @@ export function createDryRunModel(scenario: BaselineScenario, arm: "A" | "B"): T
     if (arm === "A") {
       return { kind: "tool_call", toolName: call.tool, arguments: call.args };
     }
-    // B 组：intent 由 TOOL_NAME_TO_INTENT 决定（stub 模拟模型理解 facade 语义）
+    // B / B0 组：intent 由 TOOL_NAME_TO_INTENT 决定（stub 模拟模型理解 facade 语义）
     const intent = call.tool in TOOL_NAME_TO_INTENT ? TOOL_NAME_TO_INTENT[call.tool] : undefined;
     return {
       kind: "tool_call",
@@ -585,7 +694,7 @@ export function buildRealUserPrompt(ctx: ToolAbModelFnCtx): string {
  * 运行一个场景的单个 arm（注入对应工具面，驱动 ToolAbModelFn 直至 final 或预算耗尽）。
  *
  * @param scenario 场景定义
- * @param arm A（9 专用工具）或 B（query_narrative facade）
+ * @param arm A（9 专用工具）/ B（受引导 facade）/ B0（无引导 facade）
  * @param seed 随机种子
  * @param modelFn 模型决策函数（dry-run stub 或真实模型）
  * @param maxModelCalls 模型工具调用预算（默认与场景 calls 数一致，dry-run 用）
@@ -593,7 +702,7 @@ export function buildRealUserPrompt(ctx: ToolAbModelFnCtx): string {
  */
 export async function runRealToolAbScenario(options: {
   scenario: BaselineScenario;
-  arm: "A" | "B";
+  arm: RealToolAbArm;
   seed: number;
   modelFn: ToolAbModelFn;
   maxModelCalls?: number;
@@ -602,6 +711,7 @@ export async function runRealToolAbScenario(options: {
   const { scenario, arm, seed, modelFn } = options;
   const maxModelCalls = options.maxModelCalls ?? scenario.calls.length;
   const timeoutMs = options.timeoutMs ?? 15_000;
+  const facadeArm = isFacadeArm(arm);
 
   const { projectRoot, workspaceId, cleanup } = setupBaselineWorkspace(scenario.workspace);
   const dupTracker = new SemanticDupTracker();
@@ -620,17 +730,24 @@ export async function runRealToolAbScenario(options: {
       workspaceId,
       sourceChapter: `ch${scenario.workspace.historicalChapters.length}`,
     });
-    // 注入工具面：A=9 专用工具，B=query_narrative facade
+    // 注入工具面：A=9 专用工具，B=受引导 facade，B0=无引导 facade（includeIntentGuidance=false），
+    // C=受引导 facade + compact envelope（useCompactEnvelope=true，仅剪裁模型可见 content）。
     const tools: ToolProtocol[] =
       arm === "A"
         ? createNarrativeTools({ searchService })
-        : [createTypedFacadeTool({ searchService })];
+        : [
+            createTypedFacadeTool({
+              searchService,
+              includeIntentGuidance: arm === "B" || arm === "C",
+              useCompactEnvelope: arm === "C",
+            }),
+          ];
     const toolByName = new Map(tools.map((t) => [t.name, t]));
     const visibleTools = tools.map((t) => t.name).sort();
     injectedToolCount = tools.length;
 
-    // 按 arm 注入可见工具 schema 到 system prompt（A=9 专用工具，B=facade）。
-    // allowedToolNames 白名单 fail-closed：A 用叙事白名单，B 用 facade 名。
+    // 按 arm 注入可见工具 schema 到 system prompt（A=9 专用工具，B/B0=facade）。
+    // allowedToolNames 白名单 fail-closed：A 用叙事白名单，B/B0 用 facade 名。
     // 修复1：基座 prompt 只要求输出终止标记，不要求生成正文（评测边界）。
     // Phase 4.2.2：启用 decision-only 注入模式，去除注入器中的正文诱导
     // （"基于证据生成正文/证据充分时直接输出章节正文"），只允许输出终止标记。
@@ -740,13 +857,13 @@ export async function runRealToolAbScenario(options: {
       const directiveParseError = decision.parseError ?? null;
       let routedOk = toolVisible && directiveParseError === null;
 
-      // 路由校验：工具可见性 + B 组 intent 合法性。directive 解析失败时不进路由。
+      // 路由校验：工具可见性 + facade（B/B0）intent 合法性。directive 解析失败时不进路由。
       let routeParseError: string | null = null;
       if (!toolVisible) {
         routeParseError = `工具 "${toolName}" 不在可见工具集内（可见：${visibleTools.join(", ")}）`;
         routedOk = false;
       } else if (
-        arm === "B" &&
+        facadeArm &&
         (intent === null || !QUERY_NARRATIVE_INTENTS.includes(intent as (typeof QUERY_NARRATIVE_INTENTS)[number]))
       ) {
         routeParseError = `facade intent "${String(intent)}" 非法（应在 ${QUERY_NARRATIVE_INTENTS.join("|")} 内）`;
@@ -806,8 +923,8 @@ export async function runRealToolAbScenario(options: {
         selectedTool: toolName,
         toolVisible,
         intent,
-        intentValid: arm === "B" ? intent !== null && QUERY_NARRATIVE_INTENTS.includes(intent as (typeof QUERY_NARRATIVE_INTENTS)[number]) : true,
-        routedTool: arm === "B" && intent ? (INTENT_TO_TOOL[intent as IntentKey] ?? null) : toolName,
+        intentValid: facadeArm ? intent !== null && QUERY_NARRATIVE_INTENTS.includes(intent as (typeof QUERY_NARRATIVE_INTENTS)[number]) : true,
+        routedTool: facadeArm && intent ? (INTENT_TO_TOOL[intent as IntentKey] ?? null) : toolName,
         routedOk,
         directiveParseError,
         parseError,
@@ -890,7 +1007,7 @@ function extractResultText(result: unknown): string {
 /** 把回合序列汇总为场景指标 */
 function summarizeRealScenario(
   scenario: BaselineScenario,
-  arm: "A" | "B",
+  arm: RealToolAbArm,
   seed: number,
   turns: RealToolAbTurn[],
   systemPromptTokens: number,
@@ -971,6 +1088,8 @@ function summarizeRealScenario(
     truncatedResults,
     timeouts,
     errors,
+    // 停止率观测：模型是否主动输出终止标记收敛（last turn 为 final），而非预算耗尽/超时被迫终止。
+    stopped: turns.length > 0 && turns[turns.length - 1].decision.kind === "final",
     sourceRefsValid,
     sourceRefsInvalid,
     invalidSourceRefByCategory: invalidByCategory,
@@ -984,12 +1103,21 @@ function summarizeRealScenario(
     // 首个携带 provenance 的回合的采样/路由证据（真实模型；dry-run 无）。
     // 模型 fn 返回的整个 decision（含 provenance）保存在 turn.decision 上。
     provenance: turns.find((t) => t.decision?.provenance)?.decision?.provenance,
+    toolMode: toolModeOfArm(arm),
+    renderMode: renderModeOfArm(arm),
   };
 }
 
 // ============================================================================
 // 聚合 + 门槛
 // ============================================================================
+
+/** 从场景 metrics 推导真实模型指纹：`provider:model:route`（首个非空 provenance；dry-run 无） */
+function fingerprintOf(metrics: RealToolAbScenarioMetrics[]): string | undefined {
+  const p = metrics.find((m) => m.provenance)?.provenance;
+  if (!p || (!p.provider && !p.model && !p.route)) return undefined;
+  return [p.provider, p.model, p.route].filter(Boolean).join(":");
+}
 
 function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAggregation {
   const invalidByCategory: Record<InvalidSourceRefCategory, number> = {
@@ -1001,8 +1129,10 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
   const evidenceLevelCounts: Record<string, number> = {};
   const firstLatency: number[] = [];
   let avgCoverageSum = 0;
+  let stopCount = 0;
 
   for (const m of metrics) {
+    if (m.stopped) stopCount++;
     for (const [k, v] of Object.entries(m.invalidSourceRefByCategory)) {
       invalidByCategory[k as InvalidSourceRefCategory] += v;
     }
@@ -1042,7 +1172,13 @@ function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAg
     avgCoverageRatio: metrics.length > 0 ? avgCoverageSum / metrics.length : 0,
     firstValidEvidenceLatencyMs:
       firstLatency.length > 0 ? firstLatency.reduce((a, b) => a + b, 0) / firstLatency.length : null,
+    scenarioCount: metrics.length,
+    stopCount,
+    stopRate: metrics.length > 0 ? stopCount / metrics.length : 0,
     provenance: metrics.find((m) => m.provenance)?.provenance,
+    toolMode: metrics[0]?.toolMode,
+    renderMode: metrics[0]?.renderMode,
+    fingerprint: fingerprintOf(metrics),
   };
 }
 
@@ -1083,6 +1219,7 @@ function evaluateRealGate(
   A: RealToolAbArmAggregation,
   B: RealToolAbArmAggregation,
   scenarioGates: RealToolAbScenarioGate[],
+  labelB = "B",
 ): RealToolAbGate {
   const mustVerifyCoverageNotDegraded = B.avgCoverageRatio >= A.avgCoverageRatio - 1e-9;
   const sourceRefCompletenessNotDegraded = B.sourceRefCompleteness >= A.sourceRefCompleteness - 1e-9;
@@ -1185,19 +1322,109 @@ function evaluateRealGate(
       scenarioGatesPassed &&
       burdenImproved,
     details: {
-      mustVerifyCoverage: `B=${B.avgCoverageRatio.toFixed(3)} >= A=${A.avgCoverageRatio.toFixed(3)}`,
-      sourceRefCompleteness: `B=${B.sourceRefCompleteness.toFixed(3)} >= A=${A.sourceRefCompleteness.toFixed(3)}`,
-      invalidSourceRef: `B=${invalidTotalB} <= A=${invalidTotalA}`,
+      mustVerifyCoverage: `${labelB}=${B.avgCoverageRatio.toFixed(3)} >= A=${A.avgCoverageRatio.toFixed(3)}`,
+      sourceRefCompleteness: `${labelB}=${B.sourceRefCompleteness.toFixed(3)} >= A=${A.sourceRefCompleteness.toFixed(3)}`,
+      invalidSourceRef: `${labelB}=${invalidTotalB} <= A=${invalidTotalA}`,
       invalidSourceRefCategories: detailCats,
       evidenceLevel: detailLevels,
-      errors: `B=${B.errors} <= A=${A.errors}`,
-      timeouts: `B=${B.timeouts} <= A=${A.timeouts}`,
-      emptyResults: `B=${B.emptyResults} <= A=${A.emptyResults}`,
-      truncated: `B=${B.truncatedResults} <= A=${A.truncatedResults}`,
+      errors: `${labelB}=${B.errors} <= A=${A.errors}`,
+      timeouts: `${labelB}=${B.timeouts} <= A=${A.timeouts}`,
+      emptyResults: `${labelB}=${B.emptyResults} <= A=${A.emptyResults}`,
+      truncated: `${labelB}=${B.truncatedResults} <= A=${A.truncatedResults}`,
       scenarioGates: detailScenarioGates,
-      invalidToolSelections: `B=${B.invalidToolSelections} <= A=${A.invalidToolSelections}`,
-      parseErrors: `B=${B.parseErrors} <= A=${A.parseErrors}`,
+      invalidToolSelections: `${labelB}=${B.invalidToolSelections} <= A=${A.invalidToolSelections}`,
+      parseErrors: `${labelB}=${B.parseErrors} <= A=${A.parseErrors}`,
       burdenImproved: `改善项：${improvedBurdenMetrics.join(", ") || "无"}`,
+    },
+  };
+}
+
+/**
+ * Phase 5.3 envelope 门禁（C vs B）。
+ *
+ * 用户核查指出（Phase 5.2 结论）：聚合 resultChars 下降可能掩盖局部膨胀（如 SC2、SC5）。
+ * 真实模型 replay 前必须把「单场景/单调用结果不可明显变长」纳入门禁，不能只看聚合下降。
+ * 这里同时校验：
+ * - 聚合：C 总返回字符 <= B（envelope 收益，允许持平）；
+ * - 单场景：每场景 C.totalResultChars <= B.totalResultChars × factor + buffer；
+ * - 单调用：每场景 C 最大单回合字符 <= B 最大单回合字符 × factor + buffer；
+ * - 证据覆盖：C mustVerify 覆盖率 >= B；
+ * - 有效证据引用率：C sourceRefCompleteness >= B；
+ * - 停止率：C 不显著低于 B（容差 5 个百分点，观察模型仍能在证据充分后主动收敛）；
+ * - 失败行为：C errors/timeouts/empty/truncated/非法工具/解析失败均不高于 B。
+ */
+export function evaluateEnvelopeRealGate(
+  B: RealToolAbArmAggregation,
+  C: RealToolAbArmAggregation,
+  pairs: RealToolAbPair[],
+): EnvelopeRealGate {
+  const resultCharsNotWorsened = C.totalResultChars <= B.totalResultChars;
+
+  const f = ENVELOPE_EXPANSION_FACTOR;
+  const buf = ENVELOPE_EXPANSION_BUFFER;
+  let noScenarioExpansion = true;
+  let noSingleCallExpansion = true;
+  const scenarioDetail: string[] = [];
+  const singleCallDetail: string[] = [];
+  for (const p of pairs) {
+    const bChars = p.B.reduce((s, m) => s + m.totalResultChars, 0);
+    const cChars = p.C.reduce((s, m) => s + m.totalResultChars, 0);
+    const bMaxCall = Math.max(0, ...p.B.flatMap((m) => m.turns.map((t) => t.resultChars)));
+    const cMaxCall = Math.max(0, ...p.C.flatMap((m) => m.turns.map((t) => t.resultChars)));
+    const sThreshold = bChars * f + buf;
+    const cThreshold = bMaxCall * f + buf;
+    const sOk = cChars <= sThreshold;
+    const cOk = cMaxCall <= cThreshold;
+    if (!sOk) noScenarioExpansion = false;
+    if (!cOk) noSingleCallExpansion = false;
+    scenarioDetail.push(
+      `${p.scenarioId}: C=${cChars} <= B=${bChars}×${f}+${buf}=${sThreshold} ${sOk ? "PASS" : "FAIL"}`,
+    );
+    singleCallDetail.push(
+      `${p.scenarioId}: C单调用max=${cMaxCall} <= B单调用max=${bMaxCall}×${f}+${buf}=${cThreshold} ${cOk ? "PASS" : "FAIL"}`,
+    );
+  }
+
+  const coverageNotDegraded = C.avgCoverageRatio >= B.avgCoverageRatio - 1e-9;
+  const sourceRefNotDegraded = C.sourceRefCompleteness >= B.sourceRefCompleteness - 1e-9;
+  const stopRateNotDegraded = C.stopRate >= B.stopRate - 0.05;
+  const failureNotDegraded =
+    C.errors <= B.errors &&
+    C.timeouts <= B.timeouts &&
+    C.emptyResults <= B.emptyResults &&
+    C.truncatedResults <= B.truncatedResults &&
+    C.invalidToolSelections <= B.invalidToolSelections &&
+    C.parseErrors <= B.parseErrors;
+
+  const allPassed =
+    resultCharsNotWorsened &&
+    noScenarioExpansion &&
+    noSingleCallExpansion &&
+    coverageNotDegraded &&
+    sourceRefNotDegraded &&
+    stopRateNotDegraded &&
+    failureNotDegraded;
+
+  return {
+    resultCharsNotWorsened,
+    noScenarioExpansion,
+    noSingleCallExpansion,
+    coverageNotDegraded,
+    sourceRefNotDegraded,
+    stopRateNotDegraded,
+    failureNotDegraded,
+    allPassed,
+    details: {
+      resultChars: `C=${C.totalResultChars} <= B=${B.totalResultChars}`,
+      scenarioExpansion: scenarioDetail.join("；"),
+      singleCallExpansion: singleCallDetail.join("；"),
+      coverage: `C=${C.avgCoverageRatio.toFixed(3)} >= B=${B.avgCoverageRatio.toFixed(3)}`,
+      sourceRef: `C=${C.sourceRefCompleteness.toFixed(3)} >= B=${B.sourceRefCompleteness.toFixed(3)}`,
+      stopRate: `C=${(C.stopRate * 100).toFixed(0)}% >= B=${(B.stopRate * 100).toFixed(0)}% − 5%`,
+      failure:
+        `errors(${C.errors}<=${B.errors});timeouts(${C.timeouts}<=${B.timeouts});` +
+        `empty(${C.emptyResults}<=${B.emptyResults});truncated(${C.truncatedResults}<=${B.truncatedResults});` +
+        `invalidTool(${C.invalidToolSelections}<=${B.invalidToolSelections});parseErrors(${C.parseErrors}<=${B.parseErrors})`,
     },
   };
 }
@@ -1209,9 +1436,30 @@ function evaluateRealGate(
 /** 高信号场景 ID 子集（canon / mixed / low-risk） */
 export const HIGH_SIGNAL_SCENARIO_IDS = ["SC1-canon-fact", "SC7-multi-tool-mixed", "SC6-low-risk-no-retrieval"];
 
+/**
+ * Phase 5.3 envelope 真实 replay 目标场景：最能暴露 envelope 局部膨胀或信息损失。
+ * SC2（character-state）、SC5（chapter-span）在 Phase 5.2 确定性 replay 中已出现
+ * 单场景字符膨胀（C>B），SC7（multi-tool-mixed）覆盖多工具/多意图折叠路径。
+ */
+export const ENVELOPE_REPLAY_SCENARIO_IDS = [
+  "SC2-character-state",
+  "SC5-chapter-span",
+  "SC7-multi-tool-mixed",
+];
+
 /** 返回基线高信号场景列表（供 CLI --scenario 过滤/定向诊断）。 */
 export function getBaselineScenarios(): BaselineScenario[] {
   return BASELINE_SCENARIOS.filter((s) => HIGH_SIGNAL_SCENARIO_IDS.includes(s.id));
+}
+
+/** 返回全部基线场景（供 CLI --scenario 过滤任意场景，含 SC2/SC5）。 */
+export function getAllBaselineScenarios(): BaselineScenario[] {
+  return [...BASELINE_SCENARIOS];
+}
+
+/** 返回 Phase 5.3 envelope 真实 replay 目标场景（SC2/SC5/SC7）。 */
+export function getEnvelopeReplayScenarios(): BaselineScenario[] {
+  return BASELINE_SCENARIOS.filter((s) => ENVELOPE_REPLAY_SCENARIO_IDS.includes(s.id));
 }
 
 /** 逐场景失败行为门禁：A/B 各自跨 seed 求和后，逐项比较 empty/truncated/errors/timeouts/非法工具/解析失败不恶化 */
@@ -1260,10 +1508,12 @@ function evaluateScenarioGate(pair: {
 }
 
 /**
- * 运行真实模型 A/B replay（dry-run 或真实模型）。
+ * 运行真实模型 A/B/B0/C replay（dry-run 或真实模型）。
  *
  * 默认使用 dry-run stub（零 API）。真实模型需显式传入 `modelFn`（经授权后）。
- * 3 高信号场景 × `seeds` 个 seed × A/B 成对。
+ * 场景默认取高信号集（SC1/SC6/SC7）；Phase 5.3 envelope replay 需显式传入
+ * `getEnvelopeReplayScenarios()`（SC2/SC5/SC7）或经 `scenarios` 传入目标场景。
+ * 每场景 × 每 seed × A/B/B0/C 四臂成对。
  */
 export async function runRealToolAbReplay(options: {
   modelFn?: ToolAbModelFn;
@@ -1273,14 +1523,22 @@ export async function runRealToolAbReplay(options: {
 } = {}): Promise<RealToolAbComparison> {
   const seeds = options.seeds ?? [0, 1, 2];
   const scenarioPool = options.scenarios ?? BASELINE_SCENARIOS;
-  const scenarios = scenarioPool.filter((s) => HIGH_SIGNAL_SCENARIO_IDS.includes(s.id));
+  // 显式传入 scenarios 时信任调用方（Phase 5.3 传 SC2/SC5/SC7）；否则过滤到高信号集。
+  const scenarios = options.scenarios
+    ? scenarioPool
+    : scenarioPool.filter((s) => HIGH_SIGNAL_SCENARIO_IDS.includes(s.id));
   const providedModelFn = options.modelFn;
 
   const pairs: RealToolAbPair[] = [];
   for (const scenario of scenarios) {
-    const armMetrics: Record<"A" | "B", RealToolAbScenarioMetrics[]> = { A: [], B: [] };
+    const armMetrics: Record<RealToolAbArm, RealToolAbScenarioMetrics[]> = {
+      A: [],
+      B: [],
+      B0: [],
+      C: [],
+    };
     for (const seed of seeds) {
-      for (const arm of ["A", "B"] as const) {
+      for (const arm of ["A", "B", "B0", "C"] as const) {
         const modelFn = providedModelFn ?? createDryRunModel(scenario, arm);
         const metrics = await runRealToolAbScenario({
           scenario,
@@ -1296,10 +1554,22 @@ export async function runRealToolAbReplay(options: {
       category: scenario.category,
       A: armMetrics.A,
       B: armMetrics.B,
+      B0: armMetrics.B0,
+      C: armMetrics.C,
       scenarioGate: evaluateScenarioGate({
         scenarioId: scenario.id,
         A: armMetrics.A,
         B: armMetrics.B,
+      }),
+      scenarioGateB0: evaluateScenarioGate({
+        scenarioId: scenario.id,
+        A: armMetrics.A,
+        B: armMetrics.B0,
+      }),
+      scenarioGateC: evaluateScenarioGate({
+        scenarioId: scenario.id,
+        A: armMetrics.A,
+        B: armMetrics.C,
       }),
     });
   }
@@ -1307,16 +1577,39 @@ export async function runRealToolAbReplay(options: {
   // 跨全部场景 × 全部 seed 聚合（保证 3-seed 都参与门槛判定）
   const A = aggregateRealArm(pairs.flatMap((p) => p.A));
   const B = aggregateRealArm(pairs.flatMap((p) => p.B));
+  const B0 = aggregateRealArm(pairs.flatMap((p) => p.B0));
+  const C = aggregateRealArm(pairs.flatMap((p) => p.C));
   const gate = evaluateRealGate(A, B, pairs.map((p) => p.scenarioGate));
+  const gateB0 = evaluateRealGate(A, B0, pairs.map((p) => p.scenarioGateB0));
+  const gateC = evaluateRealGate(A, C, pairs.map((p) => p.scenarioGateC), "C");
+  const envelopeGate = evaluateEnvelopeRealGate(B, C, pairs);
 
   return {
     schema: "tool-ab-real-comparison/v1",
     timestamp: options.timestamp ?? new Date().toISOString(),
-    phase: "phase4-tool-ab-real",
+    phase: providedModelFn ? "phase5-3-envelope-real" : "phase4-tool-ab-real",
     mode: providedModelFn ? "real" : "dry-run",
     scenarios: pairs,
-    aggregation: { A, B },
+    aggregation: { A, B, B0, C },
     gate,
+    gateB0,
+    gateC,
+    envelopeGate,
+    guidanceDelta: {
+      schemaTokenCost: { B: B.schemaTokenCost, B0: B0.schemaTokenCost },
+      invalidIntents: { B: B.invalidIntents, B0: B0.invalidIntents },
+      invalidToolSelections: { B: B.invalidToolSelections, B0: B0.invalidToolSelections },
+      totalCalls: { B: B.totalCalls, B0: B0.totalCalls },
+      totalDuplicateQueries: { B: B.totalDuplicateQueries, B0: B0.totalDuplicateQueries },
+      avgCoverageRatio: { B: B.avgCoverageRatio, B0: B0.avgCoverageRatio },
+      firstValidEvidenceLatencyMs: {
+        B: B.firstValidEvidenceLatencyMs,
+        B0: B0.firstValidEvidenceLatencyMs,
+      },
+      emptyResults: { B: B.emptyResults, B0: B0.emptyResults },
+      errors: { B: B.errors, B0: B0.errors },
+      stopRate: { B: B.stopRate, B0: B0.stopRate },
+    },
   };
 }
 
@@ -1330,33 +1623,43 @@ export function formatRealToolAbJson(comparison: RealToolAbComparison): string {
 
 export function formatRealToolAbMarkdown(comparison: RealToolAbComparison): string {
   const lines: string[] = [];
-  lines.push("# NovelOS Phase 4.2 真实模型 A/B 对比报告（specialized-9-tools vs typed facade）");
+  lines.push("# NovelOS Phase 5.3 真实模型 A/B/B0/C 对比报告（specialized-9-tools vs typed facade vs compact envelope）");
   lines.push("");
   lines.push(`**schema**：${comparison.schema}`);
   lines.push(`**时间**：${comparison.timestamp}`);
   lines.push(`**阶段**：${comparison.phase}`);
   lines.push(`**模式**：${comparison.mode === "dry-run" ? "dry-run（确定性 stub，零 API）" : "real（真实模型，需授权）"}`);
   lines.push("");
+  lines.push("> 四臂：A=9 专用工具（raw），B=受引导 facade（raw），B0=无引导 facade（raw），C=受引导 facade + compact envelope。");
+  lines.push("> Phase 5.3 目标：验证真实模型对 compact envelope 的理解不下降（停止率/查询精度/事实覆盖），");
+  lines.push("> 并把「单场景/单调用结果膨胀」纳入门禁（C vs B，见下方 envelope 门禁）。");
+  lines.push("");
 
   // 真实模式：采样/路由 provenance（requested route / provider / model / effective sampling）
   if (comparison.mode === "real") {
     lines.push("## 采样与路由 provenance");
     lines.push("");
-    lines.push("| 项目 | A 组（9 专用工具） | B 组（typed facade） |");
-    lines.push("|------|------|------|");
-    const prov = (arm: "A" | "B") => comparison.aggregation[arm].provenance;
+    lines.push("| 项目 | A 组（9 专用工具） | B 组（受引导 facade） | C 组（facade+compact envelope） |");
+    lines.push("|------|------|------|------|");
+    const prov = (arm: "A" | "B" | "C") => comparison.aggregation[arm].provenance;
     const pA = prov("A");
     const pB = prov("B");
-    lines.push(`| requested route | ${pA?.route ?? "unmeasured"} | ${pB?.route ?? "unmeasured"} |`);
-    lines.push(`| actual provider | ${pA?.provider ?? "unmeasured"} | ${pB?.provider ?? "unmeasured"} |`);
-    lines.push(`| actual model | ${pA?.model ?? "unmeasured"} | ${pB?.model ?? "unmeasured"} |`);
-    lines.push(`| effective temperature | ${pA?.temperature ?? "unmeasured"} | ${pB?.temperature ?? "unmeasured"} |`);
-    lines.push(`| seed 透传 | ${pA?.seedApplied ? "是" : "否"} | ${pB?.seedApplied ? "是" : "否"} |`);
-    lines.push(`| seed 被支持 | ${pA?.seedSupported ? "是" : "否"} | ${pB?.seedSupported ? "是" : "否"} |`);
-    lines.push(`| maxTokens | ${pA?.maxTokens ?? "unmeasured"} | ${pB?.maxTokens ?? "unmeasured"} |`);
-    lines.push(`| fallback 关闭 | ${pA?.fallbackDisabled ? "是" : "否"} | ${pB?.fallbackDisabled ? "是" : "否"} |`);
+    const pC = prov("C");
+    const fp = (arm: "A" | "B" | "C") => comparison.aggregation[arm].fingerprint ?? "unmeasured";
+    lines.push(`| fingerprint | ${fp("A")} | ${fp("B")} | ${fp("C")} |`);
+    lines.push(`| requested route | ${pA?.route ?? "unmeasured"} | ${pB?.route ?? "unmeasured"} | ${pC?.route ?? "unmeasured"} |`);
+    lines.push(`| actual provider | ${pA?.provider ?? "unmeasured"} | ${pB?.provider ?? "unmeasured"} | ${pC?.provider ?? "unmeasured"} |`);
+    lines.push(`| actual model | ${pA?.model ?? "unmeasured"} | ${pB?.model ?? "unmeasured"} | ${pC?.model ?? "unmeasured"} |`);
+    lines.push(`| effective temperature | ${pA?.temperature ?? "unmeasured"} | ${pB?.temperature ?? "unmeasured"} | ${pC?.temperature ?? "unmeasured"} |`);
+    lines.push(`| seed 透传 | ${pA?.seedApplied ? "是" : "否"} | ${pB?.seedApplied ? "是" : "否"} | ${pC?.seedApplied ? "是" : "否"} |`);
+    lines.push(`| seed 被支持 | ${pA?.seedSupported ? "是" : "否"} | ${pB?.seedSupported ? "是" : "否"} | ${pC?.seedSupported ? "是" : "否"} |`);
+    lines.push(`| maxTokens | ${pA?.maxTokens ?? "unmeasured"} | ${pB?.maxTokens ?? "unmeasured"} | ${pC?.maxTokens ?? "unmeasured"} |`);
+    lines.push(`| fallback 关闭 | ${pA?.fallbackDisabled ? "是" : "否"} | ${pB?.fallbackDisabled ? "是" : "否"} | ${pC?.fallbackDisabled ? "是" : "否"} |`);
     lines.push("");
-    const seedNote = pA?.seedSupported === false || pB?.seedSupported === false
+    lines.push(`| 工具模式 | ${comparison.aggregation.A.toolMode ?? "n/a"} | ${comparison.aggregation.B.toolMode ?? "n/a"} | ${comparison.aggregation.C.toolMode ?? "n/a"} |`);
+    lines.push(`| 渲染模式 | ${comparison.aggregation.A.renderMode ?? "n/a"} | ${comparison.aggregation.B.renderMode ?? "n/a"} | ${comparison.aggregation.C.renderMode ?? "n/a"} |`);
+    lines.push("");
+    const seedNote = pA?.seedSupported === false || pB?.seedSupported === false || pC?.seedSupported === false
       ? "> ⚠️ 当前 provider 协议不支持 seed：\"3 seed\"仅作标签，实际为非确定性配对实验，不能视为受控复现。"
       : "> seed 被 provider 支持并透传：3 seed 为受控复现采样。";
     lines.push(seedNote);
@@ -1381,7 +1684,40 @@ export function formatRealToolAbMarkdown(comparison: RealToolAbComparison): stri
   lines.push(`| 逐场景失败门禁全通过 | ${comparison.gate.scenarioGatesPassed ? "✓" : "✗"} | ${comparison.gate.details.scenarioGates} |`);
   lines.push(`| 至少一项负担改善 | ${comparison.gate.burdenImproved ? "✓" : "✗"} | ${comparison.gate.details.burdenImproved} |`);
   lines.push("");
-  lines.push(`**全部通过**：${comparison.gate.allPassed ? "是" : "否"}`);
+  lines.push(`**全部通过（B vs A）**：${comparison.gate.allPassed ? "是" : "否"}`);
+  lines.push("");
+  lines.push("## C 组门禁（compact envelope facade vs A：9 专用工具）");
+  lines.push("");
+  lines.push("| 门禁 | 结论 | 详情 |");
+  lines.push("|------|------|------|");
+  lines.push(`| mustVerify 覆盖率不降级 | ${comparison.gateC.mustVerifyCoverageNotDegraded ? "✓" : "✗"} | ${comparison.gateC.details.mustVerifyCoverage} |`);
+  lines.push(`| 有效证据引用率不降级 | ${comparison.gateC.sourceRefCompletenessNotDegraded ? "✓" : "✗"} | ${comparison.gateC.details.sourceRefCompleteness} |`);
+  lines.push(`| evidenceLevel 命中率不降级 | ${comparison.gateC.evidenceLevelNotDegraded ? "✓" : "✗"} | ${comparison.gateC.details.evidenceLevel} |`);
+  lines.push(`| 失败（errors）不恶化 | ${comparison.gateC.errorsNotWorsened ? "✓" : "✗"} | ${comparison.gateC.details.errors} |`);
+  lines.push(`| 空结果（empty）不恶化 | ${comparison.gateC.emptyResultsNotWorsened ? "✓" : "✗"} | ${comparison.gateC.details.emptyResults} |`);
+  lines.push(`| 截断（truncated）不恶化 | ${comparison.gateC.truncatedNotWorsened ? "✓" : "✗"} | ${comparison.gateC.details.truncated} |`);
+  lines.push(`| 非法工具选择不恶化 | ${comparison.gateC.invalidToolSelectionsNotWorsened ? "✓" : "✗"} | ${comparison.gateC.details.invalidToolSelections} |`);
+  lines.push(`| 解析失败不恶化 | ${comparison.gateC.parseErrorsNotWorsened ? "✓" : "✗"} | ${comparison.gateC.details.parseErrors} |`);
+  lines.push(`| 逐场景失败门禁全通过 | ${comparison.gateC.scenarioGatesPassed ? "✓" : "✗"} | ${comparison.gateC.details.scenarioGates} |`);
+  lines.push(`| C 全部通过（vs A） | ${comparison.gateC.allPassed ? "✓" : "✗"} | |`);
+  lines.push("");
+  lines.push("## Envelope 门禁（C vs B：compact envelope 不膨胀 + 不降级）");
+  lines.push("");
+  lines.push(`> 预注册门槛：` +
+    `单场景/单调用许可膨胀 = B × ${ENVELOPE_EXPANSION_FACTOR} + ${ENVELOPE_EXPANSION_BUFFER}（字符）。` +
+    `聚合下降不得掩盖局部膨胀，故逐场景、逐单调用校验。`);
+  lines.push("");
+  lines.push("| 门禁 | 结论 | 详情 |");
+  lines.push("|------|------|------|");
+  lines.push(`| 聚合结果字符不膨胀（C≤B） | ${comparison.envelopeGate.resultCharsNotWorsened ? "✓" : "✗"} | ${comparison.envelopeGate.details.resultChars} |`);
+  lines.push(`| 单场景无膨胀 | ${comparison.envelopeGate.noScenarioExpansion ? "✓" : "✗"} | ${comparison.envelopeGate.details.scenarioExpansion} |`);
+  lines.push(`| 单调用无膨胀 | ${comparison.envelopeGate.noSingleCallExpansion ? "✓" : "✗"} | ${comparison.envelopeGate.details.singleCallExpansion} |`);
+  lines.push(`| mustVerify 覆盖率不降级 | ${comparison.envelopeGate.coverageNotDegraded ? "✓" : "✗"} | ${comparison.envelopeGate.details.coverage} |`);
+  lines.push(`| 有效证据引用率不降级 | ${comparison.envelopeGate.sourceRefNotDegraded ? "✓" : "✗"} | ${comparison.envelopeGate.details.sourceRef} |`);
+  lines.push(`| 停止率不显著下降 | ${comparison.envelopeGate.stopRateNotDegraded ? "✓" : "✗"} | ${comparison.envelopeGate.details.stopRate} |`);
+  lines.push(`| 失败行为不恶化 | ${comparison.envelopeGate.failureNotDegraded ? "✓" : "✗"} | ${comparison.envelopeGate.details.failure} |`);
+  lines.push("");
+  lines.push(`**Envelope 门禁全部通过**：${comparison.envelopeGate.allPassed ? "是" : "否"}`);
   lines.push("");
   lines.push("## 逐场景失败行为门禁");
   lines.push("");
@@ -1394,36 +1730,89 @@ export function formatRealToolAbMarkdown(comparison: RealToolAbComparison): stri
   lines.push("");
   lines.push("## 聚合指标");
   lines.push("");
-  lines.push("| 指标 | A 组（9 专用工具） | B 组（typed facade） |");
-  lines.push("|------|------|------|");
+  lines.push("| 指标 | A 组（9 专用工具） | B 组（受引导 facade） | B0 组（无引导 facade） | C 组（facade+compact envelope） |");
+  lines.push("|------|------|------|------|------|");
   const agg = comparison.aggregation;
-  lines.push(`| schema token 成本 | ${agg.A.schemaTokenCost} | ${agg.B.schemaTokenCost} |`);
-  lines.push(`| 可见工具数 | ${agg.A.toolSurface} | ${agg.B.toolSurface} |`);
-  lines.push(`| 总调用 | ${agg.A.totalCalls} | ${agg.B.totalCalls} |`);
-  lines.push(`| 重复查询 | ${agg.A.totalDuplicateQueries} | ${agg.B.totalDuplicateQueries} |`);
-  lines.push(`| 非法工具选择 | ${agg.A.invalidToolSelections} | ${agg.B.invalidToolSelections} |`);
-  lines.push(`| 非法 intent | ${agg.A.invalidIntents} | ${agg.B.invalidIntents} |`);
-  lines.push(`| 参数解析/路由失败 | ${agg.A.parseErrors} | ${agg.B.parseErrors} |`);
-  lines.push(`| 首次有效证据平均延迟(ms) | ${agg.A.firstValidEvidenceLatencyMs?.toFixed(0) ?? "unmeasured"} | ${agg.B.firstValidEvidenceLatencyMs?.toFixed(0) ?? "unmeasured"} |`);
-  lines.push(`| 总返回字符 | ${agg.A.totalResultChars} | ${agg.B.totalResultChars} |`);
-  lines.push(`| 估算 token | ${agg.A.totalEstimateTokens} | ${agg.B.totalEstimateTokens} |`);
-  lines.push(`| 空结果 | ${agg.A.emptyResults} | ${agg.B.emptyResults} |`);
-  lines.push(`| 结果截断 | ${agg.A.truncatedResults} | ${agg.B.truncatedResults} |`);
-  lines.push(`| 超时 | ${agg.A.timeouts} | ${agg.B.timeouts} |`);
-  lines.push(`| 失败 | ${agg.A.errors} | ${agg.B.errors} |`);
-  lines.push(`| 有效 sourceRef | ${agg.A.sourceRefsValid} | ${agg.B.sourceRefsValid} |`);
-  lines.push(`| 无效 sourceRef | ${agg.A.sourceRefsInvalid} | ${agg.B.sourceRefsInvalid} |`);
-  lines.push(`| 有效证据引用率 | ${agg.A.sourceRefCompleteness.toFixed(3)} | ${agg.B.sourceRefCompleteness.toFixed(3)} |`);
-  lines.push(`| 平均 mustVerify 覆盖率 | ${agg.A.avgCoverageRatio.toFixed(3)} | ${agg.B.avgCoverageRatio.toFixed(3)} |`);
+  const fmtLatency = (v: number | null) => (v === null ? "unmeasured" : v.toFixed(0));
+  lines.push(`| schema token 成本 | ${agg.A.schemaTokenCost} | ${agg.B.schemaTokenCost} | ${agg.B0.schemaTokenCost} | ${agg.C.schemaTokenCost} |`);
+  lines.push(`| 可见工具数 | ${agg.A.toolSurface} | ${agg.B.toolSurface} | ${agg.B0.toolSurface} | ${agg.C.toolSurface} |`);
+  lines.push(`| 总调用 | ${agg.A.totalCalls} | ${agg.B.totalCalls} | ${agg.B0.totalCalls} | ${agg.C.totalCalls} |`);
+  lines.push(`| 重复查询 | ${agg.A.totalDuplicateQueries} | ${agg.B.totalDuplicateQueries} | ${agg.B0.totalDuplicateQueries} | ${agg.C.totalDuplicateQueries} |`);
+  lines.push(`| 非法工具选择 | ${agg.A.invalidToolSelections} | ${agg.B.invalidToolSelections} | ${agg.B0.invalidToolSelections} | ${agg.C.invalidToolSelections} |`);
+  lines.push(`| 非法 intent | ${agg.A.invalidIntents} | ${agg.B.invalidIntents} | ${agg.B0.invalidIntents} | ${agg.C.invalidIntents} |`);
+  lines.push(`| 参数解析/路由失败 | ${agg.A.parseErrors} | ${agg.B.parseErrors} | ${agg.B0.parseErrors} | ${agg.C.parseErrors} |`);
+  lines.push(`| 首次有效证据平均延迟(ms) | ${fmtLatency(agg.A.firstValidEvidenceLatencyMs)} | ${fmtLatency(agg.B.firstValidEvidenceLatencyMs)} | ${fmtLatency(agg.B0.firstValidEvidenceLatencyMs)} | ${fmtLatency(agg.C.firstValidEvidenceLatencyMs)} |`);
+  lines.push(`| 总返回字符 | ${agg.A.totalResultChars} | ${agg.B.totalResultChars} | ${agg.B0.totalResultChars} | ${agg.C.totalResultChars} |`);
+  lines.push(`| 估算 token | ${agg.A.totalEstimateTokens} | ${agg.B.totalEstimateTokens} | ${agg.B0.totalEstimateTokens} | ${agg.C.totalEstimateTokens} |`);
+  lines.push(`| 空结果 | ${agg.A.emptyResults} | ${agg.B.emptyResults} | ${agg.B0.emptyResults} | ${agg.C.emptyResults} |`);
+  lines.push(`| 结果截断 | ${agg.A.truncatedResults} | ${agg.B.truncatedResults} | ${agg.B0.truncatedResults} | ${agg.C.truncatedResults} |`);
+  lines.push(`| 超时 | ${agg.A.timeouts} | ${agg.B.timeouts} | ${agg.B0.timeouts} | ${agg.C.timeouts} |`);
+  lines.push(`| 失败 | ${agg.A.errors} | ${agg.B.errors} | ${agg.B0.errors} | ${agg.C.errors} |`);
+  lines.push(`| 有效 sourceRef | ${agg.A.sourceRefsValid} | ${agg.B.sourceRefsValid} | ${agg.B0.sourceRefsValid} | ${agg.C.sourceRefsValid} |`);
+  lines.push(`| 无效 sourceRef | ${agg.A.sourceRefsInvalid} | ${agg.B.sourceRefsInvalid} | ${agg.B0.sourceRefsInvalid} | ${agg.C.sourceRefsInvalid} |`);
+  lines.push(`| 有效证据引用率 | ${agg.A.sourceRefCompleteness.toFixed(3)} | ${agg.B.sourceRefCompleteness.toFixed(3)} | ${agg.B0.sourceRefCompleteness.toFixed(3)} | ${agg.C.sourceRefCompleteness.toFixed(3)} |`);
+  lines.push(`| 平均 mustVerify 覆盖率 | ${agg.A.avgCoverageRatio.toFixed(3)} | ${agg.B.avgCoverageRatio.toFixed(3)} | ${agg.B0.avgCoverageRatio.toFixed(3)} | ${agg.C.avgCoverageRatio.toFixed(3)} |`);
+  lines.push(`| 停止率（主动收敛） | ${(agg.A.stopRate * 100).toFixed(0)}% (${agg.A.stopCount}/${agg.A.scenarioCount}) | ${(agg.B.stopRate * 100).toFixed(0)}% (${agg.B.stopCount}/${agg.B.scenarioCount}) | ${(agg.B0.stopRate * 100).toFixed(0)}% (${agg.B0.stopCount}/${agg.B0.scenarioCount}) | ${(agg.C.stopRate * 100).toFixed(0)}% (${agg.C.stopCount}/${agg.C.scenarioCount}) |`);
+  lines.push(`| 工具模式 | ${agg.A.toolMode ?? "n/a"} | ${agg.B.toolMode ?? "n/a"} | ${agg.B0.toolMode ?? "n/a"} | ${agg.C.toolMode ?? "n/a"} |`);
+  lines.push(`| 渲染模式 | ${agg.A.renderMode ?? "n/a"} | ${agg.B.renderMode ?? "n/a"} | ${agg.B0.renderMode ?? "n/a"} | ${agg.C.renderMode ?? "n/a"} |`);
+  lines.push("");
+
+  // B0 门禁（A vs B0）与 guidanceDelta（B vs B0：描述引导收益）
+  lines.push("## B0 门禁（无引导 facade vs A）与描述引导收益（B vs B0）");
+  lines.push("");
+  lines.push("| B0 门禁 | 结论 | 详情 |");
+  lines.push("|------|------|------|");
+  lines.push(`| mustVerify 覆盖率不降级 | ${comparison.gateB0.mustVerifyCoverageNotDegraded ? "✓" : "✗"} | ${comparison.gateB0.details.mustVerifyCoverage} |`);
+  lines.push(`| 有效证据引用率不降级 | ${comparison.gateB0.sourceRefCompletenessNotDegraded ? "✓" : "✗"} | ${comparison.gateB0.details.sourceRefCompleteness} |`);
+  lines.push(`| evidenceLevel 命中率不降级 | ${comparison.gateB0.evidenceLevelNotDegraded ? "✓" : "✗"} | ${comparison.gateB0.details.evidenceLevel} |`);
+  lines.push(`| 失败（errors）不恶化 | ${comparison.gateB0.errorsNotWorsened ? "✓" : "✗"} | ${comparison.gateB0.details.errors} |`);
+  lines.push(`| 空结果（empty）不恶化 | ${comparison.gateB0.emptyResultsNotWorsened ? "✓" : "✗"} | ${comparison.gateB0.details.emptyResults} |`);
+  lines.push(`| 截断（truncated）不恶化 | ${comparison.gateB0.truncatedNotWorsened ? "✓" : "✗"} | ${comparison.gateB0.details.truncated} |`);
+  lines.push(`| 非法工具选择不恶化 | ${comparison.gateB0.invalidToolSelectionsNotWorsened ? "✓" : "✗"} | ${comparison.gateB0.details.invalidToolSelections} |`);
+  lines.push(`| 解析失败不恶化 | ${comparison.gateB0.parseErrorsNotWorsened ? "✓" : "✗"} | ${comparison.gateB0.details.parseErrors} |`);
+  lines.push(`| 逐场景失败门禁全通过 | ${comparison.gateB0.scenarioGatesPassed ? "✓" : "✗"} | ${comparison.gateB0.details.scenarioGates} |`);
+  lines.push(`| B0 全部通过 | ${comparison.gateB0.allPassed ? "✓" : "✗"} | |`);
+  lines.push("");
+
+  const gd = comparison.guidanceDelta;
+  lines.push("### 描述引导收益（guidanceDelta：B 受引导 vs B0 无引导）");
+  lines.push("");
+  lines.push("> 符号约定：B 相对 B0 的差异。**负值 = B 更优**（受引导减少无效调用/负担），逼近 0 = 引导无差异，单入口收益独立于引导。");
+  lines.push("");
+  lines.push("| 指标 | B（受引导） | B0（无引导） | B−B0 | 判断 |");
+  lines.push("|------|------|------|------|------|");
+  const deltaRow = (label: string, bVal: number, b0Val: number, lowerBetter = true) => {
+    const d = bVal - b0Val;
+    const verdict = lowerBetter
+      ? (d < 0 ? "引导减少" : d > 0 ? "引导增加" : "无差异")
+      : (d > 0 ? "引导提升" : d < 0 ? "引导降低" : "无差异");
+    lines.push(`| ${label} | ${bVal} | ${b0Val} | ${d > 0 ? "+" : ""}${d} | ${verdict} |`);
+  };
+  deltaRow("schema token 成本", gd.schemaTokenCost.B, gd.schemaTokenCost.B0);
+  deltaRow("非法 intent", gd.invalidIntents.B, gd.invalidIntents.B0);
+  deltaRow("非法工具选择", gd.invalidToolSelections.B, gd.invalidToolSelections.B0);
+  deltaRow("总调用", gd.totalCalls.B, gd.totalCalls.B0);
+  deltaRow("重复查询", gd.totalDuplicateQueries.B, gd.totalDuplicateQueries.B0);
+  deltaRow("空结果", gd.emptyResults.B, gd.emptyResults.B0);
+  deltaRow("失败", gd.errors.B, gd.errors.B0);
+  deltaRow("平均 mustVerify 覆盖率", gd.avgCoverageRatio.B, gd.avgCoverageRatio.B0, false);
+  deltaRow("停止率（主动收敛）", gd.stopRate.B, gd.stopRate.B0, false);
+  const bLat = gd.firstValidEvidenceLatencyMs.B;
+  const b0Lat = gd.firstValidEvidenceLatencyMs.B0;
+  lines.push(
+    `| 首证据延迟(ms) | ${bLat === null ? "unmeasured" : bLat.toFixed(0)} | ${b0Lat === null ? "unmeasured" : b0Lat.toFixed(0)} | ` +
+      `${bLat !== null && b0Lat !== null ? (bLat - b0Lat > 0 ? "+" : "") + (bLat - b0Lat).toFixed(0) : "n/a"} | ` +
+      `${bLat !== null && b0Lat !== null && bLat < b0Lat ? "引导更快" : bLat !== null && b0Lat !== null && bLat > b0Lat ? "引导更慢" : "n/a"} |`,
+  );
   lines.push("");
   lines.push("### 无效 sourceRef 分类明细（预期分类，非失败率）");
   lines.push("");
-  lines.push("| 分类 | A 组 | B 组 | 说明 |");
-  lines.push("|------|------|------|------|");
-  lines.push(`| no_match | ${agg.A.invalidSourceRefByCategory.no_match} | ${agg.B.invalidSourceRefByCategory.no_match} | 检索无匹配，预期输出 |`);
-  lines.push(`| profile_only | ${agg.A.invalidSourceRefByCategory.profile_only} | ${agg.B.invalidSourceRefByCategory.profile_only} | 风格档案降级引用 |`);
-  lines.push(`| empty | ${agg.A.invalidSourceRefByCategory.empty} | ${agg.B.invalidSourceRefByCategory.empty} | 空结果/空引用 |`);
-  lines.push(`| other | ${agg.A.invalidSourceRefByCategory.other} | ${agg.B.invalidSourceRefByCategory.other} | 其他无效形态 |`);
+  lines.push("| 分类 | A 组 | B 组 | B0 组 | C 组 | 说明 |");
+  lines.push("|------|------|------|------|------|------|");
+  lines.push(`| no_match | ${agg.A.invalidSourceRefByCategory.no_match} | ${agg.B.invalidSourceRefByCategory.no_match} | ${agg.B0.invalidSourceRefByCategory.no_match} | ${agg.C.invalidSourceRefByCategory.no_match} | 检索无匹配，预期输出 |`);
+  lines.push(`| profile_only | ${agg.A.invalidSourceRefByCategory.profile_only} | ${agg.B.invalidSourceRefByCategory.profile_only} | ${agg.B0.invalidSourceRefByCategory.profile_only} | ${agg.C.invalidSourceRefByCategory.profile_only} | 风格档案降级引用 |`);
+  lines.push(`| empty | ${agg.A.invalidSourceRefByCategory.empty} | ${agg.B.invalidSourceRefByCategory.empty} | ${agg.B0.invalidSourceRefByCategory.empty} | ${agg.C.invalidSourceRefByCategory.empty} | 空结果/空引用 |`);
+  lines.push(`| other | ${agg.A.invalidSourceRefByCategory.other} | ${agg.B.invalidSourceRefByCategory.other} | ${agg.B0.invalidSourceRefByCategory.other} | ${agg.C.invalidSourceRefByCategory.other} | 其他无效形态 |`);
   lines.push("");
   lines.push("> 有效证据引用率 = 有效 sourceRef / 总调用。分母含预期的 no_match / profile_only / empty 分类，");
   lines.push("> 它们代表\"本次调用未产生有效事实引用\"，是工具在特定查询下的正常输出，**不是普通失败率**。");
@@ -1433,31 +1822,39 @@ export function formatRealToolAbMarkdown(comparison: RealToolAbComparison): stri
   for (const p of comparison.scenarios) {
     lines.push(`### ${p.scenarioId}（${p.category}）`);
     lines.push("");
-    lines.push("| seed | A 首证 | B 首证 | A 覆盖 | B 覆盖 | schema A/B | 非法工具 A/B | 重复 A/B |");
-    lines.push("|------|--------|--------|--------|--------|-----------|-------------|----------|");
-    const n = Math.max(p.A.length, p.B.length);
+    lines.push("| seed | A 首证 | B 首证 | B0 首证 | C 首证 | A 覆盖 | B 覆盖 | B0 覆盖 | C 覆盖 | schema A/B/B0/C | 非法工具 A/B/C | 重复 A/B/C | 结果字符 B/C |");
+    lines.push("|------|--------|--------|---------|--------|--------|--------|---------|--------|---------------|---------------|-----------|------------|");
+    const n = Math.max(p.A.length, p.B.length, p.B0.length, p.C.length);
     for (let i = 0; i < n; i++) {
       const a = p.A[i];
       const b = p.B[i];
+      const b0 = p.B0[i];
+      const c = p.C[i];
       const aFirst = a?.firstValidEvidence ? `#${a.firstValidEvidence.callIndex}(${a.firstValidEvidence.cumulativeLatencyMs}ms)` : "无";
       const bFirst = b?.firstValidEvidence ? `#${b.firstValidEvidence.callIndex}(${b.firstValidEvidence.cumulativeLatencyMs}ms)` : "无";
+      const b0First = b0?.firstValidEvidence ? `#${b0.firstValidEvidence.callIndex}(${b0.firstValidEvidence.cumulativeLatencyMs}ms)` : "无";
+      const cFirst = c?.firstValidEvidence ? `#${c.firstValidEvidence.callIndex}(${c.firstValidEvidence.cumulativeLatencyMs}ms)` : "无";
       lines.push(
-        `| ${i} | ${aFirst} | ${bFirst} | ${a?.mustVerify.coverageRatio.toFixed(3)} | ${b?.mustVerify.coverageRatio.toFixed(3)} | ${a?.schemaTokenCost}/${b?.schemaTokenCost} | ${a?.invalidToolSelections}/${b?.invalidToolSelections} | ${a?.totalDuplicateQueries}/${b?.totalDuplicateQueries} |`,
+        `| ${i} | ${aFirst} | ${bFirst} | ${b0First} | ${cFirst} | ${a?.mustVerify.coverageRatio.toFixed(3)} | ${b?.mustVerify.coverageRatio.toFixed(3)} | ${b0?.mustVerify.coverageRatio.toFixed(3)} | ${c?.mustVerify.coverageRatio.toFixed(3)} | ${a?.schemaTokenCost}/${b?.schemaTokenCost}/${b0?.schemaTokenCost}/${c?.schemaTokenCost} | ${a?.invalidToolSelections}/${b?.invalidToolSelections}/${c?.invalidToolSelections} | ${a?.totalDuplicateQueries}/${b?.totalDuplicateQueries}/${c?.totalDuplicateQueries} | ${b?.totalResultChars}/${c?.totalResultChars} |`,
       );
     }
     const aAgg = aggregateRealArm(p.A);
     const bAgg = aggregateRealArm(p.B);
+    const b0Agg = aggregateRealArm(p.B0);
+    const cAgg = aggregateRealArm(p.C);
     lines.push("");
-    lines.push(`- 场景聚合：A 平均覆盖=${aAgg.avgCoverageRatio.toFixed(3)}，B=${bAgg.avgCoverageRatio.toFixed(3)}；有效证据引用率 A=${aAgg.sourceRefCompleteness.toFixed(3)}，B=${bAgg.sourceRefCompleteness.toFixed(3)}`);
-    lines.push(`- A 首证平均延迟=${aAgg.firstValidEvidenceLatencyMs === null ? "unmeasured" : aAgg.firstValidEvidenceLatencyMs.toFixed(0)}ms；B=${bAgg.firstValidEvidenceLatencyMs === null ? "unmeasured" : bAgg.firstValidEvidenceLatencyMs.toFixed(0)}ms`);
+    lines.push(`- 场景聚合：A 平均覆盖=${aAgg.avgCoverageRatio.toFixed(3)}，B=${bAgg.avgCoverageRatio.toFixed(3)}，B0=${b0Agg.avgCoverageRatio.toFixed(3)}，C=${cAgg.avgCoverageRatio.toFixed(3)}；有效证据引用率 A=${aAgg.sourceRefCompleteness.toFixed(3)}，B=${bAgg.sourceRefCompleteness.toFixed(3)}，B0=${b0Agg.sourceRefCompleteness.toFixed(3)}，C=${cAgg.sourceRefCompleteness.toFixed(3)}`);
+    lines.push(`- 场景总返回字符：B=${bAgg.totalResultChars}，C=${cAgg.totalResultChars}（envelope 单场景膨胀门槛见上方 envelope 门禁）`);
+    lines.push(`- A 首证平均延迟=${aAgg.firstValidEvidenceLatencyMs === null ? "unmeasured" : aAgg.firstValidEvidenceLatencyMs.toFixed(0)}ms；B=${bAgg.firstValidEvidenceLatencyMs === null ? "unmeasured" : bAgg.firstValidEvidenceLatencyMs.toFixed(0)}ms；B0=${b0Agg.firstValidEvidenceLatencyMs === null ? "unmeasured" : b0Agg.firstValidEvidenceLatencyMs.toFixed(0)}ms；C=${cAgg.firstValidEvidenceLatencyMs === null ? "unmeasured" : cAgg.firstValidEvidenceLatencyMs.toFixed(0)}ms`);
     lines.push("");
   }
   lines.push("## 说明");
   lines.push("");
   lines.push("- 本报告记录**模型自主决策**（非 oracle）：模型通过可见工具 schema 决定调用哪个工具/意图。");
   lines.push(`- 当前模式为 **${comparison.mode === "dry-run" ? "dry-run" : "real"}**${comparison.mode === "dry-run" ? "：确定性 stub 模型，零 API 调用，仅验证 runner 框架" : "：真实模型 replay，需授权" }。`);
-  lines.push("- 3 高信号场景（canon / mixed / low-risk）× 3 seed × A/B 成对。");
-  lines.push("- B 组 facade 为纯透传：检索/截断/nextQueryHint 由底层工具完成。");
+  lines.push(`- 场景：${comparison.scenarios.map((p) => p.scenarioId).join("，")} × ${comparison.aggregation.A.scenarioCount || 0} seed × A/B/B0/C 四臂成对。`);
+  lines.push("- B 组 facade 为纯透传：检索/截断/nextQueryHint 由底层工具完成；B0 为无 INTENT_USAGE 引导的对照（解耦单入口收益与描述引导收益）；C 在 B 基础上剪裁模型可见 content 为 compact envelope（details 不变）。");
+  lines.push("- Phase 5.3 关键：envelope 门禁逐场景/逐单调用校验「单场景/单调用结果膨胀」，聚合下降不得掩盖局部膨胀。");
   lines.push("");
   return lines.join("\n");
 }
@@ -1473,8 +1870,8 @@ export function buildRealToolAbTrajectory(comparison: RealToolAbComparison): Rec
   const out: Record<string, Array<{ type: string; timestamp: number; data: unknown }>> = {};
   const base = Date.now();
   for (const p of comparison.scenarios) {
-    for (const arm of ["A", "B"] as const) {
-      const metricsArr = arm === "A" ? p.A : p.B;
+    for (const arm of ["A", "B", "B0", "C"] as const) {
+      const metricsArr = arm === "A" ? p.A : arm === "B" ? p.B : arm === "B0" ? p.B0 : p.C;
       metricsArr.forEach((m, seedIdx) => {
         const key = `${p.scenarioId}:${arm}:${seedIdx}`;
         const entries: Array<{ type: string; timestamp: number; data: unknown }> = [];
@@ -1486,6 +1883,9 @@ export function buildRealToolAbTrajectory(comparison: RealToolAbComparison): Rec
             selectedTools: m.turns.filter((t) => t.selectedTool).map((t) => t.selectedTool),
             rejectedTools: [],
             visibleTools: m.turns.filter((t) => t.selectedTool).map((t) => t.selectedTool),
+            toolMode: m.toolMode,
+            renderMode: m.renderMode,
+            fingerprint: m.provenance ? [m.provenance.provider, m.provenance.model, m.provenance.route].filter(Boolean).join(":") : undefined,
           },
         });
         m.turns.forEach((t, idx) => {

@@ -117,6 +117,8 @@ export interface BaselineCallMetrics {
   timeout: boolean;
   isError: boolean;
   duplicateQuery: boolean;
+  /** 模型可见 content 文本（Phase 5.2 envelope 分析用：校验 C 臂内容压缩与「无结果」误报） */
+  contentText: string;
 }
 
 /** 单场景基线指标 */
@@ -554,6 +556,7 @@ export async function runScenarioWithTools(
           timeout: false,
           isError: true,
           duplicateQuery: false,
+          contentText: "",
         });
         continue;
       }
@@ -574,7 +577,7 @@ export async function runScenarioWithTools(
         isError,
         result,
       });
-      callMetrics.push(toBaselineCall(metrics));
+      callMetrics.push({ ...toBaselineCall(metrics), contentText: extractResultContentText(result) });
       allConfirmed.push(...collectConfirmedEvidences((result as { details?: unknown })?.details));
       if (call.mustVerify) mustVerifyItems.push(...call.mustVerify);
     }
@@ -647,7 +650,25 @@ export function toBaselineCall(metrics: ToolCallMetrics): BaselineCallMetrics {
     timeout: metrics.timeout,
     isError: metrics.isError,
     duplicateQuery: metrics.duplicateQuery,
+    contentText: "",
   };
+}
+
+/** 从工具 result 提取模型可见 content 文本（拼接所有 text 块） */
+function extractResultContentText(result: unknown): string {
+  if (!result || typeof result !== "object") return "";
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (c): c is { type: string; text: string } =>
+        !!c &&
+        typeof c === "object" &&
+        (c as { type?: string }).type === "text" &&
+        typeof (c as { text?: unknown }).text === "string",
+    )
+    .map((c) => c.text)
+    .join("");
 }
 
 /** 运行全部场景，产出完整基线 */

@@ -192,7 +192,7 @@ function computeFirstValidEvidence(m: BaselineScenarioMetrics): FirstEvidencePoi
 // 聚合
 // ============================================================================
 
-function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregation {
+export function aggregateArm(scenarios: BaselineScenarioMetrics[]): ToolAbArmAggregation {
   const uniqueTools = new Set<string>();
   let totalCalls = 0;
   let totalDuplicateQueries = 0;

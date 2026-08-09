@@ -26,7 +26,14 @@
 
 import { Type } from "typebox";
 import type { ToolProtocol, NarrativeToolResultDetails } from "./tool-protocol.js";
-import { createNarrativeTools, QUERY_NARRATIVE_PRODUCTION_NAME } from "./narrative-tools.js";
+import { renderCompactEnvelope } from "./tool-protocol.js";
+import {
+  createNarrativeTools,
+  QUERY_NARRATIVE_PRODUCTION_NAME,
+  CANON_CATEGORY_VALUES,
+  PROMISE_STATUS_VALUES,
+  PATTERN_TYPE_VALUES,
+} from "./narrative-tools.js";
 import type { NarrativeSearchService } from "../agent/narrative-search-service.js";
 
 // QUERY_NARRATIVE_PRODUCTION_NAME 单一来源见 narrative-tools.ts（避免环形依赖），
@@ -129,22 +136,38 @@ export const QUERY_NARRATIVE_PRODUCTION_INTENT_GUIDANCE: string =
  * execute 时按 intent 取出对应底层工具并调用其 execute()，把（intent 之外的）参数原样
  * 透传。返回的 details 与底层工具完全一致。
  *
- * @param ctx 需提供 searchService（与 createNarrativeTools 相同契约）
+ * @param ctx.searchService 与 createNarrativeTools 相同契约
+ * @param ctx.includeIntentGuidance 是否在工具 description 注入「何时使用/优先级/查询构造」
+ *   引导（INTENT_USAGE）。默认 true（受引导 facade）。B0 对照传 false 以解耦
+ *   "单入口收益"（interface surface）与"描述引导收益"（intent guidance）：
+ *   B0 仅含类型化 intent 联合，不含路由引导说明。
+ * @param ctx.useCompactEnvelope 是否用紧凑结果 envelope 渲染模型可见 content（默认 false）。
+ *   开启时只剪裁文本（renderCompactEnvelope），完整 details（sourceRef/evidenceLevel/
+ *   resultKind/truncated/nextQueryHint）原样保留供 verifier/canary 消费。与 facade 路由正交。
  */
 export function createQueryNarrativeProductionFacadeTool(ctx: {
   searchService: NarrativeSearchService;
+  includeIntentGuidance?: boolean;
+  useCompactEnvelope?: boolean;
 }): ToolProtocol {
+  const includeGuidance = ctx.includeIntentGuidance !== false;
+  const useEnvelope = ctx.useCompactEnvelope === true;
   const underlyingTools = createNarrativeTools({ searchService: ctx.searchService });
   const byName = new Map(underlyingTools.map((t) => [t.name, t]));
+
+  const guidanceBlock = includeGuidance
+    ? `\n各意图「何时使用/优先级」：\n${QUERY_NARRATIVE_PRODUCTION_INTENT_GUIDANCE}\n`
+    : "\n";
 
   return {
     name: QUERY_NARRATIVE_PRODUCTION_NAME,
     description:
       "统一叙事查询入口：按查询意图路由到对应的叙事专用工具。" +
-      "事实核验类查询**优先使用「跨源证据检索」意图**；返回的结果带来源引用与证据等级。\n" +
-      `各意图「何时使用/优先级」：\n${QUERY_NARRATIVE_PRODUCTION_INTENT_GUIDANCE}\n` +
+      "事实核验类查询**优先使用「跨源证据检索」意图**；返回的结果带来源引用与证据等级。" +
+      guidanceBlock +
       "查询构造：evidence/chapter_span 的 query 复用待验证事实原文短语（检索按子串匹配）；" +
-      "canon 意图传 category 返回该类全部事实。证据充分后立即输出终止标记，每回合只查一个事实。",
+      "canon 意图传 category 返回该类全部事实。必须逐项遍历 mustVerify 列出的全部待验证事实，逐项查询，" +
+      "全部覆盖后再输出终止标记；每次只查一个事实，不得在覆盖未完成时提前收敛。",
     label: "Query Narrative (Production Facade)",
     parameters: Type.Object({
       intent: Type.Union(
@@ -155,10 +178,25 @@ export function createQueryNarrativeProductionFacadeTool(ctx: {
         },
       ),
       query: Type.Optional(Type.String({ description: "搜索关键词/短语（跨源证据检索、章节原文检索意图使用）" })),
-      category: Type.Optional(Type.String({ description: "世界事实查询过滤类别：时间线/地点/实体/能力规则" })),
+      category: Type.Optional(
+        Type.Union(
+          CANON_CATEGORY_VALUES.map((v) => Type.Literal(v)),
+          { description: "世界事实查询过滤类别（query_canon 同枚举）" },
+        ),
+      ),
       characterId: Type.Optional(Type.String({ description: "角色标识/名称（角色状态查询、知识边界查询、声音证据查询意图使用）" })),
-      status: Type.Optional(Type.String({ description: "承诺账本查询过滤状态：进行中/推进/已兑现/已破坏" })),
-      patternType: Type.Optional(Type.String({ description: "叙事模式查询过滤类型：桥段/意象/句式风险/冲突解决/钩子类型" })),
+      status: Type.Optional(
+        Type.Union(
+          PROMISE_STATUS_VALUES.map((v) => Type.Literal(v)),
+          { description: "承诺账本查询过滤状态（query_promise_ledger 同枚举）" },
+        ),
+      ),
+      patternType: Type.Optional(
+        Type.Union(
+          PATTERN_TYPE_VALUES.map((v) => Type.Literal(v)),
+          { description: "叙事模式查询过滤类型（query_pattern_memory 同枚举）" },
+        ),
+      ),
       maxResults: Type.Optional(Type.Number({ description: "最大返回数（搜索类意图）", default: 10 })),
       maxChapters: Type.Optional(Type.Number({ description: "搜索最近多少章（章节原文检索意图）", default: 10 })),
     }),
@@ -179,10 +217,18 @@ export function createQueryNarrativeProductionFacadeTool(ctx: {
         );
       }
       // 原样透传（intent 之外的所有参数直接交给底层工具），不复制任何检索/截断逻辑。
-      return tool.execute(_toolCallId, rest ?? {}) as Promise<{
+      const result = await tool.execute(_toolCallId, rest ?? {}) as {
         content: Array<{ type: "text"; text: string }>;
         details: NarrativeToolResultDetails;
-      }>;
+      };
+      // 紧凑 envelope：仅重渲染模型可见 content 文本，details（含全部证据/来源/等级/hint）原样保留。
+      if (useEnvelope) {
+        return {
+          content: [{ type: "text", text: renderCompactEnvelope(result.details) }],
+          details: result.details,
+        };
+      }
+      return result;
     },
   };
 }

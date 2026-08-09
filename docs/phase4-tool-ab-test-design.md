@@ -219,6 +219,12 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 | 生产接入复用既有 canary/G6 治理，不新造第二套 release 机制（Phase 4.3） | `decideCanaryStrategy`（R2=bounded_canary）+ `evaluateCanaryPromotionGate` + `production-release-gate`（G6）已具备分级灰度/晋级/审批/指纹门禁全套能力；避免重复造轮子 |
 | 回滚 = active pointer 切回 A 组 release（Phase 4.3） | `release-pointer-store.ts` 提供原子切换；失败行为（empty/truncated/errors/timeouts/非法工具/解析失败）任一恶化即触发回滚评估 |
 | 模型版本隔离走 environment-fingerprint + model-routing（Phase 4.3） | 指纹含 tool schema/model-routing，facade 接入改变指纹 → 需重 capture + 审批；模型信誉按 release 隔离，canary 数据不污染旧模型 |
+| eating-canary: 真实模型隔离 canary 未通过门禁，"默认 facade"不成立（Phase 4.2，2026-08-09） | `reports/phase4-real-glm-b0-v1/`（glm-5.2，3 场景×3 seed×A/B/B0）显示：B 受引导 facade 的 mustVerify 覆盖 0.944 < A 1.000（SC1 seed1 提前收敛漏项），B0 无引导 facade 在引用率/证据等级/空结果/非法工具/场景门禁上全面恶化。整体与 B0 门禁均未通过，**不默认切换 facade** |
+| eating-canary: 单入口收益（B0）不足，facade 价值主要由描述引导贡献（Phase 4.2） | B0 无引导时无效工具 6>3、空结果 6>3、引用率 0.591<0.654、evidenceLevel 0.591<0.654 全面恶化 → 纯单入口界面不成立；B−B0 引导 delta 显示引导显著减少无效工具/调用/重复/空结果并提升停止率 → 引导是 facade 有价值的主因 |
+| eating-canary: 保留 9 专用工具为默认生产注入（Phase 4.2 决策） | 真实 canary 未证明 facade 稳定正收益：受引导 facade 有覆盖回归，无引导 facade 全面更差。A 组（9 工具）覆盖稳定 1.000。在修复"高停止率诱发覆盖回归"前，不引入 facade 作为默认；混合结构亦无当前数据支持 |
+| eating-canary: 修复"早终止诱发覆盖回归"后，受引导 facade 在 SC1 覆盖恢复 1.000（Phase 4.2，2026-08-09） | 根因：facade 收尾句"证据充分后立即输出终止标记"与 guidance 的"evidence=最高优先级"叠加，使模型拿到 e1 高等级证据后过早收敛，漏掉 mustVerify 其余项（SC1 seed1 0.500）。修复：改为强制"逐项遍历 mustVerify 全部待验证事实、全部覆盖后再输出终止标记"。`reports/phase4-real-glm-b0-v2/`（glm-5.2，SC1×3 seed×A/B/B0）显示 B 覆盖 0.833→**1.000**（全 seed），停止率仍 100%，引用率 1.000，失败行为门禁全过，schema token 6273 < A 6824。**"高停止率诱发覆盖回归"已消除**；B 唯一未过项为 evidenceLevel 的 `exact_chapter_span` 命中率（B=0.000 < A=0.200），属引导偏好差异（引导模型优先 evidence 而非 chapter_span），非覆盖缺陷 |
+| eating-canary: SC1 修复后受引导 facade 达到"全覆盖 + 高停止率 + 低负担"三优，但需全场景复验方能晋级（Phase 4.2） | SC1 定向重跑证明早终止问题已解决；但本轮仅重跑 SC1（1 场景），未覆盖 SC6/SC7。B0 在 v2 仍全面恶化（引用率 0.667、空结果 3、非法工具 3、停止率 0%），纯单入口界面仍不成立。**9 工具仍为默认**；是否晋级 facade 需对 SC6/SC7 全场景真实 canary 复验，且评估 evidenceLevel 偏好差异是否可接受 |
+| eating-canary: 全场景复验最终结论——**保留 9 专用工具为默认**，受控 opt-in facade 已无覆盖回归风险（Phase 4.2，2026-08-09） | 合并 `phase4-real-glm-b0-v2`（SC1）+ `v3`（SC6/SC7）全 3 场景真实 canary（glm-5.2×3 seed×A/B/B0）：修复后 B 的 mustVerify 覆盖**全场景全 seed 稳定 1.000 = A**（不再回归），停止率与 A 持平（SC1=100%、SC6/SC7=67%），失败行为（空结果/截断/错误/超时/非法工具）全部不恶化。但 B 在 SC7 有效证据引用率略逊 A（0.727 vs 0.833）、无效 sourceRef 微增（no_match 3 vs 1），系引导让模型对无需检索项也发起 evidence 查询的**查询精度差异，非覆盖缺陷**；SC1 的 `exact_chapter_span` 命中率差异同为引导偏好。B0 无引导在全部场景仍全面恶化（引用率 0.500、空结果/非法工具 3、SC7 门禁 FAIL）→ 纯单入口界面不成立，**引导是 facade 价值的必要前提**。决策：**保留 9 专用工具为默认生产注入**；修复后的受控 opt-in facade 因覆盖稳定可作显式选用的复用路径，但无数据支持晋升为默认或混合结构 |
 
 ---
 
@@ -277,3 +283,158 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 - 后续需独立产线：隔离 workspace bounded canary（R2）→ promotion gate 通过 → 切换 active pointer；
   任一失败行为（empty/truncated/errors/timeouts/非法工具/解析失败）恶化即回滚 9 专用工具。
 - 若需解耦"意图引导"与"接口形态"，另行补跑**无 `INTENT_USAGE` 的 B0 facade 对照**（延续 §3.2 标注）。
+
+---
+
+## 10. 紧凑结果 envelope（工具粒度收口，2026-08-09）
+
+> **状态**：已实现 + Phase 5.2 确定性 A/B/C dry-run 通过（2026-08-09）。`renderCompactEnvelope`
+> 已落地为生产纯函数（`novelos/tools/tool-protocol.ts`），facade 支持 `useCompactEnvelope` 可选
+> 渲染（eval-only `typed-facade-tool.ts`）。A/B/C 确定性报告见
+> `reports/phase5-2-envelope-abc/`（envelope-abc-comparison.json / .md / trajectory/）：
+> **聚合结果文本 2598→2159（-17%）**，mustVerify 覆盖率 1.000→1.000、有效证据引用率 0.826→0.826、
+> empty/truncated/errors/timeouts 均为 0，C.details 与 B 完全一致，无「无结果」误报，全部门禁通过。
+> 逐场景 SC2/SC5（精简事实列表/短 span）C 臂有少量摘要开销（281>270、274>228），收益以聚合门禁为准。
+> 延续 §9 的受控接入：envelope 是"工具粒度"收口的一部分，
+> 与"接口表面（9 工具 vs facade）"正交。目标是在**不降级证据覆盖**的前提下，压缩每次工具
+> 调用返回给模型的文本（`content`），降低上下文膨胀；完整结构化数据（`details`）保留供
+> verifier / trajectory / canary 消费。
+>
+> **前置**：B0 dry-run 已证明（`reports/phase4-tool-ab-b0-dryrun/`）——三臂（A/B/B0）证据覆盖
+> 完全等价（mustVerify 覆盖 1.000、引用率 0.727、失败 0），单入口收益独立于描述引导
+> （B0 schema=16797 < B 受引导=22242 < A=28149）。envelope 进一步在"结果文本量"上收口。
+
+### 10.1 设计约束（铁律）
+
+1. **先设计后实现**：§10 边界已落实为 `renderCompactEnvelope` 纯函数（Phase 5.2 已实现并 dry-run）。
+2. **envelope 是渲染层，不是检索逻辑**：绝不复制/改动检索、排序、token fallback、limit 截断、
+   nextQueryHint 生成。它只规定"模型可见文本"如何由 `details` 结构化数据渲染而成。
+3. **完整性不降级底线**：`sourceRef` / `evidenceLevel` / `resultKind` / `returnedCount` /
+   `truncated` / `nextQueryHint` 必须全部保留在 `details`（供 verifier 裁决与 canary 监控），
+   envelope 只约束 `content` 文本的**呈现**。
+4. **可回退**：envelope 作为 facade（或工具）的**可选渲染策略**接入，默认关闭（保持现状
+   完整文本）；显式 opt-in 才启用，失败可回退旧渲染。
+5. **先确定性后真实模型**：envelope 的收益先用 dry-run 在 A/B/C 上量化 `resultChars` 下降
+   （已完成，见 `reports/phase5-2-envelope-abc/`），再在真实模型 canary 验证。
+
+### 10.2 边界定义（四类字段）
+
+统一紧凑 envelope 渲染的 `content` 文本，模型每回合只看到它；`details` 保留完整数据。
+
+| 字段 | 边界 | 内容 |
+|------|------|------|
+| **摘要（summary）** | 一行，≤ 120 字符 | 一句话说明"本次调用命中什么"：结果数、最高证据等级、最强 ref。如 `命中 3 条证据（confirmed_state，最强 ref=canon:evt-003）`。空结果给 `无匹配/无结果` 摘要。 |
+| **来源（sourceRef）** | 每项 ≤ 1 行，最多 N 项（N=min(returnedCount, 3)） | 只列出**最强的前 3 条**证据的 ref（`ch17#final.md:120-180` 等），不贴全文 excerpt。完整列表在 `details`。 |
+| **证据等级（evidenceLevel）** | 每项旁标等级 + 排序 | 每条 ref 前缀 `[等级]`（如 `[confirmed_state]`），按 `confirmed_state > exact_chapter_span > confirmed > inferred > profile_only` 排序。完整 rankedEvidenceLevels 在 `details`。 |
+| **继续查询提示（nextQueryHint）** | 仅截断时透传 | envelope 仅在 `truncated=true` 时把系统生成的 `nextQueryHint` 追加一行提示；未截断时不输出（避免重复占用）。提示文本由底层工具确定性生成，envelope 不新造。 |
+
+**边界规则摘要**：
+- **摘要 > 全文**：模型看到的是摘要 + 最强前 3 条 ref，不是全部 excerpt。
+- **证据等级随 ref 走**：每条 ref 必须标等级，且按强度排序；等级判定权在底层工具，envelope 不重判。
+- **nextQueryHint 只在截断时给**：避免"未截断还提示继续查"的冗余调用。
+- **空白行/装饰**：envelope 不引入结构化标记（如 JSON 代码块），保持纯文本紧凑，避免额外 token。
+
+### 10.3 与现有 `NarrativeToolResultDetails` 的关系
+
+- `details` = 真相源（不变，含 `sourceRef` / `evidenceLevel` / `resultKind` / `returnedCount` /
+  `truncated` / `nextQueryHint` / `rankedEvidences` / 各类 `entries` / `spans`）。
+- `content` = envelope 渲染（由 `details` 派生，可开关）。
+- verifier / trajectory / canary 读 `details`；模型只读 `content`。二者解耦，envelope 改动不影响证据裁决。
+
+### 10.4 度量（envelope 收益 = resultChars 下降，证据不降级）
+
+| 指标 | 口径 | 目标 |
+|------|------|------|
+| 结果字符（resultChars） | 每次调用 `content` 文本长度 | envelope 启用后显著下降（dry-run 量化） |
+| mustVerify 覆盖率 | 不变（读 details） | 不降级 |
+| sourceRef / evidenceLevel 完整性 | 不变（读 details） | 不降级 |
+| 判读延迟 / 停止率 | 模型决策行为 | dry-run 先验证框架，canary 验证真实模型 |
+
+### 10.5 接入与验收
+
+- **接入**：envelope 渲染函数作为纯函数（`renderCompactEnvelope(details)`），供 facade 与专用工具
+  可选调用；不进入检索/排序路径。
+- **验收**：dry-run 断言 `resultChars(renderCompactEnvelope(details)) < resultChars(原 content)`，
+  且 `details` 经 envelope 渲染后再回读仍完整（`NarrativeToolResultDetails` roundtrip 不丢字段）。
+  **（Phase 5.2 已验收）** A/B/C dry-run 通过：聚合 2598→2159，details 与 B 完全一致，证据覆盖与
+  失败指标不降级，无「无结果」误报；集成测试 `tests-eval/phase5-2-envelope-abc.test.mjs` 与
+  guard N4 单测 `tests/phase5-compact-envelope.test.mjs` 锁定边界。
+- **不 cutover**：默认渲染保持现状；envelope 仅作为受控对照在 canary 中验证，稳定后才决定是否
+  成为默认渲染策略。
+
+> **结论归属**：本设计已证明"紧凑 envelope 能在不降级证据覆盖下降 resultChars"（确定性 dry-run）；
+> 是否默认启用、是否与 facade 组合，取决于真实模型 canary（§11）结果稳定后评审。当前仍保持
+> A=9 专用工具默认、`rel-000` 不切换，真实 GLM replay 仅作 eval/canary 隔离。
+
+---
+
+## 11. Phase 5.3 真实模型 envelope replay（2026-08-09）
+
+> **状态**：runner 已扩展支持 C 组（`facade + compact envelope`），CLI 支持 `--envelope`
+> 定向 replay，测试覆盖 C 组与 envelope 门禁。**尚未执行真实模型 replay**（需 GLM/Doubao 临时授权）。
+> 真实 replay 通过前不切换 production pointer，也不进入上下文压缩模块。
+
+### 11.1 动机（Phase 5.2 的两个限制）
+
+Phase 5.2 确定性 A/B/C dry-run 已证明聚合收益（2598→2159，-17%），但有两个限制必须在真实
+模型下补验：
+
+1. **零模型 ≠ 真实模型理解**：dry-run 是确定性 stub，不能证明真实模型会正确理解 compact envelope，
+   也不能证明停止率、查询精度和事实覆盖在真实模型下不下降。
+2. **聚合下降掩盖局部膨胀**：SC2（C=281 > B=270）、SC5（C=274 > B=228）在单场景字符上出现
+   局部膨胀。Phase 5.2 门禁只要求聚合下降，没有限制单场景/单调用明显变长。这个问题必须在
+   真实 replay 前纳入门禁。
+
+### 11.2 目标
+
+在 eval/canary 隔离下，验证真实 GLM 模型对 compact envelope 的理解不下降：
+
+- A/B/C 使用**同一 GLM route**（`narrator_testing_glm`）、同一 fixtures、seed、temperature、
+  `fallback=[]`（`PINOVEL_DISABLE_FALLBACK=1`）。
+- 至少覆盖 **SC2、SC5、SC7**（最能暴露 envelope 局部膨胀或信息损失）。
+- 记录真实模型 **fingerprint**（`provider:model:route`）、toolMode、renderMode、resultChars、
+  停止率、mustVerify、sourceRef、非法调用与失败指标。
+- **replay 前预注册「单场景/单调用结果膨胀」门槛**（C vs B），不能只看聚合下降。
+
+### 11.3 门禁（预注册，C vs B）
+
+envelope 门禁（`EnvelopeRealGate`）在真实 replay 前已注册，逐项校验：
+
+| 门禁 | 口径 |
+|------|------|
+| 聚合结果字符不膨胀 | C.totalResultChars ≤ B.totalResultChars |
+| 单场景无膨胀 | 每场景 C ≤ B × `factor` + `buffer` |
+| 单调用无膨胀 | 每场景 C 最大单回合字符 ≤ B 最大单回合 × `factor` + `buffer` |
+| mustVerify 覆盖率不降级 | C.avgCoverageRatio ≥ B |
+| 有效证据引用率不降级 | C.sourceRefCompleteness ≥ B |
+| 停止率不显著下降 | C.stopRate ≥ B − 5% |
+| 失败行为不恶化 | C errors/timeouts/empty/truncated/非法工具/解析失败 ≤ B |
+
+膨胀门槛常量：`ENVELOPE_EXPANSION_FACTOR=1.5`、`ENVELOPE_EXPANSION_BUFFER=1`（字符）。
+语义：允许 envelope 对精简列表/短 span 有少量摘要开销，但超过 `B × 1.5 + 1` 即判「明显膨胀」。
+
+同时保留 C vs A 门禁（`gateC`，envelope facade 失败行为不劣于 9 专用工具）与逐场景失败门禁
+（`scenarioGateC`）。
+
+### 11.4 运行与产物
+
+```bash
+# dry-run（验证框架，零 API）
+node scripts/tool-ab-real-report.mjs --envelope
+
+# 真实模型（需 GLM/Doubao 临时授权）
+PINOVEL_DISABLE_FALLBACK=1 node scripts/tool-ab-real-report.mjs --envelope --mode real --require-auth
+```
+
+`--envelope` 默认输出到 `reports/phase5-3-envelope-real/`：
+`real-ab-comparison.json` / `.md` / `trajectory/{SC2|SC5|SC7}-{A|B|B0|C}-{seed}.jsonl`。
+报告含 provenance（路由/provider/model/seed 支持/fallback 关闭）、C 组门禁、envelope 门禁与
+逐场景/逐调用字符明细。
+
+### 11.5 准入与后续
+
+- 真实 replay 通过（envelope 门禁全过 + C vs A 全过）后，再做**少量真实 canary**。
+- 在此之前**不切换 production pointer**（`active-production.json` 仍指向 `rel-000`，
+  `rel-phase5b` 保持 held），默认仍为 9 专用工具。
+- 真实 canary 稳定后才评审：是否默认启用 envelope、是否与 facade 组合、是否进入上下文压缩模块。
+- 任一门槛失败（单场景/单调用膨胀、覆盖/引用/停止率降级、失败恶化）即视为 envelope 需回退或修正。

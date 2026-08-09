@@ -194,3 +194,114 @@ export function makeEmptyToolResult(
     },
   );
 }
+
+// ============================================================================
+// 紧凑结果 envelope（Phase 4/5 工具粒度收口，渲染层纯函数）
+// ============================================================================
+
+/** 证据强度排序（最强在前），envelope 渲染据此取"最强前 N 条" */
+export const EVIDENCE_STRENGTH_ORDER: EvidenceLevel[] = [
+  "confirmed_state",
+  "exact_chapter_span",
+  "confirmed",
+  "inferred",
+  "profile_only",
+];
+
+/** envelope 渲染时最多展示的 ref 数（取最强前 N 条） */
+export const ENVELOPE_MAX_REFS = 3;
+
+/** envelope 摘要最大字符数 */
+export const ENVELOPE_SUMMARY_MAX_CHARS = 120;
+
+/** 取某条证据对象的 sourceRef（兼容 rankedEvidences / spans / entries 结构） */
+function refOf(item: unknown): string | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  const ref = (item as { sourceRef?: unknown }).sourceRef;
+  return typeof ref === "string" ? ref : undefined;
+}
+
+/** 取某条证据对象的 evidenceLevel（无则按回调回退） */
+function levelOf(item: unknown, fallback: EvidenceLevel | undefined): EvidenceLevel | undefined {
+  if (!item || typeof item !== "object") return fallback;
+  const lv = (item as { evidenceLevel?: unknown }).evidenceLevel;
+  return typeof lv === "string" && (EVIDENCE_STRENGTH_ORDER as string[]).includes(lv)
+    ? (lv as EvidenceLevel)
+    : fallback;
+}
+
+/** 从 details 中提取证据条目列表（兼容各类 resultKind 的字段名） */
+function collectEvidenceItems(details: Record<string, unknown>): Array<{
+  sourceRef: string;
+  evidenceLevel?: EvidenceLevel;
+}> {
+  const rawList = (details.rankedEvidences ??
+    details.spans ??
+    details.entries) as unknown;
+  if (!Array.isArray(rawList)) return [];
+  const items: Array<{ sourceRef: string; evidenceLevel?: EvidenceLevel }> = [];
+  for (const item of rawList) {
+    const ref = refOf(item);
+    if (!ref) continue;
+    items.push({ sourceRef: ref, evidenceLevel: levelOf(item, details.evidenceLevel as EvidenceLevel | undefined) });
+  }
+  return items;
+}
+
+/**
+ * 把 details 渲染为紧凑 envelope 文本（只剪裁"模型可见文本"，不改详情）。
+ *
+ * 边界（见 docs/phase4-tool-ab-test-design.md §10）：
+ * - 摘要：一行 ≤ ENVELOPE_SUMMARY_MAX_CHARS，说明命中数/最高等级/最强 ref。
+ * - 来源 + 证据等级：只输出最强前 ENVELOPE_MAX_REFS 条的 `[等级] ref`，不贴全文 excerpt。
+ * - 继续查询提示：仅 truncated=true 时透传系统生成的 nextQueryHint。
+ * - 摘要优先于全文：绝不在 envelope 里输出完整 excerpt。
+ *
+ * 纯函数：不读文件、不检索、不排序重判（等级判定权在底层工具），只做呈现。
+ */
+export function renderCompactEnvelope(details: NarrativeToolResultDetails): string {
+  const items = collectEvidenceItems(details as unknown as Record<string, unknown>);
+  const returnedCount = typeof details.returnedCount === "number" ? details.returnedCount : items.length;
+  const truncated = details.truncated === true;
+  const hint = truncated && details.nextQueryHint ? `\n提示：${details.nextQueryHint}` : "";
+
+  // 空结果摘要：以 returnedCount 为权威（>0 即"有命中"）。
+  // 守护（Phase 5.2）：returnedCount>0 但条目数组缺失（resultKind 的数组字段不在
+  // rankedEvidences/spans/entries 已知集内，或数据畸形）时，绝不得误报「无匹配/无结果」——
+  // 只出摘要，不出伪造的 ref 行。
+  if (returnedCount === 0) {
+    return "无匹配/无结果" + hint;
+  }
+
+  // 有命中但无可提取条目：只出摘要（命中数 + 顶层 evidenceLevel），不伪造 ref。
+  if (items.length === 0) {
+    const fallback = `命中 ${returnedCount} 条${details.evidenceLevel ? `（${details.evidenceLevel}）` : ""}`;
+    return fallback + hint;
+  }
+
+  // 按强度排序（details 已按 searchRanked 排序，此处兜底但不重判等级）
+  const sorted = [...items].sort(
+    (a, b) =>
+      (a.evidenceLevel ? EVIDENCE_STRENGTH_ORDER.indexOf(a.evidenceLevel) : EVIDENCE_STRENGTH_ORDER.length) -
+      (b.evidenceLevel ? EVIDENCE_STRENGTH_ORDER.indexOf(b.evidenceLevel) : EVIDENCE_STRENGTH_ORDER.length),
+  );
+  const top = sorted.slice(0, Math.min(ENVELOPE_MAX_REFS, returnedCount));
+  const strongestLevel = top[0].evidenceLevel ?? details.evidenceLevel;
+
+  // 摘要（一行，≤ 120 字符）
+  const summary = `命中 ${returnedCount} 条${strongestLevel ? `（${strongestLevel}）` : ""}，最强 ref=${top[0].sourceRef}`;
+  const summaryText = summary.length > ENVELOPE_SUMMARY_MAX_CHARS
+    ? summary.slice(0, ENVELOPE_SUMMARY_MAX_CHARS)
+    : summary;
+
+  // 来源 + 证据等级（每项一行，只列最强前 N 条 ref）
+  const refLines = top.map(
+    (item) => `[${item.evidenceLevel ?? "unknown"}] ${item.sourceRef}`,
+  );
+
+  const parts = [summaryText, ...refLines];
+  if (truncated && details.nextQueryHint) {
+    parts.push(`提示：${details.nextQueryHint}`);
+  }
+  return parts.join("\n");
+}

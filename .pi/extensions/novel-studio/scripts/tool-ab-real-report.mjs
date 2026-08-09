@@ -1,22 +1,30 @@
 #!/usr/bin/env node
 /**
- * PHASE4-TOOL-AB-REAL-REPORT CLI：Phase 4.2 真实模型 A/B 报告生成（默认 dry-run）
+ * PHASE4-TOOL-AB-REAL-REPORT CLI：真实模型 A/B/B0/C 报告生成（默认 dry-run）
  *
  * 运行 tool-ab-real-runner 的模型自主决策 replay。默认使用 dry-run stub（确定性，
  * 零 API 调用），仅验证 runner 框架；真实模型需显式 `--mode real` 并注入已授权的
  * modelFn（当前不支持 CLI 注入，需改代码）。结果写入项目根目录
  * reports/phase4-tool-ab-real/：
- *   real-ab-comparison.json            完整 A/B 对比（JSON）
- *   real-ab-comparison.md              人类可读对比报告（含"有效证据引用率"与无效分类明细）
- *   trajectory/{scenarioId}-{A|B}-{seed}.jsonl  每场景每 arm 每 seed 的持久化 trajectory 副本
+ *   real-ab-comparison.json            完整 A/B/B0/C 对比（JSON）
+ *   real-ab-comparison.md              人类可读对比报告（含 envelope 门禁与 C 组）
+ *   trajectory/{scenarioId}-{A|B|B0|C}-{seed}.jsonl  每场景每 arm 每 seed 的持久化 trajectory 副本
+ *
+ * Phase 5.3：加 `--envelope` 即运行 SC2/SC5/SC7 三场景（最能暴露 envelope 局部膨胀/
+ * 信息损失），并预注册「单场景/单调用结果膨胀」门槛（C vs B）。envelope 模式下默认
+ * 输出目录 reports/phase5-3-envelope-real/。
  *
  * 用法：
- *   node scripts/tool-ab-real-report.mjs [--output <dir>] [--mode dry-run]
+ *   node scripts/tool-ab-real-report.mjs [--output <dir>] [--mode dry-run] [--envelope]
  *
  * 选项：
- *   --output <dir>   输出目录（默认 <projectRoot>/reports/phase4-tool-ab-real）
+ *   --output <dir>   输出目录（默认 <projectRoot>/reports/phase4-tool-ab-real；
+ *                    加 --envelope 时默认 reports/phase5-3-envelope-real）
  *   --mode <dry-run|real>   执行模式（默认 dry-run；real 需 --require-auth + GLM/Doubao 授权）
  *   --route <name>   real 模式测试路由（默认 narrator_testing_glm，须在 GLM/Doubao allowlist 内）
+ *   --envelope       运行 Phase 5.3 envelope replay（SC2/SC5/SC7 + envelope 门禁）
+ *   --scenario <ids> 定向重跑指定场景（可任意基线场景，逗号分隔）
+ *   --samples <n>    seed 数（默认 3）
  *   --require-auth   real 模式显式授权开关（未传则拒绝执行）
  *   --help           打印帮助
  */
@@ -34,6 +42,7 @@ const { values } = parseArgs({
     "samples": { type: "string" },
     "maxTokens": { type: "string" },
     "scenario": { type: "string" },
+    "envelope": { type: "boolean", default: false },
     "require-auth": { type: "boolean", default: false },
     "help": { type: "boolean", default: false },
   },
@@ -41,23 +50,25 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  process.stdout.write(`PHASE4-TOOL-AB-REAL-REPORT CLI：Phase 4.2 真实模型 A/B 报告生成
+  process.stdout.write(`PHASE4-TOOL-AB-REAL-REPORT CLI：真实模型 A/B/B0/C 报告生成
 
 用法：
-  node scripts/tool-ab-real-report.mjs [--output <dir>] [--mode dry-run]
+  node scripts/tool-ab-real-report.mjs [--output <dir>] [--mode dry-run] [--envelope]
 
 选项：
-  --output <dir>   输出目录（默认 <projectRoot>/reports/phase4-tool-ab-real）
+  --output <dir>   输出目录（默认 <projectRoot>/reports/phase4-tool-ab-real；--envelope 时 reports/phase5-3-envelope-real）
   --mode <dry-run|real>   执行模式（默认 dry-run；real 注入真实模型决策 fn，需 GLM/Doubao 授权）
   --route <name>   real 模式使用的测试路由（默认 narrator_testing_glm）
   --maxTokens <n>  real 模式单次输出上限 token（默认 2048）
+  --envelope       运行 Phase 5.3 envelope replay（SC2/SC5/SC7 + envelope 门禁）
+  --scenario <ids> 定向重跑指定场景（任意基线场景，逗号分隔）
   --require-auth   real 模式显式授权开关：确认已获 GLM/Doubao 临时调用授权。
                    必须显式传入，否则 real 模式拒绝执行（默认 dry-run 无需）。
 
 产物：
-  real-ab-comparison.json            完整 A/B 对比（JSON）
-  real-ab-comparison.md              人类可读对比报告
-  trajectory/{场景}-{A|B}-{seed}.jsonl  每场景每 arm 每 seed 的 persistence trajectory 副本
+  real-ab-comparison.json            完整 A/B/B0/C 对比（JSON）
+  real-ab-comparison.md              人类可读对比报告（含 C 组门禁与 envelope 门禁）
+  trajectory/{场景}-{A|B|B0|C}-{seed}.jsonl  每场景每 arm 每 seed 的 persistence trajectory 副本
 `);
   process.exit(0);
 }
@@ -69,7 +80,9 @@ const PROJECT_ROOT = resolve(SCRIPT_DIR, "..", "..", "..", "..");
 const EXT_ROOT = join(PROJECT_ROOT, ".pi", "extensions", "novel-studio");
 const OUTPUT_DIR = values.output
   ? resolve(values.output)
-  : join(PROJECT_ROOT, "reports", "phase4-tool-ab-real");
+  : values.envelope
+    ? join(PROJECT_ROOT, "reports", "phase5-3-envelope-real")
+    : join(PROJECT_ROOT, "reports", "phase4-tool-ab-real");
 
 const MODULE_PATH = pathToFileURL(
   join(EXT_ROOT, "dist-eval", "novelos", "eval", "tool-ab-real-runner.js"),
@@ -131,18 +144,25 @@ if (mode === "real") {
   });
 }
 
-log(`运行 Phase 4.2 模型自主决策 A/B replay（模式=${mode}，dry-run 零 API）...`);
+log(`运行模型自主决策 A/B/B0/C replay（模式=${mode}${values.envelope ? "，envelope=SC2/SC5/SC7" : ""}，dry-run 零 API）...`);
 const seedCount = values.samples ? Math.max(1, parseInt(values.samples, 10)) : 3;
 const seeds = Array.from({ length: seedCount }, (_, i) => i);
 
-// --scenario：仅重跑指定高信号场景（如 SC1-canon-fact），用于定向诊断。
+// --envelope：Phase 5.3 envelope replay，默认 SC2/SC5/SC7（最能暴露 envelope 局部膨胀/信息损失）。
+// --scenario：仅重跑指定场景（任意基线场景，逗号分隔），用于定向诊断。
 let scenarios;
-if (values.scenario) {
-  const all = mod.getBaselineScenarios ? mod.getBaselineScenarios() : undefined;
+if (values.envelope) {
+  scenarios = mod.getEnvelopeReplayScenarios ? mod.getEnvelopeReplayScenarios() : undefined;
+  if (!scenarios || scenarios.length === 0) {
+    log("--envelope：未取得 envelope replay 目标场景（SC2/SC5/SC7）。");
+    process.exit(1);
+  }
+} else if (values.scenario) {
+  const all = mod.getAllBaselineScenarios ? mod.getAllBaselineScenarios() : undefined;
   const ids = values.scenario.split(",").map((s) => s.trim()).filter(Boolean);
   scenarios = all ? all.filter((s) => ids.includes(s.id)) : undefined;
   if (scenarios && scenarios.length === 0) {
-    log(`--scenario 未匹配到任何高信号场景：${ids.join(",")}（合法：SC1-canon-fact / SC6-low-risk-no-retrieval / SC7-multi-tool-mixed）`);
+    log(`--scenario 未匹配到任何基线场景：${ids.join(",")}（合法：SC1-canon-fact / SC2-character-state / SC3-timeline / SC4-promise-foreshadow / SC5-chapter-span / SC6-low-risk-no-retrieval / SC7-multi-tool-mixed）`);
     process.exit(1);
   }
 }
@@ -180,12 +200,24 @@ for (const [key, entries] of Object.entries(trajectory)) {
 log("报告完成。");
 log(`场景数：${comparison.scenarios.length}（每场景 × seeds=${comparison.scenarios[0]?.A.length ?? 0}）`);
 log(`模式：${comparison.mode}`);
-log(`A 组工具面：${comparison.aggregation.A.toolSurface}，B 组工具面：${comparison.aggregation.B.toolSurface}`);
-log(`schema token：A=${comparison.aggregation.A.schemaTokenCost}，B=${comparison.aggregation.B.schemaTokenCost}`);
-log(`有效证据引用率：A=${comparison.aggregation.A.sourceRefCompleteness.toFixed(3)}，B=${comparison.aggregation.B.sourceRefCompleteness.toFixed(3)}`);
-log(`平均 mustVerify 覆盖率：A=${comparison.aggregation.A.avgCoverageRatio.toFixed(3)}，B=${comparison.aggregation.B.avgCoverageRatio.toFixed(3)}`);
+log(`A 组工具面：${comparison.aggregation.A.toolSurface}，B 组工具面：${comparison.aggregation.B.toolSurface}，B0 组工具面：${comparison.aggregation.B0?.toolSurface ?? "n/a"}，C 组工具面：${comparison.aggregation.C?.toolSurface ?? "n/a"}`);
+log(`工具模式：A=${comparison.aggregation.A.toolMode ?? "n/a"}，B=${comparison.aggregation.B.toolMode ?? "n/a"}，C=${comparison.aggregation.C?.toolMode ?? "n/a"}；渲染模式：A=${comparison.aggregation.A.renderMode ?? "n/a"}，C=${comparison.aggregation.C?.renderMode ?? "n/a"}`);
+log(`schema token：A=${comparison.aggregation.A.schemaTokenCost}，B=${comparison.aggregation.B.schemaTokenCost}，B0=${comparison.aggregation.B0?.schemaTokenCost ?? "n/a"}，C=${comparison.aggregation.C?.schemaTokenCost ?? "n/a"}`);
+log(`总返回字符：A=${comparison.aggregation.A.totalResultChars}，B=${comparison.aggregation.B.totalResultChars}，C=${comparison.aggregation.C?.totalResultChars ?? "n/a"}`);
+log(`有效证据引用率：A=${comparison.aggregation.A.sourceRefCompleteness.toFixed(3)}，B=${comparison.aggregation.B.sourceRefCompleteness.toFixed(3)}，B0=${comparison.aggregation.B0?.sourceRefCompleteness.toFixed(3) ?? "n/a"}，C=${comparison.aggregation.C?.sourceRefCompleteness.toFixed(3) ?? "n/a"}`);
+log(`平均 mustVerify 覆盖率：A=${comparison.aggregation.A.avgCoverageRatio.toFixed(3)}，B=${comparison.aggregation.B.avgCoverageRatio.toFixed(3)}，B0=${comparison.aggregation.B0?.avgCoverageRatio.toFixed(3) ?? "n/a"}，C=${comparison.aggregation.C?.avgCoverageRatio.toFixed(3) ?? "n/a"}`);
+log(`停止率（主动收敛）：A=${(comparison.aggregation.A.stopRate * 100).toFixed(0)}% (${comparison.aggregation.A.stopCount}/${comparison.aggregation.A.scenarioCount})，B=${(comparison.aggregation.B.stopRate * 100).toFixed(0)}% (${comparison.aggregation.B.stopCount}/${comparison.aggregation.B.scenarioCount})，B0=${(comparison.aggregation.B0?.stopRate * 100).toFixed(0)}% (${comparison.aggregation.B0?.stopCount}/${comparison.aggregation.B0?.scenarioCount})，C=${(comparison.aggregation.C?.stopRate * 100).toFixed(0)}% (${comparison.aggregation.C?.stopCount}/${comparison.aggregation.C?.scenarioCount})`);
+log(`首证据延迟(ms)：A=${comparison.aggregation.A.firstValidEvidenceLatencyMs ?? "unmeasured"}，B=${comparison.aggregation.B.firstValidEvidenceLatencyMs ?? "unmeasured"}，B0=${comparison.aggregation.B0?.firstValidEvidenceLatencyMs ?? "unmeasured"}，C=${comparison.aggregation.C?.firstValidEvidenceLatencyMs ?? "unmeasured"}`);
+log(`无效调用：非法工具 A=${comparison.aggregation.A.invalidToolSelections}，非法 intent B=${comparison.aggregation.B.invalidIntents}/B0=${comparison.aggregation.B0?.invalidIntents}/C=${comparison.aggregation.C?.invalidIntents}，解析失败 A=${comparison.aggregation.A.parseErrors}/B=${comparison.aggregation.B.parseErrors}/B0=${comparison.aggregation.B0?.parseErrors}/C=${comparison.aggregation.C?.parseErrors}`);
+log(`失败率：空结果 A=${comparison.aggregation.A.emptyResults}，错误 A=${comparison.aggregation.A.errors}/B=${comparison.aggregation.B.errors}/B0=${comparison.aggregation.B0?.errors}/C=${comparison.aggregation.C?.errors}，超时 A=${comparison.aggregation.A.timeouts}`);
+log(`B0 门禁全部通过：${comparison.gateB0?.allPassed ?? "n/a"}`);
+log(`C 组门禁（vs A）全部通过：${comparison.gateC?.allPassed ?? "n/a"}`);
+if (comparison.envelopeGate) {
+  log(`Envelope 门禁（C vs B）：聚合不膨胀=${comparison.envelopeGate.resultCharsNotWorsened}，单场景无膨胀=${comparison.envelopeGate.noScenarioExpansion}，单调用无膨胀=${comparison.envelopeGate.noSingleCallExpansion}，覆盖率不降级=${comparison.envelopeGate.coverageNotDegraded}，引用率不降级=${comparison.envelopeGate.sourceRefNotDegraded}，停止率不降=${comparison.envelopeGate.stopRateNotDegraded}，失败不恶化=${comparison.envelopeGate.failureNotDegraded}，全部通过=${comparison.envelopeGate.allPassed}`);
+}
+log(`描述引导收益（B−B0）非法 intent：${comparison.guidanceDelta?.invalidIntents ? `${comparison.guidanceDelta.invalidIntents.B} - ${comparison.guidanceDelta.invalidIntents.B0}` : "n/a"}`);
 log(`改善负担项：${comparison.gate.improvedBurdenMetrics.join(", ") || "无"}`);
-log(`全部通过：${comparison.gate.allPassed}`);
+log(`全部通过（B vs A）：${comparison.gate.allPassed}`);
 log(`JSON：${join(OUTPUT_DIR, "real-ab-comparison.json")}`);
 log(`Markdown：${join(OUTPUT_DIR, "real-ab-comparison.md")}`);
 log(`trajectory 副本：${trajectoryFiles} 个（${trajDir}）`);
