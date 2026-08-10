@@ -69,6 +69,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = resolve(__dirname, ".."); // .pi/extensions/novel-studio
 const REPO_ROOT = resolve(EXT_ROOT, "..", "..", ".."); // d:\CODE\PiNovelStudio
 
+// PI 不会自动加载 .env，手动解析注入 process.env。
+// 环境指纹的 secretEnvStates 依赖密钥变量是否已设置，CLI 必须与生产运行时（index.ts）一致，
+// 否则 capture/verify 算出的指纹与 release gate 不一致。
+const envPath = join(REPO_ROOT, ".env");
+if (existsSync(envPath)) {
+  for (const line of readFileSync(envPath, "utf-8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const value = trimmed.slice(eqIdx + 1).trim();
+    if (!process.env[key]) process.env[key] = value;
+  }
+}
+
 // ============================================================================
 // 路径解析
 // ============================================================================
