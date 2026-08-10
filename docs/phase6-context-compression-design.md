@@ -1,8 +1,15 @@
 # Phase 6 - 上下文压缩与记忆层设计
 
-> **状态**：Phase 6.1a/b 已完成（2026-08-09）。两次真实 replay 结果矛盾（FAIL/PASS），模型变异性导致结论不稳定。
+> **状态**：**已冻结（2026-08-10）**。负向决策：不启用压缩和状态删减，四类状态全部保持完整注入。
 > **前置**：Phase 5.3.3 B-safe 已收口（`88a5fa4`，2026-08-09），生产仍为 `rel-000`，9 专用工具默认执行面未改变。
 > **范围**：eval-only A/B 基线，工具决策 replay（非完整生产链路）。
+>
+> **冻结决策**：
+> - 生产继续使用完整 CanonState、CharacterState、PromiseLedger、PatternMemory
+> - 不启用上下文压缩、不删减状态类
+> - 保持 `rel-000` + 9 专用工具，不切 canary、不改 production pointer
+> - 实验范围限于工具决策 replay，不等于完整生产链路验证
+> - 两轮独立消融 replay（各 135 场景）无状态类稳定显著，不构成压缩依据
 
 ---
 
@@ -517,3 +524,50 @@ Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生�
 - **PatternMemory 对失败行为有影响**：虽覆盖率 delta 不显著，但空结果和非法工具显著增加
 - **生产链路 integration replay 仍是待办**：当前结论限于工具决策层面
 - **Phase 6.2.1 收口**：evaluateAblationGate 已移入共享 gate 模块；原始 entry 已保存；消融 arm 参数测试 16/16 通过
+
+---
+
+## 14. Phase 6 冻结决策记录（2026-08-10）
+
+### 决策
+
+**负向决策：不启用上下文压缩和状态删减。四类长期叙事状态全部保持完整注入。**
+
+### 决策依据
+
+1. **Phase 6.1 整体压缩（B 组）**：两轮真实 replay 门禁矛盾（FAIL/PASS），模型变异性导致结论不稳定
+2. **Phase 6.2 逐类消融**：两轮独立 replay（各 135 场景）中，没有任何状态类在两轮中都表现出显著的边际贡献（>5%）
+   - CharacterState：Run 1 delta=7.4%（显著）→ Run 2 delta=3.7%（不显著）
+   - CanonState/PromiseLedger/PatternMemory：两轮方向不一致
+3. **实验范围限制**：所有实验均为工具决策 replay（使用模拟状态），非完整 `ContextCompiler -> runUnifiedPipeline` 生产链路验证
+
+### 冻结范围
+
+| 项目 | 冻结状态 |
+|------|---------|
+| CanonState 注入 | 保持完整 |
+| CharacterState 注入 | 保持完整 |
+| PromiseLedger 注入 | 保持完整 |
+| PatternMemory 注入 | 保持完整 |
+| maxItems 24-48 / 摘要 160 字符 | 不调整 |
+| 生产 release pointer | `rel-000` 不变 |
+| 工具集 | 9 专用工具不变 |
+| canary | 不切换 |
+
+### 提交记录
+
+| 提交 | 内容 |
+|------|------|
+| `34bd491` | Phase 6.1a：eval-only runner + dry-run 验证 |
+| `dc3ad62` | Phase 6.1b：真实模型 replay 结论 |
+| `96cdd5e` | Phase 6.1.1：产物隔离 + 门禁修复 + 实验范围声明 |
+| `06ac1f6` | Phase 6.1.1：两次 replay 对比结论 |
+| `da1e9f2` | Phase 6.2：逐类单因素消融变体 + gate 模块提取 |
+| `1a917b8` | Phase 6.2：消融结论 |
+| `2aaf3ea` | Phase 6.2.1：evaluateAblationGate 共享 + 原始 entry + 消融 arm 测试 + 结论降级 |
+| `96d423e` | Phase 6.2.1：confirmation replay 两轮不一致结论 |
+| 本次提交 | Phase 6 冻结决策记录 |
+
+### 后续
+
+Phase 6 冻结。下一研究模块：**思考/推理预算设计**（eval-only A/B，不触碰生产链路）。
