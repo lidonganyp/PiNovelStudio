@@ -9,7 +9,7 @@
  * 授权边界：不调用模型、不依赖真实 workspace，纯本地确定性执行（直接驱动工具 execute）。
  *
  * 覆盖：
- * 1. 三臂全量 replay 跑通（7 场景），工具面 A=9，B=C=1
+ * 1. 三臂全量 replay 跑通（8 场景），工具面 A=9，B=C=1
  * 2. 门禁：结果文本不显著膨胀（C<=B×1.15）、mustVerify 覆盖率不降级、sourceRef 完整率不降级、
  *    失败行为（empty/truncated/errors/timeouts）不降级、C.details 与 B 完全一致、
  *    无「无结果」误报
@@ -44,10 +44,10 @@ async function importRunner() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("PHASE5-2-ENVELOPE-ABC-1：三臂 replay 与工具面", () => {
-  it("全量 7 场景跑通，工具面 A=9，B=C=1", async () => {
+  it("全量 8 场景跑通，工具面 A=9，B=C=1", async () => {
     const runner = await importRunner();
     const comparison = await runner.runCompactEnvelopeAbcReplay();
-    assert.equal(comparison.scenarios.length, 7, "确定性 runner 应含全部 7 场景");
+    assert.equal(comparison.scenarios.length, 8, "确定性 runner 应含全部 8 场景");
     assert.equal(comparison.aggregation.A.toolSurface, 9, "A 组应暴露 9 个专用工具");
     assert.equal(comparison.aggregation.B.toolSurface, 1, "B 组应暴露 1 个 facade");
     assert.equal(comparison.aggregation.C.toolSurface, 1, "C 组应暴露 1 个 facade");
@@ -216,7 +216,7 @@ describe("PHASE5-2-ENVELOPE-ABC-3：报告格式化与 trajectory", () => {
     const runner = await importRunner();
     const comparison = await runner.runCompactEnvelopeAbcReplay();
     const traj = runner.buildEnvelopeAbcTrajectory(comparison);
-    // 7 场景 × A/B/C = 21 个 key
+    // 8 场景 × A/B/C = 24 个 key
     assert.equal(Object.keys(traj).length, comparison.scenarios.length * 3);
     for (const s of comparison.scenarios) {
       for (const arm of ["A", "B", "C"]) {

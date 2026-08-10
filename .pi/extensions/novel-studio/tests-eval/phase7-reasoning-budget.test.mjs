@@ -329,3 +329,81 @@ describe("PHASE7-REASONING-BUDGET-5：门禁评估", () => {
       "stub 模式下 B 组 token 与 A 相同，tokenCostReduced 应为 false");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 测试 6：真实 replay 路径 dry-run（模型驱动，零 API）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("PHASE7-REASONING-BUDGET-6：真实 replay dry-run", () => {
+  it("runReasoningBudgetAbcRealReplay 用 dry-run 模型跑通并产出 real 报告", async () => {
+    const runner = await importRunner();
+    const realRunner = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-ab-real-runner.js")}`
+    );
+    const config = await importConfig();
+
+    // 用单场景（含 high 风险 SC8）验证 high 档预算注入
+    const baseline = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-interface-baseline.js")}`
+    );
+    const highScenario = baseline.BASELINE_SCENARIOS.find((s) => s.id === "SC8-high-risk");
+    assert.ok(highScenario, "baseline 应包含 SC8-high-risk 场景");
+    const riskScore = config.computeRiskScore(
+      highScenario.calls.flatMap((c) => c.mustVerify ?? []),
+    );
+    assert.equal(riskScore.tier, "high", "SC8 应为 high 档");
+
+    const modelFn = realRunner.createDryRunModel(highScenario, "A");
+    const comparison = await runner.runReasoningBudgetAbcRealReplay({
+      modelFn,
+      seeds: [0, 1, 2],
+      scenarios: [highScenario],
+    });
+
+    assert.equal(comparison.schema, "reasoning-budget-abc-real/v1");
+    assert.equal(comparison.mode, "real");
+    assert.equal(comparison.toolSurface, "specialized-9");
+    assert.deepEqual(comparison.seeds, [0, 1, 2]);
+    assert.equal(comparison.scenarios.length, 1);
+    const s = comparison.scenarios[0];
+    assert.equal(s.riskScore.tier, "high");
+    assert.equal(s.budgetC.tier, "high");
+    assert.equal(s.budgetC.budgetConfig.maxTurns, 14, "C 组 high 档 maxTurns 应为 14");
+    assert.equal(s.budgetC.retrievalDepth, 3, "C 组 high 档 depth 应为 3");
+    // 三臂统一 9 专用工具（arm=A），只变 maxModelCalls
+    assert.ok(s.metricsA.length === 3, "A 组应有 3 seed 指标");
+    assert.ok(s.metricsB.length === 3, "B 组应有 3 seed 指标");
+    assert.ok(s.metricsC.length === 3, "C 组应有 3 seed 指标");
+    // dry-run 三臂 maxModelCalls 不同（A=10/B=7/C=14），但工具结果一致
+    assert.ok(comparison.aggregation.A && comparison.aggregation.B && comparison.aggregation.C);
+    assert.ok(comparison.gateB && comparison.gateC);
+  });
+
+  it("真实 replay 报告格式化（real JSON + real Markdown）", async () => {
+    const runner = await importRunner();
+    const realRunner = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-ab-real-runner.js")}`
+    );
+    const baseline = await import(
+      `file://${join(EXTENSION_ROOT, "dist-eval", "novelos", "eval", "tool-interface-baseline.js")}`
+    );
+    const scenario = baseline.BASELINE_SCENARIOS[0];
+    const modelFn = realRunner.createDryRunModel(scenario, "A");
+    const comparison = await runner.runReasoningBudgetAbcRealReplay({
+      modelFn,
+      seeds: [0],
+      scenarios: [scenario],
+    });
+
+    const json = runner.formatReasoningBudgetRealJson(comparison);
+    const parsed = JSON.parse(json);
+    assert.equal(parsed.schema, "reasoning-budget-abc-real/v1");
+    assert.equal(parsed.mode, "real");
+
+    const md = runner.formatReasoningBudgetRealMarkdown(comparison);
+    assert.ok(md.includes("真实模型对比报告"), "应含真实模型标题");
+    assert.ok(md.includes("B 组门禁"), "应含 B 组门禁");
+    assert.ok(md.includes("C 组门禁"), "应含 C 组门禁");
+    assert.ok(md.includes("provenance"), "应含 provenance");
+  });
+});

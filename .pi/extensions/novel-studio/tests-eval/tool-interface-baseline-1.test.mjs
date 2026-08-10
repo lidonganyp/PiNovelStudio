@@ -3,10 +3,10 @@
  *
  * 冻结"当前 9 个专用工具"行为作为 Phase 3（统一结果格式）的对照组。
  * 本测试直接驱动 createNarrativeTools 真实实现（零模型调用、确定性），
- * 断言 7 类场景 × 指标收集的正确性。
+ * 断言 8 类场景 × 指标收集的正确性。
  *
  * 覆盖：
- * 1. 7 类场景齐全（canon / 角色状态 / 时间线 / 伏笔 / 章节 span / 低风险无检索 / 多工具混合）
+ * 1. 8 类场景齐全（canon / 角色状态 / 时间线 / 伏笔 / 章节 span / 低风险无检索 / 多工具混合 / 高风险）
  * 2. 聚合指标：总调用、重复查询、空白结果、超时、失败、有效/无效 sourceRef、覆盖率
  * 3. 场景级指标：callsByTool / duplicateQueries / emptyResults / sourceRefsInvalid / coverage
  * 4. 报告格式化：JSON roundtrip + Markdown 关键章节
@@ -40,19 +40,20 @@ async function importModule() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 测试 1：7 类场景齐全 + 工具面
+// 测试 1：8 类场景齐全 + 工具面
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("TOOL-INTERFACE-BASELINE-1：场景与工具面", () => {
-  it("BASELINE_SCENARIOS 共 7 类场景", async () => {
+  it("BASELINE_SCENARIOS 共 8 类场景", async () => {
     const mod = await importModule();
-    assert.equal(mod.BASELINE_SCENARIOS.length, 7);
+    assert.equal(mod.BASELINE_SCENARIOS.length, 8);
   });
 
-  it("7 类场景分类覆盖全部要求", async () => {
+  it("8 类场景分类覆盖全部要求（SC8 与 SC1 同属 canon_fact_retrieval）", async () => {
     const mod = await importModule();
     const categories = mod.BASELINE_SCENARIOS.map((s) => s.category).sort();
     assert.deepEqual(categories, [
+      "canon_fact_retrieval",
       "canon_fact_retrieval",
       "chapter_span",
       "character_state",
@@ -92,12 +93,12 @@ describe("TOOL-INTERFACE-BASELINE-1：场景与工具面", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("TOOL-INTERFACE-BASELINE-1：聚合指标", () => {
-  it("跑出 7 个场景，总调用 = 3×6 + 5 = 23", async () => {
+  it("跑出 8 个场景，总调用 = 3×6 + 5 + 5 = 28", async () => {
     const mod = await importModule();
     const baseline = await mod.runToolInterfaceBaseline();
-    assert.equal(baseline.scenarios.length, 7);
-    assert.equal(baseline.summary.scenarioCount, 7);
-    assert.equal(baseline.summary.totalCalls, 23);
+    assert.equal(baseline.scenarios.length, 8);
+    assert.equal(baseline.summary.scenarioCount, 8);
+    assert.equal(baseline.summary.totalCalls, 28);
   });
 
   it("重复查询 = 3（SC2 角色状态空 query 重复 + SC4 伏笔空 query 重复 + SC7 显式重复 query）", async () => {
@@ -119,10 +120,10 @@ describe("TOOL-INTERFACE-BASELINE-1：聚合指标", () => {
     assert.equal(baseline.summary.totalErrors, 0);
   });
 
-  it("有效 sourceRef = 19，无效 = 4（无结果信号由无效 sourceRef 承载）", async () => {
+  it("有效 sourceRef = 24，无效 = 4（无结果信号由无效 sourceRef 承载；SC8 高风险 5 调用全命中）", async () => {
     const mod = await importModule();
     const baseline = await mod.runToolInterfaceBaseline();
-    assert.equal(baseline.summary.totalSourceRefsValid, 19);
+    assert.equal(baseline.summary.totalSourceRefsValid, 24);
     assert.equal(baseline.summary.totalSourceRefsInvalid, 4);
   });
 
@@ -206,12 +207,12 @@ describe("TOOL-INTERFACE-BASELINE-1：场景级指标", () => {
     const mod = await importModule();
     const baseline = await mod.runToolInterfaceBaseline();
     const totalByTool = baseline.summary.callsByTool;
-    // SC1(2) + SC3(1) + SC4(1) + SC6(1) + SC7(2) = 7
-    assert.equal(totalByTool["search_narrative_evidence"], 7);
-    // SC1 + SC3 + SC6 = 3
-    assert.equal(totalByTool["query_canon"], 3);
-    // SC5(3) + SC7(1) = 4
-    assert.equal(totalByTool["search_chapter_span"], 4);
+    // SC1(2) + SC3(1) + SC4(1) + SC6(1) + SC7(2) + SC8(2) = 9
+    assert.equal(totalByTool["search_narrative_evidence"], 9);
+    // SC1 + SC3 + SC6 + SC8 = 4
+    assert.equal(totalByTool["query_canon"], 4);
+    // SC5(3) + SC7(1) + SC8(2) = 6
+    assert.equal(totalByTool["search_chapter_span"], 6);
     // SC2(2) + SC6(1) + SC7(1) = 4
     assert.equal(totalByTool["query_character_state"], 4);
   });
@@ -228,7 +229,7 @@ describe("TOOL-INTERFACE-BASELINE-1：报告格式化", () => {
     const json = mod.formatToolInterfaceBaselineJson(baseline);
     const parsed = JSON.parse(json);
     assert.equal(parsed.schema, baseline.schema);
-    assert.equal(parsed.scenarios.length, 7);
+    assert.equal(parsed.scenarios.length, 8);
     assert.equal(parsed.summary.totalCalls, baseline.summary.totalCalls);
   });
 

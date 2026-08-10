@@ -1303,7 +1303,7 @@ function fingerprintOf(metrics: RealToolAbScenarioMetrics[]): string | undefined
   return [p.provider, p.model, p.route].filter(Boolean).join(":");
 }
 
-function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAggregation {
+export function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealToolAbArmAggregation {
   const invalidByCategory: Record<InvalidSourceRefCategory, number> = {
     no_match: 0,
     profile_only: 0,

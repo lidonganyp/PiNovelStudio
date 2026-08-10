@@ -163,7 +163,7 @@ describe("PHASE4-TOOL-AB-2：A/B replay 与门禁", () => {
   it("逐场景失败行为门禁：每场景 empty/truncated/errors/timeouts 不恶化", async () => {
     const runner = await importRunner();
     const comparison = await runner.runToolAbReplay();
-    assert.equal(comparison.scenarios.length, 7, "确定性 runner 应含全部 7 场景");
+    assert.equal(comparison.scenarios.length, 8, "确定性 runner 应含全部 8 场景");
     for (const s of comparison.scenarios) {
       assert.ok(s.scenarioGate, `场景 ${s.scenarioId} 应有 scenarioGate`);
       const sg = s.scenarioGate;
