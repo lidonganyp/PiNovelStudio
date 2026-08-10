@@ -18,7 +18,7 @@ import type {
 import type { WriterPromptProfile } from "./model-prompt-adapter.js";
 import type { AuthorStyleStrategyParams } from "../learning/author-style-strategy-registry.js";
 
-const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编辑。请在不改变故事事实、事件因果、人物关系、知识边界和章末压力的前提下，把完整初稿优化成指定作者的稳定写作风格。
+export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编辑。请在不改变故事事实、事件因果、人物关系、知识边界和章末压力的前提下，把完整初稿优化成指定作者的稳定写作风格。
 
 风格档案只提供定性参考，历史统计不得转成正文配额。你可以重组表达，但不能删改关键事件，也不能补写档案、解释或分析。
 

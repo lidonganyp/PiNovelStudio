@@ -433,6 +433,16 @@ export function renderLayeredContract(contract: ChapterContract): string {
   ].join("\n\n");
 }
 
+/**
+ * Writer adapter system prompt（Phase 9 registry 导出）。
+ *
+ * 生产 raw/editorial 候选共用此 system prompt；模型专属差异由 WriterPromptProfile
+ * 在 user prompt 的 contract 渲染层（renderContract vs renderLayeredContract）处理，
+ * system prompt 保持模型无关。
+ */
+export const WRITER_ADAPTER_SYSTEM_PROMPT =
+  "你是中文长篇小说作者。遵守作者提供的叙事内容、事实和人物知识边界，完成本章正文。";
+
 /** Apply model-specific ordering and language without mutating the contract. */
 export function adaptWriterPrompt(input: WriterPromptAdapterInput): AdaptedWriterPrompt {
   const useLayered = input.profile === "gemini_writer_v2_layered";
@@ -445,7 +455,7 @@ export function adaptWriterPrompt(input: WriterPromptAdapterInput): AdaptedWrite
   const outputBoundary = `只输出第${input.chapterNumber}章完整正文，不解释思路，不输出大纲、清单、JSON 或创作说明。`;
   return {
     profile: input.profile,
-    systemPrompt: "你是中文长篇小说作者。遵守作者提供的叙事内容、事实和人物知识边界，完成本章正文。",
+    systemPrompt: WRITER_ADAPTER_SYSTEM_PROMPT,
     userPrompt: [
       input.sharedContext,
       contractBlock,

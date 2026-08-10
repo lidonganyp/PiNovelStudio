@@ -286,7 +286,7 @@ export const AGENTIC_RAW_KIND = "agentic_raw";
  * 不确定性驱动规则（narrative-agent-loop 的 DEFAULT_UNCERTAINTY_DRIVEN_PROMPT）驱动：
  * 上下文足以保证事实/人物状态/因果关系时直接生成正文，缺关键信息才检索。
  */
-const NOVELOS_SYSTEM_PROMPT =
+export const NOVELOS_SYSTEM_PROMPT =
   "你是顶尖网文作家。你将基于本章意图、种子上下文与叙事证据生成章节正文。" +
   "仅当现有上下文不足以保证事实、人物状态或因果关系正确时，才调用叙事证据工具查证。" +
   "只输出正文，不要写大纲、注释或分析。";

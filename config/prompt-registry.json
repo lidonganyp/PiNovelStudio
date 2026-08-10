@@ -1,0 +1,256 @@
+{
+  "schema": "pinovel-prompt-registry/v1",
+  "version": "1.0.0",
+  "updatedAt": "2026-08-10T12:29:32.542Z",
+  "versions": [
+    {
+      "versionId": "novelos_agentic-v1",
+      "slot": "novelos_agentic",
+      "version": 1,
+      "label": "通用 NovelOS Agentic 系统 Prompt（生产基线）",
+      "modelRoute": "narrator_primary",
+      "hashes": {
+        "promptHash": "fab363a154538ac8",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：dry-run 验证通过",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-08-10T12:29:32.205Z",
+      "updatedAt": "2026-08-10T12:29:32.207Z"
+    },
+    {
+      "versionId": "style_optimizer-v1",
+      "slot": "style_optimizer",
+      "version": 1,
+      "label": "通用作者风格优化系统 Prompt（生产基线）",
+      "modelRoute": "narrator_primary",
+      "hashes": {
+        "promptHash": "83c11299b5554407",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：dry-run 验证通过",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-08-10T12:29:32.206Z",
+      "updatedAt": "2026-08-10T12:29:32.207Z"
+    },
+    {
+      "versionId": "writer_adapter-v1",
+      "slot": "writer_adapter",
+      "version": 1,
+      "label": "通用 Writer Adapter 系统 Prompt（生产基线）",
+      "modelRoute": "narrator_primary",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "85fcaf8de7e357ce",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：dry-run 验证通过",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-08-10T12:29:32.206Z",
+      "updatedAt": "2026-08-10T12:29:32.207Z"
+    },
+    {
+      "versionId": "retrieval_eval-v1",
+      "slot": "retrieval_eval",
+      "version": 1,
+      "label": "通用检索决策 Prompt（评测基线）",
+      "modelRoute": "narrator_primary",
+      "hashes": {
+        "promptHash": "17e9500271e5f840",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：dry-run 验证通过",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-08-10T12:29:32.207Z",
+          "reason": "Phase 9 基线回放：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-08-10T12:29:32.207Z",
+      "updatedAt": "2026-08-10T12:29:32.207Z"
+    },
+    {
+      "versionId": "retrieval_eval-v2",
+      "slot": "retrieval_eval",
+      "version": 2,
+      "label": "Phase 8 P-B: Gemini 专属检索 Prompt（已 rejected）",
+      "modelRoute": "narrator_primary",
+      "hashes": {
+        "promptHash": "51fdcfd74a12353c",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "status": "rejected",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-08-10T12:29:32.208Z",
+          "reason": "Phase 8 Stage P 真实 replay 评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "rejected",
+          "timestamp": "2026-08-10T12:29:32.208Z",
+          "reason": "Phase 8 Stage P 真实 replay（2026-08-10）：mustVerify 覆盖率 0.134（A=0.983），sourceRef 完整率 0.083（A=0.880），9 个场景空结果/超时/错误。根因：Gemini 专属 prompt 过度强调'证据充分即输出 <done>'，导致模型在检索验证前过早终止。prematureDoneRate=1.0（9/9 场景过早终止）。3 批次全部 FAIL，方向一致。",
+          "actor": "eval-gate"
+        }
+      ],
+      "createdAt": "2026-08-10T12:29:32.208Z",
+      "updatedAt": "2026-08-10T12:29:32.208Z",
+      "rejectedReason": "Phase 8 Stage P 真实 replay（2026-08-10）：mustVerify 覆盖率 0.134（A=0.983），sourceRef 完整率 0.083（A=0.880），9 个场景空结果/超时/错误。根因：Gemini 专属 prompt 过度强调'证据充分即输出 <done>'，导致模型在检索验证前过早终止。prematureDoneRate=1.0（9/9 场景过早终止）。3 批次全部 FAIL，方向一致。",
+      "evalManifestId": "phase8-stage-p-real-replay",
+      "evalReportPath": "reports/phase8-prompt-native/real/prompt-ab-comparison.json"
+    },
+    {
+      "versionId": "novelos_agentic-v2",
+      "slot": "novelos_agentic",
+      "version": 2,
+      "label": "Phase 8 P-B: Gemini 专属生成 Prompt（已 rejected）",
+      "modelRoute": "narrator_primary",
+      "hashes": {
+        "promptHash": "5c311187dcc775f2",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "status": "rejected",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-08-10T12:29:32.208Z",
+          "reason": "Phase 8 Stage P 真实 replay 评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "rejected",
+          "timestamp": "2026-08-10T12:29:32.208Z",
+          "reason": "Phase 8 Stage P 真实 replay（2026-08-10）：mustVerify 覆盖率 0.134（A=0.983），sourceRef 完整率 0.083（A=0.880），9 个场景空结果/超时/错误。根因：Gemini 专属 prompt 过度强调'证据充分即输出 <done>'，导致模型在检索验证前过早终止。prematureDoneRate=1.0（9/9 场景过早终止）。3 批次全部 FAIL，方向一致。",
+          "actor": "eval-gate"
+        }
+      ],
+      "createdAt": "2026-08-10T12:29:32.208Z",
+      "updatedAt": "2026-08-10T12:29:32.208Z",
+      "rejectedReason": "Phase 8 Stage P 真实 replay（2026-08-10）：mustVerify 覆盖率 0.134（A=0.983），sourceRef 完整率 0.083（A=0.880），9 个场景空结果/超时/错误。根因：Gemini 专属 prompt 过度强调'证据充分即输出 <done>'，导致模型在检索验证前过早终止。prematureDoneRate=1.0（9/9 场景过早终止）。3 批次全部 FAIL，方向一致。",
+      "evalManifestId": "phase8-stage-p-real-replay",
+      "evalReportPath": "reports/phase8-prompt-native/real/prompt-ab-comparison.json"
+    }
+  ],
+  "productionPointers": [
+    {
+      "slot": "novelos_agentic",
+      "activeVersionId": "novelos_agentic-v1",
+      "pinnedAt": "2026-08-10T12:29:32.541Z"
+    },
+    {
+      "slot": "style_optimizer",
+      "activeVersionId": "style_optimizer-v1",
+      "pinnedAt": "2026-08-10T12:29:32.541Z"
+    },
+    {
+      "slot": "writer_adapter",
+      "activeVersionId": "writer_adapter-v1",
+      "pinnedAt": "2026-08-10T12:29:32.541Z"
+    },
+    {
+      "slot": "retrieval_eval",
+      "activeVersionId": "retrieval_eval-v1",
+      "pinnedAt": "2026-08-10T12:29:32.541Z"
+    }
+  ]
+}
