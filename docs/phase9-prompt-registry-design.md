@@ -1,6 +1,10 @@
 # Phase 9：Prompt 版本管理与评测流程
 
-> **状态**：基线回放已完成（2026-08-10），registry 已初始化，production pointer 保持通用 Prompt 不动。
+> **状态**：产品级验收已通过（2026-08-10），当前版本作为稳定生产基线运行。
+> - 基线回放完成：7/7 hash 一致性通过，registry 已初始化（4 active + 2 rejected P-B）。
+> - `verify:prompt-registry` 命令链路全绿：drift check 4/4 + governance tests 20/20 + production smoke 2/2。
+> - 真实 workspace 验收（xinmo ch18）：novel_generate_chapter 完整主链路 140.9s，3 次模型调用（Gemini 3.1），budget used=3/soft=6/hard=10（A 组预算），18.md 原子保存 6242 bytes，selectedSource=v2_amplified，trace 4 gate 完整，narrative-state ch18 hash 199 处引用，无 silent degrade。
+> - active pointer=rel-000（devMode，PINOVEL_DEV_MODE=1），暂不启动 canary。
 > **前置**：Phase 8 Stage P 负向结论已确认（P-B Gemini 专属 Prompt 过早终止，prematureDoneRate=1.0）。Stage N 不启动。
 > **约束**：registry 是被动观测层，不拦截生产调用；新 Prompt 候选按生命周期流程准入，禁止自动晋级。
 
