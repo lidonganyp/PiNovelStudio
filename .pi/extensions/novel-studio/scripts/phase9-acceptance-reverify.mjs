@@ -90,16 +90,37 @@ if (existsSync(traceFile)) {
   failureEnvelopes = traceData.failureEnvelopes || [];
   console.log(`    failureEnvelopes count: ${failureEnvelopes.length}`);
 
-  // 检查关键 gate 的 releaseGovernance
+  // P0 硬门：releaseGovernance 必须 devMode=false 才算生产验收。
+  // 防止 dev-mode 验收（devMode=true）再次被误报为生产验收。
+  // 生产验收要求 devMode=false 且 release 身份/指纹/审批引用齐全
+  // （releaseId / environmentFingerprint / approvalRef 均由已通过门禁的
+  //  releaseGovernance 携带；任一缺失即视为非生产验收）。
+  let releaseGovernanceGateCount = 0;
+  let nonProdGates = 0;
   for (const gate of gates) {
     const rg = gate.evidence?.releaseGovernance;
-    if (rg) {
-      check(
-        `gate[${gate.stage}] releaseGovernance 已记录`,
-        rg.devMode !== undefined,
-        `devMode=${rg.devMode}, releaseId=${rg.releaseId}`,
-      );
-    }
+    if (!rg) continue;
+    releaseGovernanceGateCount += 1;
+    const isProd =
+      rg.devMode === false &&
+      rg.releaseId != null &&
+      rg.approvalRef != null &&
+      rg.environmentFingerprint != null;
+    check(
+      `gate[${gate.stage}] 生产 releaseGovernance（devMode=false）`,
+      isProd,
+      `devMode=${rg.devMode}, releaseId=${rg.releaseId}, ` +
+        `approvalRef=${rg.approvalRef}, ` +
+        `fingerprint=${rg.environmentFingerprint ? rg.environmentFingerprint.slice(0, 16) + "…" : null}`,
+    );
+    if (!isProd) nonProdGates += 1;
+  }
+  if (releaseGovernanceGateCount > 0) {
+    check(
+      "全部 releaseGovernance gate 均为生产（无 dev-mode 误报）",
+      nonProdGates === 0,
+      `${releaseGovernanceGateCount} 个 gate`,
+    );
   }
 
   // v2Summary

@@ -1,8 +1,18 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-07-28（Phase 1 整改后更新）
+**快照日期**：2026-08-10（Phase 9 生产晋级 blocked 状态更新）
 **代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
+
+## Phase 9 生产晋级 blocked（2026-08-10）
+
+**当前状态：生产晋级 blocked，eval/开发基线可用。** 继续保持 `active-production.json → rel-000`，不启动 canary，不开放新的 Prompt/Native 实验。
+
+- `phase9-acceptance-reverify.mjs` 的 releaseGovernance 检查已升级为 **P0 硬门**：必须 `devMode===false` 且 `releaseId/approvalRef/environmentFingerprint` 全非空，任一条不满足即 FAIL。dev-mode 验收不再可能被误报为生产验收。
+- 对现有 dev-mode ch18 trace 复检结果为 **20/23 FAIL（exit 1）**——这是**正确的负向验证**，证明门禁拒绝了未审批的 dev 产物。**不得修改 trace 或放宽门禁来"修绿"**。
+- **`rel-000` 是 dev-bootstrap 审批，非生产审批**：`approvals/dev-approval-001.json` 缺 `reviewTransport`（门禁硬性要求 `"network"`）、`releaseManifestHash="bootstrap-dev"`。因此非 devMode 下 `novel_generate_chapter` 会在 `g6_release_gate` 硬阻断，不会得到 `devMode=false` 的成功签字。
+- **模型基础设施未就绪**：`SUB2API_INTERNAL_LLM_BASE_URL` 网关未配置，环境无 GEMINI/GPT/ARK Key。真实 `evolution:proxy-review --real`（gpt5.6-sol）与真实 Gemini 章节生成当前无法执行。
+- **解锁生产基线需补齐**：(1) 合法生产审批——`reviewTransport=network`、真实 `releaseManifestHash`、目标环境 `environmentFingerprint`、正式审批 artifact（不能用 `bootstrap-dev`）；(2) 模型基础设施——配置 `SUB2API_INTERNAL_LLM_BASE_URL`、有授权的 Gemini 生产路由与密钥、保持 `fallback=[]`。条件具备后再执行：关闭 `PINOVEL_DEV_MODE` → 真实 `novel_generate_chapter` → 生产 gate → 加固后的复检脚本，预期 `devMode=false` 且生产治理字段完整。
 
 ## Phase 1 整改（2026-07-28）
 
