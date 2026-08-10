@@ -41,13 +41,22 @@ if (!existsSync(WORKSPACE_DIR)) {
 // ============================================================================
 // 验收前快照
 // ============================================================================
-const chapterFile = join(WORKSPACE_DIR, "chapters", `chapter-${chapterNumber}.md`);
+// 章节文件命名兼容两种格式：新命名 "{N}.md" 与旧命名 "chapter-{N}.md"
+const chapterFileCandidates = [
+  join(WORKSPACE_DIR, "chapters", `${chapterNumber}.md`),
+  join(WORKSPACE_DIR, "chapters", `chapter-${chapterNumber}.md`),
+];
+function resolveChapterFile() {
+  return chapterFileCandidates.find((p) => existsSync(p)) ?? chapterFileCandidates[0];
+}
 const traceFile = join(WORKSPACE_DIR, "traces", `${chapterId}-quality-trace.json`);
 const evidenceReport = join(WORKSPACE_DIR, "traces", `${chapterId}-quality-evidence-report.json`);
 const narrativeStateFile = join(WORKSPACE_DIR, "narrative-state-store.json");
 
 function snapshotState() {
+  const chapterFile = resolveChapterFile();
   const snap = {
+    chapterFile,
     chapterExists: existsSync(chapterFile),
     traceExists: existsSync(traceFile),
     evidenceReportExists: existsSync(evidenceReportFile()),
@@ -74,7 +83,7 @@ console.log("=".repeat(70));
 console.log(`  Phase 9 产品级验收 — ${workspaceId} 第${chapterNumber}章`);
 console.log("=".repeat(70));
 console.log("\n[验收前快照]");
-console.log(`  chapter-${chapterNumber}.md exists: ${before.chapterExists}`);
+console.log(`  chapter file exists: ${before.chapterExists} (candidates: ${chapterNumber}.md, chapter-${chapterNumber}.md)`);
 console.log(`  ${chapterId}-quality-trace.json exists: ${before.traceExists}`);
 console.log(`  narrative-state lastCommittedChapter: ${before.nsLastCommittedChapter}`);
 console.log(`  narrative-state updatedAt: ${before.nsUpdatedAt}`);
@@ -193,25 +202,26 @@ function check(name, condition, detail = "") {
 }
 
 // 1. 章节文件原子保存
+const chapterFileName = after.chapterFile ? after.chapterFile.split(/[\\/]/).pop() : "(none)";
 check(
   "章节文件原子保存",
   !before.chapterExists && after.chapterExists,
   before.chapterExists
     ? "验收前已存在（非新生成）"
     : after.chapterExists
-      ? `chapter-${chapterNumber}.md 已生成`
+      ? `${chapterFileName} 已生成`
       : "章节文件未生成",
 );
-if (after.chapterExists) {
-  const stat = statSync(chapterFile);
-  const content = readFileSync(chapterFile, "utf8");
+if (after.chapterExists && after.chapterFile) {
+  const stat = statSync(after.chapterFile);
+  const content = readFileSync(after.chapterFile, "utf8");
   check(
     "章节文件非空",
     content.length > 500,
     `${stat.size} bytes, ${content.length} chars`,
   );
   const hash = crypto.createHash("sha256").update(content, "utf8").digest("hex");
-  console.log(`    chapter-${chapterNumber}.md SHA-256: ${hash.substring(0, 16)}...`);
+  console.log(`    ${chapterFileName} SHA-256: ${hash.substring(0, 16)}...`);
 }
 
 // 2. trace 完整
