@@ -254,12 +254,14 @@ C 组的 riskScore 计算需要 ChapterIntent 的 mustVerify 风险分布。在 
 
 ## 8. 验收产物
 
-- [ ] `novelos/eval/reasoning-budget-config.ts`（三臂配置 + riskScore）
-- [ ] `novelos/eval/reasoning-budget-runner.ts`（A/B/C runner）
-- [ ] `novelos/eval/reasoning-budget-gate.ts`（门禁评估）
-- [ ] `tests-eval/phase7-reasoning-budget.test.mjs`（确定性断言）
-- [ ] `reports/phase7-reasoning-budget/`（对比报告 JSON + MD）
+- [x] `novelos/eval/reasoning-budget-config.ts`（三臂配置 + riskScore）
+- [x] `novelos/eval/reasoning-budget-runner.ts`（A/B/C runner）
+- [x] `novelos/eval/reasoning-budget-gate.ts`（门禁评估）
+- [x] `tests-eval/phase7-reasoning-budget.test.mjs`（确定性断言）
+- [x] `reports/phase7-reasoning-budget/`（对比报告 JSON + MD）
 - [ ] 本设计评审通过后，才可进入实现 Phase
+
+> **Phase 7 决策结果（2026-08-10）**：真实 replay（gemini31 / narrator_primary，GLM 配额耗尽临时改用）3 批 × 3 seed。仅 batch-1（seed 0-2）数据干净；batch-2 降质、batch-3 全部超时无效（gemini31 不稳定）。以干净 batch-1 为准：**B 组未过 token 成本下降门（B=4072 > A×0.9），C 组未过 sourceRef 完整率门（0.809<0.878）与失败行为门（errors 2>1）**。按决策树**均未通过 → 保留 A 组生产预算**，B/C 不进入 canary。生产零改动，B/C 仅存于 eval-only。决策详见 `reports/phase7-reasoning-budget-real-gemini/decision.md`。
 
 ---
 
