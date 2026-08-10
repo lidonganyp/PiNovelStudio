@@ -1,13 +1,14 @@
 # Phase 9：Prompt 版本管理与评测流程
 
-> **状态**：产品级验收已通过（2026-08-10），当前版本作为稳定生产基线运行。
-> - 生产基线 active_prod：active pointer=rel-prod-101（合法生产审批，reviewTransport=network），`PINOVEL_DEV_MODE=0`，暂不启动 canary。
+> **状态**：产品级验收已通过（2026-08-10），当前版本作为稳定生产基线运行，进入生产运营期（2026-08-11）。
+> - 生产基线 active_prod：active pointer=rel-prod-103（合法生产审批，reviewTransport=network，审批 `approval-rel-prod-103-1786379908606-42cfb37a`，环境指纹 57abb60c），`PINOVEL_DEV_MODE=0`，暂不启动 canary。
 > - 基线回放完成：7/7 hash 一致性通过，registry 已初始化（4 active + 2 rejected P-B）。
 > - `verify:prompt-registry` 命令链路全绿：drift check 4/4 + governance tests 20/20 + production smoke 2/2。
-> - 真实生产基线（xinmo ch19，2026-08-10）：novel_generate_chapter 完整主链路 150.5s，4 次模型调用（Gemini 3.1），budget used=4/soft=6/hard=10（A 组预算），19.md 原子保存 5616 bytes，selectedSource=v2_amplified，trace 完整，narrative-state ch19 hash 217 处引用，无 silent degrade，release gate 通过（devMode=false，releaseId=rel-prod-101，指纹 4e129c8f，approvalRef 齐全）。
+> - 真实生产基线（xinmo ch19，2026-08-10，rel-prod-101）：novel_generate_chapter 完整主链路 150.5s，4 次模型调用（Gemini 3.1），budget used=4/soft=6/hard=10（A 组预算），19.md 原子保存 5616 bytes，selectedSource=v2_amplified，trace 完整，narrative-state ch19 hash 217 处引用，无 silent degrade，release gate 通过（devMode=false，releaseId=rel-prod-101，指纹 4e129c8f，approvalRef 齐全）。该基线已由 rel-prod-103 继承。
+> - Bounded observation（ch20/ch21，2026-08-11，rel-prod-103）：每章生产验收 + 加固复检全绿。ch20 生产验收 14/14、复检 22/22（5 次模型调用、budget 5/10、narrative ch19→ch20，trace 含 2 条历史 envelope 被复检按本次运行起点正确隔离）；ch21 生产验收 12/12、复检 22/22（4 次模型调用、budget 4/10、narrative ch20→ch21，trace 0 envelope 干净）。两章均无 fallback、预算未 capped、原子保存与状态引用一致、无 silent degrade，证明 rel-prod-103 稳定。
 > - 验收证据复检（reverify，2026-08-10）：22/22 PASS — 章节文件/trace/narrative-state 交叉验证全一致，devMode=false + release gate + 原子保存 + 状态提交全部通过，模型路由 Gemini 3.1 Pro Preview，A 组预算 4/10。复检脚本：`scripts/phase9-acceptance-reverify.mjs`。
 > **前置**：Phase 8 Stage P 负向结论已确认（P-B Gemini 专属 Prompt 过早终止，prematureDoneRate=1.0）。Stage N 不启动。
-> **约束**：registry 是被动观测层，不拦截生产调用；新 Prompt 候选按生命周期流程准入，禁止自动晋级。
+> **约束**：registry 是被动观测层，不拦截生产调用；新 Prompt 候选按生命周期流程准入，禁止自动晋级。进入生产运营期后，每次发布前执行 drift check / release gate / reverify，不启动 canary，不开放新的 Prompt/Native 实验。
 
 ---
 

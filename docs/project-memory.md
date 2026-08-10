@@ -1,18 +1,22 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-10（Phase 9 生产基线 active_prod 状态更新）
+**快照日期**：2026-08-11（Phase 9 生产运营期 active_prod 状态更新）
 **代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
 
-## Phase 9 生产晋级 active_prod（2026-08-10）
+## Phase 9 生产运营期 active_prod（2026-08-11）
 
-**当前状态：生产晋级 active_prod，生产基线运行中。** active production pointer 已切换到 `rel-prod-101`（`active-production.json → rel-prod-101`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。
+**当前状态：生产运营期，稳定生产基线运行中。** 项目已从"开发/验收阶段"转入"生产运营与按需迭代"。active production pointer 已切换到 `rel-prod-103`（`active-production.json → rel-prod-103`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。
 
-- **`rel-prod-101` 是正式生产审批**：`reviewTransport=network`、真实 `releaseManifestHash`、目标环境 `environmentFingerprint`，审批 artifact 绑定 `approval-rel-prod-101-1786375821073-fb75040c`（reviewerModel=gpt5.6-sol，finalVerdict=APPROVE_DEV）。
-- **真实生产基线（xinmo ch19，2026-08-10）**：关闭 `PINOVEL_DEV_MODE` 后 `novel_generate_chapter` 完整主链路 150.5s，4 次模型调用（Gemini 3.1 Pro Preview），release gate 通过（releaseId=rel-prod-101、指纹 4e129c8f、approvalRef 齐全），trace 完整，narrative-state 推进到 ch19（hash 217 处引用），原子保存成功，无 silent degrade。
-- **加固复检（`phase9-acceptance-reverify.mjs`，2026-08-10）：22/22 PASS** — devMode=false、release gate、trace、原子保存、状态提交全部通过。
+- **`rel-prod-103` 是当前正式生产审批**：`reviewTransport=network`、真实 `releaseManifestHash`、目标环境 `environmentFingerprint=57abb60c…`，审批 artifact 绑定 `approval-rel-prod-103-1786379908606-42cfb37a`（reviewerModel=gpt5.6-sol，finalVerdict=APPROVE_DEV）。rel-prod-103 解除 rel-prod-102 因 `evolution-cli` .env 加载修复提交（c9ef8ef）导致的 codeCommit 指纹漂移，重新捕获并与当前生产运行时指纹一致。
+- **真实生产基线（xinmo ch19，2026-08-10）**：关闭 `PINOVEL_DEV_MODE` 后 `novel_generate_chapter` 完整主链路 150.5s，4 次模型调用（Gemini 3.1 Pro Preview），release gate 通过，trace 完整，narrative-state 推进到 ch19（hash 217 处引用），原子保存成功，无 silent degrade。此基线在 rel-prod-101 下验证，已由 rel-prod-103 继承遗传。
+- **Bounded observation（ch20/ch21，2026-08-11，rel-prod-103）**：连续观察真实章节，每章生产验收 + 加固复检全绿。
+  - **ch20**：生产验收 14/14 PASS、加固复检 22/22 PASS；5 次模型调用全部 gemini-3.1-pro-preview（expected=actual，无 fallback），budget used=5/soft=6/hard=10 未 capped，20.md 原子保存（SHA 681dd25d，与状态引用一致），narrative-state ch19→ch20（引用 258 处），selectedSource=v2_amplified 无 silent degrade。trace 含 2 条**历史** failureEnvelope（rel-prod-101 旧指纹 4e129c8f 漂移 + 早期 preflight），复检按"本次运行起点"（16:42:13）只统计本次 3 个 gate，历史 envelope 被正确隔离、无误判。
+  - **ch21**：生产验收 12/12 PASS、加固复检 22/22 PASS；4 次模型调用全部 gemini-3.1-pro-preview，budget used=4/soft=6/hard=10 未 capped，21.md 原子保存（SHA 2f0feca9，与状态引用一致），narrative-state ch20→ch21（引用 206 处），selectedSource=v2_amplified 无 silent degrade，**trace 干净（0 failureEnvelope）**，证明 rel-prod-103 基线稳定。
+- **加固复检（`phase9-acceptance-reverify.mjs`）：22/22 PASS** — devMode=false、release gate、trace、原子保存、状态提交全部通过；对 ch20 历史 envelope 的隔离验证了复检脚本对历史污染的健壮性。
 - `phase9-acceptance-reverify.mjs` 的 releaseGovernance 检查为 **P0 硬门**：必须 `devMode===false` 且 `releaseId/approvalRef/environmentFingerprint` 全非空，任一条不满足即 FAIL。dev-mode 验收不再可能被误报为生产验收。
 - **历史负向验证（已退役，保留为门禁有效性记录）**：`rel-000` 是 dev-bootstrap 审批，非生产审批（缺 `reviewTransport`、`releaseManifestHash="bootstrap-dev"`）；对 dev-mode ch18 trace 复检 20/23 FAIL 证明门禁会拒绝未审批 dev 产物。当前生产路径不再使用 `rel-000`，该记录仅说明门禁在 dev 产物下正确拒绝。
+- **生产运营节奏**：每次发布前执行 drift check（环境指纹）、release gate（`evaluateProductionReleaseGate`）、加固复检（reverify）；持续归档章节 trace 与状态提交证据；监控 fallback、FailureEnvelope、预算封顶（A 组 soft=6/hard=10）与状态/hash 不一致。任何代码/配置变更后需重新 capture release 并走审批晋级（新 commit 会改变 codeCommit 指纹）。
 
 ## Phase 1 整改（2026-07-28）
 
