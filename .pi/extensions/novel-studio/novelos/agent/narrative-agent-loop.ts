@@ -200,7 +200,7 @@ export class NarrativeAgentLoop {
           evidencePlan: plan,
           trajectoryPath: this.trajectory.getOutputPath(),
           inviolableFacts: input.inviolableFacts ?? [],
-          contextCoveredFacts: this.collectContextCoveredFacts(input.context),
+          contextCoveredFacts: this.collectContextCoveredFacts(input),
         });
         if (coverageGateResult.passed) break;
 
@@ -767,14 +767,16 @@ export class NarrativeAgentLoop {
   }
 
   /** Flatten authoritative compiled-context text for deterministic coverage matching. */
-  private collectContextCoveredFacts(input: AgentLoopInput["context"]): string[] {
+  private collectContextCoveredFacts(input: AgentLoopInput): string[] {
+    const ctx = input.context;
     return [
-      ...input.facts.map((fact) => fact.content),
-      ...input.characterStates.map((state) =>
+      ...(ctx?.facts ?? []).map((fact) => fact.content),
+      ...(input.inviolableFacts ?? []),
+      ...(ctx?.characterStates ?? []).map((state) =>
         `${state.name} ${JSON.stringify(state.state)}`,
       ),
-      ...input.openLoops.map((loop) => loop.description),
-      ...input.worldRules.map((rule) => rule.description),
+      ...(ctx?.openLoops ?? []).map((loop) => loop.description),
+      ...(ctx?.worldRules ?? []).map((rule) => rule.description),
     ].filter((fact) => fact.trim().length > 0);
   }
 

@@ -90,6 +90,31 @@ if (existsSync(traceFile)) {
   failureEnvelopes = traceData.failureEnvelopes || [];
   console.log(`    failureEnvelopes count: ${failureEnvelopes.length}`);
 
+  // P0 修复：trace 为累积追加（appendExisting），多次运行共享同一文件，
+  // 历史失败 gate（preflight/g6 指纹失配/coverage 失败等）会残留并污染本次验收判定。
+  // 只评估"最近一次运行"产生的 gate：以 v2Summary.stages 起始时间戳为本次运行起点，
+  // 过滤出 timestamp >= 起始时间的 gate。无 v2Summary 时回退到全部 gate（保持旧行为）。
+  const v2Stages = traceData.v2Summary?.stages || [];
+  let runStartTs = null;
+  if (v2Stages.length > 0) {
+    const ts = v2Stages.map((s) => s.timestamp).sort();
+    runStartTs = ts[0]; // 本次运行最早阶段时间戳
+  }
+  if (runStartTs) {
+    const currentRunGates = gates.filter((g) => {
+      const ts = g?.evidence?.timestamp;
+      return typeof ts === "string" && ts >= runStartTs;
+    });
+    if (currentRunGates.length > 0) {
+      console.log(`    本次运行起点: ${runStartTs}，本次 gate ${currentRunGates.length}/${gates.length} 个`);
+      // 用本次运行 gate 替换全集，避免历史失败 gate 污染验收判定
+      gates.length = 0;
+      gates.push(...currentRunGates);
+    } else {
+      console.log(`    ⚠️ v2Summary 起点 ${runStartTs} 下无匹配 gate，回退评估全部 ${gates.length} 个 gate`);
+    }
+  }
+
   // P0 硬门：releaseGovernance 必须 devMode=false 才算生产验收。
   // 防止 dev-mode 验收（devMode=true）再次被误报为生产验收。
   // 生产验收要求 devMode=false 且 release 身份/指纹/审批引用齐全
