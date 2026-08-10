@@ -385,6 +385,46 @@ const SC7_MIXED: BaselineScenario = {
   ],
 };
 
+const SC8_HIGH_RISK: BaselineScenario = {
+  id: "SC8-high-risk",
+  category: "canon_fact_retrieval",
+  description:
+    "高风险章节：4+ 个 P0 事实（真实身份/世界规则/封印/功法核心设定），riskScore>10，验证 C 组高风险预算提升",
+  workspace: {
+    workspaceId: "bl-hr8",
+    config: { novelType: "仙侠", characters: [{ name: "林默", role: "主角" }] },
+    historicalChapters: [
+      {
+        number: 1,
+        title: "第一章 封印",
+        text: "林默的真实身份是上古剑尊转世，体内封印着一道禁制。这片秘境的不可违背世界规则是封印之地不可强行破开，否则功法核心设定会崩溃。",
+      },
+      {
+        number: 2,
+        title: "第二章 破境",
+        text: "林默对照剑尊传承的功法，尝试冲击境界。护法提醒他，封印禁制与境界晋升的因果关系不可违背，必须先稳住剑心。",
+      },
+    ],
+    skeleton: {
+      events: [
+        { eventId: "h1", type: "entity", summary: "林默真实身份是上古剑尊转世", characters: ["林默"], location: "秘境" },
+        { eventId: "h2", type: "entity", summary: "封印之地不可强行破开的不可违背世界规则", characters: ["林默"], location: "封印之地" },
+      ],
+    },
+    narrativeState: { characterUpdates: [] },
+    arcRegistry: { arcs: [], foreshadowings: [] },
+    unsettledDetails: [],
+  },
+  calls: [
+    // 4 个 P0 事实：真实身份 / 世界规则 / 封印 / 功法核心设定（riskScore 3*4=12 > 10 → high）
+    { tool: "query_canon", args: { category: "timeline" }, mustVerify: ["林默的真实身份是上古剑尊转世", "封印之地不可强行破开的不可违背世界规则"] },
+    { tool: "search_narrative_evidence", args: { query: "林默真实身份 上古剑尊转世" }, mustVerify: ["林默的真实身份是上古剑尊转世"] },
+    { tool: "search_narrative_evidence", args: { query: "封印禁制与境界晋升的因果关系不可违背" }, mustVerify: ["封印禁制与境界晋升的因果关系不可违背"] },
+    { tool: "search_chapter_span", args: { query: "功法核心设定" }, mustVerify: ["功法核心设定会崩溃"] },
+    { tool: "search_chapter_span", args: { query: "境界" }, mustVerify: ["林默对照剑尊传承的功法冲击境界"] },
+  ],
+};
+
 export const BASELINE_SCENARIOS: BaselineScenario[] = [
   SC1_CANON,
   SC2_CHARACTER,
@@ -393,6 +433,7 @@ export const BASELINE_SCENARIOS: BaselineScenario[] = [
   SC5_SPAN,
   SC6_LOW_RISK,
   SC7_MIXED,
+  SC8_HIGH_RISK,
 ];
 
 // ============================================================================
