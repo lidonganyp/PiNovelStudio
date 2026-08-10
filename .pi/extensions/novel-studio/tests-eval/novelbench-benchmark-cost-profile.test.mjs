@@ -123,6 +123,10 @@ describe("NB-4.0 benchmark-cost-profile unit", () => {
       process.env.PINOVEL_BENCHMARK_COST_PROFILE = "production_validation";
       assert.equal(getBenchmarkCostProfile(), "production_validation");
     });
+    test("returns 'gemini_validation' when set", () => {
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+      assert.equal(getBenchmarkCostProfile(), "gemini_validation");
+    });
     test("returns null for invalid value (not enforced)", () => {
       process.env.PINOVEL_BENCHMARK_COST_PROFILE = "invalid";
       assert.equal(getBenchmarkCostProfile(), null);
@@ -146,6 +150,17 @@ describe("NB-4.0 benchmark-cost-profile unit", () => {
       assert.equal(set.has("doubao"), false);
       assert.equal(set.has("ernie"), false);
     });
+    test("gemini_validation allows gemini31 only", () => {
+      // Phase 8（Stage P/N）eval-only：仅授权 Gemini，不改变 production_validation 的
+      // GPT/Claude 语义，也不授权 package_screening 的 GLM/Doubao。
+      const set = getAuthorizedProviders("gemini_validation");
+      assert.equal(set.has("gemini31"), true);
+      assert.equal(set.has("gpt"), false);
+      assert.equal(set.has("claude"), false);
+      assert.equal(set.has("glm"), false);
+      assert.equal(set.has("doubao"), false);
+      assert.equal(set.has("ernie"), false);
+    });
   });
 
   describe("isProviderAuthorized (case-insensitive)", () => {
@@ -164,6 +179,16 @@ describe("NB-4.0 benchmark-cost-profile unit", () => {
       assert.equal(isProviderAuthorized("glm", "production_validation"), false);
       assert.equal(isProviderAuthorized("doubao", "production_validation"), false);
       assert.equal(isProviderAuthorized("ernie", "production_validation"), false);
+    });
+    test("gemini_validation: gemini31 authorized (any case); others not", () => {
+      assert.equal(isProviderAuthorized("gemini31", "gemini_validation"), true);
+      assert.equal(isProviderAuthorized("GEMINI31", "gemini_validation"), true);
+      assert.equal(isProviderAuthorized("Gemini31", "gemini_validation"), true);
+      assert.equal(isProviderAuthorized("gpt", "gemini_validation"), false);
+      assert.equal(isProviderAuthorized("claude", "gemini_validation"), false);
+      assert.equal(isProviderAuthorized("glm", "gemini_validation"), false);
+      assert.equal(isProviderAuthorized("doubao", "gemini_validation"), false);
+      assert.equal(isProviderAuthorized("ernie", "gemini_validation"), false);
     });
   });
 
@@ -184,6 +209,37 @@ describe("NB-4.0 benchmark-cost-profile unit", () => {
       process.env.PINOVEL_BENCHMARK_COST_PROFILE = "production_validation";
       assert.doesNotThrow(() => assertProviderAuthorized("gpt", "anti_ai_detector"));
       assert.doesNotThrow(() => assertProviderAuthorized("claude", "style_shaper"));
+    });
+    test("no-throw when provider authorized (gemini_validation + gemini31)", () => {
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+      assert.doesNotThrow(() =>
+        assertProviderAuthorized("gemini31", "narrator_primary")
+      );
+    });
+    test("throws when gemini_validation + gpt (Gemini 隔离，不兑现 GPT)", () => {
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+      assert.throws(
+        () => assertProviderAuthorized("gpt", "narrator_primary"),
+        (err) => {
+          assert.ok(err instanceof BenchmarkCostProfileViolation);
+          assert.equal(err.profile, "gemini_validation");
+          assert.equal(err.provider, "gpt");
+          assert.match(err.message, /HARD BLOCK/);
+          return true;
+        }
+      );
+    });
+    test("throws when gemini_validation + glm / claude / doubao", () => {
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+      for (const p of ["glm", "claude", "doubao", "ernie"]) {
+        assert.throws(
+          () => assertProviderAuthorized(p, "narrator_primary"),
+          (err) =>
+            err instanceof BenchmarkCostProfileViolation &&
+            err.profile === "gemini_validation" &&
+            err.provider === p
+        );
+      }
     });
     test("throws BenchmarkCostProfileViolation when package_screening + gpt", () => {
       process.env.PINOVEL_BENCHMARK_COST_PROFILE = "package_screening";
@@ -253,6 +309,10 @@ describe("NB-4.0 benchmark-cost-profile unit", () => {
       process.env.PINOVEL_BENCHMARK_COST_PROFILE = "production_validation";
       assert.equal(shouldDisableFallbackForProfile(), false);
     });
+    test("true for gemini_validation (Phase 8 强制禁用 fallback)", () => {
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+      assert.equal(shouldDisableFallbackForProfile(), true);
+    });
   });
 
   describe("filterFallbackChainByProfile", () => {
@@ -308,6 +368,23 @@ describe("NB-4.0 benchmark-cost-profile unit", () => {
         "architect"
       );
       assert.deepEqual(result, ["GLM", "Doubao"]);
+    });
+    test("gemini_validation keeps only gemini31", () => {
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+      const result = filterFallbackChainByProfile(
+        ["gemini31", "gpt", "claude", "glm", "doubao"],
+        "narrator_primary"
+      );
+      assert.deepEqual(result, ["gemini31"]);
+    });
+    test("gemini_validation: chain with no gemini31 throws", () => {
+      process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+      assert.throws(
+        () => filterFallbackChainByProfile(["gpt", "claude"], "narrator_primary"),
+        (err) =>
+          err instanceof BenchmarkCostProfileViolation &&
+          err.profile === "gemini_validation"
+      );
     });
   });
 
@@ -468,6 +545,28 @@ describe("NB-4.0 callWithFallback cost profile integration", () => {
       (err) => {
         assert.ok(err instanceof BenchmarkCostProfileViolation);
         assert.equal(err.profile, "production_validation");
+        return true;
+      }
+    );
+  });
+
+  test("gemini_validation forces disableFallback: primary=gpt → hard-blocks (禁止跨 provider 备援)", async () => {
+    // Phase 8（Stage P/N）：gemini_validation 只允许 gemini31 且强制禁用 fallback。
+    // chain=[gpt, gemini31] 时，若 disableFallback 生效，chain 收窄到 [primary=gpt]，
+    // profile 过滤掉 gpt → 抛 BenchmarkCostProfileViolation（不触网）。
+    process.env.PINOVEL_BENCHMARK_COST_PROFILE = "gemini_validation";
+    delete process.env.PINOVEL_DISABLE_FALLBACK;
+    const manager = new APIFallbackManager();
+    manager.loadFallbackContext = async () => buildMockContext(["gpt", "gemini31"]);
+    manager.makeOpenAIChatCall = async () => {
+      throw new Error("mock transport error (offline)");
+    };
+    await assert.rejects(
+      () => manager.callWithFallback("narrator_primary", [{ role: "user", content: "hi" }]),
+      (err) => {
+        assert.ok(err instanceof BenchmarkCostProfileViolation);
+        assert.equal(err.profile, "gemini_validation");
+        assert.equal(err.provider, "gpt");
         return true;
       }
     );

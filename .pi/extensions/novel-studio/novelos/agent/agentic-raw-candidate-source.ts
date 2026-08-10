@@ -135,6 +135,17 @@ export interface AgenticRawSourceInput {
    */
   retrievalPromptOverride?: string;
   /**
+   * eval-only：覆盖 NovelOS Agentic 生成所用的系统提示词（Stage P Prompt-A/B 注入）。
+   *
+   * Phase 8 Stage P（Prompt-only）评测用：P-A 传当前通用 NOVELOS_SYSTEM_PROMPT，
+   * P-B 传 Gemini 专属系统提示词（gemini-prompt-library.ts 的 GEMINI_SYSTEM_PROMPT）。
+   *
+   * fail-closed：本字段仅在 createAgenticRawCandidateSource({ permitSystemPromptOverride: true })
+   * 显式授权后可注入；生产调用 createAgenticRawCandidateSource() 未授权，任何调用方
+   * （含误传的生产入口）传入本字段都会抛错，无法静默激活。生产不传则行为不变。
+   */
+  systemPromptOverride?: string;
+  /**
    * Phase 5 受控接入：叙事工具暴露模式。
    *
    * - "facade"：canary workspace 显式 opt-in。registry 额外注册 query_narrative_production，
@@ -241,6 +252,14 @@ export interface AgenticRawSourceCapabilities {
   enableVerification?: boolean;
   /** 是否启用 mustVerify 覆盖门（离线消融可显式关闭） */
   enableCoverageGate?: boolean;
+  /**
+   * eval-only 授权开关：允许注入 input.systemPromptOverride。
+   *
+   * 默认 false（生产 createAgenticRawCandidateSource() 未传 → 未授权）。
+   * 仅 Stage P Prompt-A/B 评测 runner 在显式构造候选源时传 true。
+   * fail-closed：未授权时任何调用方传入 systemPromptOverride 都会抛错。
+   */
+  permitSystemPromptOverride?: boolean;
 }
 
 // ============================================================================
@@ -290,6 +309,7 @@ export function createAgenticRawCandidateSource(
   const enableRetrieval = capabilities?.enableRetrieval ?? true;
   const enableVerification = capabilities?.enableVerification ?? true;
   const enableCoverageGate = capabilities?.enableCoverageGate ?? true;
+  const permitSystemPromptOverride = capabilities?.permitSystemPromptOverride ?? false;
 
   return {
     async generate(input: AgenticRawSourceInput): Promise<AgenticRawSourceResult> {
@@ -310,8 +330,21 @@ export function createAgenticRawCandidateSource(
         fewshotSelection,
         writerPromptProfile,
         retrievalPromptOverride,
+        systemPromptOverride,
         toolMode,
       } = input;
+
+      // ── 0b. Phase 8 Stage P eval-only fail-closed 守卫 ─────────────────
+      // systemPromptOverride 仅允许经 createAgenticRawCandidateSource({permitSystemPromptOverride:true})
+      // 显式授权后注入。生产 createAgenticRawCandidateSource() 未授权（permit=false），
+      // 任何调用方（含误传该系统提示词的生产入口）传入 override 都会抛错，无法静默激活。
+      if (systemPromptOverride !== undefined && !permitSystemPromptOverride) {
+        throw new Error(
+          "systemPromptOverride 是 eval-only 覆盖字段；创建候选源时未传 permitSystemPromptOverride:true，" +
+          "禁止注入（fail-closed）。生产路径不得设置系统提示词覆盖，请移除该系统提示词覆盖。",
+        );
+      }
+      const effectiveSystemPrompt = systemPromptOverride ?? NOVELOS_SYSTEM_PROMPT;
 
       // ── 0. P1-5 修复：包装 modelGenerate 捕获真实模型名 ──────────────
       // 原先 candidate.model 固定为 "novelos_agentic"，导致 detectModelVersion
@@ -468,7 +501,7 @@ export function createAgenticRawCandidateSource(
       try {
         runtime = createNovelOSRuntime({
           session,
-          systemPrompt: NOVELOS_SYSTEM_PROMPT,
+          systemPrompt: effectiveSystemPrompt,
           // P1-5：使用带捕获的 modelGenerate，记录真实模型名用于版本隔离
           modelGenerate: modelGenerateWithCapture,
           route,

@@ -1,0 +1,532 @@
+{
+  "schema": "prompt-ab-replay/v1",
+  "timestamp": "2026-08-10T11:44:42.187Z",
+  "phase": "phase8-stage-p",
+  "mode": "real",
+  "batches": 3,
+  "seedsPerBatch": 3,
+  "route": "narrator_primary",
+  "temperature": 0.72,
+  "maxTokens": 2048,
+  "provenance": {
+    "provider": "gemini31",
+    "model": "gemini-3.1-pro-preview",
+    "route": "narrator_primary",
+    "temperature": 0.72,
+    "maxTokens": 2048,
+    "seedApplied": true,
+    "seedSupported": true,
+    "fallbackDisabled": false
+  },
+  "arms": {
+    "A": {
+      "label": "P-A（通用 Prompt）",
+      "base": "REAL_SYSTEM_PROMPT_BASE"
+    },
+    "B": {
+      "label": "P-B（Gemini 专属 Prompt）",
+      "base": "GEMINI_RETRIEVAL_SYSTEM_PROMPT_BASE"
+    }
+  },
+  "crossBatchAggregation": {
+    "A": {
+      "toolSurface": 9,
+      "schemaTokenCost": 52886,
+      "totalCalls": 124,
+      "totalDuplicateQueries": 0,
+      "totalResultChars": 8331,
+      "totalEstimateTokens": 11610,
+      "invalidToolSelections": 0,
+      "correctedToolSelections": 0,
+      "emptyResultRetried": 0,
+      "invalidIntents": 0,
+      "parseErrors": 0,
+      "emptyResults": 0,
+      "truncatedResults": 0,
+      "timeouts": 0,
+      "errors": 0,
+      "sourceRefsValid": 38,
+      "sourceRefsInvalid": 6,
+      "invalidSourceRefByCategory": {
+        "no_match": 5,
+        "profile_only": 0,
+        "empty": 1,
+        "other": 0
+      },
+      "evidenceLevelCounts": {
+        "confirmed_state": 23,
+        "exact_chapter_span": 25,
+        "confirmed": 2
+      },
+      "sourceRefCompleteness": 0.8801239410995508,
+      "avgCoverageRatio": 0.9833333333333334,
+      "firstValidEvidenceLatencyMs": 4.0476190476190474,
+      "scenarioCount": 24,
+      "stopCount": 18,
+      "stopRate": 0.8472222222222222,
+      "provenance": {
+        "provider": "gemini31",
+        "model": "gemini-3.1-pro-preview",
+        "route": "narrator_primary",
+        "temperature": 0.72,
+        "maxTokens": 2048,
+        "seedApplied": true,
+        "seedSupported": true,
+        "fallbackDisabled": false
+      },
+      "toolMode": "specialized",
+      "renderMode": "raw",
+      "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+      "avgFirstEvidenceLatencyMs": 3.8253968253968256
+    },
+    "B": {
+      "toolSurface": 9,
+      "schemaTokenCost": 23832,
+      "totalCalls": 10,
+      "totalDuplicateQueries": 0,
+      "totalResultChars": 0,
+      "totalEstimateTokens": 52,
+      "invalidToolSelections": 0,
+      "correctedToolSelections": 0,
+      "emptyResultRetried": 0,
+      "invalidIntents": 0,
+      "parseErrors": 0,
+      "emptyResults": 9,
+      "truncatedResults": 0,
+      "timeouts": 9,
+      "errors": 9,
+      "sourceRefsValid": 0,
+      "sourceRefsInvalid": 4,
+      "invalidSourceRefByCategory": {
+        "no_match": 0,
+        "profile_only": 0,
+        "empty": 4,
+        "other": 0
+      },
+      "evidenceLevelCounts": {},
+      "sourceRefCompleteness": 0.08333333333333333,
+      "avgCoverageRatio": 0.13425925925925927,
+      "firstValidEvidenceLatencyMs": null,
+      "scenarioCount": 24,
+      "stopCount": 20,
+      "stopRate": 0.875,
+      "provenance": {
+        "provider": "gemini31",
+        "model": "gemini-3.1-pro-preview",
+        "route": "narrator_primary",
+        "temperature": 0.72,
+        "maxTokens": 2048,
+        "seedApplied": true,
+        "seedSupported": true,
+        "fallbackDisabled": false
+      },
+      "toolMode": "specialized",
+      "renderMode": "raw",
+      "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+      "avgFirstEvidenceLatencyMs": 3
+    }
+  },
+  "crossBatchGate": {
+    "coverageNotDegraded": false,
+    "sourceRefNotDegraded": false,
+    "invalidCallsNotWorsened": true,
+    "emptyResultsNotWorsened": false,
+    "stopRateNotDegraded": true,
+    "tokenCostReduced": true,
+    "latencyNotWorse": true,
+    "allHardPassed": false,
+    "allPassed": false,
+    "details": {
+      "coverageNotDegraded": "B=0.134 >= A=0.983 - 0.05",
+      "sourceRefNotDegraded": "B=0.083 >= A=0.880 - 0.05",
+      "invalidCallsNotWorsened": "非法工具 B=0<=A=0, 解析失败 B=0<=A=0",
+      "emptyResultsNotWorsened": "B=9 <= A=0",
+      "stopRateNotDegraded": "B=88% >= A=85% - 5%",
+      "tokenCostReduced": "B=52 < A=11610×0.9=10449",
+      "latencyNotWorse": "B=3ms <= A=4ms + 1"
+    }
+  },
+  "perBatch": [
+    {
+      "batch": 0,
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "gate": {
+        "coverageNotDegraded": false,
+        "sourceRefNotDegraded": false,
+        "invalidCallsNotWorsened": true,
+        "emptyResultsNotWorsened": false,
+        "stopRateNotDegraded": true,
+        "tokenCostReduced": true,
+        "latencyNotWorse": false,
+        "allHardPassed": false,
+        "allPassed": false,
+        "details": {
+          "coverageNotDegraded": "B=0.125 >= A=0.983 - 0.05",
+          "sourceRefNotDegraded": "B=0.000 >= A=0.864 - 0.05",
+          "invalidCallsNotWorsened": "非法工具 B=0<=A=0, 解析失败 B=0<=A=0",
+          "emptyResultsNotWorsened": "B=4 <= A=0",
+          "stopRateNotDegraded": "B=83% >= A=75% - 5%",
+          "tokenCostReduced": "B=0 < A=4178×0.9=3760",
+          "latencyNotWorse": "B=unmeasuredms <= A=4ms + 1"
+        }
+      },
+      "aggregation": {
+        "A": {
+          "toolSurface": 9,
+          "schemaTokenCost": 52886,
+          "totalCalls": 44,
+          "totalDuplicateQueries": 0,
+          "totalResultChars": 8331,
+          "totalEstimateTokens": 4178,
+          "invalidToolSelections": 0,
+          "correctedToolSelections": 0,
+          "emptyResultRetried": 0,
+          "invalidIntents": 0,
+          "parseErrors": 0,
+          "emptyResults": 0,
+          "truncatedResults": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "sourceRefsValid": 38,
+          "sourceRefsInvalid": 6,
+          "invalidSourceRefByCategory": {
+            "no_match": 5,
+            "profile_only": 0,
+            "empty": 1,
+            "other": 0
+          },
+          "evidenceLevelCounts": {
+            "confirmed_state": 23,
+            "exact_chapter_span": 25,
+            "confirmed": 2
+          },
+          "sourceRefCompleteness": 0.8636363636363636,
+          "avgCoverageRatio": 0.9833333333333334,
+          "firstValidEvidenceLatencyMs": 4.0476190476190474,
+          "scenarioCount": 24,
+          "stopCount": 18,
+          "stopRate": 0.75,
+          "provenance": {
+            "provider": "gemini31",
+            "model": "gemini-3.1-pro-preview",
+            "route": "narrator_primary",
+            "temperature": 0.72,
+            "maxTokens": 2048,
+            "seedApplied": true,
+            "seedSupported": true,
+            "fallbackDisabled": false
+          },
+          "toolMode": "specialized",
+          "renderMode": "raw",
+          "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+          "avgFirstEvidenceLatencyMs": 4.0476190476190474
+        },
+        "B": {
+          "toolSurface": 9,
+          "schemaTokenCost": 23832,
+          "totalCalls": 4,
+          "totalDuplicateQueries": 0,
+          "totalResultChars": 0,
+          "totalEstimateTokens": 0,
+          "invalidToolSelections": 0,
+          "correctedToolSelections": 0,
+          "emptyResultRetried": 0,
+          "invalidIntents": 0,
+          "parseErrors": 0,
+          "emptyResults": 4,
+          "truncatedResults": 0,
+          "timeouts": 4,
+          "errors": 4,
+          "sourceRefsValid": 0,
+          "sourceRefsInvalid": 4,
+          "invalidSourceRefByCategory": {
+            "no_match": 0,
+            "profile_only": 0,
+            "empty": 4,
+            "other": 0
+          },
+          "evidenceLevelCounts": {},
+          "sourceRefCompleteness": 0,
+          "avgCoverageRatio": 0.125,
+          "firstValidEvidenceLatencyMs": null,
+          "scenarioCount": 24,
+          "stopCount": 20,
+          "stopRate": 0.8333333333333334,
+          "provenance": {
+            "provider": "gemini31",
+            "model": "gemini-3.1-pro-preview",
+            "route": "narrator_primary",
+            "temperature": 0.72,
+            "maxTokens": 2048,
+            "seedApplied": true,
+            "seedSupported": true,
+            "fallbackDisabled": false
+          },
+          "toolMode": "specialized",
+          "renderMode": "raw",
+          "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+          "avgFirstEvidenceLatencyMs": null
+        }
+      }
+    },
+    {
+      "batch": 1,
+      "seeds": [
+        3,
+        4,
+        5
+      ],
+      "gate": {
+        "coverageNotDegraded": false,
+        "sourceRefNotDegraded": false,
+        "invalidCallsNotWorsened": true,
+        "emptyResultsNotWorsened": false,
+        "stopRateNotDegraded": true,
+        "tokenCostReduced": true,
+        "latencyNotWorse": true,
+        "allHardPassed": false,
+        "allPassed": false,
+        "details": {
+          "coverageNotDegraded": "B=0.153 >= A=0.992 - 0.05",
+          "sourceRefNotDegraded": "B=0.250 >= A=0.923 - 0.05",
+          "invalidCallsNotWorsened": "非法工具 B=0<=A=0, 解析失败 B=0<=A=0",
+          "emptyResultsNotWorsened": "B=3 <= A=0",
+          "stopRateNotDegraded": "B=88% >= A=92% - 5%",
+          "tokenCostReduced": "B=52 < A=3942×0.9=3548",
+          "latencyNotWorse": "B=3ms <= A=4ms + 1"
+        }
+      },
+      "aggregation": {
+        "A": {
+          "toolSurface": 9,
+          "schemaTokenCost": 52033,
+          "totalCalls": 39,
+          "totalDuplicateQueries": 0,
+          "totalResultChars": 7866,
+          "totalEstimateTokens": 3942,
+          "invalidToolSelections": 0,
+          "correctedToolSelections": 0,
+          "emptyResultRetried": 0,
+          "invalidIntents": 0,
+          "parseErrors": 0,
+          "emptyResults": 0,
+          "truncatedResults": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "sourceRefsValid": 36,
+          "sourceRefsInvalid": 3,
+          "invalidSourceRefByCategory": {
+            "no_match": 3,
+            "profile_only": 0,
+            "empty": 0,
+            "other": 0
+          },
+          "evidenceLevelCounts": {
+            "confirmed_state": 21,
+            "exact_chapter_span": 23,
+            "confirmed": 3
+          },
+          "sourceRefCompleteness": 0.9230769230769231,
+          "avgCoverageRatio": 0.9916666666666667,
+          "firstValidEvidenceLatencyMs": 4,
+          "scenarioCount": 24,
+          "stopCount": 22,
+          "stopRate": 0.9166666666666666,
+          "provenance": {
+            "provider": "gemini31",
+            "model": "gemini-3.1-pro-preview",
+            "route": "narrator_primary",
+            "temperature": 0.72,
+            "maxTokens": 2048,
+            "seedApplied": true,
+            "seedSupported": true,
+            "fallbackDisabled": false
+          },
+          "toolMode": "specialized",
+          "renderMode": "raw",
+          "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+          "avgFirstEvidenceLatencyMs": 4
+        },
+        "B": {
+          "toolSurface": 9,
+          "schemaTokenCost": 24825,
+          "totalCalls": 4,
+          "totalDuplicateQueries": 0,
+          "totalResultChars": 104,
+          "totalEstimateTokens": 52,
+          "invalidToolSelections": 0,
+          "correctedToolSelections": 0,
+          "emptyResultRetried": 0,
+          "invalidIntents": 0,
+          "parseErrors": 0,
+          "emptyResults": 3,
+          "truncatedResults": 0,
+          "timeouts": 3,
+          "errors": 3,
+          "sourceRefsValid": 1,
+          "sourceRefsInvalid": 3,
+          "invalidSourceRefByCategory": {
+            "no_match": 0,
+            "profile_only": 0,
+            "empty": 3,
+            "other": 0
+          },
+          "evidenceLevelCounts": {
+            "confirmed_state": 1
+          },
+          "sourceRefCompleteness": 0.25,
+          "avgCoverageRatio": 0.15277777777777776,
+          "firstValidEvidenceLatencyMs": 3,
+          "scenarioCount": 24,
+          "stopCount": 21,
+          "stopRate": 0.875,
+          "provenance": {
+            "provider": "gemini31",
+            "model": "gemini-3.1-pro-preview",
+            "route": "narrator_primary",
+            "temperature": 0.72,
+            "maxTokens": 2048,
+            "seedApplied": true,
+            "seedSupported": true,
+            "fallbackDisabled": false
+          },
+          "toolMode": "specialized",
+          "renderMode": "raw",
+          "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+          "avgFirstEvidenceLatencyMs": 3
+        }
+      }
+    },
+    {
+      "batch": 2,
+      "seeds": [
+        6,
+        7,
+        8
+      ],
+      "gate": {
+        "coverageNotDegraded": false,
+        "sourceRefNotDegraded": false,
+        "invalidCallsNotWorsened": true,
+        "emptyResultsNotWorsened": false,
+        "stopRateNotDegraded": true,
+        "tokenCostReduced": true,
+        "latencyNotWorse": false,
+        "allHardPassed": false,
+        "allPassed": false,
+        "details": {
+          "coverageNotDegraded": "B=0.125 >= A=0.975 - 0.05",
+          "sourceRefNotDegraded": "B=0.000 >= A=0.854 - 0.05",
+          "invalidCallsNotWorsened": "非法工具 B=0<=A=0, 解析失败 B=0<=A=0",
+          "emptyResultsNotWorsened": "B=2 <= A=0",
+          "stopRateNotDegraded": "B=92% >= A=88% - 5%",
+          "tokenCostReduced": "B=0 < A=3490×0.9=3141",
+          "latencyNotWorse": "B=unmeasuredms <= A=3ms + 1"
+        }
+      },
+      "aggregation": {
+        "A": {
+          "toolSurface": 9,
+          "schemaTokenCost": 52886,
+          "totalCalls": 41,
+          "totalDuplicateQueries": 0,
+          "totalResultChars": 6960,
+          "totalEstimateTokens": 3490,
+          "invalidToolSelections": 0,
+          "correctedToolSelections": 0,
+          "emptyResultRetried": 0,
+          "invalidIntents": 0,
+          "parseErrors": 0,
+          "emptyResults": 0,
+          "truncatedResults": 0,
+          "timeouts": 0,
+          "errors": 0,
+          "sourceRefsValid": 35,
+          "sourceRefsInvalid": 6,
+          "invalidSourceRefByCategory": {
+            "no_match": 6,
+            "profile_only": 0,
+            "empty": 0,
+            "other": 0
+          },
+          "evidenceLevelCounts": {
+            "confirmed_state": 22,
+            "exact_chapter_span": 22,
+            "confirmed": 2
+          },
+          "sourceRefCompleteness": 0.8536585365853658,
+          "avgCoverageRatio": 0.9750000000000001,
+          "firstValidEvidenceLatencyMs": 3.4285714285714284,
+          "scenarioCount": 24,
+          "stopCount": 21,
+          "stopRate": 0.875,
+          "provenance": {
+            "provider": "gemini31",
+            "model": "gemini-3.1-pro-preview",
+            "route": "narrator_primary",
+            "temperature": 0.72,
+            "maxTokens": 2048,
+            "seedApplied": true,
+            "seedSupported": true,
+            "fallbackDisabled": false
+          },
+          "toolMode": "specialized",
+          "renderMode": "raw",
+          "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+          "avgFirstEvidenceLatencyMs": 3.4285714285714284
+        },
+        "B": {
+          "toolSurface": 9,
+          "schemaTokenCost": 23832,
+          "totalCalls": 2,
+          "totalDuplicateQueries": 0,
+          "totalResultChars": 0,
+          "totalEstimateTokens": 0,
+          "invalidToolSelections": 0,
+          "correctedToolSelections": 0,
+          "emptyResultRetried": 0,
+          "invalidIntents": 0,
+          "parseErrors": 0,
+          "emptyResults": 2,
+          "truncatedResults": 0,
+          "timeouts": 2,
+          "errors": 2,
+          "sourceRefsValid": 0,
+          "sourceRefsInvalid": 2,
+          "invalidSourceRefByCategory": {
+            "no_match": 0,
+            "profile_only": 0,
+            "empty": 2,
+            "other": 0
+          },
+          "evidenceLevelCounts": {},
+          "sourceRefCompleteness": 0,
+          "avgCoverageRatio": 0.125,
+          "firstValidEvidenceLatencyMs": null,
+          "scenarioCount": 24,
+          "stopCount": 22,
+          "stopRate": 0.9166666666666666,
+          "provenance": {
+            "provider": "gemini31",
+            "model": "gemini-3.1-pro-preview",
+            "route": "narrator_primary",
+            "temperature": 0.72,
+            "maxTokens": 2048,
+            "seedApplied": true,
+            "seedSupported": true,
+            "fallbackDisabled": false
+          },
+          "toolMode": "specialized",
+          "renderMode": "raw",
+          "fingerprint": "gemini31:gemini-3.1-pro-preview:narrator_primary",
+          "avgFirstEvidenceLatencyMs": null
+        }
+      }
+    }
+  ],
+  "note": "Phase 8 Stage P: P-A(通用 Prompt) vs P-B(Gemini 专属 Prompt)。固定9专用工具+完整上下文+A组预算+Gemini生产route(fallback=[])。"
+}

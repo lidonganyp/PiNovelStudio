@@ -773,6 +773,15 @@ export async function runRealToolAbScenario(options: {
   timeoutMs?: number;
   /** Phase 5.3.2 消融：显式指定引导变体（透传到 createTypedFacadeTool） */
   guidanceVariant?: "old" | "new";
+  /**
+   * Phase 8 Stage P（Prompt-only）eval 注入：覆盖检索决策 system prompt 基座。
+   *
+   * 默认 REAL_SYSTEM_PROMPT_BASE（通用基线）。Stage P 的 P-B 臂传
+   * gemini-prompt-library.ts 的 GEMINI_RETRIEVAL_SYSTEM_PROMPT_BASE（Gemini 专属），
+   * 与 P-A（通用）对比时，工具面/上下文/预算/模型 route 完全一致，只变化 systemPrompt，
+   * 使 Prompt 收益可独立归因。未传则不改变现有行为。
+   */
+  systemPromptBase?: string;
 }): Promise<RealToolAbScenarioMetrics> {
   const { scenario, arm, seed, modelFn } = options;
   const maxModelCalls = options.maxModelCalls ?? scenario.calls.length;
@@ -819,7 +828,7 @@ export async function runRealToolAbScenario(options: {
     // Phase 4.2.2：启用 decision-only 注入模式，去除注入器中的正文诱导
     // （"基于证据生成正文/证据充分时直接输出章节正文"），只允许输出终止标记。
     const systemPrompt = injectToolSchemas(
-      REAL_SYSTEM_PROMPT_BASE,
+      options.systemPromptBase ?? REAL_SYSTEM_PROMPT_BASE,
       tools as unknown as AgentTool[],
       arm === "A" ? NARRATIVE_TOOL_NAMES : new Set([QUERY_NARRATIVE_NAME]),
       { decisionOnly: true, doneMarker: REAL_DONE_MARKER },

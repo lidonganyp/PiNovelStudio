@@ -4,11 +4,13 @@
  * 目标：在 NovelBench 评测期间强制隔离 provider，防止套餐模型测试意外调用
  * 按量计费的生产模型（GPT/Claude/ERNIE），或生产验证测试意外调用套餐模型。
  *
- * 两个 profile：
+ * 三个 profile：
  * - package_screening：只允许 GLM / Doubao，禁止 fallback，禁止 GPT/Claude/ERNIE
  * - production_validation：只允许 GPT / Claude，使用生产级路由
+ * - gemini_validation：只允许 Gemini（gemini31），Phase 8（Stage P/N）eval-only 授权。
+ *   独立 profile，不改变 production_validation 的 GPT/Claude 授权语义。
  *
- * 激活方式：env PINOVEL_BENCHMARK_COST_PROFILE=package_screening|production_validation
+ * 激活方式：env PINOVEL_BENCHMARK_COST_PROFILE=package_screening|production_validation|gemini_validation
  * 未设置 env 时不强制（向后兼容，生产 novel_generate_chapter 默认路由不受影响）。
  *
  * 违规时立即 hard block（throw），不静默降级。
@@ -21,7 +23,10 @@
 // 类型
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type BenchmarkCostProfile = "package_screening" | "production_validation";
+export type BenchmarkCostProfile =
+  | "package_screening"
+  | "production_validation"
+  | "gemini_validation";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider 授权表
@@ -33,6 +38,9 @@ const PACKAGE_SCREENING_ALLOWED: ReadonlySet<string> = new Set(["glm", "doubao"]
 /** production_validation 允许的 provider（生产模型，按量计费） */
 const PRODUCTION_VALIDATION_ALLOWED: ReadonlySet<string> = new Set(["gpt", "claude"]);
 
+/** gemini_validation 允许的 provider（仅 Gemini，Phase 8 eval-only） */
+const GEMINI_VALIDATION_ALLOWED: ReadonlySet<string> = new Set(["gemini31"]);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 公开 API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +51,11 @@ const PRODUCTION_VALIDATION_ALLOWED: ReadonlySet<string> = new Set(["gpt", "clau
  */
 export function getBenchmarkCostProfile(): BenchmarkCostProfile | null {
   const raw = process.env.PINOVEL_BENCHMARK_COST_PROFILE;
-  if (raw === "package_screening" || raw === "production_validation") {
+  if (
+    raw === "package_screening" ||
+    raw === "production_validation" ||
+    raw === "gemini_validation"
+  ) {
     return raw;
   }
   return null;
@@ -53,9 +65,18 @@ export function getBenchmarkCostProfile(): BenchmarkCostProfile | null {
  * 返回指定 profile 下授权的 provider 集合（小写）。
  */
 export function getAuthorizedProviders(profile: BenchmarkCostProfile): ReadonlySet<string> {
-  return profile === "package_screening"
-    ? PACKAGE_SCREENING_ALLOWED
-    : PRODUCTION_VALIDATION_ALLOWED;
+  switch (profile) {
+    case "package_screening":
+      return PACKAGE_SCREENING_ALLOWED;
+    case "production_validation":
+      return PRODUCTION_VALIDATION_ALLOWED;
+    case "gemini_validation":
+      return GEMINI_VALIDATION_ALLOWED;
+    default: {
+      const _exhaustive: never = profile;
+      throw new Error(`Unknown profile: ${String(_exhaustive)}`);
+    }
+  }
 }
 
 /**
@@ -98,13 +119,15 @@ export function assertProviderAuthorized(provider: string, agentName: string): v
  * 判断当前是否应禁用 fallback。
  *
  * package_screening 模式下强制禁用 fallback（只允许 GLM/Doubao，失败即失败）。
+ * gemini_validation 模式下强制禁用 fallback（Phase 8 只允许 Gemini，narrator_primary
+ * 生产 route 本身 fallback=[]，禁止任何跨 provider 备援）。
  * production_validation 模式下不禁用 fallback（生产级路由有自己的 fallback 策略）。
  * 未设置 profile 时返回 false（向后兼容）。
  */
 export function shouldDisableFallbackForProfile(): boolean {
   const profile = getBenchmarkCostProfile();
   if (profile === null) return false;
-  return profile === "package_screening";
+  return profile === "package_screening" || profile === "gemini_validation";
 }
 
 /**

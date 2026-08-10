@@ -1,6 +1,6 @@
 # Phase 8：Gemini 专属 Prompt 与原生能力评估
 
-> **状态**：设计阶段（2026-08-10）
+> **状态**：Stage P 已实现并完成真实 replay 评估（2026-08-10），P-B 未通过硬门；按 §7 决策保持当前生产基线，Stage N 不启动。
 > **前置**：Phase 7 已正式收口（A 组当前推理预算 = 生产基线，B/C 仅保留 eval，不进入 canary）。当前生产基线冻结为：9 专用工具 + 完整上下文 + A 组推理预算 + Gemini 生产 route（`fallback=[]`）。
 > **约束**：eval-only，不直接修改 `novel_generate_chapter` 生产编排或 production pointer。两个实验**按顺序、正交**执行，不同时改变 Prompt 与协议。
 
@@ -145,14 +145,37 @@ NovelOS Agentic 使用的是**与模型无关的通用 Prompt 与文本协议**�
 
 ## 8. 验收产物
 
-- [ ] `novelos/eval/prompt-ab-runner.ts`（Stage P 两臂 runner + stub/real）
-- [ ] `novelos/eval/prompt-ab-gate.ts`（Stage P 门禁）
-- [ ] `novelos/eval/gemini-prompt-library.ts`（Gemini 专属 Prompt，eval-only）
-- [ ] `novelos/eval/native-protocol-runner.ts`（Stage N 原生协议 runner）
-- [ ] `novelos/eval/native-protocol-gate.ts`（Stage N 门禁）
-- [ ] `tests-eval/phase8-prompt-native.test.mjs`（确定性断言）
-- [ ] `reports/phase8-prompt-native/`（对比报告 JSON + MD）
-- [ ] 本设计评审通过后，才可进入实现 Phase
+- [x] `novelos/eval/prompt-ab-runner.ts`（Stage P 两臂 runner + stub/real）
+- [x] `novelos/eval/prompt-ab-gate.ts`（Stage P 门禁）
+- [x] `novelos/eval/gemini-prompt-library.ts`（Gemini 专属 Prompt，eval-only）
+- [ ] `novelos/eval/native-protocol-runner.ts`（Stage N 原生协议 runner）—— **未启动**（Stage P 负向，按 §7 保持基线）
+- [ ] `novelos/eval/native-protocol-gate.ts`（Stage N 门禁）—— **未启动**（Stage P 负向）
+- [x] `tests-eval/phase8-prompt-native.test.mjs`（确定性断言）
+- [x] `reports/phase8-prompt-native/`（对比报告 JSON + MD，含 dry-run 与 real）
+- [x] `api/benchmark-cost-profile.ts` 新增 `gemini_validation` profile（独立授权，不改 `production_validation`）
+- [x] `scripts/prompt-ab-replay.mjs`（CLI：dry-run stub / real 需 `--require-auth` + `gemini_validation`）
+- [x] `agentic-raw-candidate-source.ts` 新增 eval-only `systemPromptOverride` + `permitSystemPromptOverride` fail-closed 守卫
+- [x] 本设计评审通过后，才可进入实现 Phase
+
+### 8.1 Stage P 真实 replay 结果（2026-08-10）
+
+route：`narrator_primary`（provider=gemini31, model=gemini-3.1-pro-preview, fallback=[]），3 批 × 3 seed（seed 0-8），P-A（通用 Prompt）vs P-B（Gemini 专属 Prompt），工具/上下文/预算固定。
+
+| 指标 | P-A（通用） | P-B（Gemini 专属） | 门禁 | 结论 |
+|------|-------------|--------------------|------|------|
+| mustVerify 覆盖率 | 0.983 | 0.134 | ≥ A-0.05 | ✗ |
+| sourceRef 完整率 | 0.880 | 0.083 | ≥ A-0.05 | ✗ |
+| 非法调用 | 0 | 0 | ≤ A | ✓ |
+| 空结果 | 0 | 9 | ≤ A | ✗ |
+| 停止率 | 85% | 88% | ≥ A-5% | ✓ |
+| token 成本 | 11610 | 52 | < A×0.9（加分项） | ✓ |
+| 首证据延迟 | 4ms | 3ms | ≤ A+1ms（加分项） | ✓ |
+
+**硬门全部通过：否**（3 批次全部 FAIL，方向一致）。
+
+**根因分析**：P-B 的 Gemini 专属 prompt 过度强调"证据充分即输出 `<done>` 终止标记"，导致真实模型在检索验证前就过早终止：总调用仅 10（P-A=124），9 个场景空结果/超时/错误。mustVerify 覆盖率从 0.983 崩溃至 0.134，sourceRef 完整率从 0.880 崩溃至 0.083。首次证据延迟因无有效证据而未测（unmeasured）。
+
+**决策（§7）**：P-B 未达 ≥2/3 批次硬门通过门槛 → **保持当前生产基线（通用 Prompt）**，不移动 production pointer，Stage N（Native-only）不启动。Prompt 层改进仅存于 eval，供后续迭代参考。
 
 ---
 
@@ -177,5 +200,7 @@ NovelOS Agentic 使用的是**与模型无关的通用 Prompt 与文本协议**�
 | 固定 | — | 工具+预算 | 上下文+工具 | 工具+上下文+预算 |
 | 结论 | 9 专用工具 | 不压缩 | A 组预算 | 待验证 |
 | canary 前提 | — | 负向 | 未过 | 仅在稳定获益后设计 |
+
+> **Phase 8 结论更新（2026-08-10）**：Stage P（Prompt-only）真实 replay 为**负向**——P-B（Gemini 专属 Prompt）mustVerify 覆盖率 0.134 / sourceRef 0.083，远低于 P-A（0.983 / 0.880）；按 §7 决策保持当前生产基线（通用 Prompt），Stage N（Native-only）不启动。生产链路、9 工具、完整上下文、A 组预算全部保持不变。
 
 > Phase 8 是 Phase 7 收口后的下一个正交能力维度，三者固定维度逐层叠加：工具（P5）→ 上下文（P6）→ 预算（P7）→ Prompt/协议（P8）。
