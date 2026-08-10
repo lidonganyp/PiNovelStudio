@@ -55,9 +55,14 @@ const narrativeStateFile = join(WORKSPACE_DIR, "narrative-state-store.json");
 
 function snapshotState() {
   const chapterFile = resolveChapterFile();
+  const chapterExists = existsSync(chapterFile);
   const snap = {
     chapterFile,
-    chapterExists: existsSync(chapterFile),
+    chapterExists,
+    // 捕获章节文件修改时间（ms），用于"章节已存在"场景下判定原子保存是否推进。
+    // 旧逻辑 `!before.chapterExists && after.chapterExists` 在重跑某章时恒为 false，
+    // 导致标准验收入口误报（即便 pipeline 已成功原子保存）。mtime 变化等价于本次确实写盘。
+    chapterMtimeMs: chapterExists ? statSync(chapterFile).mtimeMs : null,
     traceExists: existsSync(traceFile),
     evidenceReportExists: existsSync(evidenceReportFile()),
     nsLastCommittedChapter: null,
@@ -201,13 +206,20 @@ function check(name, condition, detail = "") {
   if (!condition) evidence.passed = false;
 }
 
-// 1. 章节文件原子保存
+// 1. 章节文件原子保存：判定本次运行是否真正写盘。
+// 旧逻辑 `!before.chapterExists && after.chapterExists` 只在"从无到有"时成立；
+// 重跑某章（章节已存在）时恒为 false，产生误报。改为：
+//   - 新生成：before 不存在 && after 存在 -> PASS
+//   - 重跑覆盖：章节已存在但 mtime 更新（statSync 精度到 ms，pipeline 耗时远超 1ms）-> PASS
+//   - 章节不存在且 mtime 未更新 -> FAIL
 const chapterFileName = after.chapterFile ? after.chapterFile.split(/[\\/]/).pop() : "(none)";
+const chapterSaved = after.chapterExists &&
+  (before.chapterMtimeMs === null || after.chapterMtimeMs > before.chapterMtimeMs);
 check(
   "章节文件原子保存",
-  !before.chapterExists && after.chapterExists,
+  chapterSaved,
   before.chapterExists
-    ? "验收前已存在（非新生成）"
+    ? `章节已存在，mtime 已更新（${before.chapterMtimeMs} -> ${after.chapterMtimeMs}）`
     : after.chapterExists
       ? `${chapterFileName} 已生成`
       : "章节文件未生成",
