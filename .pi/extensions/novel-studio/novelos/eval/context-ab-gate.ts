@@ -111,6 +111,60 @@ export function aggregate(entries: ContextAbEntry[]): ContextAbAggregate {
   };
 }
 
+// ── 消融门禁（Phase 6.2） ─────────────────────────────────────────────────
+
+export interface AblationGateResult {
+  arm: string;
+  coverageGteA: boolean;
+  sourceRefGteA: boolean;
+  failuresNotWorseThanA: boolean;
+  stopRateNotDegraded: boolean;
+  allPassed: boolean;
+  coverageDelta: number;
+  sourceRefDelta: number;
+  tokenDelta: number;
+  hasSignificantContribution: boolean;
+}
+
+/**
+ * 消融门禁：每个消融 arm vs A 不降级。
+ * delta（A - 消融 arm）：正值表示该类状态有正贡献。
+ */
+export function evaluateAblationGate(
+  ablationAgg: ContextAbAggregate,
+  aAgg: ContextAbAggregate,
+  armLabel: string,
+): AblationGateResult {
+  const coverageGteA = ablationAgg.avgCoverage >= aAgg.avgCoverage - 1e-9;
+  const sourceRefGteA = ablationAgg.avgSourceRef >= aAgg.avgSourceRef - 1e-9;
+  const failuresNotWorseThanA =
+    ablationAgg.totalErrors <= aAgg.totalErrors &&
+    ablationAgg.totalTimeouts <= aAgg.totalTimeouts &&
+    ablationAgg.totalParseErrors <= aAgg.totalParseErrors &&
+    ablationAgg.totalEmpty <= aAgg.totalEmpty &&
+    ablationAgg.totalInvalidTool <= aAgg.totalInvalidTool &&
+    ablationAgg.totalTruncated <= aAgg.totalTruncated &&
+    ablationAgg.totalInvalidIntents <= aAgg.totalInvalidIntents;
+  const stopRateNotDegraded = ablationAgg.stopRate >= aAgg.stopRate - 0.05;
+  const coverageDelta = aAgg.avgCoverage - ablationAgg.avgCoverage;
+  const sourceRefDelta = aAgg.avgSourceRef - ablationAgg.avgSourceRef;
+  const tokenDelta = aAgg.totalContextBlockTokens - ablationAgg.totalContextBlockTokens;
+  const allPassed = coverageGteA && sourceRefGteA && failuresNotWorseThanA && stopRateNotDegraded;
+
+  return {
+    arm: armLabel,
+    coverageGteA,
+    sourceRefGteA,
+    failuresNotWorseThanA,
+    stopRateNotDegraded,
+    allPassed,
+    coverageDelta,
+    sourceRefDelta,
+    tokenDelta,
+    hasSignificantContribution: coverageDelta > 0.05,
+  };
+}
+
 // ── 门禁评估 ──────────────────────────────────────────────────────────────
 
 export interface BGateResult {

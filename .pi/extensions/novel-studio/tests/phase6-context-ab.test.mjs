@@ -14,6 +14,13 @@ const gateMod = await import(
   `file://${join(process.cwd(), "dist-eval", "novelos", "eval", "context-ab-gate.js")}`
 );
 const { aggregate, evaluateGate } = gateMod;
+// Phase 6.2.1：导入消融 runner 和 builder 模块
+const runnerMod = await import(
+  `file://${join(process.cwd(), "dist-eval", "novelos", "eval", "context-ab-runner.js")}`
+);
+const builderMod = await import(
+  `file://${join(process.cwd(), "dist-eval", "novelos", "eval", "compressed-context-builder.js")}`
+);
 
 // ── 门禁逻辑测试 ──────────────────────────────────────────────────────────
 
@@ -50,6 +57,83 @@ describe("Phase 6.1.1 门禁逻辑（从 gate 模块导入）", () => {
     const cAgg = { avgCoverage: 0.8, avgSourceRef: 0.7, totalContextBlockTokens: 0 };
     const gate = evaluateGate(bAgg, cAgg, aAgg);
     assert.equal(gate.bGate.firstEvidenceNotDelayed, true, "无有效证据时不应阻断门禁");
+  });
+});
+
+// ── 消融 arm 参数测试（Phase 6.2.1） ─────────────────────────────────────
+
+describe("Phase 6.2.1 消融 arm 参数验证", () => {
+  it("每个消融 arm 只关闭一个状态类别", () => {
+    const arms = ["A-Canon", "A-Character", "A-Promise", "A-Pattern"];
+    for (const arm of arms) {
+      const params = runnerMod.compressionParamsOfArm(arm);
+      // 统计关闭的字段数
+      const offCount = [
+        !params.injectCanon,
+        !params.injectCharacter,
+        !params.injectPromise,
+        !params.injectPattern,
+        !params.injectExpectation,
+        !params.injectPlanned,
+      ].filter(Boolean).length;
+      assert.equal(offCount, 1, `${arm} 应只关闭 1 个状态类别，实际关闭 ${offCount} 个`);
+    }
+  });
+
+  it("A-Canon 只关闭 CanonState", () => {
+    const params = runnerMod.compressionParamsOfArm("A-Canon");
+    assert.equal(params.injectCanon, false);
+    assert.equal(params.injectCharacter, true);
+    assert.equal(params.injectPromise, true);
+    assert.equal(params.injectPattern, true);
+  });
+
+  it("A-Character 只关闭 CharacterState", () => {
+    const params = runnerMod.compressionParamsOfArm("A-Character");
+    assert.equal(params.injectCanon, true);
+    assert.equal(params.injectCharacter, false);
+    assert.equal(params.injectPromise, true);
+    assert.equal(params.injectPattern, true);
+  });
+
+  it("A-Promise 只关闭 PromiseLedger", () => {
+    const params = runnerMod.compressionParamsOfArm("A-Promise");
+    assert.equal(params.injectCanon, true);
+    assert.equal(params.injectCharacter, true);
+    assert.equal(params.injectPromise, false);
+    assert.equal(params.injectPattern, true);
+  });
+
+  it("A-Pattern 只关闭 PatternMemory", () => {
+    const params = runnerMod.compressionParamsOfArm("A-Pattern");
+    assert.equal(params.injectCanon, true);
+    assert.equal(params.injectCharacter, true);
+    assert.equal(params.injectPromise, true);
+    assert.equal(params.injectPattern, false);
+  });
+
+  it("A 组（完整）全部注入", () => {
+    const params = runnerMod.compressionParamsOfArm("A");
+    assert.equal(params.injectCanon, true);
+    assert.equal(params.injectCharacter, true);
+    assert.equal(params.injectPromise, true);
+    assert.equal(params.injectPattern, true);
+    assert.equal(params.injectExpectation, true);
+    assert.equal(params.injectPlanned, true);
+  });
+
+  it("消融 arm 的 maxItems 和 summaryCharLimit 与 A 组一致", () => {
+    const aParams = runnerMod.compressionParamsOfArm("A");
+    for (const arm of ["A-Canon", "A-Character", "A-Promise", "A-Pattern"]) {
+      const params = runnerMod.compressionParamsOfArm(arm);
+      assert.equal(params.maxItems, aParams.maxItems, `${arm} maxItems 应与 A 一致`);
+      assert.equal(params.summaryCharLimit, aParams.summaryCharLimit, `${arm} summaryCharLimit 应与 A 一致`);
+    }
+  });
+
+  it("消融门禁从 gate 模块导入（无内联副本）", () => {
+    // 确认 evaluateAblationGate 可从 gate 模块导入
+    assert.equal(typeof gateMod.evaluateAblationGate, "function", "evaluateAblationGate 应从 gate 模块导出");
   });
 });
 

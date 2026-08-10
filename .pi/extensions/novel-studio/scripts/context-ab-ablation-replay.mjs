@@ -61,7 +61,7 @@ const runner = await import(
 const gateMod = await import(
   `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "context-ab-gate.js")}`
 );
-const { aggregate, evaluateGate } = gateMod;
+const { aggregate, evaluateAblationGate } = gateMod;
 
 const scenarios = runner.getContextAbScenarios();
 const variants = [
@@ -146,40 +146,6 @@ async function runOne(scenario, seed, variant) {
   }
 }
 
-// ── 消融门禁：每个消融 arm vs A 不降级 ──
-function evaluateAblationGate(ablationAgg, aAgg, armLabel) {
-  const coverageGteA = ablationAgg.avgCoverage >= aAgg.avgCoverage - 1e-9;
-  const sourceRefGteA = ablationAgg.avgSourceRef >= aAgg.avgSourceRef - 1e-9;
-  const failuresNotWorseThanA =
-    ablationAgg.totalErrors <= aAgg.totalErrors &&
-    ablationAgg.totalTimeouts <= aAgg.totalTimeouts &&
-    ablationAgg.totalParseErrors <= aAgg.totalParseErrors &&
-    ablationAgg.totalEmpty <= aAgg.totalEmpty &&
-    ablationAgg.totalInvalidTool <= aAgg.totalInvalidTool &&
-    ablationAgg.totalTruncated <= aAgg.totalTruncated &&
-    ablationAgg.totalInvalidIntents <= aAgg.totalInvalidIntents;
-  const stopRateNotDegraded = ablationAgg.stopRate >= aAgg.stopRate - 0.05;
-  // delta（A - 消融 arm）：正值表示该类状态有正贡献
-  const coverageDelta = aAgg.avgCoverage - ablationAgg.avgCoverage;
-  const sourceRefDelta = aAgg.avgSourceRef - ablationAgg.avgSourceRef;
-  const tokenDelta = aAgg.totalContextBlockTokens - ablationAgg.totalContextBlockTokens;
-  const allPassed = coverageGteA && sourceRefGteA && failuresNotWorseThanA && stopRateNotDegraded;
-
-  return {
-    arm: armLabel,
-    coverageGteA,
-    sourceRefGteA,
-    failuresNotWorseThanA,
-    stopRateNotDegraded,
-    allPassed,
-    coverageDelta,
-    sourceRefDelta,
-    tokenDelta,
-    // 该类状态的边际贡献：coverageDelta > 5% 表示有显著正贡献
-    hasSignificantContribution: coverageDelta > 0.05,
-  };
-}
-
 // ── 多批次执行 ──
 const allBatchResults = [];
 let globalProvenance = null;
@@ -262,6 +228,11 @@ const report = {
     batch: b.batch,
     aggregation: b.aggregation,
     gates: ablationArms.map((arm) => evaluateAblationGate(b.aggregation[arm], b.aggregation.A, arm)),
+  })),
+  // Phase 6.2.1：保存每次场景的原始 entry，不只保存聚合结果
+  rawEntries: allBatchResults.map((b) => ({
+    batch: b.batch,
+    entries: b.rawEntries,
   })),
   note: "Phase 6.2: 逐类单因素消融。每个 arm 只排除一类状态，其他参数与 A 一致。",
 };
