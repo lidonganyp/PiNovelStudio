@@ -144,6 +144,10 @@ export const QUERY_NARRATIVE_PRODUCTION_INTENT_GUIDANCE: string =
  * @param ctx.useCompactEnvelope 是否用紧凑结果 envelope 渲染模型可见 content（默认 false）。
  *   开启时只剪裁文本（renderCompactEnvelope），完整 details（sourceRef/evidenceLevel/
  *   resultKind/truncated/nextQueryHint）原样保留供 verifier/canary 消费。与 facade 路由正交。
+ *
+ *   ⚠️ DEPRECATED：Phase 5.3 真实模型 replay 多项门禁失败（覆盖率降级/sourceRef 降级/
+ *   errors 恶化），不进入默认生产。registry 创建 facade 时不传此参数（默认 false）。
+ *   在真实 replay 全部门禁通过前，禁止在生产路径设置 useCompactEnvelope=true。
  */
 export function createQueryNarrativeProductionFacadeTool(ctx: {
   searchService: NarrativeSearchService;

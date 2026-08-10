@@ -199,6 +199,16 @@ export function makeEmptyToolResult(
 // 紧凑结果 envelope（Phase 4/5 工具粒度收口，渲染层纯函数）
 // ============================================================================
 
+/**
+ * ⚠️ DEPRECATED（Phase 5.3 真实模型 replay 多项门禁失败，2026-08-09）：
+ * compact envelope 在 Phase 5.3 真实 GLM replay 中 mustVerify 覆盖率降级（0.852 < 0.926）、
+ * sourceRef 降级（0.783 < 0.839）、errors/empty 恶化。不进入默认生产，不与 facade 组合启用。
+ *
+ * 当前状态：纯函数保留为 eval-only 资产，供未来模型升级后重新评估。
+ * 生产代码中 `useCompactEnvelope` 默认 false，registry 不传 true。
+ * 在真实 replay 全部门禁通过前，禁止将本函数接入生产路径。
+ */
+
 /** 证据强度排序（最强在前），envelope 渲染据此取"最强前 N 条" */
 export const EVIDENCE_STRENGTH_ORDER: EvidenceLevel[] = [
   "confirmed_state",

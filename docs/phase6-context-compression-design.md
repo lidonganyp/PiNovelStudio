@@ -297,6 +297,11 @@ C 组是测量边际价值的基线，**不设通过/失败门禁**，只记录 
 
 Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生产注入），只变化上下文注入量。两个 Phase 正交。
 
+> **Phase 5 结论冻结（2026-08-10）**：
+> - 9 专用工具为默认生产注入，facade 仅 canary opt-in（`toolMode="facade"`）。
+> - compact envelope 已在 Phase 5.3 真实 replay 中多项门禁失败（覆盖率/sourceRef/失败行为降级），**已弃用**，不进入默认生产。
+> - Phase 6 上下文压缩实验固定使用 9 专用工具基线，不使用 compact envelope。
+
 ---
 
 ## 11. 风险与缓解

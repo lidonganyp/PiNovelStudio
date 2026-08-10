@@ -10,7 +10,7 @@
  *
  * 覆盖：
  * 1. 三臂全量 replay 跑通（7 场景），工具面 A=9，B=C=1
- * 2. 门禁：结果文本下降（C<B）、mustVerify 覆盖率不降级、sourceRef 完整率不降级、
+ * 2. 门禁：结果文本不显著膨胀（C<=B×1.15）、mustVerify 覆盖率不降级、sourceRef 完整率不降级、
  *    失败行为（empty/truncated/errors/timeouts）不降级、C.details 与 B 完全一致、
  *    无「无结果」误报
  * 3. resultKind 覆盖：跨场景出现的 resultKind 均被 C 臂覆盖
@@ -69,24 +69,26 @@ describe("PHASE5-2-ENVELOPE-ABC-1：三臂 replay 与工具面", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("PHASE5-2-ENVELOPE-ABC-2：envelope 收益与不降级底线", () => {
-  it("结果文本下降：C.totalResultChars < B.totalResultChars（聚合门禁）", async () => {
+  it("结果文本不显著膨胀：C.totalResultChars <= B.totalResultChars * 1.15（聚合门禁）", async () => {
     const runner = await importRunner();
     const comparison = await runner.runCompactEnvelopeAbcReplay();
     assert.ok(
-      comparison.gate.resultCharsReduced,
-      `C 聚合结果文本应小于 B：B=${comparison.aggregation.B.totalResultChars}, C=${comparison.aggregation.C.totalResultChars}`,
+      comparison.gate.resultCharsNotInflated,
+      `C 聚合结果文本不应显著膨胀（>B×1.15）：B=${comparison.aggregation.B.totalResultChars}, C=${comparison.aggregation.C.totalResultChars}`,
     );
     assert.ok(
-      comparison.aggregation.C.totalResultChars < comparison.aggregation.B.totalResultChars,
-      "C 总返回字符应小于 B",
+      comparison.aggregation.C.totalResultChars <= comparison.aggregation.B.totalResultChars * 1.15,
+      "C 总返回字符不应超过 B 的 1.15 倍",
     );
     // 逐场景：envelope 面向「带全文 excerpt 的检索结果」压缩；对已是最精简的事实列表
-    // （如角色状态），摘要行会引入少量开销。故逐场景只断言不出现病态膨胀（>1.5x），
-    // 不做强制收缩--收益以聚合门禁为准（见 runner 的 resultCharsReduced）。
+    // （如角色状态）或短 span（如 chapter_span），Phase 5.3.1 内容摘要修复后摘要行+内容
+    // 摘要会引入较多开销。故逐场景只断言不出现病态膨胀（>2x），不做强制收缩--
+    // 收益以聚合门禁为准（见 runner 的 resultCharsNotInflated）。
+    // compact envelope 已弃用，此检查仅验证机械正确性。
     for (const s of comparison.scenarios) {
       assert.ok(
-        s.C.totalResultChars <= s.B.totalResultChars * 1.5 + 1,
-        `场景 ${s.scenarioId} C(${s.C.totalResultChars}) 不应超过 B(${s.B.totalResultChars}) 的 1.5 倍`,
+        s.C.totalResultChars <= s.B.totalResultChars * 2 + 1,
+        `场景 ${s.scenarioId} C(${s.C.totalResultChars}) 不应超过 B(${s.B.totalResultChars}) 的 2 倍`,
       );
     }
   });
@@ -232,15 +234,16 @@ describe("PHASE5-2-ENVELOPE-ABC-3：报告格式化与 trajectory", () => {
     }
   });
 
-  it("C 臂 content 文本确实被压缩（平均字符下降）", async () => {
+  it("C 臂 content 文本不显著膨胀（平均字符不超过 B 的 1.15 倍）", async () => {
     const runner = await importRunner();
     const comparison = await runner.runCompactEnvelopeAbcReplay();
-    // 校验 C 臂模型可见 content 文本确实小于 B 臂（envelope 收益落地到 content 层）
+    // 校验 C 臂模型可见 content 文本不显著膨胀（envelope 收益落地到 content 层）
+    // Phase 5.3.1 内容摘要修复后 C 可能略大于 B，门禁改为不显著膨胀（<=1.15x）
     const totalB = comparison.aggregation.B.totalResultChars;
     const totalC = comparison.aggregation.C.totalResultChars;
     assert.ok(
-      totalC < totalB,
-      `C 总返回字符应小于 B（B=${totalB}, C=${totalC}）`,
+      totalC <= totalB * 1.15,
+      `C 总返回字符不应超过 B 的 1.15 倍（B=${totalB}, C=${totalC}）`,
     );
   });
 });

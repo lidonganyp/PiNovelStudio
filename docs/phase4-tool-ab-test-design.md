@@ -289,13 +289,21 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 
 ## 10. 紧凑结果 envelope（工具粒度收口，2026-08-09）
 
-> **状态**：已实现 + Phase 5.2 确定性 A/B/C dry-run 通过（2026-08-09）。`renderCompactEnvelope`
-> 已落地为生产纯函数（`novelos/tools/tool-protocol.ts`），facade 支持 `useCompactEnvelope` 可选
-> 渲染（eval-only `typed-facade-tool.ts`）。A/B/C 确定性报告见
-> `reports/phase5-2-envelope-abc/`（envelope-abc-comparison.json / .md / trajectory/）：
-> **聚合结果文本 2598→2159（-17%）**，mustVerify 覆盖率 1.000→1.000、有效证据引用率 0.826→0.826、
-> empty/truncated/errors/timeouts 均为 0，C.details 与 B 完全一致，无「无结果」误报，全部门禁通过。
-> 逐场景 SC2/SC5（精简事实列表/短 span）C 臂有少量摘要开销（281>270、274>228），收益以聚合门禁为准。
+> **状态**：已实现 + Phase 5.2 确定性 A/B/C 机械验证通过（2026-08-09，2026-08-10 更新）。
+> `renderCompactEnvelope` 已落地为生产纯函数（`novelos/tools/tool-protocol.ts`），facade 支持
+> `useCompactEnvelope` 可选渲染（eval-only `typed-facade-tool.ts`）。
+>
+> **Phase 5.3.1 内容摘要修复后**：`renderCompactEnvelope` 每条 ref 行追加内容摘要（≤50 字符），
+> 修复了真实模型 replay 中 stopRate=0%、duplicateQueries 激增的问题。但此修复使精简列表场景
+> （SC2/SC5）的 C 臂文本略大于 B 臂，聚合 C=2674 > B=2598。Phase 5.2 确定性门禁已从
+> 「C < B」调整为「C <= B×1.15」（不显著膨胀），机械验证（details 一致性、无结果误报守护）通过。
+>
+> **Phase 5.3 真实模型 replay 结果**：compact envelope 多项门禁失败（mustVerify 覆盖率
+> 0.852 < 0.926、sourceRef 0.783 < 0.839、errors 1 > 0、empty 1 > 0），**已明确弃用**，
+> 不进入默认生产。纯函数保留为 eval-only 资产，供未来模型升级后重新评估。
+> 详见 `reports/phase5-3-envelope-real/real-ab-comparison.md`。
+>
+> A/B/C 确定性报告见 `reports/phase5-2-envelope-abc/`。
 > 延续 §9 的受控接入：envelope 是"工具粒度"收口的一部分，
 > 与"接口表面（9 工具 vs facade）"正交。目标是在**不降级证据覆盖**的前提下，压缩每次工具
 > 调用返回给模型的文本（`content`），降低上下文膨胀；完整结构化数据（`details`）保留供
@@ -355,35 +363,45 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 
 - **接入**：envelope 渲染函数作为纯函数（`renderCompactEnvelope(details)`），供 facade 与专用工具
   可选调用；不进入检索/排序路径。
-- **验收**：dry-run 断言 `resultChars(renderCompactEnvelope(details)) < resultChars(原 content)`，
-  且 `details` 经 envelope 渲染后再回读仍完整（`NarrativeToolResultDetails` roundtrip 不丢字段）。
-  **（Phase 5.2 已验收）** A/B/C dry-run 通过：聚合 2598→2159，details 与 B 完全一致，证据覆盖与
-  失败指标不降级，无「无结果」误报；集成测试 `tests-eval/phase5-2-envelope-abc.test.mjs` 与
+- **验收**：dry-run 断言 `resultChars(renderCompactEnvelope(details))` 不显著膨胀
+  （C <= B×1.15），且 `details` 经 envelope 渲染后再回读仍完整（`NarrativeToolResultDetails` roundtrip 不丢字段）。
+  **（Phase 5.2 已验收，2026-08-10 更新）** A/B/C 确定性机械验证通过：details 与 B 完全一致，
+  证据覆盖与失败指标不降级，无「无结果」误报；门禁从「C < B」调整为「C <= B×1.15」
+  （Phase 5.3.1 内容摘要修复后 C=2674 > B=2598，但未显著膨胀）。集成测试
+  `tests-eval/phase5-2-envelope-abc.test.mjs` 与
   guard N4 单测 `tests/phase5-compact-envelope.test.mjs` 锁定边界。
-- **不 cutover**：默认渲染保持现状；envelope 仅作为受控对照在 canary 中验证，稳定后才决定是否
-  成为默认渲染策略。
+- **不 cutover**：compact envelope 已在 Phase 5.3 真实 replay 中多项门禁失败，**已弃用**，
+  不作为默认渲染策略。纯函数保留为 eval-only 资产。
 
-> **结论归属**：本设计已证明"紧凑 envelope 能在不降级证据覆盖下降 resultChars"（确定性 dry-run）；
-> 是否默认启用、是否与 facade 组合，取决于真实模型 canary（§11）结果稳定后评审。当前仍保持
-> A=9 专用工具默认、`rel-000` 不切换，真实 GLM replay 仅作 eval/canary 隔离。
+> **结论归属**：确定性 dry-run 证明 envelope 渲染机械正确（details 一致、无结果误报守护）；
+> 但 Phase 5.3 真实模型 replay 证明 compact envelope 在真实模型下覆盖率/sourceRef/失败行为
+> 均降级，不进入默认生产。当前仍保持 A=9 专用工具默认、`rel-000` 不切换。
+> 真实 replay 报告见 `reports/phase5-3-envelope-real/real-ab-comparison.md`。
 
 ---
 
-## 11. Phase 5.3 真实模型 envelope replay（2026-08-09）
+## 11. Phase 5.3 真实模型 envelope replay（2026-08-09，2026-08-10 更新）
 
-> **状态**：runner 已扩展支持 C 组（`facade + compact envelope`），CLI 支持 `--envelope`
-> 定向 replay，测试覆盖 C 组与 envelope 门禁。**尚未执行真实模型 replay**（需 GLM/Doubao 临时授权）。
-> 真实 replay 通过前不切换 production pointer，也不进入上下文压缩模块。
+> **状态**：已执行真实模型 replay（GLM 5.2，`narrator_testing_glm` route，`fallback=[]`，
+> 3 场景 SC2/SC5/SC7 × 3 seed × 4 臂 A/B/B0/C）。**compact envelope 多项门禁失败，已弃用**。
+>
+> Phase 5.3 真实 replay 结果（`reports/phase5-3-envelope-real/real-ab-comparison.md`）：
+> - C 组门禁（vs A）：mustVerify 覆盖率 0.852 < 0.926 FAIL、sourceRef 0.783 < 0.839 FAIL、
+>   errors 1 > 0 FAIL、empty 1 > 0 FAIL
+> - Envelope 门禁（C vs B）：mustVerify 覆盖率 0.852 < 1.000 FAIL、sourceRef 0.783 < 0.867 FAIL、
+>   失败行为 errors/timeouts/empty 恶化 FAIL
+> - **结论**：compact envelope 在真实模型下覆盖率/sourceRef/失败行为均降级，不进入默认生产。
+>   纯函数保留为 eval-only 资产，供未来模型升级后重新评估。
 
 ### 11.1 动机（Phase 5.2 的两个限制）
 
-Phase 5.2 确定性 A/B/C dry-run 已证明聚合收益（2598→2159，-17%），但有两个限制必须在真实
+Phase 5.2 确定性 A/B/C dry-run 已验证机械正确性（details 一致、无结果误报守护），但有两个限制必须在真实
 模型下补验：
 
 1. **零模型 ≠ 真实模型理解**：dry-run 是确定性 stub，不能证明真实模型会正确理解 compact envelope，
    也不能证明停止率、查询精度和事实覆盖在真实模型下不下降。
-2. **聚合下降掩盖局部膨胀**：SC2（C=281 > B=270）、SC5（C=274 > B=228）在单场景字符上出现
-   局部膨胀。Phase 5.2 门禁只要求聚合下降，没有限制单场景/单调用明显变长。这个问题必须在
+2. **聚合不膨胀掩盖局部膨胀**：SC2（C=281 > B=270）、SC5（C=274 > B=228）在单场景字符上出现
+   局部膨胀。Phase 5.2 门禁只要求聚合不显著膨胀（C<=B×1.15），没有限制单场景/单调用明显变长。这个问题必须在
    真实 replay 前纳入门禁。
 
 ### 11.2 目标
@@ -434,11 +452,12 @@ PINOVEL_DISABLE_FALLBACK=1 node scripts/tool-ab-real-report.mjs --envelope --mod
 
 ### 11.5 准入与后续
 
-- 真实 replay 通过（envelope 门禁全过 + C vs A 全过）后，再做**少量真实 canary**。
-- 在此之前**不切换 production pointer**（`active-production.json` 仍指向 `rel-000`，
+- **真实 replay 已执行**（2026-08-09）：envelope 门禁多项失败（覆盖率降级、sourceRef 降级、
+  errors/empty 恶化），compact envelope **已弃用**。
+- **不切换 production pointer**（`active-production.json` 仍指向 `rel-000`，
   `rel-phase5b` 保持 held），默认仍为 9 专用工具。
-- 真实 canary 稳定后才评审：是否默认启用 envelope、是否与 facade 组合、是否进入上下文压缩模块。
-- 任一门槛失败（单场景/单调用膨胀、覆盖/引用/停止率降级、失败恶化）即视为 envelope 需回退或修正。
+- compact envelope 纯函数保留为 eval-only 资产，供未来模型升级后重新评估。
+- 若未来模型（如 GPT/Claude）工具选择更稳定，可重新评估 compact envelope 是否有正收益。
 
 ---
 

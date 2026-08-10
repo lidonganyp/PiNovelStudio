@@ -49,6 +49,8 @@ export class NarrativeToolRegistry {
     }
     // Phase 5 受控接入：仅 when enableFacade=true 额外注册 facade runtime 变体。
     // 默认（非 canary workspace）不注册，保持 9 专用工具执行面不变。
+    // 注意：useCompactEnvelope 不传（默认 false）--compact envelope 已在 Phase 5.3
+    // 真实 replay 多项门禁失败，已弃用，不进入生产。
     if (options.enableFacade === true) {
       const facade = createQueryNarrativeProductionFacadeTool({
         searchService: options.searchService,
