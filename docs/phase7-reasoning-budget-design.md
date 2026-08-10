@@ -259,7 +259,7 @@ C 组的 riskScore 计算需要 ChapterIntent 的 mustVerify 风险分布。在 
 - [x] `novelos/eval/reasoning-budget-gate.ts`（门禁评估）
 - [x] `tests-eval/phase7-reasoning-budget.test.mjs`（确定性断言）
 - [x] `reports/phase7-reasoning-budget/`（对比报告 JSON + MD）
-- [ ] 本设计评审通过后，才可进入实现 Phase
+- [x] 本设计评审通过后，才可进入实现 Phase（Phase 7 已正式收口：A 组保留生产基线，B/C 不进入 canary，跨模型确认）
 
 > **Phase 7 决策结果（2026-08-10，跨模型双重确认）**：真实 replay 先后在 gemini31 与 GLM 5.2 上执行，结论一致。
 >
