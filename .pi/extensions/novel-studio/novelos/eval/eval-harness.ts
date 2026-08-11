@@ -623,7 +623,7 @@ export async function runAgentLoopForEval(
       ? { enableRetrieval: false, enableVerification: false, enableCoverageGate: false }
       : mode === "b2"
         ? { enableRetrieval: true, enableVerification: false, enableCoverageGate: false }
-        : { enableRetrieval: true, enableVerification: true, enableCoverageGate: false }; // b3
+        : { enableRetrieval: true, enableVerification: true, enableCoverageGate: true }; // b3 全链路
 
   const source = createAgenticRawCandidateSource(capabilities);
 

@@ -116,3 +116,61 @@ test("Phase 3.1 · 完整 eval-only replay 产出持久化 tool_visibility traje
     cleanup();
   }
 }, { timeout: 120_000 });
+
+/**
+ * AGENTIC-EVIDENCE-MERGE-1 可观测性：完整 b3 路径（retrieval + verify/patch + coverage gate）
+ * 应返回 trace 可观测聚合字段，直接解释 Agentic 在 ReAct 循环内实际做了什么。
+ *
+ * 断言口径（计划 §5.6 trace 新契约）：
+ * - decisionMode 恒为 "agentic_inline"（独立证据决策回合已合并进首轮）
+ * - firstAction ∈ {"draft","tool_call"}（首回合实际动作）
+ * - actualRetrievalCalls 为非负整数（实际检索类工具调用数）
+ * - mustVerifyCount / mustVerifyCoveredCount 为非负整数，covered ≤ total
+ * - coverageResult 存在（b3 含 coverage gate）
+ * - modelCallsByKind 含 draft/patch/verify 三个非负整数
+ */
+test("AGENTIC-EVIDENCE-MERGE-1 · 完整 b3 路径产出可观测聚合 trace 字段", async () => {
+  const { projectRoot, workspaceId, cleanup } = setupFixtureWorkspace(fixture);
+  try {
+    // b3 = enableRetrieval=true, enableVerification=true, enableCoverageGate=true（全链路）
+    const result = await runAgentLoopForEval(fixture, "b3", projectRoot, workspaceId);
+
+    // 1. 决策模式：独立 EvidenceDecision 已退役，恒为 agentic_inline
+    assert.equal(result.decisionMode, "agentic_inline", "decisionMode 应恒为 agentic_inline");
+
+    // 2. 首回合实际动作（draft 或 tool_call）
+    assert.ok(
+      result.firstAction === "draft" || result.firstAction === "tool_call",
+      `firstAction 应为 draft 或 tool_call，实际=${result.firstAction}`,
+    );
+
+    // 3. 实际检索调用数：非负整数
+    assert.equal(Number.isInteger(result.actualRetrievalCalls), true, "actualRetrievalCalls 应为整数");
+    assert.ok(result.actualRetrievalCalls >= 0, "actualRetrievalCalls 应 ≥ 0");
+
+    // 4. mustVerify 覆盖：total ≥ covered ≥ 0
+    assert.equal(Number.isInteger(result.mustVerifyCount), true, "mustVerifyCount 应为整数");
+    assert.ok(result.mustVerifyCount >= 0, "mustVerifyCount 应 ≥ 0");
+    assert.equal(Number.isInteger(result.mustVerifyCoveredCount), true, "mustVerifyCoveredCount 应为整数");
+    assert.ok(result.mustVerifyCoveredCount >= 0, "mustVerifyCoveredCount 应 ≥ 0");
+    assert.ok(
+      result.mustVerifyCoveredCount <= result.mustVerifyCount,
+      "mustVerifyCoveredCount 不应超过 mustVerifyCount",
+    );
+
+    // 5. coverage gate 结果存在（b3 全链路含 coverage gate）
+    assert.ok(result.coverageResult, "b3 路径应返回 coverageResult");
+    assert.equal(typeof result.coverageResult.passed, "boolean", "coverageResult.passed 应为布尔");
+
+    // 6. 按阶段模型调用数：draft/patch/verify 三个非负整数，总量 ≥ draft（至少一次 draft 调用）
+    const m = result.modelCallsByKind;
+    assert.ok(m && typeof m === "object", "modelCallsByKind 应存在");
+    for (const k of ["draft", "patch", "verify"]) {
+      assert.equal(Number.isInteger(m[k]), true, `modelCallsByKind.${k} 应为整数`);
+      assert.ok(m[k] >= 0, `modelCallsByKind.${k} 应 ≥ 0`);
+    }
+    assert.ok(m.draft >= 1, "draft 阶段至少应有 1 次模型调用");
+  } finally {
+    cleanup();
+  }
+}, { timeout: 120_000 });

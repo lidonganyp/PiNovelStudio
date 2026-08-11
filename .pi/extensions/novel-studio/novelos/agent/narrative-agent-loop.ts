@@ -65,11 +65,13 @@ import type {
   NarrativeAgentLoopOptions,
   AgentTurnsResult,
   VerifyPatchResult,
+  ModelCallsByKind,
 } from "./narrative-agent-loop-types.js";
 import type {
   CoverageGate,
   CoverageGateResult,
 } from "./must-verify-coverage-gate.js";
+import { RETRIEVAL_TOOL_NAMES } from "../tools/narrative-tools.js";
 import {
   DEFAULT_REPAIR_BATCH_SIZE,
   isSemanticFinding,
@@ -270,6 +272,8 @@ export class NarrativeAgentLoop {
     let verifierCleared = false;
     let hardFindingCount = 0;
     let repairStopReason: AgentLoopStopReason | undefined;
+    let patchModelCalls = 0;
+    let verifyModelCalls = 0;
 
     if (this.verifier && this.patchService) {
       try {
@@ -281,6 +285,8 @@ export class NarrativeAgentLoop {
         verifierCleared = vp.verifierCleared;
         hardFindingCount = vp.hardFindingCount;
         repairStopReason = vp.stopReason;
+        patchModelCalls = vp.patchModelCalls;
+        verifyModelCalls = vp.verifyModelCalls;
         // 若 patch 修改了正文，更新 draft.md
         if (finalText !== turns.draftText) {
           this.candidateWorkspace.writeDraft(finalText);
@@ -314,6 +320,13 @@ export class NarrativeAgentLoop {
       evidenceFacts: turns.evidenceFacts,
       verifierCleared,
       hardFindingCount,
+      firstAction: turns.firstAction,
+      actualRetrievalCalls: turns.actualRetrievalCalls,
+      modelCallsByKind: {
+        draft: turns.draftModelCalls,
+        patch: patchModelCalls,
+        verify: verifyModelCalls,
+      },
       ...(coverageGateResult ? { coverageGate: coverageGateResult } : {}),
       ...(coverageGateRetries > 0 ? { coverageGateRetries } : {}),
     };
@@ -461,6 +474,31 @@ export class NarrativeAgentLoop {
 
     const toolCalls = this.budget.getSnapshot().toolCalls;
 
+    // AGENTIC-EVIDENCE-MERGE-1 可观测性：统计首回合动作 / 实际检索调用数 / ReAct 阶段模型调用数
+    // （不记录原始思维链，只根据实际消息与工具调用断言动作）
+    const assistantMessages = messages.filter(
+      (m) => (m as { role?: string }).role === "assistant",
+    );
+    const draftModelCalls = assistantMessages.length;
+    const firstAssistant = assistantMessages[0];
+    const firstAssistantContent = Array.isArray(
+      (firstAssistant as { content?: unknown })?.content,
+    )
+      ? (firstAssistant as { content: Array<{ type?: string }> }).content
+      : [];
+    const firstAction: "draft" | "tool_call" = firstAssistantContent.some(
+      (c) => c.type === "toolCall",
+    )
+      ? "tool_call"
+      : "draft";
+    // 实际检索调用 = toolResult 消息中工具名属于检索集的数量
+    const actualRetrievalCalls = messages.filter((m) => {
+      const role = (m as { role?: string }).role;
+      if (role !== "toolResult") return false;
+      const toolName = (m as { toolName?: string }).toolName ?? "";
+      return RETRIEVAL_TOOL_NAMES.has(toolName);
+    }).length;
+
     // stopReason 映射
     let stopReason: AgentLoopStopReason;
     if (this.budget.isExhausted() && draftText.trim().length === 0) {
@@ -472,7 +510,16 @@ export class NarrativeAgentLoop {
       stopReason = "model_declares_sufficient";
     }
 
-    return { draftText, sourceRefs, evidenceFacts, toolCalls, stopReason };
+    return {
+      draftText,
+      sourceRefs,
+      evidenceFacts,
+      toolCalls,
+      stopReason,
+      firstAction,
+      actualRetrievalCalls,
+      draftModelCalls,
+    };
   }
 
   // ── 内部：verify/patch/reverify 闭环（Task B.2） ──────────────────────
@@ -503,7 +550,12 @@ export class NarrativeAgentLoop {
     // Phase 2C：从 plan 读取停滞阈值（默认与 MAX_STAGNANT_REPAIR_ROUNDS 一致）
     const maxStagnant = plan.stopConditions.maxStagnantRounds;
 
+    // AGENTIC-EVIDENCE-MERGE-1 可观测性：按阶段累计模型调用数
+    let verifyModelCalls = 0;
+    let patchModelCalls = 0;
+
     // 1. 初次 verify
+    verifyModelCalls += 1;
     let report = verifier.verify({
       text: draftText,
       context: input.context,
@@ -523,6 +575,8 @@ export class NarrativeAgentLoop {
         repairRounds: 0,
         verifierCleared: true,
         hardFindingCount: 0,
+        patchModelCalls: 0,
+        verifyModelCalls,
       };
     }
 
@@ -558,6 +612,7 @@ export class NarrativeAgentLoop {
       // 生成 patched text
       let patchedText: string;
       try {
+        patchModelCalls += 1;
         patchedText = await this.generatePatchedText(
           currentText,
           proposals,
@@ -597,6 +652,7 @@ export class NarrativeAgentLoop {
       const previousFindingIds = findingIds(report.hardFindings);
 
       // reverify patchedText
+      verifyModelCalls += 1;
       report = verifier.verify({
         text: patchedText,
         context: input.context,
@@ -632,6 +688,8 @@ export class NarrativeAgentLoop {
           repairRounds,
           verifierCleared: true,
           hardFindingCount: 0,
+          patchModelCalls,
+          verifyModelCalls,
         };
       }
 
@@ -662,6 +720,8 @@ export class NarrativeAgentLoop {
       repairRounds,
       verifierCleared: false,
       hardFindingCount: report.hardFindings.length,
+      patchModelCalls,
+      verifyModelCalls,
       ...(stopReason ? { stopReason } : {}),
     };
   }
@@ -785,6 +845,10 @@ export class NarrativeAgentLoop {
       evidenceFacts,
       verifierCleared: false,
       hardFindingCount: 0,
+      // fallback 路径：首回合动作未知（未产出 draft），保守标记为 tool_call 不适用时用 draft 兜底
+      firstAction: "draft",
+      actualRetrievalCalls: 0,
+      modelCallsByKind: { draft: 0, patch: 0, verify: 0 },
       ...(coverageGate ? { coverageGate } : {}),
       ...(coverageGateRetries > 0 ? { coverageGateRetries } : {}),
     };

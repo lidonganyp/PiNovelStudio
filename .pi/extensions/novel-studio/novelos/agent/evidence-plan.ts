@@ -73,10 +73,9 @@ export interface EvidencePlan {
   /**
    * 系统检索调用上限（AGENTIC-EVIDENCE-MERGE-1）。
    *
-   * 由确定性策略生成，不被不可验证的结构化模型输出降低：
-   * - 无 mustVerify 且上下文摘要完整 -> 2
+   * 由确定性策略生成，不被不可验证的结构化模型输出降低（两档）：
+   * - 无 mustVerify（上下文充分）-> 2
    * - 存在 mustVerify -> 4
-   * - 多个关键状态/伏笔/bridge context 缺失/冲突 -> 6
    *
    * 这是系统上限，不是模型必须消耗的配额。Agentic 可以使用 0 到该上限之间的任意调用数。
    * runtime 的 beforeToolCall 在达到此上限后阻断后续检索工具调用。

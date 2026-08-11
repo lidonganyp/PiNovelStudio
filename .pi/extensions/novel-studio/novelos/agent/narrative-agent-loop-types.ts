@@ -88,6 +88,19 @@ export type AgentLoopStopReason =
   | "tool_error"
   | "must_verify_coverage_failed";
 
+/**
+ * 按阶段统计的模型调用次数（AGENTIC-EVIDENCE-MERGE-1 可观测性）。
+ * 不区分 provider/具体模型，只按阶段聚合，供 trace 解释 Agentic 实际动作。
+ * - draft：Agentic 首轮 ReAct 阶段的模型调用数（每条 assistant 消息计 1）
+ * - patch：整章/局部补丁生成的模型调用数
+ * - verify：verifier 校验的调用数（可能为本地确定性，非模型）
+ */
+export interface ModelCallsByKind {
+  draft: number;
+  patch: number;
+  verify: number;
+}
+
 export interface AgentLoopLineage {
   evidencePlan: EvidencePlan;
   toolCalls: number;
@@ -100,6 +113,16 @@ export interface AgentLoopLineage {
   verifierCleared: boolean;
   /** 硬失败数量（最终） */
   hardFindingCount: number;
+  /**
+   * AGENTIC-EVIDENCE-MERGE-1 可观测性：Agentic 首回合实际采取的动作。
+   * - "tool_call"：首条 assistant 消息含工具调用指令（先检索）
+   * - "draft"：首条 assistant 消息直接输出正文
+   */
+  firstAction: "draft" | "tool_call";
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：实际执行的检索类工具调用数 */
+  actualRetrievalCalls: number;
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：按阶段聚合的模型调用数 */
+  modelCallsByKind: ModelCallsByKind;
   /** mustVerify 覆盖门最近一次结果（若启用） */
   coverageGate?: CoverageGateResult;
   /** 覆盖门触发的有限重试次数 */
@@ -145,6 +168,12 @@ export interface AgentTurnsResult {
   evidenceFacts: string[];
   toolCalls: number;
   stopReason: AgentLoopStopReason;
+  /** AGENTIC-EVIDENCE-MERGE-1：首回合实际动作 */
+  firstAction: "draft" | "tool_call";
+  /** AGENTIC-EVIDENCE-MERGE-1：实际检索类工具调用数 */
+  actualRetrievalCalls: number;
+  /** AGENTIC-EVIDENCE-MERGE-1：ReAct 首轮阶段模型调用数 */
+  draftModelCalls: number;
 }
 
 export interface VerifyPatchResult {
@@ -155,6 +184,10 @@ export interface VerifyPatchResult {
   verifierCleared: boolean;
   hardFindingCount: number;
   stopReason?: AgentLoopStopReason;
+  /** AGENTIC-EVIDENCE-MERGE-1：patch 阶段模型调用数 */
+  patchModelCalls: number;
+  /** AGENTIC-EVIDENCE-MERGE-1：verify 阶段调用数 */
+  verifyModelCalls: number;
 }
 
 // 重新导出 VerificationFinding 类型供辅助模块使用

@@ -41,6 +41,7 @@ import { createNarrativeVerifierSuite } from "../verification/narrative-verifier
 import { createCandidatePatchService } from "./candidate-patch-service.js";
 import { createEvidencePlan } from "./evidence-plan.js";
 import { createMustVerifyCoverageGate } from "./must-verify-coverage-gate.js";
+import type { CoverageGateResult } from "./must-verify-coverage-gate.js";
 import {
   buildFewshotPromptBlock,
   type AgenticFewshotSelection,
@@ -201,6 +202,23 @@ export interface AgenticRawSourceResult {
   sourceRefs: string[];
   /** 工具调用次数 */
   toolCalls: number;
+  /**
+   * AGENTIC-EVIDENCE-MERGE-1 可观测性：独立决策回合已合并进 Agentic 首轮。
+   * 恒为 "agentic_inline"，标识证据与检索判断在 Agentic ReAct 循环内做出。
+   */
+  decisionMode: "agentic_inline";
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：Agentic 首回合实际动作 */
+  firstAction: "draft" | "tool_call" | "not_run";
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：实际检索类工具调用数 */
+  actualRetrievalCalls: number;
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：mustVerify 总数 */
+  mustVerifyCount: number;
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：mustVerify 已覆盖数（来自 coverage gate） */
+  mustVerifyCoveredCount: number;
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：mustVerify 覆盖门结果 */
+  coverageResult?: CoverageGateResult;
+  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：按阶段聚合的模型调用数 */
+  modelCallsByKind: { draft: number; patch: number; verify: number };
   /** verifier 是否清零（无硬失败或 patch 后清零） */
   verifierCleared?: boolean;
   /** 修复轮次（verify/patch 闭环执行了几轮） */
@@ -467,9 +485,10 @@ export function createAgenticRawCandidateSource(
       const allowedToolSet = new Set(evidencePlan.allowedTools);
       const tools = allTools.filter((tool) => allowedToolSet.has(tool.name));
 
-      // ── 5b. Phase 0：记录工具可见性快照 ──────────────────────────────
-      // 对比「系统允许边界 / 模型选择 / 被拒绝 / 最终可见」四者，用于观测工具暴露是否一致。
-      // 在 runtime 创建前记录，确保决策后、注入前的真实可见集被留存。
+      // ── 5b. 记录工具可见性快照 ──────────────────────────────────────
+      // AGENTIC-EVIDENCE-MERGE-1：快照只记录「系统允许边界 / 最终可见」两者
+      // （systemAllowedTools / visibleTools）。独立证据决策回合已删除，
+      // 不再记录模型选择/被拒绝工具。在 runtime 创建前记录，确保真实可见集被留存。
       recordToolVisibility(
         trajectory,
         createToolVisibilitySnapshot({
@@ -668,6 +687,17 @@ export function createAgenticRawCandidateSource(
         stopReason: loopResult.lineage.stopReason,
         sourceRefs: loopResult.lineage.sourceRefs,
         toolCalls: loopResult.lineage.toolCalls,
+        // AGENTIC-EVIDENCE-MERGE-1 可观测性
+        decisionMode: "agentic_inline",
+        firstAction: loopResult.lineage.firstAction,
+        actualRetrievalCalls: loopResult.lineage.actualRetrievalCalls,
+        mustVerifyCount: loopResult.lineage.evidencePlan.mustVerify.length,
+        mustVerifyCoveredCount:
+          loopResult.lineage.coverageGate?.confirmedItems.length ?? 0,
+        ...(loopResult.lineage.coverageGate
+          ? { coverageResult: loopResult.lineage.coverageGate }
+          : {}),
+        modelCallsByKind: loopResult.lineage.modelCallsByKind,
         verifierCleared: loopResult.lineage.verifierCleared,
         repairRounds: loopResult.repairRounds,
         hardFindingCount: loopResult.lineage.hardFindingCount,
@@ -774,6 +804,13 @@ function makeFallbackResult(
     failureKind,
     sourceRefs: [],
     toolCalls: 0,
+    // AGENTIC-EVIDENCE-MERGE-1 可观测性：fallback 未产出 draft，动作未知 → not_run
+    decisionMode: "agentic_inline",
+    firstAction: "not_run",
+    actualRetrievalCalls: 0,
+    mustVerifyCount: 0,
+    mustVerifyCoveredCount: 0,
+    modelCallsByKind: { draft: 0, patch: 0, verify: 0 },
     verifierCleared: false,
     repairRounds: 0,
     hardFindingCount: 0,

@@ -873,6 +873,16 @@ export class UnifiedOrchestrator {
         repairRounds: agenticResult.repairRounds,
         hardFindingCount: agenticResult.hardFindingCount ?? null,
         unresolvedFindings: agenticResult.unresolvedFindings ?? [],
+        // AGENTIC-EVIDENCE-MERGE-1 可观测性：证据/检索判断合并进 Agentic 首轮后，
+        // 记录实际决策模式、首动作、实际检索调用数、mustVerify 覆盖与按阶段模型调用数。
+        // 这些聚合字段直接解释 Agentic 在 ReAct 循环内做了什么，不记录原始思维链。
+        decisionMode: agenticResult.decisionMode,
+        firstAction: agenticResult.firstAction,
+        actualRetrievalCalls: agenticResult.actualRetrievalCalls,
+        mustVerifyCount: agenticResult.mustVerifyCount,
+        mustVerifyCoveredCount: agenticResult.mustVerifyCoveredCount,
+        coverageResult: agenticResult.coverageResult ?? null,
+        modelCallsByKind: agenticResult.modelCallsByKind,
       };
       const agenticCandidate = agenticResult.candidate;
       if (!agenticCandidate) {
@@ -1690,6 +1700,14 @@ export class UnifiedOrchestrator {
           toolCalls: agenticResult.toolCalls,
           verifierCleared: agenticResult.verifierCleared,
           repairRounds: agenticResult.repairRounds,
+          // AGENTIC-EVIDENCE-MERGE-1 可观测性（eval 回放路径同构）
+          decisionMode: agenticResult.decisionMode,
+          firstAction: agenticResult.firstAction,
+          actualRetrievalCalls: agenticResult.actualRetrievalCalls,
+          mustVerifyCount: agenticResult.mustVerifyCount,
+          mustVerifyCoveredCount: agenticResult.mustVerifyCoveredCount,
+          coverageResult: agenticResult.coverageResult ?? null,
+          modelCallsByKind: agenticResult.modelCallsByKind,
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1850,6 +1868,14 @@ export class UnifiedOrchestrator {
           budgetSnapshot: agenticResult.budgetSnapshot,
           sourceRefs: agenticResult.sourceRefs,
           toolCalls: agenticResult.toolCalls,
+          // AGENTIC-EVIDENCE-MERGE-1 可观测性（shadow 路径同构）
+          decisionMode: agenticResult.decisionMode,
+          firstAction: agenticResult.firstAction,
+          actualRetrievalCalls: agenticResult.actualRetrievalCalls,
+          mustVerifyCount: agenticResult.mustVerifyCount,
+          mustVerifyCoveredCount: agenticResult.mustVerifyCoveredCount,
+          coverageResult: agenticResult.coverageResult ?? null,
+          modelCallsByKind: agenticResult.modelCallsByKind,
         };
         if (agenticResult.candidate) {
           // agentic_raw 进入 candidates 供 trace 审计，但不参与 FactGuard/judge/selection
