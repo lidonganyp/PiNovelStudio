@@ -67,6 +67,19 @@ flowchart LR
 - `context-retrieval.ts` 对附带 `entry.memory` 信封的条目做权威感知过滤与加权（`isFormalFactEvidence` + authority/epistemic 加权），并执行自身的 `maxItems` 选择逻辑——这是生产主检索路径。
 - `memory-retrieval.ts#rankMemoryRecords`（含 `toLightweightResults` / `maxChars` 预算）是独立的权威感知排序器，当前**仅被评测与 deterministic replay 消费**，未接入 `ContextCompiler` 生产主检索链。它与 `context-retrieval.ts` 的过滤/加权是两套等价实现；生产主路径以 `context-retrieval.ts` 为准。若要启用独立排序器，需在 `ContextCompiler` 明确接入点并做 A/B 验证，避免双排序器互相冲突。
 
+### 1.4 Canon 不同值更新语义（方案 A：Canon ID 不可变）
+
+> **约束判定（MEMORY-5）**：同一 Canon ID 代表唯一不可违背事实，**禁止通过同 ID 改写值**。在方案 A 下，Canon ID 不可变，值演进必须经由「新 memoryId + 显式 supersede/invalidate 旧 id」完成。
+
+| 场景 | 规则 | 结果 |
+|---|---|---|
+| 同 ID 同值（如置信度刷新） | 值不变，仅更新元数据 | 合法 upsert，不阻断 |
+| 新 memoryId + 显式 `supersedesMemoryIds` 指向旧 id | 合法版本演进 | `superseded`，允许 |
+| 新 memoryId，但未声明替代关系、值不同 | 未授权改写 | `hard_conflict_blocked` |
+| **同 ID 不同值（即使携带替代声明）** | **方案 A：ID 不可变，连带替代声明也阻断** | `hard_conflict_blocked`，错误信息含「必须创建新 memoryId」结构化提示 |
+
+实现位置：`v2/core/memory/memory-transaction.ts#detectMemoryConflicts`（同 `memoryId` 分支对 canon 值变化一律阻断，不校验 supersedes）；生产接线在 `v2/core/final-state-commit.ts#commit`（硬冲突在 `saveStateStore` 之前抛 `MemoryHardConflictError`）。测试见 `tests/memory-hard-conflict-block.test.mjs`（MEMORY-5 Canon 语义三个用例）。
+
 ---
 
 ## 2. 记忆字段盘点表

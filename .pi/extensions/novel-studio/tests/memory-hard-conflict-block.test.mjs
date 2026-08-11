@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +23,8 @@ import {
   computeFinalTextHash,
 } from "../dist/v2/core/final-state-commit.js";
 import { MemoryHardConflictError } from "../dist/v2/core/memory/memory-lifecycle.js";
+import { commitAndSave, chapterFilePath } from "../dist/v2/core/orchestrator-commit-save.js";
+import { detectMemoryConflicts } from "../dist/v2/core/memory/memory-transaction.js";
 
 function makeTempProject() {
   const dir = mkdtempSync(join(tmpdir(), "memory-gap-test-"));
@@ -170,4 +172,138 @@ test("MEMORY-4/5 生产边界: 同 Canon id 同值（置信度刷新）不阻断
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ============================================================================
+// 生产路径：commitAndSave() 完整回滚（正文先写 → 状态硬冲突 → 回滚 → 无 receipt）
+// ============================================================================
+
+function makeOrchestratorInputWithStagedState(dir, workspaceId, chapterId, chapterNumber, fact, category) {
+  const sourceChapter = `ch${chapterNumber}`;
+  return {
+    workspaceId,
+    chapterId,
+    chapterNumber,
+    projectRoot: dir,
+    intent: {},
+    context: { facts: [], longTermState: null },
+    constitution: null,
+    characterNames: [],
+    stagedStateUpdate: {
+      additions: [
+        {
+          kind: "canon",
+          id: "canon:world:genre",
+          sourceChapter,
+          sourceRef: "seed:canon:world:genre",
+          confidence: 0.9,
+          lastUpdated: new Date().toISOString(),
+          fact,
+          category,
+        },
+      ],
+      invalidations: [],
+      sourceChapter,
+    },
+  };
+}
+
+test("MEMORY-4/5 生产边界: commitAndSave 硬冲突回滚完整流程（正文先写→状态阻断→回滚→无receipt）", () => {
+  const { dir, workspaceId } = makeTempProject();
+  try {
+    // 1. ch1 成功提交正文 + 状态（仙侠世界）
+    const input1 = makeOrchestratorInputWithStagedState(dir, workspaceId, "1", 1, "仙侠世界", "genre");
+    const finalText1 = "仙侠世界灵气浓郁。";
+    const stage1 = {};
+    const out1 = commitAndSave(input1, "cand-ch1", finalText1, stage1);
+    assert.equal(out1.ok, true, "ch1 应成功提交");
+    assert.ok(existsSync(chapterFilePath(input1)), "ch1 正文应先成功写入");
+
+    // 2. ch2 尝试把同一 Canon（canon:world:genre）改写为 玄幻世界 → 硬冲突
+    const input2 = makeOrchestratorInputWithStagedState(dir, workspaceId, "2", 2, "玄幻世界", "genre");
+    const finalText2 = "玄幻世界灵气稀薄。";
+    const stage2 = {};
+    const out2 = commitAndSave(input2, "cand-ch2", finalText2, stage2);
+
+    // 3. 断言回滚结果
+    assert.equal(out2.ok, false, "硬冲突应返回 ok=false");
+    assert.equal(stage2.stateCommit.blocked, "memory_hard_conflict", "stateCommit 应标记 blocked=memory_hard_conflict");
+    assert.equal(stage2.stateCommit.gate, "memory_hard_conflict", "gate 应正确");
+    assert.equal(stage2.stateCommit.severity, "hard", "severity 应为 hard");
+    assert.ok(stage2.stateCommit.evidence, "应携带结构化 evidence");
+    assert.equal(stage2.stateCommit.evidence.key, "canon:canonworldgenre", "evidence.key 应正确");
+    assert.equal(stage2.stateCommit.evidence.existingValue, "仙侠世界", "evidence.existingValue 应为旧值");
+    assert.equal(stage2.stateCommit.evidence.incomingValue, "玄幻世界", "evidence.incomingValue 应为新值");
+    assert.equal(stage2.stateCommit.receipt, undefined, "失败路径不产生 MemoryCommitReceipt");
+    assert.equal(stage2.atomicSave.rolledBack, true, "正文应被回滚");
+    assert.equal(stage2.atomicSave.rollbackAction, "removed_new", "ch2 为新建文件应删除");
+    assert.ok(!existsSync(chapterFilePath(input2)), "冲突后 ch2 正文应被删除");
+    assert.ok(existsSync(chapterFilePath(input1)), "ch1 正文应保留不受影响");
+    // 状态保持原值
+    const loaded = loadStateStore(workspaceId, dir);
+    assert.equal(loaded.canon.length, 1, "硬冲突后不应新增 canon");
+    assert.equal(loaded.canon[0].fact, "仙侠世界", "StateStore 应保持 ch1 原值");
+    assert.equal(loaded.canon[0].sourceChapter, "ch1", "StateStore 来源仍为 ch1");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// Canon 不同值更新语义（方案 A：Canon ID 不可变）——detectMemoryConflicts 单测
+// ============================================================================
+
+function makeCanonRecord(memoryId, key, value, supersedes = []) {
+  return {
+    memoryId,
+    memoryType: "canon",
+    authorityClass: "final_text_explicit",
+    epistemicStatus: "confirmed",
+    lifecycleStatus: "active",
+    sourceChapter: 1,
+    sourceRef: ["ch1#finalText:abc:0-4"],
+    textHash: ["abc"],
+    sourceRunId: "run-1",
+    sourceFinalTextHash: "abc",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    expiresAt: null,
+    confidence: 0.9,
+    derivedFromMemoryIds: [],
+    supersedesMemoryIds: supersedes,
+    payload: { memoryType: "canon", data: { value, category: "genre", key } },
+  };
+}
+
+test("MEMORY-5 Canon 语义: 合法版本演进通过（新 memoryId + 显式 supersedes 旧 id → superseded）", () => {
+  const existing = [makeCanonRecord("canon:world:genre", "canon:world:genre", "仙侠世界")];
+  const incoming = [
+    makeCanonRecord("canon:world:genre-v2", "canon:world:genre", "玄幻世界", ["canon:world:genre"]),
+  ];
+  const conflicts = detectMemoryConflicts(incoming, existing);
+  assert.equal(conflicts.length, 1, "应产生一条冲突记录");
+  assert.equal(conflicts[0].resolution, "superseded", "新 ID + 显式 supersedes 旧 ID = 合法版本演进");
+  assert.equal(conflicts[0].incomingMemoryId, "canon:world:genre-v2", "应使用新 memoryId");
+});
+
+test("MEMORY-5 Canon 语义: 未声明替代关系的不同值改写被阻断（hard_conflict_blocked）", () => {
+  const existing = [makeCanonRecord("canon:world:genre", "canon:world:genre", "仙侠世界")];
+  const incoming = [
+    makeCanonRecord("canon:world:genre-v2b", "canon:world:genre", "玄幻世界"), // 未提供 supersedes
+  ];
+  const conflicts = detectMemoryConflicts(incoming, existing);
+  assert.equal(conflicts.length, 1, "应产生一条冲突记录");
+  assert.equal(conflicts[0].resolution, "hard_conflict_blocked", "未声明替代关系的不同值改写应阻断");
+});
+
+test("MEMORY-5 Canon 语义[方案A]: 同 ID 不同值即使携带替代声明也应阻断，并给出'必须创建新 ID'提示", () => {
+  const existing = [makeCanonRecord("canon:world:genre", "canon:world:genre", "仙侠世界")];
+  // 同 memoryId，却携带 supersedes 指向自身 —— 方案 A 下仍必须阻断（ID 不可变）
+  const incoming = [
+    makeCanonRecord("canon:world:genre", "canon:world:genre", "玄幻世界", ["canon:world:genre"]),
+  ];
+  const conflicts = detectMemoryConflicts(incoming, existing);
+  assert.equal(conflicts.length, 1, "应产生一条冲突记录");
+  assert.equal(conflicts[0].resolution, "hard_conflict_blocked", "同 ID 不同值即使携带替代声明也应阻断");
+  assert.match(conflicts[0].reason, /必须创建新 memoryId/, "应给出'必须创建新 ID'结构化提示");
 });

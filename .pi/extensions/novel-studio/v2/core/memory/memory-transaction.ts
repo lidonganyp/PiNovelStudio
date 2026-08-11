@@ -161,9 +161,11 @@ export function detectMemoryConflicts(
     const prevValue = (prev.payload.data as { value?: string }).value ?? "";
 
     // 同一记忆自身更新（supersedes 指向自身旧版）。
-    // 注意：canon 是"不可违背事实"，同一 id 被写入不同值 = 静默改写 Canon，
-    // 必须阻断（需显式 invalidate/supersede 才允许演进）；同值（如置信度提升）
-    // 或非 canon 状态机推进（character/promise）则视为合法 upsert。
+    // 注意 [方案 A：Canon ID 不可变]：canon 是"不可违背事实"，同一 id 被写入
+    // 不同值 = 静默改写 Canon，必须阻断。即使 incoming 携带 supersedes 声明旧
+    // 自身 id，也**不得**借同 ID 改值——必须先创建新 memoryId 并显式 supersede
+    // 旧 id，才能演进。同值（如置信度提升）或非 canon 状态机推进
+    // （character/promise）则视为合法 upsert。
     if (prev.memoryId === inc.memoryId) {
       if (isCanon && normalize(incValue) !== normalize(prevValue)) {
         conflicts.push({
@@ -172,7 +174,7 @@ export function detectMemoryConflicts(
           existingMemoryId: prev.memoryId,
           incomingMemoryId: inc.memoryId,
           resolution: "hard_conflict_blocked",
-          reason: `同一 Canon 记录值被改写：${prevValue} → ${incValue}（不可违背事实，禁止静默覆盖，需显式 invalidate/supersede）`,
+          reason: `方案 A（Canon ID 不可变）：同一 Canon 记录 ${prev.memoryId} 值被改写 ${prevValue} → ${incValue}。禁止同 ID 改写值，即使携带替代声明也必须创建新 memoryId 并显式 supersede/invalidate 旧记录。`,
         });
       }
       continue;
