@@ -181,3 +181,90 @@ test("MEMORY-6 集成: 权威更高条目在评分中加权，优先进入工作
   );
   assert.ok(confirmedItem.reason.some((r) => r.includes("memory_")));
 });
+
+test("MEMORY-7 生产接线: TTL 到期(expiresAt<=now)的记忆被排除，未到期仍进入", () => {
+  const now = Date.parse("2026-08-11T00:00:00Z");
+  const makeDiagPattern = (id, expiresAt) => ({
+    id,
+    kind: "pattern",
+    sourceChapter: "ch14",
+    sourceRef: "ch14#finalText:abc123def456:0-10",
+    confidence: 0.8,
+    lastUpdated: "2026-08-11T00:00:00Z",
+    patternType: "sentence_risk",
+    description: `诊断${id}`,
+    occurrenceCount: 1,
+    memory: {
+      memoryId: id,
+      memoryType: "diagnostic",
+      authorityClass: "system_derived",
+      epistemicStatus: "derived",
+      // 关键：lifecycleStatus 仍为 active，只有 expiresAt 已过——isMemoryRetrievable
+      // 不会拦截（它只查 lifecycleStatus 字段），必须由 TTL 到期过滤(TierForMemory)拦截。
+      lifecycleStatus: "active",
+      sourceChapter: 14,
+      sourceRef: ["ch14#finalText:abc123def456:0-10"],
+      textHash: ["abc123def456"],
+      createdAt: "2026-08-01T00:00:00Z",
+      updatedAt: "2026-08-01T00:00:00Z",
+      expiresAt,
+      confidence: 0.8,
+      derivedFromMemoryIds: [],
+      supersedesMemoryIds: [],
+      payload: { memoryType: "diagnostic", data: { description: `诊断${id}`, ttlSeconds: 3600 } },
+    },
+  });
+  const state = {
+    canon: [],
+    character: [],
+    promise: [],
+    pattern: [
+      makeDiagPattern("expired-ttl", "2020-01-01T00:00:00Z"),
+      makeDiagPattern("active-ttl", null),
+    ],
+  };
+  const result = retrieveNarrativeContext({
+    chapterNumber: 17,
+    relevantCharacters: [],
+    selectedPromiseIds: [],
+    keywords: [],
+    state,
+    maxItems: 24,
+    now,
+  });
+  // 到期条目被排除并记录 memory_expired_ttl（不静默忽略）
+  const excludedIds = new Set(result.report.futureStateExcluded.map((e) => e.id));
+  assert.ok(excludedIds.has("expired-ttl"), "expiresAt 已过的 diagnostic 应被 TTL 过滤排除");
+  const ttlExcluded = result.report.futureStateExcluded.find((e) => e.id === "expired-ttl");
+  assert.equal(ttlExcluded.reason, "memory_expired_ttl");
+  // 未到期条目进入 workingSet
+  const patternIds = result.workingSet.pattern.map((p) => p.id);
+  assert.ok(patternIds.includes("active-ttl"), "未到期的 diagnostic 应进入 advisory 通道");
+  assert.ok(!patternIds.includes("expired-ttl"), "到期条目不得进入 workingSet");
+});
+
+test("MEMORY-7 生产接线: retrieved 条目暴露 traceable 回源审计", () => {
+  const state = {
+    canon: [
+      makeCanonWithMemory("traceable-can", { sourceRef: "ch14#finalText:abc123def456:0-10" }),
+      makeCanonWithMemory("non-traceable", { sourceRef: "narrative-state-store.json#canon:k" }),
+    ],
+    character: [],
+    promise: [],
+    pattern: [],
+  };
+  const result = retrieveNarrativeContext({
+    chapterNumber: 17,
+    relevantCharacters: [],
+    selectedPromiseIds: [],
+    keywords: [],
+    state,
+    maxItems: 24,
+  });
+  const retrieved = result.report.retrieved;
+  const traceableItem = retrieved.find((r) => r.id === "traceable-can");
+  const nonTraceableItem = retrieved.find((r) => r.id === "non-traceable");
+  assert.equal(typeof traceableItem.traceable, "boolean", "traceable 字段必须存在");
+  assert.equal(traceableItem.traceable, true, "可解析 sourceRef 应 traceable=true");
+  assert.equal(nonTraceableItem.traceable, false, "不可解析 sourceRef 应 traceable=false");
+});

@@ -24,6 +24,16 @@ import type {
 // PEA-1：pattern 等 advisory 类型不作为硬事实，但作为低权重 advisory 注入，
 // 因此改用 isMemoryRetrievable 分层判定（正式事实严格把关，advisory 仅由生命周期/认识阻断）。
 import { isMemoryRetrievable } from "./memory/memory-record.js";
+// MEMORY-7 生产接线（2026-08-11）：TTL 到期过滤复用 memory-lifecycle 的分层判定。
+// isMemoryRetrievable 只检查 lifecycleStatus 字段（expired/archived/conflicted），
+// 不检查 expiresAt 是否已到期（TTL 时间判定）。working/diagnostic 等 DECAY_TYPES
+// 若 expiresAt 已过但 lifecycleStatus 仍为 active，会被当作 advisory 注入——R7 缺口。
+// tierForMemory 对 DECAY_TYPES 检查 expiresAt <= now，复用其判定补齐 TTL 到期过滤。
+import { tierForMemory } from "./memory/memory-lifecycle.js";
+// MEMORY-7 生产接线：回源能力暴露。parseSourceRef 判定唯一 sourceRef 是否可解析为
+// 最终正文 span（ch{N}#finalText:{hash}[:{start}-{end}]），用于 report.traceable 审计：
+// 每条检索条目能否从摘要/结构化状态回源原文。纯函数、无 I/O 副作用。
+import { parseSourceRef } from "./memory/memory-compression.js";
 // P4 M3 修复（2026-07-23）：type-only import，编译期擦除，无运行时耦合。
 // OverdueAlertEntry 形状与 post-raw buildOverdueAlerts 对齐，供 pre-write 通道复用。
 import type { OverdueAlertEntry } from "./methodology-diagnostic-derived.js";
@@ -60,6 +70,12 @@ export interface ContextRetrievalInput {
    * 条目匹配按 entry.id / promiseId / expectationId（kind 守卫）。
    */
   forcedRecallIds?: string[];
+  /**
+   * MEMORY-7 生产接线（2026-08-11）：当前时间戳，用于 TTL 到期过滤。
+   * 默认取 Date.now()（向后兼容，不破坏现有调用）。测试可注入固定 now 验证
+   * expiresAt 已过但 lifecycleStatus 仍为 active 的记忆被真正排除（R7）。
+   */
+  now?: number;
 }
 
 /**
@@ -74,7 +90,7 @@ export interface FutureStateExcludedEntry {
   kind: "canon" | "character" | "promise" | "pattern" | "expectation";
   sourceChapter: string;
   sourceRef: string;
-  reason: "future_state" | "unparseable_chapter" | "memory_not_formal_fact" | "memory_advisory_not_retrievable";
+  reason: "future_state" | "unparseable_chapter" | "memory_not_formal_fact" | "memory_advisory_not_retrievable" | "memory_expired_ttl";
   /** 解析出的章节号（future_state 时为当前章或更大；unparseable 时为 null） */
   parsedChapter?: number | null;
 }
@@ -83,7 +99,7 @@ export interface ContextRetrievalReport {
   requestedCharacters: string[];
   requestedPromiseIds: string[];
   keywords: string[];
-  retrieved: Array<{ id: string; score: number; reason: string[]; sourceRef: string }>;
+  retrieved: Array<{ id: string; score: number; reason: string[]; sourceRef: string; traceable: boolean }>;
   dropped: Array<{ id: string; score: number; reason: string; sourceRef: string }>;
   recall: {
     requiredIds: string[];
@@ -132,6 +148,8 @@ type AnyEntry = CanonEntry | CharacterStateEntry | PromiseEntry | PatternEntry |
 type AnyKind = "canon" | "character" | "promise" | "pattern" | "expectation";
 
 export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextRetrievalResult {
+  // MEMORY-7 生产接线：默认 now = Date.now()，测试可注入固定时间验证 TTL 到期过滤。
+  const now = input.now ?? Date.now();
   // FUTURE-STATE-ISOLATION-1：聚合所有状态，先按 sourceChapter 严格过滤
   const allEntries: AnyEntry[] = [
     ...input.state.canon,
@@ -184,6 +202,22 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
           sourceChapter: entry.sourceChapter,
           sourceRef: entry.sourceRef,
           reason: factCheck.advisory ? "memory_advisory_not_retrievable" : "memory_not_formal_fact",
+          parsedChapter: parsed,
+        });
+        continue;
+      }
+      // MEMORY-7 生产接线：TTL 到期过滤（R7）。
+      // isMemoryRetrievable 只检查 lifecycleStatus 字段，不判定 expiresAt 是否到期。
+      // working/diagnostic 等 DECAY_TYPES 若 expiresAt < now 但 lifecycleStatus 仍 active，
+      // 会被当作 advisory 注入——TTL 未真正生效。复用 tierForMemory 补齐到期判定，
+      // 到期条目排除并记入 futureStateExcluded.reason=memory_expired_ttl，不静默忽略。
+      if (tierForMemory(entry.memory, now) === "expired") {
+        futureStateExcluded.push({
+          id: entry.id,
+          kind,
+          sourceChapter: entry.sourceChapter,
+          sourceRef: entry.sourceRef,
+          reason: "memory_expired_ttl",
           parsedChapter: parsed,
         });
         continue;
@@ -354,6 +388,10 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
         score,
         reason: reasons,
         sourceRef: entry.sourceRef,
+        // MEMORY-7 生产接线：回源能力审计。sourceRef 是否为可解析的最终正文 span
+        // （ch{N}#finalText:{hash}[:{start}-{end}]）。true 表示该条目可从摘要/结构化
+        // 状态回源原文；false 表示无法精确定位（fail-closed，不返回模糊片段）。
+        traceable: entry.sourceRef ? parseSourceRef(entry.sourceRef) !== null : false,
       })),
       dropped: scored
         .filter((item) => !selectedIds.has(item.entry.id))

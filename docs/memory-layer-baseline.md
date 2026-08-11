@@ -66,6 +66,10 @@ flowchart LR
 - `context-compiler.ts#deriveLongTermState` → `context-retrieval.ts#retrieveNarrativeContext`（JIT working set，`maxItems` 动态缩放 24..48，promptItems 摘要 160 字符/条）。
 - `context-retrieval.ts` 对附带 `entry.memory` 信封的条目做权威感知过滤与加权（`isFormalFactEvidence` + authority/epistemic 加权），并执行自身的 `maxItems` 选择逻辑——这是生产主检索路径。
 - `memory-retrieval.ts#rankMemoryRecords`（含 `toLightweightResults` / `maxChars` 预算）是独立的权威感知排序器，当前**仅被评测与 deterministic replay 消费**，未接入 `ContextCompiler` 生产主检索链。它与 `context-retrieval.ts` 的过滤/加权是两套等价实现；生产主路径以 `context-retrieval.ts` 为准。若要启用独立排序器，需在 `ContextCompiler` 明确接入点并做 A/B 验证，避免双排序器互相冲突。
+- **MEMORY-7 生产接线（2026-08-11，方案A 已落地）**：在保持 `retrieveNarrativeContext` 为唯一生产排序器的前提下，补齐两个真实缺口——
+  - **TTL 到期过滤**：`isMemoryRetrievable` 只检查 `lifecycleStatus` 字段（expired/archived/conflicted），不判定 `expiresAt` 是否到期。现复用 `memory-lifecycle.ts#tierForMemory` 对 DECAY_TYPES（working/diagnostic）的 `expiresAt <= now` 判定，到期记忆被排除并记入 `futureStateExcluded.reason=memory_expired_ttl`（不静默忽略）。`retrieveNarrativeContext` 新增可选 `now` 参数（默认 `Date.now()`，测试可注入）。
+  - **回源能力暴露**：`retrieveNarrativeContext` 的 `report.retrieved` 每条新增 `traceable` 布尔标记，用 `memory-compression.ts#parseSourceRef` 判定 sourceRef 能否回源最终正文 span（fail-closed）。
+  - 独立排序器 `rankMemoryRecords` 保持 eval-only，不引入双排序器（符合上文警告）。
 
 ### 1.4 Canon 不同值更新语义（方案 A：Canon ID 不可变）
 
