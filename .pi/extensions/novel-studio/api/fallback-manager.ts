@@ -355,6 +355,17 @@ export interface LLMTimingEntry {
   inputTokens?: number;
   /** 输出 token（仅 OpenAI-compatible 路径可精确取自 usage；Claude streaming 路径无 usage，留空） */
   outputTokens?: number;
+  /**
+   * 推理 token（reasoning/thinking token），从 OpenAI-compatible `completion_tokens_details.reasoning_tokens` 提取。
+   * Gemini 3.x 是推理模型，`completion_tokens` 包含 reasoning tokens；此字段如果存在可用于区分推理与可见输出。
+   * 不存在时留空（provider 未返回细分）。
+   */
+  reasoningTokens?: number;
+  /**
+   * 缓存命中 token，从 OpenAI-compatible `prompt_tokens_details.cached_tokens` 提取。
+   * Gemini 隐式缓存命中时 > 0。不存在时留空（provider 未返回细分）。
+   */
+  cachedTokens?: number;
 }
 
 function createAttemptRequestId(): string {
@@ -586,6 +597,14 @@ export class APIFallbackManager {
             `[LLMAttemptEnd] agent=${agentName} provider=${providerKey} attempt=${attempt + 1} status=ok elapsedMs=${_okElapsedMs}\n`
           );
           // P43 Task 1：emit ok 条目，orchestrator 收集进 PerformanceProfile.llmTimings
+          // 提取 usage 细分：reasoning_tokens（Gemini 3.x 推理模型在 completion_tokens 中包含）
+          // 和 cached_tokens（Gemini 隐式缓存命中）。provider 未返回时留 undefined。
+          const _usage = response.usage as {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            completion_tokens_details?: { reasoning_tokens?: number };
+            prompt_tokens_details?: { cached_tokens?: number };
+          } | undefined;
           emitLLMAttempt({
             timestamp: new Date().toISOString(),
             agent: agentName,
@@ -596,8 +615,10 @@ export class APIFallbackManager {
             status: "ok",
             requestId,
             responseHash: hashResponseText(response.choices[0]?.message?.content ?? ""),
-            inputTokens: (response.usage as { prompt_tokens?: number } | undefined)?.prompt_tokens,
-            outputTokens: (response.usage as { completion_tokens?: number } | undefined)?.completion_tokens,
+            inputTokens: _usage?.prompt_tokens,
+            outputTokens: _usage?.completion_tokens,
+            reasoningTokens: _usage?.completion_tokens_details?.reasoning_tokens,
+            cachedTokens: _usage?.prompt_tokens_details?.cached_tokens,
           });
 
           return {

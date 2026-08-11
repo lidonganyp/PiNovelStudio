@@ -334,6 +334,17 @@ export interface LLMTimingEntry {
   inputTokens?: number;
   /** 输出 token（仅 OpenAI-compatible 路径精确取自 usage；Claude streaming 路径无 usage，留空） */
   outputTokens?: number;
+  /**
+   * 推理 token（reasoning/thinking token），从 OpenAI-compatible `completion_tokens_details.reasoning_tokens` 提取。
+   * Gemini 3.x 是推理模型，`outputTokens`（= `completion_tokens`）可能包含 reasoning tokens；
+   * 此字段如果存在可用于区分推理与可见输出。不存在时留空（provider 未返回细分）。
+   */
+  reasoningTokens?: number;
+  /**
+   * 缓存命中 token，从 OpenAI-compatible `prompt_tokens_details.cached_tokens` 提取。
+   * Gemini 隐式缓存命中时 > 0。不存在时留空（provider 未返回细分）。
+   */
+  cachedTokens?: number;
 }
 
 /** P43 新增：单阶段耗时记录 */
