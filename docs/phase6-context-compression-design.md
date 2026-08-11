@@ -704,4 +704,172 @@ Phase 6 冻结。下一研究模块：**思考/推理预算设计**（eval-only 
 1. **D_pm 通过门禁**：所有 9 个样本 coverage=1.000，跨 seed 稳定（无 B 方案 SC1:s1 coverage=0 的不稳定问题）；sourceRef 反而略优（0.667 vs 0.611，SC7:s1/s2 的 D_pm sourceRef=1.000 而 A=0.750）。
 2. **初步结论**：排除 PatternMemory 对模型工具选择和证据覆盖**无负面影响**，token 降 35.2%。
 3. **仍需后续消融**：D_pm 通过只能说明排除 PatternMemory 在当前 9 样本下安全；maxItems 和摘要长度的单因素消融仍需分别测试（需构造足量条目/长摘要确保限制确实生效），才能完整区分各压缩因素的贡献。
-4. **生产保持 A 基线**：本轮仍为 eval-only，不改生产、不切 canary、不改 production pointer。D_pm 通过门禁为后续生产改造提供证据，但不直接进入生产——需等 maxItems/摘要长度消融也完成后再做整体决策。
+4. **生产保持 A 基线**：本轮仍为 eval-only，不改生产、不切 canary、不改 production pointer。D_pm 通过门禁为后续生产改造提供证据，但不直接进入生产--需等 maxItems/摘要长度消融也完成后再做整体决策。
+
+### 15.7 D_mi 单因素消融真实 Gemini replay 结果（2026-08-11）- D_mi 未通过门禁
+
+**背景**：D_pm 通过后，本轮为 maxItems 单因素消融：保持 A 的摘要长度/PatternMemory 不变，只缩减 maxItems（canon 4->2、character 6->3）。
+
+**执行口径**：`scripts/context-ab-replay.mjs --ablation=D_mi`，`reports/phase6-context-ab/real-D_mi/context-ab-comparison.json`，route=`v2_rawstage2_gemini31`（Gemini 3.1 Pro Preview），temperature=0.72，maxTokens=2048，`DISABLE_FALLBACK=1`，SC1/SC6/SC7 × seed 0/1/2 × **3 批次共 27 arm 样本**（扩大样本量平滑随机波动），工具面固定 A 组 9 专用工具，走生产 `buildHistoricalContext`（`boundedEntries`）注入路径。对照基线为 **Context Replay A**（§15.4）。
+
+**D_mi 组压缩参数**（`HistoricalContextOverrides`）：canon `maxEntries:2`（生产 4）、character `maxEntries:3`（生产 6）、pattern 不变（4×1000）。maxChars 保持生产默认（canon 2400、character 1800）。
+
+**fixtures 扩充**（`context-ab-fixtures.ts`）：canon padding ≥8 条、每条 ≥800 字符；character padding ≥7 条、每条 ≥400 字符；确保 maxItems 和 maxChars 限制确实生效。character padding 统一使用主角名（characters[0]）避免被 `relevantNames` 过滤。
+
+**压缩收益（contextBlockTokens）**：
+
+| 指标（跨 27 样本合计） | A（完整） | D_mi（减 maxItems） | 变化 |
+|------|--------|--------|------|
+| contextBlockTokens | 25452 | 9711 | **-61.8%** |
+| 平均条目数 itemCount | 7.7 | 4.3 | -43.5% |
+| schemaTokenCost（诊断，不纳入门禁） | 47191 | 50644 | 不列为收益 |
+
+**质量指标逐场景逐 seed 对照（3 批次聚合，任一劣化则 D_mi 不通过）**：
+
+| 场景 | seed | A cov | D_mi cov | A ref | D_mi ref | A stop | D_mi stop | 判定 |
+|------|------|-------|----------|-------|----------|--------|-----------|------|
+| SC1-canon-fact | 0 | 0.000 | 0.333 | 0.000 | 0.333 | 100% | 67% | ⚠️ D_mi timeout |
+| SC1-canon-fact | 1 | 0.000 | 0.000 | 0.000 | 0.000 | 100% | 67% | ⚠️ D_mi timeout |
+| SC1-canon-fact | 2 | 0.000 | 0.333 | 0.000 | 0.333 | 100% | 67% | ⚠️ D_mi timeout |
+| SC6-low-risk | 0/1/2 | 1.000 | 1.000 | 0.000 | 0.000 | 100% | 100% | ✅ 持平 |
+| SC7-multi-tool | 0 | 1.000 | 1.000 | 0.767 | **1.000** | 67% | **100%** | ✅ D_mi 更优 |
+| SC7-multi-tool | 1 | 1.000 | 1.000 | 0.833 | **1.000** | 67% | **100%** | ✅ D_mi 更优 |
+| SC7-multi-tool | 2 | 1.000 | 1.000 | 1.000 | 0.889 | 100% | 100% | ✅ 基本持平 |
+
+| 聚合指标 | A | D_mi | 判定 |
+|------|-----|------|------|
+| mustVerify avgCoverage | 0.667 | **0.741** | ✅ D_mi 更优 |
+| sourceRef avgCompleteness | 0.289 | **0.395** | ✅ D_mi 更优 |
+| empty / errors / timeouts | 1 / 1 / 1 | **3 / 3 / 3** | ❌ D_mi 劣化 |
+| stopRate | 93% | 89% | ✅ 在 5% 容差内 |
+| d_miGate allPassed | - | **false** | ❌ 未通过 |
+
+**结论**：
+1. **D_mi 未通过门禁**：`failuresNotWorseThanA` FAIL--D_mi 在 SC1-canon-fact 场景 3 个 seed 各出现 1 次 timeout/error/empty（27 样本中 3 次，A 仅 1 次）。这是**系统性问题而非随机波动**：canon maxItems 从 4 缩减到 2 后，SC1（canon 事实检索场景）的稳定性下降。
+2. **压缩收益显著但质量不可接受**：contextBlockTokens 降 61.8%，coverage/sourceRef 反而略优，但 timeout 增加 2 次。
+3. **归因分析**：SC1 是 canon 事实检索场景，maxItems=2 导致关键 canon 事实可能被截断，模型在检索 canon 事实时更易触发重试/超时。SC7（多工具混合）反而更优，因为该场景 canon 不是主要检索目标。
+4. **生产保持 A 基线**：D_mi 不进入生产。maxItems 缩减对 canon 依赖型场景有负面影响，不应作为通用压缩策略。
+
+### 15.8 D_sl 单因素消融真实 Gemini replay 结果（2026-08-11）- D_sl 通过门禁
+
+**背景**：D_mi 未通过后，本轮为摘要长度单因素消融：保持 A 的 maxItems/PatternMemory 不变，只缩减 maxChars（canon 2400->1200、character 1800->900）。
+
+**执行口径**：`scripts/context-ab-replay.mjs --ablation=D_sl`，`reports/phase6-context-ab/real-D_sl/context-ab-comparison.json`，route=`v2_rawstage2_gemini31`（Gemini 3.1 Pro Preview），temperature=0.72，maxTokens=2048，`DISABLE_FALLBACK=1`，SC1/SC6/SC7 × seed 0/1/2 共 9 arm 样本，工具面固定 A 组 9 专用工具，走生产 `buildHistoricalContext`（`boundedEntries`）注入路径。对照基线为 **Context Replay A**（§15.4）。
+
+**D_sl 组压缩参数**（`HistoricalContextOverrides`）：canon `maxChars:1200`（生产 2400）、character `maxChars:900`（生产 1800）、pattern 不变（4×1000）。maxEntries 保持生产默认（canon 4、character 6）。
+
+**压缩收益（contextBlockTokens）**：
+
+| 指标（跨 9 样本合计） | A（完整） | D_sl（减摘要长度） | 变化 |
+|------|--------|--------|------|
+| contextBlockTokens | 8484 | 6699 | **-21.0%** |
+| 平均条目数 itemCount | 7.7 | 6.7 | -13.0% |
+| schemaTokenCost（诊断，不纳入门禁） | 14963 | 13812 | 不列为收益 |
+
+**质量指标逐场景逐 seed 对照（任一劣化则 D_sl 不通过）**：
+
+| 场景 | seed | A cov | D_sl cov | A ref | D_sl ref | 判定 |
+|------|------|-------|----------|-------|----------|------|
+| SC1-canon-fact | 0 | 0.000 | 0.000 | 0.000 | 0.000 | ✅ 持平 |
+| SC1-canon-fact | 1 | 0.000 | 0.000 | 0.000 | 0.000 | ✅ 持平 |
+| SC1-canon-fact | 2 | 0.000 | 0.000 | 0.000 | 0.000 | ✅ 持平 |
+| SC6-low-risk | 0/1/2 | 1.000 | 1.000 | 0.000 | 0.000 | ✅ 持平 |
+| SC7-multi-tool | 0 | 1.000 | 1.000 | 1.000 | 1.000 | ✅ 持平 |
+| SC7-multi-tool | 1 | 1.000 | 1.000 | 1.000 | 1.000 | ✅ 持平 |
+| SC7-multi-tool | 2 | 1.000 | 1.000 | 0.500 | **1.000** | ✅ D_sl 更优 |
+
+| 聚合指标 | A | D_sl | 判定 |
+|------|-----|------|------|
+| mustVerify avgCoverage | 0.667 | 0.667 | ✅ 持平 |
+| sourceRef avgCompleteness | 0.278 | **0.333** | ✅ D_sl 更优 |
+| empty / errors / timeouts | 0 / 0 / 0 | 0 / 0 / 0 | ✅ 未劣化 |
+| stopRate | 100% | 100% | ✅ 持平 |
+| d_slGate allPassed | - | **true** | ✅ 通过 |
+
+**结论**：
+1. **D_sl 通过门禁**：所有 9 个样本 coverage 与 A 持平，sourceRef 略优（0.333 vs 0.278，SC7:s2 的 D_sl sourceRef=1.000 而 A=0.500），无 timeout/error/empty。
+2. **压缩收益适中**：contextBlockTokens 降 21.0%，itemCount 降 13.0%（character 从 6 条截断到 4-5 条）。
+3. **稳定性优于 D_mi**：D_sl 在 SC1 场景无 timeout，而 D_mi 在 SC1 每批次都 timeout。摘要长度缩减不影响条目数量，模型仍能看到所有关键事实（只是每条更短），因此对 canon 事实检索场景无负面影响。
+4. **生产保持 A 基线**：本轮仍为 eval-only。D_sl 通过门禁为后续生产改造提供证据。
+
+### 15.9 Phase 6.2 单因素消融总结（2026-08-11）
+
+**三组单因素消融结果汇总**：
+
+| 消融 arm | 压缩变量 | token 下降 | 门禁结果 | 主要原因 |
+|------|------|------|------|------|
+| D_pm | 排除 PatternMemory | -35.2% | ✅ PASS | PatternMemory 对工具选择无正贡献 |
+| D_mi | maxItems 缩减（canon 4->2、character 6->3） | -61.8% | ❌ FAIL | SC1 canon 检索场景系统性 timeout |
+| D_sl | maxChars 缩减（canon 2400->1200、character 1800->900） | -21.0% | ✅ PASS | 摘要长度缩减不影响条目数量 |
+
+**关键发现**：
+1. **maxItems 是质量敏感参数**：缩减 maxItems 会截断关键事实条目，对 canon 依赖型场景（SC1）有系统性负面影响。D_mi 虽然压缩收益最高（-61.8%），但质量不可接受。
+2. **maxChars 缩减仅作为受限结论**：缩减 maxChars 只缩短每条摘要文本长度，不减少条目数量，模型仍能看到所有关键事实；D_sl 压缩收益适中（-21.0%）且质量稳定。**该结论仅限定为"在当前模型、场景、seed 和 fixture 范围内未观察到质量劣化"，不能泛化为绝对安全。** 摘要长度缩减是否在更大样本/其他场景下保持稳定，需进一步验证。
+3. **PatternMemory 可安全排除**：D_pm 证明排除 PatternMemory 对工具选择和证据覆盖无负面影响，压缩收益显著（-35.2%）。
+
+**组合策略建议（后续研究，不直接进入生产）**：
+- **D_pm + D_sl 组合**：两者单因素分别通过（D_pm -35.2%、D_sl -21.0%），但 **~50% token 下降只是估算，不能由两个单因素 token 降幅直接推断**。必须做组合 replay 验证组合后质量仍不降级，且组合 token 降幅需实测。
+- **不建议包含 D_mi**：maxItems 缩减对 canon 依赖型场景有系统性风险。
+
+**生产决策**：
+- 生产保持 A 基线，本轮全部 eval-only。
+- D_pm 和 D_sl 通过门禁为后续生产改造提供证据，但需组合验证后才能整体决策。
+- D_mi 不进入任何组合策略。
+
+### 15.10 Phase 6.2 单因素验收结论与组合验证计划（2026-08-11）
+
+**单因素验收判定**（用户已核验）：
+- **D_mi 明确失败，不进入任何组合**：27 样本 token 降 61.8%，但 empty/errors/timeouts 从 1 增至 3，`allPassed=false`。
+- **D_sl 在当前 Gemini replay 范围内通过**：9 样本 token 降 21%，coverage 持平、sourceRef 略优，`allPassed=true`。
+- **Phase 6.2 测试 16/16 通过**；prod/eval 类型检查通过。
+- **生产继续保持 A 基线**，不切 canary。
+
+**限定表述**：
+- "maxChars 是安全压缩参数" 仅表述为 **"在当前模型、场景、seed 和 fixture 范围内未观察到质量劣化"**，不能泛化为绝对安全。
+
+**下一步（仅 eval-only，不改生产）— D_pm + D_sl 组合 replay**：
+- 使用与 D_mi 相同的 **27 样本规模**（3 batches × 3 scenarios × 3 seeds）。
+- 固定同模型（gemini-3.1-pro-preview / `v2_rawstage2_gemini31`）、同 seed、同场景（SC1/SC6/SC7）、同生产 `buildHistoricalContext` 注入路径。
+- 按 **逐场景逐 seed 门禁** 验收（对照 Context Replay A），任一劣化即不通过。
+- **不得用两个单因素的 token 降幅推断组合后 ~50% 且质量不降级**；组合 token 降幅与质量必须实测。
+- 若组合实验通过，再提交整体候选方案评审；在此之前 **production pointer 保持不变**。
+
+### 15.11 D_pm + D_sl 组合 replay 结果（2026-08-11）— 组合未通过门禁
+
+**背景**：D_pm（-35.2%）与 D_sl（-21.0%）单因素分别通过后，按 §15.10 计划做组合验证。组合 arm `D_pm_sl` = 排除 PatternMemory + 缩减 maxChars（canon 2400→1200、character 1800→900），maxItems 保持生产默认（canon 4、character 6）。
+
+**执行口径**：`scripts/context-ab-replay.mjs --ablation=D_pm_sl --batches=3 --seeds=0,1,2`，`reports/phase6-context-ab/real-D_pm_sl/context-ab-comparison.json`，route=`v2_rawstage2_gemini31`（Gemini 3.1 Pro Preview），temperature=0.72，maxTokens=2048，`DISABLE_FALLBACK=1`，SC1/SC6/SC7 × seed 0/1/2 × 3 batches 共 **27 arm 样本**，工具面固定 A 组 9 专用工具，走生产 `buildHistoricalContext` 注入路径。对照基线为 **Context Replay A**（§15.4）。
+
+**压缩收益（contextBlockTokens，实测）**：
+
+| 指标（跨 27 样本合计） | A（完整） | D_pm_sl（组合） | 变化 |
+|------|--------|--------|------|
+| contextBlockTokens | 25452 | 19476 | **-23.5%** |
+| 平均条目数 itemCount | 7.7 | 5.7 | -26.1% |
+
+> **组合 token 降幅实测仅 -23.5%，远低于单因素累加估算的 ~50%**（D_pm -35.2% + D_sl -21.0%）。原因：D_pm 已排除 PatternMemory，D_sl 的 maxChars 缩减作用于已缩小的基座，两者收益部分重叠而非累加。这验证了"不能由两个单因素 token 降幅直接推断组合收益"的告诫。
+
+**质量指标逐场景逐 seed 对照（任一劣化则 D_pm_sl 不通过）**：
+
+| 场景 | seed | A cov | D_pm_sl cov | A ref | D_pm_sl ref | A 失败 | D_pm_sl 失败 | 判定 |
+|------|------|-------|----------|-------|----------|--------|--------|------|
+| SC1-canon-fact | 0/1/2 | 0.000 | 0.000 | 0.000 | 0.000 | 0/0/0 | 0/0/0 | ✅ 持平 |
+| SC6-low-risk | 0/1 | 1.000 | 1.000 | 0.000 | 0.000 | 0/0/0 | 0/0/0 | ✅ 持平 |
+| SC6-low-risk | 2 | 1.000 | 1.000 | 0.000 | 0.000 | 0/0/0 | **1/1/1** | ⚠️ D_pm_sl timeout/error/empty |
+| SC7-multi-tool | 0 | 1.000 | 1.000 | 1.000 | 1.000 | 0/0/0 | 0/0/0 | ✅ 持平 |
+| SC7-multi-tool | 1 | 1.000 | 1.000 | 1.000 | 0.833 | 0/0/0 | **1/1/1** | ⚠️ D_pm_sl timeout + sourceRef 略劣 |
+| SC7-multi-tool | 2 | 1.000 | 1.000 | 1.000 | 0.833 | 0/0/0 | 0/0/0 | ⚠️ D_pm_sl sourceRef 0.833 vs 1.000 |
+
+| 聚合指标 | A | D_pm_sl | 判定 |
+|------|-----|------|------|
+| mustVerify avgCoverage | 0.667 | 0.667 | ✅ 持平 |
+| sourceRef avgCompleteness | 0.333 | **0.296** | ❌ D_pm_sl 劣化 |
+| empty / errors / timeouts | 0 / 0 / 0 | **2 / 2 / 2** | ❌ D_pm_sl 劣化 |
+| stopRate | 100% | **93%** | ❌ D_pm_sl 降级 |
+| d_pmSlGate allPassed | - | **false** | ❌ 未通过 |
+
+**结论**：
+1. **D_pm_sl 组合未通过门禁**：`allPassed=false`。sourceRef 0.296 vs 0.333 劣化、stopRate 93% vs 100% 降级、且出现 2 次 timeout/error/empty（SC6:s2、SC7:s1，其中 SC7:s1 为网关 120s 超时后的可恢复重试导致）。按逐场景逐 seed 严格门禁，任一劣化即不通过。
+2. **组合 token 降幅远低于估算**：实测仅 -23.5%，不是 ~50%。单因素收益重叠，不能累加。
+3. **组合稳定性弱于单因素**：D_sl 单因素 9 样本零失败，但组合 27 样本出现 2 次失败且 sourceRef 略降，说明组合并非简单叠加，需全量验证。
+4. **生产保持 A 基线**：组合未通过，**不提交整体候选方案评审，production pointer 保持不变**。D_pm / D_sl 单因素虽通过，但无有效组合候选，不作为生产改造依据。

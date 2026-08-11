@@ -92,6 +92,17 @@ describe("Phase 6.2 historicalOverridesOfArm arm 参数验证", () => {
     assert.equal(overrides.character, undefined, "D_pm 组 character 应为 undefined（保持 A 默认）");
   });
 
+  it("D_pm_sl 组组合消融：排除 PatternMemory + 缩减 maxChars，maxItems 保持 A 默认", () => {
+    const overrides = runnerMod.historicalOverridesOfArm("D_pm_sl");
+    assert.ok(overrides && overrides !== "none" && overrides !== null, "D_pm_sl 组应返回 overrides 对象");
+    assert.equal(overrides.pattern.inject, false, "D_pm_sl 组 pattern inject 应为 false（排除 PatternMemory）");
+    assert.equal(overrides.canon.maxChars, 1200, "D_pm_sl 组 canon maxChars 应为 1200（D_sl 摘要长度）");
+    assert.equal(overrides.character.maxChars, 900, "D_pm_sl 组 character maxChars 应为 900（D_sl 摘要长度）");
+    // maxItems 保持 A 默认（不设置 maxEntries）
+    assert.equal(overrides.canon.maxEntries, undefined, "D_pm_sl 组 canon 不应设置 maxEntries（maxItems 保持 A 默认）");
+    assert.equal(overrides.character.maxEntries, undefined, "D_pm_sl 组 character 不应设置 maxEntries（maxItems 保持 A 默认）");
+  });
+
   it("B 组与 D_pm 组的差异：B 改 maxItems/摘要长度，D_pm 不改", () => {
     const bOverrides = runnerMod.historicalOverridesOfArm("B");
     const dpmOverrides = runnerMod.historicalOverridesOfArm("D_pm");

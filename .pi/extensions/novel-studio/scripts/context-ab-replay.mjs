@@ -43,6 +43,16 @@ const batchesArg = process.argv.find((a) => a.startsWith("--batches="));
 const BATCHES = batchesArg ? parseInt(batchesArg.split("=")[1], 10) : 1;
 const seedsArg = process.argv.find((a) => a.startsWith("--seeds="));
 const SEEDS = seedsArg ? seedsArg.split("=")[1].split(",").map((s) => parseInt(s.trim(), 10)) : [0, 1, 2];
+// 消融 arm 选择：D_pm（PatternMemory）/ D_mi（maxItems）/ D_sl（摘要长度）
+const ablationArg = process.argv.find((a) => a.startsWith("--ablation="));
+const ABLATION_ARM = ablationArg ? ablationArg.split("=")[1] : "D_pm";
+const ABLATION_LABELS = {
+  D_pm: "D_pm（排PatternMemory, 其余不变）",
+  D_mi: "D_mi（减maxItems: canon 4→2, character 6→3, 其余不变）",
+  D_sl: "D_sl（减摘要长度: canon 2400→1200, character 1800→900, 其余不变）",
+  D_pm_sl: "D_pm+D_sl（组合: 排PatternMemory + 减摘要长度 canon 2400→1200, character 1800→900, maxItems 保持生产默认）",
+};
+const ABLATION_DESC = ABLATION_LABELS[ABLATION_ARM] ?? ABLATION_ARM;
 
 if (!DRY_RUN && !REQUIRE_AUTH) {
   console.error("[context-ab] 非 dry-run 模式必须显式传 --require-auth");
@@ -54,8 +64,10 @@ if (!DRY_RUN && process.env.PINOVEL_DISABLE_FALLBACK !== "1") {
 }
 
 // Phase 6.1.1 修复：real/dry-run 使用不同输出目录，禁止 dry-run 覆盖 real 产物
+// 不同消融 arm 使用不同子目录，避免覆盖
 const MODE_DIR = DRY_RUN ? "dry-run" : "real";
-const REPORT_DIR = join(PROJECT_ROOT, "reports", "phase6-context-ab", MODE_DIR);
+const REPORT_SUBDIR = ABLATION_ARM === "D_pm" ? MODE_DIR : `${MODE_DIR}-${ABLATION_ARM}`;
+const REPORT_DIR = join(PROJECT_ROOT, "reports", "phase6-context-ab", REPORT_SUBDIR);
 
 // Gemini 冻结基线路由（唯一真相源为 config/model-routing.json v4.31.0）
 const MODEL_ROUTE = process.env.PINOVEL_TOOL_AB_ROUTE ?? "v2_rawstage2_gemini31";
@@ -64,10 +76,10 @@ const MODEL = "gemini-3.1-pro-preview";
 const TEMPERATURE = 0.72;
 const MAX_TOKENS = 2048;
 
-console.log("[context-ab] PatternMemory 单因素消融 A/D_pm replay 启动（生产 buildHistoricalContext 注入路径）");
+console.log(`[context-ab] ${ABLATION_ARM} 单因素消融 A/${ABLATION_ARM} replay 启动（生产 buildHistoricalContext 注入路径）`);
 console.log(`[context-ab] 模式=${DRY_RUN ? "dry-run" : "real"}, 批次数=${BATCHES}, seeds=${SEEDS.join(",")}`);
 console.log(`[context-ab] 路由=${MODEL_ROUTE} (${PROVIDER}/${MODEL}), temp=${TEMPERATURE}, maxTokens=${MAX_TOKENS}`);
-console.log(`[context-ab] 变体：A(完整) / D_pm(排PatternMemory, 其余不变)`);
+console.log(`[context-ab] 变体：A(完整) / ${ABLATION_DESC}`);
 
 const runner = await import(
   `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "context-ab-runner.js")}`
@@ -89,7 +101,7 @@ if (scenarios.length === 0) {
 }
 const variants = [
   { label: "A", arm: "A" },
-  { label: "D_pm", arm: "D_pm" },
+  { label: ABLATION_ARM, arm: ABLATION_ARM },
 ];
 
 // ── modelFn 构建 ──
@@ -238,10 +250,10 @@ function crossBatchAggregate(variantLabel) {
 }
 
 const crossA = crossBatchAggregate("A");
-const crossDpm = crossBatchAggregate("D_pm");
+const crossD = crossBatchAggregate(ABLATION_ARM);
 
-// 单因素消融：D_pm vs A，不使用 C 组；cAgg 传 crossDpm 使 cDelta 归零（无意义但不报错）
-const gate = evaluateGate(crossDpm, crossDpm, crossA);
+// 单因素消融：D vs A，不使用 C 组；cAgg 传 crossD 使 cDelta 归零（无意义但不报错）
+const gate = evaluateGate(crossD, crossD, crossA);
 
 // ── 逐场景/逐 seed trajectory ──
 function buildTrajectory() {
@@ -278,12 +290,12 @@ function buildTrajectory() {
 }
 const trajectory = buildTrajectory();
 
-// ── 压缩比例（D_pm vs A，按 contextBlockTokens 与条目数） ──
+// ── 压缩比例（D vs A，按 contextBlockTokens 与条目数） ──
 function compressionRatio() {
   const aTokens = crossA.totalContextBlockTokens;
-  const dTokens = crossDpm.totalContextBlockTokens;
+  const dTokens = crossD.totalContextBlockTokens;
   const aItems = crossA.avgContextItemCount;
-  const dItems = crossDpm.avgContextItemCount;
+  const dItems = crossD.avgContextItemCount;
   return {
     tokenReductionPct: aTokens > 0 ? +((1 - dTokens / aTokens) * 100).toFixed(1) : 0,
     itemReductionPct: aItems > 0 ? +((1 - dItems / aItems) * 100).toFixed(1) : 0,
@@ -320,20 +332,20 @@ const report = {
     injectionPath: "production buildHistoricalContext (boundedEntries)",
     compressionParams: {
       A: { canon: "4×2400", character: "6×1800", pattern: "4×1000" },
-      D_pm: { canon: "4×2400（不变）", character: "6×1800（不变）", pattern: "excluded（单因素）" },
+      [ABLATION_ARM]: ABLATION_DESC,
     },
-    note: "schemaTokenCost 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 contextBlockTokens。D_pm 为 PatternMemory 单因素消融：保持 A 的 maxItems/摘要长度，只排除 PatternMemory。",
+    note: `schemaTokenCost 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 contextBlockTokens。${ABLATION_ARM} 单因素消融：${ABLATION_DESC}。`,
   },
-  crossBatchAggregation: { A: crossA, D_pm: crossDpm },
+  crossBatchAggregation: { A: crossA, [ABLATION_ARM]: crossD },
   compressionRatio: compression,
   gate,
   trajectory,
   perBatch: allBatchResults.map((b) => ({
     batch: b.batch,
     aggregation: b.aggregation,
-    gate: evaluateGate(b.aggregation.D_pm ?? b.aggregation["D_pm"], b.aggregation.D_pm ?? b.aggregation["D_pm"], b.aggregation.A),
+    gate: evaluateGate(b.aggregation[ABLATION_ARM] ?? b.aggregation[ABLATION_ARM], b.aggregation[ABLATION_ARM] ?? b.aggregation[ABLATION_ARM], b.aggregation.A),
   })),
-  note: "Phase 6.2 单因素消融：A=完整长期状态(生产默认)/D_pm=只排除PatternMemory(其余不变)。固定9专用工具，走生产 buildHistoricalContext 注入路径。",
+  note: `Phase 6.2 单因素消融：A=完整长期状态(生产默认)/${ABLATION_ARM}=${ABLATION_DESC}。固定9专用工具，走生产 buildHistoricalContext 注入路径。`,
 };
 
 mkdirSync(REPORT_DIR, { recursive: true });
@@ -345,7 +357,7 @@ function fmt(v, d = 3) { return (typeof v === "number" ? v.toFixed(d) : String(v
 function pct(v) { return `${(v * 100).toFixed(0)}%`; }
 
 const md = [
-  "# Phase 6.2 PatternMemory 单因素消融 A/D_pm replay 报告（生产 buildHistoricalContext 注入路径）",
+  `# Phase 6.2 ${ABLATION_ARM} 单因素消融 A/${ABLATION_ARM} replay 报告（生产 buildHistoricalContext 注入路径）`,
   "",
   `**时间**：${report.timestamp}`,
   `**模式**：${report.mode}`,
@@ -356,61 +368,61 @@ const md = [
   "## 两组定义",
   "",
   "- **A 组（完整）**：生产默认注入参数（canon 4×2400、character 6×1800、pattern 4×1000）",
-  "- **D_pm 组（单因素消融）**：保持 A 的 maxItems/摘要长度不变，只排除 PatternMemory",
+  `- **${ABLATION_ARM} 组（单因素消融）**：${ABLATION_DESC}`,
   "",
   "> 注入路径：生产 `buildHistoricalContext`（boundedEntries 三段）。`schemaTokenCost` 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 `contextBlockTokens`。",
   "> 对照基线为 **Context Replay A**（§15.4），非 Tool Interface A（§15.1）。",
   "",
   "## 跨批次聚合对比",
   "",
-  "| 指标 | A 完整 | D_pm 排Pattern |",
+  `| 指标 | A 完整 | ${ABLATION_ARM} 消融 |`,
   "|------|--------|---------------|",
-  `| 平均覆盖率 | ${fmt(crossA.avgCoverage)} | ${fmt(crossDpm.avgCoverage)} |`,
-  `| 停止率 | ${pct(crossA.stopRate)} | ${pct(crossDpm.stopRate)} |`,
-  `| sourceRef 完整率 | ${fmt(crossA.avgSourceRef)} | ${fmt(crossDpm.avgSourceRef)} |`,
-  `| 总调用数 | ${crossA.totalCalls} | ${crossDpm.totalCalls} |`,
-  `| 空结果数 | ${crossA.totalEmpty} | ${crossDpm.totalEmpty} |`,
-  `| 错误数 | ${crossA.totalErrors} | ${crossDpm.totalErrors} |`,
-  `| 超时数 | ${crossA.totalTimeouts} | ${crossDpm.totalTimeouts} |`,
-  `| 非法工具选择 | ${crossA.totalInvalidTool} | ${crossDpm.totalInvalidTool} |`,
-  `| schemaTokenCost（诊断） | ${crossA.schemaTokenCost} | ${crossDpm.schemaTokenCost} |`,
-  `| 上下文 token | ${crossA.totalContextBlockTokens} | ${crossDpm.totalContextBlockTokens} |`,
-  `| 上下文条目数 | ${fmt(crossA.avgContextItemCount, 1)} | ${fmt(crossDpm.avgContextItemCount, 1)} |`,
-  `| 首证据延迟 | ${fmt(crossA.avgFirstValidEvidenceCall, 1)} | ${fmt(crossDpm.avgFirstValidEvidenceCall, 1)} |`,
+  `| 平均覆盖率 | ${fmt(crossA.avgCoverage)} | ${fmt(crossD.avgCoverage)} |`,
+  `| 停止率 | ${pct(crossA.stopRate)} | ${pct(crossD.stopRate)} |`,
+  `| sourceRef 完整率 | ${fmt(crossA.avgSourceRef)} | ${fmt(crossD.avgSourceRef)} |`,
+  `| 总调用数 | ${crossA.totalCalls} | ${crossD.totalCalls} |`,
+  `| 空结果数 | ${crossA.totalEmpty} | ${crossD.totalEmpty} |`,
+  `| 错误数 | ${crossA.totalErrors} | ${crossD.totalErrors} |`,
+  `| 超时数 | ${crossA.totalTimeouts} | ${crossD.totalTimeouts} |`,
+  `| 非法工具选择 | ${crossA.totalInvalidTool} | ${crossD.totalInvalidTool} |`,
+  `| schemaTokenCost（诊断） | ${crossA.schemaTokenCost} | ${crossD.schemaTokenCost} |`,
+  `| 上下文 token | ${crossA.totalContextBlockTokens} | ${crossD.totalContextBlockTokens} |`,
+  `| 上下文条目数 | ${fmt(crossA.avgContextItemCount, 1)} | ${fmt(crossD.avgContextItemCount, 1)} |`,
+  `| 首证据延迟 | ${fmt(crossA.avgFirstValidEvidenceCall, 1)} | ${fmt(crossD.avgFirstValidEvidenceCall, 1)} |`,
   "",
-  "## 压缩比例（D_pm vs A）",
+  `## 压缩比例（${ABLATION_ARM} vs A）`,
   "",
   `- **contextBlockTokens 下降**：${compression.tokenReductionPct}%`,
   `- **注入条目数下降**：${compression.itemReductionPct}%`,
   "",
-  "## 每场景 trajectory（A/D_pm × seed）",
+  `## 每场景 trajectory（A/${ABLATION_ARM} × seed）`,
   "",
   "| 场景 | seed | 臂 | 覆盖 | 停止 | sourceRef | empty | errors | timeouts | ctxTokens | canon | char | pattern | items |",
   "|------|------|-----|-----|------|-----------|-------|--------|----------|-----------|-------|------|---------|-------|",
   ...trajectory.flatMap((row) =>
-    ["A", "D_pm"].map((v) => {
+    ["A", ABLATION_ARM].map((v) => {
       const m = row[v];
       return `| ${row.scenarioId} | ${row.seed} | ${v} | ${fmt(m.coverage)} | ${pct(m.stopRate)} | ${fmt(m.sourceRef)} | ${m.empty} | ${m.errors} | ${m.timeouts} | ${m.contextBlockTokens} | ${m.canonCount} | ${m.characterCount} | ${m.patternCount} | ${m.itemCount} |`;
     }),
   ),
   "",
-  "## D_pm 组门禁（排除 PatternMemory 不降级）",
+  `## ${ABLATION_ARM} 组门禁（单因素消融不降级）`,
   "",
   "| 门禁项 | 结果 | 说明 |",
   "|--------|------|------|",
-  `| 覆盖率 >= A | ${gate.bGate.coverageGteA ? "PASS" : "FAIL"} | ${fmt(crossDpm.avgCoverage)} vs ${fmt(crossA.avgCoverage)} |`,
-  `| sourceRef >= A | ${gate.bGate.sourceRefGteA ? "PASS" : "FAIL"} | ${fmt(crossDpm.avgSourceRef)} vs ${fmt(crossA.avgSourceRef)} |`,
+  `| 覆盖率 >= A | ${gate.bGate.coverageGteA ? "PASS" : "FAIL"} | ${fmt(crossD.avgCoverage)} vs ${fmt(crossA.avgCoverage)} |`,
+  `| sourceRef >= A | ${gate.bGate.sourceRefGteA ? "PASS" : "FAIL"} | ${fmt(crossD.avgSourceRef)} vs ${fmt(crossA.avgSourceRef)} |`,
   `| 失败不劣于 A | ${gate.bGate.failuresNotWorseThanA ? "PASS" : "FAIL"} | errors/timeouts/parse/empty/invTool/truncated/invIntents |`,
-  `| 停止率不降级 | ${gate.bGate.stopRateNotDegraded ? "PASS" : "FAIL"} | ${pct(crossDpm.stopRate)} vs ${pct(crossA.stopRate)} |`,
+  `| 停止率不降级 | ${gate.bGate.stopRateNotDegraded ? "PASS" : "FAIL"} | ${pct(crossD.stopRate)} vs ${pct(crossA.stopRate)} |`,
   `| token 下降 >10% | ${gate.bGate.tokenReduced ? "PASS" : "FAIL"} | ${gate.bGate.tokenReductionPct}（contextBlockTokens） |`,
-  `| 首证据不延迟 | ${gate.bGate.firstEvidenceNotDelayed ? "PASS" : "FAIL"} | ${fmt(crossDpm.avgFirstValidEvidenceCall, 1)} vs ${fmt(crossA.avgFirstValidEvidenceCall, 1)} |`,
+  `| 首证据不延迟 | ${gate.bGate.firstEvidenceNotDelayed ? "PASS" : "FAIL"} | ${fmt(crossD.avgFirstValidEvidenceCall, 1)} vs ${fmt(crossA.avgFirstValidEvidenceCall, 1)} |`,
   `| **整体门禁** | ${gate.bGate.allPassed ? "PASS" : "FAIL"} | |`,
   "",
   "## 结论",
   "",
   gate.bGate.allPassed
-    ? "D_pm 组（排除 PatternMemory）**通过**门禁：contextBlockTokens 下降且覆盖不降级。可初步认为 PatternMemory 排除对质量无负面影响。"
-    : "D_pm 组（排除 PatternMemory）**未通过**门禁。排除 PatternMemory 导致质量劣化，保持 A 基线。",
+    ? `${ABLATION_ARM} 组（${ABLATION_DESC}）**通过**门禁：contextBlockTokens 下降且覆盖不降级。`
+    : `${ABLATION_ARM} 组（${ABLATION_DESC}）**未通过**门禁。质量劣化，保持 A 基线。`,
 ];
 
 writeFileSync(join(REPORT_DIR, "context-ab-comparison.md"), md.join("\n"));
@@ -418,4 +430,4 @@ writeFileSync(join(REPORT_DIR, "context-ab-comparison.md"), md.join("\n"));
 console.log(`\n[context-ab] 报告已生成：`);
 console.log(`  JSON: ${join(REPORT_DIR, "context-ab-comparison.json")}`);
 console.log(`  MD:   ${join(REPORT_DIR, "context-ab-comparison.md")}`);
-console.log(`[context-ab] D_pm 组门禁：${gate.bGate.allPassed ? "PASS" : "FAIL"}（token 下降 ${compression.tokenReductionPct}%）`);
+console.log(`[context-ab] ${ABLATION_ARM} 组门禁：${gate.bGate.allPassed ? "PASS" : "FAIL"}（token 下降 ${compression.tokenReductionPct}%）`);

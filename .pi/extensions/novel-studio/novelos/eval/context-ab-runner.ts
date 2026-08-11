@@ -33,7 +33,7 @@ import { deriveSnapshotFromScenario } from "./context-ab-fixtures.js";
 
 // ── 类型 ──────────────────────────────────────────────────────────────────
 
-export type ContextAbArm = "A" | "B" | "C" | "D_pm";
+export type ContextAbArm = "A" | "B" | "C" | "D_pm" | "D_mi" | "D_sl" | "D_pm_sl";
 
 /** 各状态类别实际保留条目数（走生产注入后 boundedEntries 的真实输出） */
 export interface ContextInjectionCounts {
@@ -76,6 +76,9 @@ export interface ContextAbRunOptions {
  * B 组：压缩 overrides —— maxEntries 减半、maxChars 减半、排除 PatternMemory（组合方案）。
  * C 组：哨兵 null（不注入）。
  * D_pm 组：单因素消融 —— 保持 A 的 maxItems/摘要长度，只排除 PatternMemory。
+ * D_mi 组：单因素消融 —— 只减 maxEntries（canon 4→2、character 6→3），maxChars/PatternMemory 不变。
+ * D_sl 组：单因素消融 —— 只减 maxChars（canon 2400→1200、character 1800→900），maxItems/PatternMemory 不变。
+ * D_pm_sl 组：组合消融 —— 同时排除 PatternMemory 并缩减 maxChars（D_pm + D_sl 叠加），maxItems 保持生产默认。
  */
 export function historicalOverridesOfArm(arm: ContextAbArm): HistoricalContextOverrides | "none" | null {
   switch (arm) {
@@ -93,10 +96,29 @@ export function historicalOverridesOfArm(arm: ContextAbArm): HistoricalContextOv
         pattern: { inject: false },
       };
     }
+    case "D_mi": {
+      return {
+        canon: { maxEntries: 2 },
+        character: { maxEntries: 3 },
+      };
+    }
+    case "D_sl": {
+      return {
+        canon: { maxChars: 1200 },
+        character: { maxChars: 900 },
+      };
+    }
+    case "D_pm_sl": {
+      return {
+        canon: { maxChars: 1200 },
+        character: { maxChars: 900 },
+        pattern: { inject: false },
+      };
+    }
   }
 }
 
-/** 是否注入（A/B/D_pm 注入，C 不注入） */
+/** 是否注入（A/B/D_pm/D_mi/D_sl/D_pm_sl 注入，C 不注入） */
 function shouldInject(arm: ContextAbArm): boolean {
   return arm !== "C";
 }
