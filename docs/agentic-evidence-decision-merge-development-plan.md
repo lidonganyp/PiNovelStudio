@@ -4,7 +4,7 @@
 **版本**：v1.0  
 **日期**：2026-08-11  
 **决策**：采用方案 A，将独立 `EvidenceDecision` 模型回合合并到 NovelOS Agentic 首轮  
-**状态**：待开发  
+**状态**：已完成（2026-08-12；build / typecheck / test / test:eval 全部通过）  
 **适用范围**：统一生产主链路 `novel_generate_chapter → NovelOS Agentic`  
 
 ## 1. 背景与问题

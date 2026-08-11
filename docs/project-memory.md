@@ -4,6 +4,19 @@
 **代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
 
+## AGENTIC-EVIDENCE-MERGE-1：证据决策合并进 Agentic 首轮（2026-08-12）
+
+**状态：已完成（build / typecheck / test / test:eval 全部通过）。** 独立 `EvidenceDecision` 模型回合已退役，证据与检索判断合并进 NovelOS Agentic 首轮 ReAct 循环。
+
+- **EvidencePlan 收敛为系统安全计划**：字段收敛为 `known / mustVerify / allowedTools / stopConditions / retrievalCallLimit`；移除只服务独立回合的 `unknown / queries / needRetrieval / retrievalDepth`。检索上限由确定性策略生成（`mustVerify ? 4 : 2`），是系统上限而非模型配额。
+- **Agentic 合并**：`agentic-raw-candidate-source.ts` 删除 `runEvidenceDecisionRound` 调用，把 `retrievalCallLimit` 接线进 runtime `retrievalBudget`；Agentic 首轮可在同一循环内自主选择直接生成或调用系统授权工具。
+- **物理清理**：`novelos/agent/evidence-decision.ts` 已物理删除；`context_decision` trajectory entry 类型与 `recordContextDecision` 死代码已移除；`ToolVisibilitySnapshot` 只记录 `systemAllowedTools / visibleTools`，不再记录模型决策的 `selectedTools / rejectedTools`。
+- **保留的系统安全边界（未削弱）**：`mustVerify`、工具白名单（fail-closed）、`retrievalCallLimit` 上限强制、MustVerifyCoverageGate、Agentic FactGuard 与 verify/patch 闭环全部保留。
+- **未引入**：固定 thinking token、未验证的 provider 隐藏推理参数、机器文学裁判或 raw fallback。
+- **测试**：`tests/phase2d-evidence-decision.test.mjs` 重写为证明独立回合退役 + Agentic 内生决策 + 系统边界有效（18 项）；tool-visibility runtime/trajectory 测试与 replay 脚本同步改为新快照契约。完整测试 2787 pass / eval 1055 pass / 0 fail。
+
+> 文档表述统一为：EvidencePlan 由系统建立安全边界；是否检索及检索顺序由 NovelOS Agentic 在同一 ReAct 循环内决定；系统通过工具白名单、调用上限、MustVerifyCoverageGate 和 FactGuard 保证安全。历史 `evidence-decision-prompt-inventory.md` 与 `phase-reasoning-budget-baseline.md` 保留为只读研究证据，不再描述为生产阶段。
+
 ## Phase 9 生产运营期 active_prod（2026-08-11）
 
 **当前状态：生产运营期，稳定生产基线运行中。** 项目已从"开发/验收阶段"转入"生产运营与按需迭代"。active production pointer 已切换到 `rel-prod-103`（`active-production.json → rel-prod-103`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。

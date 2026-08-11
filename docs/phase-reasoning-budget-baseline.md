@@ -1,6 +1,6 @@
 # 思考/推理预算研究 — Phase 1 统一主链路基线
 
-> 状态：**Phase 1 baseline v1（3 章 / 1 workspace）已冻结**（2026-08-11）；**Phase 1 baseline v2（9 章 / 2 workspaces）已冻结**（2026-08-11）；**Gemini reasoning-control capability probe 已完成**（2026-08-11，21 次真实调用，结论：当前 `api.solov.cc` 代理不支持 reasoning_effort/thinking_budget 控制，不扩大为 Gemini 原生 API 不支持）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。**capability probe 证明 reasoning_effort/thinking_budget 在当前代理端点不生效，不进入基于该参数的 A/B；若未来更换 provider 或 endpoint 必须重新探测。替代预算方向见 §9.4。**
+> 状态：**Phase 1 baseline v1（3 章 / 1 workspace）已冻结**（2026-08-11）；**Phase 1 baseline v2（9 章 / 2 workspaces）已冻结**（2026-08-11）；**Gemini reasoning-control capability probe 已完成**（2026-08-11，21 次真实调用，结论：当前 `api.solov.cc` 代理不支持 reasoning_effort/thinking_budget 控制，不扩大为 Gemini 原生 API 不支持）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。**capability probe 证明 reasoning_effort/thinking_budget 在当前代理端点不生效，不进入基于该参数的 A/B；若未来更换 provider 或 endpoint 必须重新探测。替代预算方向见 §9.4。** **§9.4 替代方向 #3「调用频率优化：合并 evidence_decision 到 agentic_raw 的 ReAct 循环」已由 AGENTIC-EVIDENCE-MERGE-1（2026-08-12）落地：独立 `novelos_evidence_decision` 回合已删除，检索判断合并进 Agentic 首轮，正常章节每章模型调用减少 1 次。本节与 baseline 数据保留为只读历史证据，不再描述为生产当前行为。**
 
 ## 1. 目标
 

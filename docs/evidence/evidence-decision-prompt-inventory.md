@@ -1,9 +1,10 @@
 # Evidence Decision Prompt Inventory
 
-> 状态：**盘点中**（2026-08-11）。本盘点仅用于识别 prompt 压缩机会，不修改生产 prompt。
-> 数据来源：baseline v2 真实 trace（ch22 xinmo-eval / ch2 fuben-eval）+ 源码分析。
+> 状态：**已退役（历史只读研究证据，2026-08-12）**。
+> AGENTIC-EVIDENCE-MERGE-1 已将独立 `EvidenceDecision` 模型回合合并进 NovelOS Agentic 首轮，`runEvidenceDecisionRound` 与 `novelos/agent/evidence-decision.ts` 已物理删除，生产不再执行固定每章一次的 `novelos_evidence_decision` 调用。本盘点仅保留为合并前的 token 成本研究证据，不再描述为生产阶段；其结论（prompt 精简 / 合并到 Agentic ReAct）已由该任务落地。
+> 原始数据来源：baseline v2 真实 trace（ch22 xinmo-eval / ch2 fuben-eval）+ 源码分析。
 
-## 1. evidence_decision 调用概述
+## 1. evidence_decision 调用概述（历史，已退役）
 
 `novelos_evidence_decision` 是统一主链路中固定每章一次的结构化决策回合。它在 NovelOS Agentic 的 ReAct 检索循环之前运行，由 `runEvidenceDecisionRound`（[evidence-decision.ts](file:///D:/CODE/PiNovelStudio/.pi/extensions/novel-studio/novelos/agent/evidence-decision.ts)）编排。
 
