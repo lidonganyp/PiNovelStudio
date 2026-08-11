@@ -351,6 +351,10 @@ export interface LLMTimingEntry {
   requestId?: string;
   /** SHA-256 of the exact assistant text returned by a successful attempt. */
   responseHash?: string;
+  /** 输入 token（仅 OpenAI-compatible 路径可精确取自 usage；Claude streaming 路径无 usage，留空） */
+  inputTokens?: number;
+  /** 输出 token（仅 OpenAI-compatible 路径可精确取自 usage；Claude streaming 路径无 usage，留空） */
+  outputTokens?: number;
 }
 
 function createAttemptRequestId(): string {
@@ -592,6 +596,8 @@ export class APIFallbackManager {
             status: "ok",
             requestId,
             responseHash: hashResponseText(response.choices[0]?.message?.content ?? ""),
+            inputTokens: (response.usage as { prompt_tokens?: number } | undefined)?.prompt_tokens,
+            outputTokens: (response.usage as { completion_tokens?: number } | undefined)?.completion_tokens,
           });
 
           return {

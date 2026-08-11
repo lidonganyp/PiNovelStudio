@@ -330,6 +330,10 @@ export interface LLMTimingEntry {
   requestId?: string;
   /** SHA-256 of exact assistant text for successful attempts. */
   responseHash?: string;
+  /** 输入 token（仅 OpenAI-compatible 路径精确取自 usage；Claude streaming 路径无 usage，留空） */
+  inputTokens?: number;
+  /** 输出 token（仅 OpenAI-compatible 路径精确取自 usage；Claude streaming 路径无 usage，留空） */
+  outputTokens?: number;
 }
 
 /** P43 新增：单阶段耗时记录 */

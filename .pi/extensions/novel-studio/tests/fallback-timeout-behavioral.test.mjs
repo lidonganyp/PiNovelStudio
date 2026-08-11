@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import {
   APIFallbackManager,
   clearUnhealthyProviders,
+  emitLLMAttempt,
   setLLMAttemptListener,
 } from "../dist/api/fallback-manager.js";
 
@@ -187,11 +188,35 @@ describe("APIFallbackManager totalTimeoutMs behavior", () => {
     assert.match(ok?.responseHash ?? "", /^[a-f0-9]{64}$/);
   });
 
+  test("ok 调用从 usage 捕获输入/输出 token 到 llmTimings", async () => {
+    const manager = new APIFallbackManager();
+    const timings = [];
+    setLLMAttemptListener((entry) => timings.push(entry));
+    installMockContext(manager, 250);
+    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, _providerKey, model) => ({
+      id: "mock-response",
+      object: "chat.completion",
+      created: 0,
+      model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "token-captured response" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 1234, completion_tokens: 567, total_tokens: 1801 },
+    });
+
+    await manager.callWithFallback("architect", [{ role: "user", content: "count my tokens" }]);
+
+    const ok = timings.find((entry) => entry.status === "ok");
+    assert.equal(ok?.inputTokens, 1234, "llmTimings 应精确捕获输入 token");
+    assert.equal(ok?.outputTokens, 567, "llmTimings 应精确捕获输出 token");
+  });
+
   test("allows fallback success when no total timeout budget is configured", async () => {
     const manager = new APIFallbackManager();
     const attempts = [];
-
-    installMockContext(manager, undefined);
+    installMockContext(manager, 250);
     manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, _providerKey, model) => {
       attempts.push(model);
       if (model === "glm-test") {
