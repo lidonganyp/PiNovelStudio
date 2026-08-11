@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,8 @@ import {
 import { MemoryHardConflictError } from "../dist/v2/core/memory/memory-lifecycle.js";
 import { commitAndSave, chapterFilePath } from "../dist/v2/core/orchestrator-commit-save.js";
 import { detectMemoryConflicts } from "../dist/v2/core/memory/memory-transaction.js";
+import { isMemoryRetrievable } from "../dist/v2/core/memory/memory-record.js";
+import { retrieveNarrativeContext } from "../dist/v2/core/context-retrieval.js";
 
 function makeTempProject() {
   const dir = mkdtempSync(join(tmpdir(), "memory-gap-test-"));
@@ -306,4 +308,143 @@ test("MEMORY-5 Canon 语义[方案A]: 同 ID 不同值即使携带替代声明�
   assert.equal(conflicts.length, 1, "应产生一条冲突记录");
   assert.equal(conflicts[0].resolution, "hard_conflict_blocked", "同 ID 不同值即使携带替代声明也应阻断");
   assert.match(conflicts[0].reason, /必须创建新 memoryId/, "应给出'必须创建新 ID'结构化提示");
+});
+
+// ============================================================================
+// P0（legacy 兼容）：旧工作区无 memory 信封的 Canon 也要参与冲突检测
+// ============================================================================
+
+test("P0 生产边界: 旧工作区(无memory信封)Canon不被同ID新值静默覆盖", () => {
+  const { dir, workspaceId } = makeTempProject();
+  try {
+    // 旧工作区 store：canon 条目无 memory 信封（legacy 格式）
+    const statePath = join(dir, "workspaces", workspaceId, "narrative-state-store.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        workspaceId,
+        canon: [
+          {
+            id: "canon:world:genre",
+            sourceChapter: "ch1",
+            sourceRef: "seed:canon:world:genre",
+            confidence: 0.9,
+            lastUpdated: "2026-01-01T00:00:00.000Z",
+            fact: "仙侠世界",
+            category: "genre",
+          },
+        ],
+        character: [],
+        promise: [],
+        pattern: [],
+        expectation: [],
+      }),
+      "utf-8",
+    );
+
+    // 新正文提交同 ID 不同值（legacy 未带信封也必须被冲突检测拦住）
+    const input = makeOrchestratorInputWithStagedState(dir, workspaceId, "2", 2, "玄幻世界", "genre");
+    const finalText = "玄幻世界灵气稀薄。";
+    const stage = {};
+    const out = commitAndSave(input, "cand-ch2", finalText, stage);
+
+    assert.equal(out.ok, false, "旧 Canon 被同 ID 新值改写应阻断");
+    assert.equal(stage.stateCommit.blocked, "memory_hard_conflict", "应触发 memory_hard_conflict");
+    assert.equal(stage.stateCommit.evidence.existingValue, "仙侠世界", "existingValue 应为旧值");
+    assert.equal(stage.stateCommit.evidence.incomingValue, "玄幻世界", "incomingValue 应为新值");
+    assert.equal(stage.atomicSave.rolledBack, true, "正文应回滚");
+    assert.ok(!existsSync(chapterFilePath(input)), "冲突后正文应被删除");
+    const loaded = loadStateStore(workspaceId, dir);
+    assert.equal(loaded.canon.length, 1, "不应新增冲突 canon");
+    assert.equal(loaded.canon[0].fact, "仙侠世界", "旧 Canon 不得被覆盖");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// PEA-1：PatternMemory 分层检索——作为 advisory 注入，不作为硬事实排除
+// ============================================================================
+
+function makePatternRecord(memoryId, overrides = {}) {
+  return {
+    memoryId,
+    memoryType: "pattern",
+    authorityClass: "system_derived",
+    epistemicStatus: "derived",
+    lifecycleStatus: "active",
+    sourceChapter: 14,
+    sourceRef: ["ch14#finalText:abc123def456"],
+    textHash: ["abc123def456"],
+    sourceRunId: "run-ch14",
+    sourceFinalTextHash: "abc123def456",
+    createdAt: "2026-08-11T00:00:00Z",
+    updatedAt: "2026-08-11T00:00:00Z",
+    expiresAt: null,
+    confidence: 0.8,
+    derivedFromMemoryIds: [],
+    supersedesMemoryIds: [],
+    payload: { memoryType: "pattern", data: { patternType: "sentence_risk", description: "AI 腔风险", occurrenceCount: 3 } },
+    ...overrides,
+  };
+}
+
+test("PEA-1: PatternMemory(带信封)作为低权重 advisory 进入检索，不被排除", () => {
+  const r = makePatternRecord("pattern:x");
+  const check = isMemoryRetrievable(r);
+  assert.equal(check.usable, true, "active pattern 应可检索");
+  assert.equal(check.advisory, true, "pattern 应标记为 advisory（非硬事实）");
+});
+
+test("PEA-1: 过期/计划的 PatternMemory 被排除且 reason 标记 advisory", () => {
+  const expired = isMemoryRetrievable(makePatternRecord("expired", { lifecycleStatus: "expired" }));
+  assert.equal(expired.usable, false, "过期 pattern 应排除");
+  assert.equal(expired.advisory, true);
+
+  const planned = isMemoryRetrievable(
+    makePatternRecord("planned", { epistemicStatus: "planned", authorityClass: "model_planned" }),
+  );
+  assert.equal(planned.usable, false, "计划 pattern 应排除");
+  assert.equal(planned.advisory, true);
+});
+
+// PEA-1 集成：真正调用生产检索 retrieveNarrativeContext，断言 PatternMemory 通过
+// advisory 专用召回通道进入 workingSet.pattern（而不是只测 isMemoryRetrievable 纯函数）。
+test("PEA-1 集成: PatternMemory 经生产检索进入 workingSet，advisory 通道注入", () => {
+  const state = {
+    canon: [],
+    character: [],
+    promise: [],
+    pattern: [
+      {
+        id: "pattern:x",
+        kind: "pattern",
+        sourceChapter: "ch14",
+        sourceRef: "ch14#finalText:abc123def456",
+        confidence: 0.8,
+        lastUpdated: "2026-08-11T00:00:00Z",
+        patternType: "sentence_risk",
+        description: "AI 腔风险",
+        occurrenceCount: 3,
+        memory: makePatternRecord("pattern:x"),
+      },
+    ],
+  };
+  // 无关键词命中时 pattern 评分 = system_derived(-20) + derived(-10) + recency(<=20) < 10，
+  // 常规 passingScore 通道无法进入，必须靠 advisory 专用召回通道。
+  const result = retrieveNarrativeContext({
+    chapterNumber: 17,
+    relevantCharacters: [],
+    selectedPromiseIds: [],
+    keywords: [],
+    state,
+    maxItems: 24,
+  });
+  assert.equal(result.workingSet.pattern.length, 1, "PatternMemory 应进入 workingSet.pattern");
+  assert.equal(result.workingSet.pattern[0].id, "pattern:x");
+  assert.ok(result.report.advisoryInjected.includes("pattern:x"), "应记录 advisoryInjected");
+  const item = result.promptItems.find((i) => i.kind === "pattern");
+  assert.ok(item, "promptItems 应包含 pattern 条目");
+  assert.ok(result.report.futureStateExcluded.length === 0, "advisory 可检索时不应被排除");
 });

@@ -21,7 +21,9 @@ import type {
 } from "./final-state-commit.js";
 // MEMORY-6：权威感知检索。对已附加 memory 信封的状态条目，按权威/认识状态
 // 评估其是否可作为正式事实证据，并在评分中加权（旧条目无信封，行为不变）。
-import { isFormalFactEvidence } from "./memory/memory-record.js";
+// PEA-1：pattern 等 advisory 类型不作为硬事实，但作为低权重 advisory 注入，
+// 因此改用 isMemoryRetrievable 分层判定（正式事实严格把关，advisory 仅由生命周期/认识阻断）。
+import { isMemoryRetrievable } from "./memory/memory-record.js";
 // P4 M3 修复（2026-07-23）：type-only import，编译期擦除，无运行时耦合。
 // OverdueAlertEntry 形状与 post-raw buildOverdueAlerts 对齐，供 pre-write 通道复用。
 import type { OverdueAlertEntry } from "./methodology-diagnostic-derived.js";
@@ -72,7 +74,7 @@ export interface FutureStateExcludedEntry {
   kind: "canon" | "character" | "promise" | "pattern" | "expectation";
   sourceChapter: string;
   sourceRef: string;
-  reason: "future_state" | "unparseable_chapter" | "memory_not_formal_fact";
+  reason: "future_state" | "unparseable_chapter" | "memory_not_formal_fact" | "memory_advisory_not_retrievable";
   /** 解析出的章节号（future_state 时为当前章或更大；unparseable 时为 null） */
   parsedChapter?: number | null;
 }
@@ -99,6 +101,13 @@ export interface ContextRetrievalReport {
    * 仅供 trace 审计，不参与评分。空数组表示无强制纳入。
    */
   forcedRecallAdded: string[];
+  /**
+   * PEA-1：被 advisory 专用召回通道纳入 workingSet 的条目 id 列表。
+   * PatternMemory 等 advisory 类型（system_derived/derived 降权后 score 恒 < 阈值 10）
+   * 无法经 passingScore 进入工作集，但应作为低权重上下文注入。本通道用 itemLimit
+   * 剩余名额补充召回，不挤占正式事实。仅供 trace 审计。
+   */
+  advisoryInjected: string[];
 }
 
 export interface ContextRetrievalResult {
@@ -163,17 +172,18 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
       continue;
     }
     // MEMORY-6：对已有 memory 信封的条目做权威感知过滤。
-    // 若信封显示该条目不可作为正式事实（expired/archived/conflicted/plan/hypothesis），
-    // 排除并记录诊断。旧条目（无信封）不受影响，保持既有行为。
+    // 正式事实类型（canon/character/promise）严格把关；advisory 类型（pattern 等）
+    // 由 isMemoryRetrievable 判定——不作为硬事实，但作为低权重 advisory 注入。
+    // 旧条目（无信封）不受影响，保持既有行为。
     if (entry.memory) {
-      const factCheck = isFormalFactEvidence(entry.memory);
+      const factCheck = isMemoryRetrievable(entry.memory);
       if (!factCheck.usable) {
         futureStateExcluded.push({
           id: entry.id,
           kind,
           sourceChapter: entry.sourceChapter,
           sourceRef: entry.sourceRef,
-          reason: "memory_not_formal_fact",
+          reason: factCheck.advisory ? "memory_advisory_not_retrievable" : "memory_not_formal_fact",
           parsedChapter: parsed,
         });
         continue;
@@ -230,14 +240,40 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
       forcedAdded.push(entry.id);
     }
   }
+
+  // PEA-1：advisory 专用召回通道。
+  // PatternMemory 等 advisory 类型（system_derived -20 / derived -10 降权后，无关键词
+  // 命中时最高分 = recency 上限 20 - 30 = -10）分数恒低于 passingScore 阈值 10，
+  // 永远无法经常规通道进入 workingSet。作为低权重上下文，此处用 itemLimit 剩余名额
+  // 补充召回：按评分从高到低取 advisory 条目，填入尚未占满的名额，不挤占正式事实。
+  // 数量受 advisoryFloor 上限约束（与 canon/pattern perKindFloor 同量级），避免过量注入。
+  const advisoryEntries = eligible.filter((entry) => isAdvisoryEntry(entry));
+  const advisoryFloor = Math.min(advisoryEntries.length, Math.max(1, Math.floor(itemLimit / 8)));
+  const advisoryInjected: string[] = [];
+  for (const item of scored) {
+    if (selectedIdSet.size >= itemLimit) break;
+    if (!isAdvisoryEntry(item.entry)) continue;
+    if (advisoryInjected.length >= advisoryFloor) break;
+    if (!selectedIdSet.has(item.entry.id)) {
+      selectedIdSet.add(item.entry.id);
+      advisoryInjected.push(item.entry.id);
+    }
+  }
+
   // selected 包含 (a) passingScore 中被选中的，与 (b) 不在 passingScore（score<10）
-  // 但被强制纳入的条目（score=0, reasons=["forced_recall"]）。
+  // 但被强制纳入的条目（score=0, reasons=["forced_recall"]），以及 (c) 被 advisory
+  // 通道纳入的条目（score=0, reasons=["advisory_recall"]）。
   const forcedNotInPassing = forcedEligible.filter(
     (entry) => !passingScore.some((item) => item.entry.id === entry.id),
+  );
+  const advisoryNotInPassing = advisoryEntries.filter(
+    (entry) => advisoryInjected.includes(entry.id)
+      && !passingScore.some((item) => item.entry.id === entry.id),
   );
   const selected = [
     ...passingScore.filter((item) => selectedIdSet.has(item.entry.id)),
     ...forcedNotInPassing.map((entry) => ({ entry, score: 0, reasons: ["forced_recall"] })),
+    ...advisoryNotInPassing.map((entry) => ({ entry, score: 0, reasons: ["advisory_recall"] })),
   ];
   const selectedIds = new Set(selected.map((item) => item.entry.id));
 
@@ -290,6 +326,7 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
       },
       futureStateExcluded,
       forcedRecallAdded: forcedAdded,
+      advisoryInjected,
     },
     overdueAlerts,
   };
@@ -423,6 +460,22 @@ function isForcedEntry(entry: AnyEntry, forcedIdSet: Set<string>): boolean {
   if (forcedIdSet.has(entry.id)) return true;
   if (entry.kind === "promise") return forcedIdSet.has(entry.promiseId);
   if (entry.kind === "expectation") return forcedIdSet.has(entry.expectationId);
+  return false;
+}
+
+/**
+ * PEA-1：判断条目是否为 advisory 类型（PatternMemory 等非正式事实）。
+ *
+ * 正式事实类型（canon/character/promise/chapter_fact）作为权威上下文；pattern 等
+ * advisory 类型不作为硬事实，但应作为低权重上下文注入。判定优先依据 memory 信封的
+ * isMemoryRetrievable（advisory 标志），无信封的 pattern 条目也视为 advisory。
+ */
+function isAdvisoryEntry(entry: AnyEntry): boolean {
+  if (entry.kind === "pattern") return true;
+  if (entry.memory) {
+    const check = isMemoryRetrievable(entry.memory);
+    return check.advisory === true;
+  }
   return false;
 }
 

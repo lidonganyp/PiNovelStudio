@@ -363,3 +363,49 @@ export function isFormalFactEvidence(record: MemoryRecord): {
   }
   return { usable: true };
 }
+
+/**
+ * 生产检索可检索性判定（PEA-1：事实检索与 advisory 检索分层）。
+ *
+ * MEMORY-6 检索层接入时，正式事实类型（chapter_fact/canon/character/promise）必须
+ * 通过 isFormalFactEvidence 严格把关；而 PatternMemory 等"允许高度抽象"的
+ * advisory 类型虽然不是硬事实，仍应作为低权重 advisory 上下文注入，不应被整体排除。
+ *
+ * 返回：
+ * - usable=false：不可进入工作集（生命周期/认识/权威被阻断），reason 说明原因。
+ * - usable=true + advisory=false：正式事实类型，作为权威上下文。
+ * - usable=true + advisory=true：非正式 advisory 类型（如 pattern），作为低权重上下文。
+ */
+export function isMemoryRetrievable(record: MemoryRecord): {
+  usable: boolean;
+  reason?: string;
+  advisory?: boolean;
+} {
+  const advisory = !FORMAL_MEMORY_TYPES.includes(record.memoryType);
+  if (advisory) {
+    // 非正式 advisory 类型（pattern/chapter_summary 等）：允许低权重注入，
+    // 仅当生命周期/认识/权威阻断检索时才排除。
+    const blocked =
+      record.lifecycleStatus === "expired" ||
+      record.lifecycleStatus === "archived" ||
+      record.lifecycleStatus === "conflicted" ||
+      record.epistemicStatus === "planned" ||
+      record.epistemicStatus === "hypothesis" ||
+      record.authorityClass === "model_planned" ||
+      record.authorityClass === "diagnostic_hypothesis";
+    if (blocked) {
+      return {
+        usable: false,
+        advisory: true,
+        reason: `advisory 记忆不可检索（lifecycle=${record.lifecycleStatus}, epistemic=${record.epistemicStatus}, authority=${record.authorityClass}）`,
+      };
+    }
+    return { usable: true, advisory: true };
+  }
+  // 正式事实类型：严格走 isFormalFactEvidence（lifecycle/epistemic/authority 均把关）。
+  const factCheck = isFormalFactEvidence(record);
+  if (!factCheck.usable) {
+    return { usable: false, advisory: false, reason: "memory_not_formal_fact" };
+  }
+  return { usable: true, advisory: false };
+}
