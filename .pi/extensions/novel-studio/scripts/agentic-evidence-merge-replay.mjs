@@ -64,6 +64,16 @@ function scaffoldWorkspace() {
       role: name === "叶尘" ? "主角" : "主角团成员",
     })),
     worldKeyTerms: ["碎星剑", "尘心诀", "青鱼嘴"],
+    immutableFacts: [
+      `这个世界的背景是${GENRE}。`,
+      "叶尘是主角团成员。",
+      "林婉儿是主角团成员。",
+      "苏影是主角团成员。",
+      "宗门与门派是仙侠世界的主要势力组织。",
+      "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+      "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+      "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+    ],
   };
   writeFileSync(join(WS_ROOT, "config.json"), JSON.stringify(config, null, 2), "utf-8");
 
