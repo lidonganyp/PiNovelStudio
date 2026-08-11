@@ -115,9 +115,9 @@ describe("Phase 6.2 historicalOverridesOfArm arm 参数验证", () => {
     assert.equal(dpmOverrides.pattern.inject, false, "D_pm 组排除 PatternMemory");
   });
 
-  it("ContextAbArm 类型包含 A/B/C/D_pm 四种", () => {
+  it("ContextAbArm 类型包含全部合法 arm（A/B/C/D_pm/D_mi/D_sl/D_pm_sl）", () => {
     // 验证所有合法 arm 都能正常返回
-    const arms = ["A", "B", "C", "D_pm"];
+    const arms = ["A", "B", "C", "D_pm", "D_mi", "D_sl", "D_pm_sl"];
     for (const arm of arms) {
       const result = runnerMod.historicalOverridesOfArm(arm);
       // 只要不抛异常即为合法 arm
