@@ -204,3 +204,73 @@ describe("MUST-VERIFY-COVERAGE-GATE-2: real coverage gate", () => {
     assert.equal(gate.checkAndBlock(makeInput()).passed, false);
   });
 });
+
+describe("MUST-VERIFY-COVERAGE-GATE-2: entity-aware matching (AGENTIC-EVIDENCE-MERGE-1 fix)", () => {
+  it("does NOT match different characters with the same predicate", async () => {
+    const mod = await importModule();
+    // "林婉儿的真实身份" (P0 via "身份") vs "叶尘的真实身份已确认"
+    // 旧逻辑：共享 "的真实身份" 4 字片段 -> 误判覆盖
+    // 新逻辑：主语 "林婉儿" ≠ "叶尘" -> 不覆盖
+    const result = mod.checkMustVerifyCoverage(
+      makeInput({
+        evidencePlan: makePlan(["林婉儿的真实身份"]),
+        contextCoveredFacts: ["叶尘的真实身份已确认"],
+      }),
+    );
+    assert.equal(result.passed, false, "不同人物相同谓语不应判为覆盖");
+    assert.equal(result.unverifiedHighRisk.length, 1);
+  });
+
+  it("does NOT match same-domain different-fact items", async () => {
+    const mod = await importModule();
+    // "心法、功法是修士的修炼传承" (P0 via "功法") vs "法宝是修士的重要对敌道具"
+    // 旧逻辑：可能共享 "是修士的" 4 字片段 -> 误判覆盖
+    // 新逻辑：主语 "心法、功法" ≠ "法宝" -> 不覆盖
+    const result = mod.checkMustVerifyCoverage(
+      makeInput({
+        evidencePlan: makePlan(["心法、功法是修士的修炼传承"]),
+        contextCoveredFacts: ["法宝是修士的重要对敌道具"],
+      }),
+    );
+    assert.equal(result.passed, false, "相同领域不同事实不应判为覆盖");
+    assert.equal(result.unverifiedHighRisk.length, 1);
+  });
+
+  it("still matches same character with same fact (positive control)", async () => {
+    const mod = await importModule();
+    const result = mod.checkMustVerifyCoverage(
+      makeInput({
+        evidencePlan: makePlan(["林默当前伤势"]),
+        contextCoveredFacts: ["林默当前伤势已经稳定"],
+      }),
+    );
+    assert.equal(result.passed, true, "相同人物相同事实应判为覆盖");
+    assert.equal(result.confirmedItems.length, 1);
+  });
+
+  it("still matches when subject is contained in a list (positive control)", async () => {
+    const mod = await importModule();
+    // "叶尘的功法境界要求" vs "叶尘、林婉儿的功法境界要求已确认"
+    // 主语 "叶尘" 被 "叶尘、林婉儿" 包含；谓语 "的功法境界要求" (6字) 足以匹配
+    const result = mod.checkMustVerifyCoverage(
+      makeInput({
+        evidencePlan: makePlan(["叶尘的功法境界要求"]),
+        contextCoveredFacts: ["叶尘、林婉儿的功法境界要求已确认"],
+      }),
+    );
+    assert.equal(result.passed, true, "主语包含关系且谓语匹配应判为覆盖");
+    assert.equal(result.confirmedItems.length, 1);
+  });
+
+  it("does NOT classify different character as P0 via inviolable fact overlap", async () => {
+    const mod = await importModule();
+    // "林婉儿是主角团成员" vs inviolableFact "叶尘是主角团成员"
+    // 旧逻辑：factsMatch 误判重叠 -> P0
+    // 新逻辑：主语不同 -> 不重叠 -> 不应因 inviolableFact 判为 P0
+    const [result] = mod.assessMustVerifyRisk(
+      ["林婉儿是主角团成员"],
+      ["叶尘是主角团成员"],
+    );
+    assert.notEqual(result.riskLevel, "P0", "不同人物不应经 inviolableFact 误判为 P0");
+  });
+});

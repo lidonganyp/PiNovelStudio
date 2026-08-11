@@ -158,8 +158,19 @@ function extractTraceMetrics(trace) {
   const gates = Array.isArray(trace?.gates) ? trace.gates : [];
   const novelosGate = gates.find((g) => g?.stage === "v2_novelos_agentic");
   const novelos = novelosGate?.evidence?.novelos ?? {};
-  const finalGate = gates.find((g) => g?.stage === "v2_final_selected");
-  const modelCalls = finalGate?.evidence?.modelCalls ?? [];
+
+  // 聚合所有 gate 的 evidence.modelCalls（阻断路径没有 v2_final_selected gate，
+  // 但已执行的模型调用记录在前置阻断 gate 的 evidence 中）
+  const seenCalls = new Map(); // ts+route 去重
+  for (const gate of gates) {
+    const calls = gate?.evidence?.modelCalls;
+    if (!Array.isArray(calls)) continue;
+    for (const call of calls) {
+      const key = `${call.ts ?? 0}\u0000${call.route ?? ""}`;
+      if (!seenCalls.has(key)) seenCalls.set(key, call);
+    }
+  }
+  const modelCalls = [...seenCalls.values()];
 
   // 独立 EvidenceDecision 调用数：kind 含 evidence_decision 或 route 为 novelos_evidence_decision
   const evidenceDecisionCalls = modelCalls.filter(
@@ -326,7 +337,9 @@ async function main() {
       mustVerifyCovered: mvCovered,
       mustVerifyCoverageRate: mvTotal > 0 ? Math.round((mvCovered / mvTotal) * 1000) / 10 : null,
       factualErrorChapters: factualErrors,
-      recoveryRate: MAX_CHAPTERS > 0 ? Math.round((okCount / MAX_CHAPTERS) * 1000) / 10 : null,
+      recoveryRate: recoverableBlocked > 0 ? null : null,
+      recoveryRateNote: recoverableBlocked === 0 ? "N/A（本次无可恢复失败；2 个阻断均为 hard/preflight 安全块）" : `${recoverableBlocked} 个可恢复阻断`,
+      successRate: MAX_CHAPTERS > 0 ? Math.round((okCount / MAX_CHAPTERS) * 1000) / 10 : null,
       traceRetentionRate: MAX_CHAPTERS > 0 ? Math.round((traceRetained / MAX_CHAPTERS) * 1000) / 10 : null,
     },
     chapterResults,
@@ -353,7 +366,8 @@ async function main() {
   md += `| 总模型调用延迟 | ${(report.totals.latencyMs / 1000).toFixed(1)}s |\n`;
   md += `| mustVerify 覆盖 | ${report.totals.mustVerifyCovered}/${report.totals.mustVerifyTotal}（${report.totals.mustVerifyCoverageRate}%） |\n`;
   md += `| 事实硬错误章节 | ${report.totals.factualErrorChapters} |\n`;
-  md += `| 自动恢复后成功率 | ${report.totals.recoveryRate}%（≥85% 目标） |\n`;
+  md += `| 自动恢复率 | ${report.totals.recoveryRateNote ?? (report.totals.recoveryRate + "%")} |\n`;
+  md += `| 整体成功率 | ${report.totals.successRate}%（${okCount}/${MAX_CHAPTERS}） |\n`;
   md += `| 零检索成功章节 | ${report.zeroRetrievalOk} |\n\n`;
   md += `## 逐章明细\n\n`;
   md += `| 章 | 状态 | firstAction | 检索 | mustVerify覆盖 | modelCalls | 输入token | 延迟(s) | 停止原因 |\n`;

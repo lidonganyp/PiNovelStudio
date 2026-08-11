@@ -110,19 +110,38 @@ const FACT_STOP_WORDS = new Set([
   "是否",
 ]);
 
+/** 主语分隔词——用于切分事实的主语和谓语 */
+const SUBJECT_SPLITTERS = ["是", "的", "在", "有", "为", "被", "将", "属于"];
+
 function normalizeFact(value: string): string {
   return value.replace(/\s+/gu, "").trim();
 }
 
-function extractKeyPhrases(value: string): string[] {
+/**
+ * 提取事实的主语（第一个分隔词之前的部分）。
+ * 用于实体感知：不同主语的事实不应判为覆盖。
+ * 例如 "叶尘是主角团成员" -> "叶尘"，"林婉儿是主角团成员" -> "林婉儿"
+ */
+function extractSubject(fact: string): string | null {
+  let earliestIdx = -1;
+  for (const splitter of SUBJECT_SPLITTERS) {
+    const idx = fact.indexOf(splitter);
+    if (idx > 0 && (earliestIdx === -1 || idx < earliestIdx)) {
+      earliestIdx = idx;
+    }
+  }
+  return earliestIdx > 0 ? fact.slice(0, earliestIdx) : null;
+}
+
+/**
+ * 提取中文关键短语（≥ minLength 字）。
+ * minLength=6 以避免 "是主角团成" 等通用谓语片段造成误匹配。
+ */
+function extractKeyPhrases(value: string, minLength = 6): string[] {
   const phrases = new Set<string>();
   const segments = normalizeFact(value).match(/[\u4e00-\u9fff]+/gu) ?? [];
   for (const segment of segments) {
-    // Short fragments such as a character name are not enough to establish
-    // that two facts are semantically the same. Keep fuzzy overlap bounded to
-    // meaningful four-character phrases; exact containment remains available
-    // for shorter, explicitly identical facts.
-    for (let length = 4; length <= segment.length; length += 1) {
+    for (let length = minLength; length <= segment.length; length += 1) {
       for (let index = 0; index <= segment.length - length; index += 1) {
         const phrase = segment.slice(index, index + length);
         if (!FACT_STOP_WORDS.has(phrase)) phrases.add(phrase);
@@ -142,6 +161,21 @@ function factsMatch(item: string, candidate: string): boolean {
   ) {
     return true;
   }
+
+  // 实体感知：如果两条事实都有可识别主语，且主语不同（无包含关系），则不匹配。
+  // 这防止 "叶尘是主角团成员" 匹配 "林婉儿是主角团成员"。
+  const itemSubject = extractSubject(normalizedItem);
+  const candidateSubject = extractSubject(normalizedCandidate);
+  if (
+    itemSubject &&
+    candidateSubject &&
+    itemSubject !== candidateSubject &&
+    !itemSubject.includes(candidateSubject) &&
+    !candidateSubject.includes(itemSubject)
+  ) {
+    return false;
+  }
+
   return extractKeyPhrases(normalizedItem).some((phrase) =>
     normalizedCandidate.includes(phrase),
   );
