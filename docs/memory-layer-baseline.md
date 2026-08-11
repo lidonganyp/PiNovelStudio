@@ -55,7 +55,7 @@ flowchart LR
    - 备份 `narrative-state-store.json`（到 `chapter-approvals/`）；
    - `reanchorStagedStateToFinalText`：seed 派生状态重锚定到 finalText span；
    - 正文扫描派生 PatternMemory；
-   - `stage` + `commit`：校验 span/hash → 附加 `MemoryRecord` 信封 → 应用 invalidations → compaction → 写入 planned → 写入 quarantine → `saveStateStore` 原子落盘 → 构建 `MemoryCommitReceipt`；
+   - `stage` + `commit`：校验 span/hash → 附加 `MemoryRecord` 信封 → **StagedMemoryUpdate 校验 + 硬冲突检测（`hard_conflict_blocked` 时抛 `MemoryHardConflictError`，阻断落盘，不产生部分提交）** → 应用 invalidations → compaction → 写入 planned → 写入 quarantine → `saveStateStore` 原子落盘 → 构建 `MemoryCommitReceipt`（写入 `stageResults.stateCommit` 供 trace 留存）；
    - 状态失败 → 回滚刚保存的正文（restore 旧版/删除新版）。
 4. **STATE-BRIDGE / CLOSURE-TRACKER advisory**：独立可重建 cache，失败不阻断主链路。
 
@@ -64,8 +64,8 @@ flowchart LR
 ### 1.3 读取点（检索消费）
 
 - `context-compiler.ts#deriveLongTermState` → `context-retrieval.ts#retrieveNarrativeContext`（JIT working set，`maxItems` 动态缩放 24..48，promptItems 摘要 160 字符/条）。
-- `context-retrieval.ts` 对附带 `entry.memory` 信封的条目做权威感知过滤与加权（`isFormalFactEvidence` + authority/epistemic 加权）。
-- 检索层 `memory-retrieval.ts#rankMemoryRecords` 提供权威/认识状态排序与 `maxItems/maxChars` 预算控制。
+- `context-retrieval.ts` 对附带 `entry.memory` 信封的条目做权威感知过滤与加权（`isFormalFactEvidence` + authority/epistemic 加权），并执行自身的 `maxItems` 选择逻辑——这是生产主检索路径。
+- `memory-retrieval.ts#rankMemoryRecords`（含 `toLightweightResults` / `maxChars` 预算）是独立的权威感知排序器，当前**仅被评测与 deterministic replay 消费**，未接入 `ContextCompiler` 生产主检索链。它与 `context-retrieval.ts` 的过滤/加权是两套等价实现；生产主路径以 `context-retrieval.ts` 为准。若要启用独立排序器，需在 `ContextCompiler` 明确接入点并做 A/B 验证，避免双排序器互相冲突。
 
 ---
 

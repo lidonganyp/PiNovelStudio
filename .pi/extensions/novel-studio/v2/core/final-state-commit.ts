@@ -25,9 +25,16 @@ import {
 import {
   detectMemoryConflicts,
   buildMemoryCommitReceipt,
+  validateStagedMemoryUpdate,
   type MemoryCommitReceipt,
   type MemoryConflictRecord,
+  type StagedMemoryUpdate,
 } from "./memory/memory-transaction.js";
+import {
+  buildMemoryHardConflictEnvelope,
+  MemoryHardConflictError,
+  type MemoryConflictEnvelope,
+} from "./memory/memory-lifecycle.js";
 
 // ============================================================================
 // 四类长期叙事状态
@@ -1371,6 +1378,50 @@ export class FinalStateCommit {
       ];
     }
 
+    // ── MEMORY-TRANSACTION-1：硬冲突阻断（状态落盘前）────────────────
+    // 冲突检测必须在 saveStateStore 之前：若新正文与旧 Canon 硬冲突
+    // （canon 同键且内容不同，未显式 supersedes），不得静默覆盖既有状态。
+    // 命中 hard_conflict_blocked 时抛出 MemoryHardConflictError（携带
+    // MemoryConflictEnvelope），由 commitAndSave 捕获并回滚刚保存的正文，
+    // 阻断 commitAndSave（ok=false，正文/状态均不提交）。
+    const existingMemory: MemoryRecord[] = collectStoreMemory(store);
+    const memoryConflicts = detectMemoryConflicts(memoryRecords, existingMemory);
+
+    // ── MEMORY-TRANSACTION-1：StagedMemoryUpdate 事务协议接入 ─────────
+    // 把本次提交的缓冲记忆记录 + 作废列表封装为 StagedMemoryUpdate，经
+    // validateStagedMemoryUpdate 校验（finalTextHash 已冻结、sourceRunId 非空、
+    // 每条记录通过 validateMemoryRecord）。校验失败视为提交前置条件不满足，
+    // 阻断提交（不落盘、不静默继续）。
+    const stagedMemory: StagedMemoryUpdate = {
+      records: memoryRecords,
+      invalidations: [...this.staged.invalidations],
+      sourceChapter: sourceChapterNumber,
+      sourceRunId: sourceRunId ?? `run-${this.staged.sourceChapter}`,
+      finalTextHash,
+    };
+    const stagedMemValidation = validateStagedMemoryUpdate(stagedMemory);
+    if (!stagedMemValidation.ok) {
+      throw new Error(
+        `StagedMemoryUpdate 校验失败，阻断状态提交：${stagedMemValidation.errors.join("; ")}`
+      );
+    }
+
+    const hardConflicts = memoryConflicts.filter(
+      (c) => c.resolution === "hard_conflict_blocked",
+    );
+    if (hardConflicts.length > 0) {
+      const first = hardConflicts[0];
+      const envelope = buildMemoryHardConflictEnvelope({
+        memoryType: first.memoryType,
+        key: first.key,
+        existingMemoryId: first.existingMemoryId,
+        incomingMemoryId: first.incomingMemoryId,
+        existingRecord: existingMemory.find((r) => r.memoryId === first.existingMemoryId),
+        incomingRecord: memoryRecords.find((r) => r.memoryId === first.incomingMemoryId),
+      });
+      throw new MemoryHardConflictError(envelope);
+    }
+
     // 落盘
     // STEP-3 事务边界：arc-registry.json 的更新（如未来需要机器更新 arc/foreshadow
     // 状态）必须在此事务内完成，不能在 post-final 阶段独立写入。当前 arc-registry
@@ -1379,10 +1430,8 @@ export class FinalStateCommit {
     saveStateStore(compacted, workspaceId, projectRoot);
 
     // ── MEMORY-RECORD-1：构建 MemoryCommitReceipt ──
-    // 从已有 store 的 memory 信封 + 本次新增 memoryRecords 检测冲突，生成 receipt。
     // 冲突检测为 advisory（报告供 trace/人工裁决），不自动覆盖既有状态。
-    const existingMemory: MemoryRecord[] = collectStoreMemory(store);
-    const memoryConflicts = detectMemoryConflicts(memoryRecords, existingMemory);
+    // 硬冲突已在落盘前阻断；此处仅记录非阻断冲突（superseded/new_text_wins/versioned）。
     const receipt: MemoryCommitReceipt = buildMemoryCommitReceipt({
       workspaceId,
       sourceChapter: sourceChapterNumber,

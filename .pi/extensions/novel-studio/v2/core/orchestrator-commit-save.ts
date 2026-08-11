@@ -35,6 +35,8 @@ import type { StructuralEvidence, ChapterQualityEvidence } from "./chapter-quali
 // 是否存在且 status="pending"；存在时 commitAndSave 拒绝执行（不写 chapters/、不提交状态）。
 // 闭包自包含（仅依赖 node:fs / node:path），可安全进入生产闭包。
 import { hasPendingProxyDraft } from "../governance/chapter-proxy-approval-draft-checkpoint.js";
+// MEMORY-TRANSACTION-1：硬冲突阻断异常（FinalStateCommit.commit 在状态落盘前抛出）
+import { MemoryHardConflictError } from "./memory/memory-lifecycle.js";
 
 /**
  * 最终正文选定后：原子保存正文 + 提交状态（P0-4 事务一致性）。
@@ -241,10 +243,27 @@ export function commitAndSave(
           finalTextHash: result.finalTextHash,
           patternEntriesAdded: patternEntries.length,
           plannedPersisted: result.plannedPersisted,
+          // MEMORY-TRANSACTION-1：MemoryCommitReceipt 写入 stageResults.stateCommit，
+          // 供统一编排器 → 质量 trace 审计（真实内存返回值不再是唯一产物）。
+          receipt: result.receipt ?? null,
         };
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        // 状态提交失败：记录 error，回滚正文并阻断交付。
+        // MEMORY-TRANSACTION-1：硬冲突阻断 → 回滚正文并阻断交付，不静默覆盖。
+        if (e instanceof MemoryHardConflictError) {
+          stageResults.stateCommit = {
+            blocked: "memory_hard_conflict",
+            gate: e.envelope.gate,
+            severity: e.envelope.severity,
+            committed: 0,
+            rejected: 0,
+            error: e.envelope.reason,
+            evidence: e.envelope.evidence,
+            userActionRequired: e.envelope.userActionRequired,
+          };
+          return rollbackChapter(e.envelope.reason);
+        }
+        // 其他状态提交失败：记录 error，回滚正文并阻断交付。
         stageResults.stateCommit = { error: msg, committed: 0, rejected: 0 };
         return rollbackChapter(msg);
       }

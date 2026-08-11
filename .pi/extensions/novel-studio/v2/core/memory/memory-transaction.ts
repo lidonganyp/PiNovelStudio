@@ -154,13 +154,29 @@ export function detectMemoryConflicts(
     const key = memoryKey(inc);
     const prev = existingByKey.get(key);
     if (!prev) continue;
-    // 同一记忆自身更新（supersedes 指向自身旧版）不算硬冲突
-    if (prev.memoryId === inc.memoryId) continue;
 
     const isCanon =
       inc.memoryType === "canon" || inc.memoryType === "chapter_fact";
     const incValue = (inc.payload.data as { value?: string }).value ?? "";
     const prevValue = (prev.payload.data as { value?: string }).value ?? "";
+
+    // 同一记忆自身更新（supersedes 指向自身旧版）。
+    // 注意：canon 是"不可违背事实"，同一 id 被写入不同值 = 静默改写 Canon，
+    // 必须阻断（需显式 invalidate/supersede 才允许演进）；同值（如置信度提升）
+    // 或非 canon 状态机推进（character/promise）则视为合法 upsert。
+    if (prev.memoryId === inc.memoryId) {
+      if (isCanon && normalize(incValue) !== normalize(prevValue)) {
+        conflicts.push({
+          memoryType: inc.memoryType,
+          key,
+          existingMemoryId: prev.memoryId,
+          incomingMemoryId: inc.memoryId,
+          resolution: "hard_conflict_blocked",
+          reason: `同一 Canon 记录值被改写：${prevValue} → ${incValue}（不可违背事实，禁止静默覆盖，需显式 invalidate/supersede）`,
+        });
+      }
+      continue;
+    }
 
     if (isCanon && normalize(incValue) !== normalize(prevValue)) {
       // 新正文与旧 Canon 硬冲突 → 阻断（除非 incoming 显式 supersedes 旧版）

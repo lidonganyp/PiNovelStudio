@@ -179,3 +179,24 @@ export function buildMemoryHardConflictEnvelope(input: {
     userActionRequired: true,
   };
 }
+
+/**
+ * 硬冲突阻断异常（MEMORY-TRANSACTION-1 生产接线）。
+ *
+ * 由 FinalStateCommit.commit() 在状态落盘前抛出，携带 structured
+ * MemoryConflictEnvelope。调用方（orchestrator-commit-save.ts）捕获后：
+ * - 不保存正文/状态（回滚刚保存的正文）；
+ * - 把 envelope 写入 stageResults.stateCommit 与 FailureEnvelope；
+ * - 阻断 commitAndSave（ok=false）。
+ *
+ * 抛出时机必须早于 saveStateStore，保证硬冲突不产生部分提交。
+ */
+export class MemoryHardConflictError extends Error {
+  readonly envelope: MemoryConflictEnvelope;
+
+  constructor(envelope: MemoryConflictEnvelope) {
+    super(envelope.reason);
+    this.name = "MemoryHardConflictError";
+    this.envelope = envelope;
+  }
+}
