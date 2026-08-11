@@ -20,7 +20,7 @@
  *   7. dist/ 不含已知 eval-only 产物文件（novelbench/* 等）
  *   8. dist-eval/ 含全部已知 eval-only 产物（确认 eval 构建完整）
  *   9. dist/ 与 dist-eval/ 存在 eval-only 差集（生产闭包严格小于 eval 闭包）
- *  10. dist/ JS 文件数 < 200（旧通配 include 产出 237，生产闭包约 132）
+ *  10. dist/ JS 文件数 < 240（旧通配 include 产出 237，生产闭包约 233，含 MEMORY 层）
  *
  * 设计说明：
  *   - 用 import 路径模式（`from "./legacy-index` / `import("./lab/`）而非裸字符串，
@@ -243,12 +243,12 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     );
   });
 
-  it("dist/ JS 文件数 < 230（防通配 include 退化为 237 文件全量编译）", () => {
+  it("dist/ JS 文件数 < 240（防通配 include 退化为 237 文件全量编译）", () => {
     const distCount = countJsFiles(DIST_DIR);
     assert.ok(distCount > 0, "dist/ JS 文件数应 > 0（需先 npm run build）");
     assert.ok(
-      distCount < 230,
-      `dist/ JS 文件数（${distCount}）应 < 230（生产闭包约 210，含 orchestrator 相位模块抽取；旧通配 include 产出 237）；超过说明 tsconfig.prod.json 退化为全量编译`,
+      distCount < 240,
+      `dist/ JS 文件数（${distCount}）应 < 240（生产闭包约 233，含 orchestrator 相位模块抽取 + MEMORY 长期记忆层 4 个 memory/* 模块；旧通配 include 产出 237）；超过说明 tsconfig.prod.json 退化为全量编译`,
     );
   });
 });

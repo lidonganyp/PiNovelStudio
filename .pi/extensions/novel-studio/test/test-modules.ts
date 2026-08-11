@@ -268,5 +268,16 @@ import "../craft/anti-ai-auto-patch.js";
 import "../novelos/tools/tool-capability.js";
 import "../novelos/trajectory/tool-metrics-tracer.js";
 
+// MEMORY-RECORD 长期记忆层（MEMORY-2/3/4/5/6）。
+// memory-factory / memory-record / memory-transaction / memory-hash 已随
+// final-state-commit（生产闭包）进入 dist/；此处补充 memory-compression /
+// memory-lifecycle / memory-retrieval / index barrel 到 dist-test/ 供测试消费。
+// 闭包自包含（仅 node:buffer + sibling memory-record），不依赖 legacy-index /
+// agents / workflow / lab / novelbench，可安全纳入 dist-test。
+import "../v2/core/memory/memory-compression.js";
+import "../v2/core/memory/memory-lifecycle.js";
+import "../v2/core/memory/memory-retrieval.js";
+import "../v2/core/memory/index.js";
+
 // Marker export to prevent tree-shaking from removing side-effect imports
 export const TEST_MODULES_LOADED = true;

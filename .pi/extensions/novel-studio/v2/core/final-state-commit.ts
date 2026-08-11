@@ -16,6 +16,18 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from "
 import { join, dirname } from "path";
 import { createHash } from "node:crypto";
 import { compactNarrativeMemory, type MemoryCompactionReport } from "./memory-compactor.js";
+// MEMORY-RECORD-1：长期记忆信封 + receipt 集成
+import { stateEntryToMemoryRecord } from "./memory/memory-factory.js";
+import {
+  validateMemoryRecord,
+  type MemoryRecord,
+} from "./memory/memory-record.js";
+import {
+  detectMemoryConflicts,
+  buildMemoryCommitReceipt,
+  type MemoryCommitReceipt,
+  type MemoryConflictRecord,
+} from "./memory/memory-transaction.js";
 
 // ============================================================================
 // 四类长期叙事状态
@@ -37,6 +49,12 @@ export interface StateEntryBase {
   effectiveFrom?: string;
   effectiveTo?: string;
   sourceRefs?: string[];
+  /**
+   * MEMORY-RECORD-1：权威记忆信封（可选）。
+   * 由 commit() 在最终正文提交时附加到 accepted entry，供权威检索/回源/TTL 消费。
+   * 旧 reader 忽略该字段，向后兼容。
+   */
+  memory?: import("./memory/memory-record.js").MemoryRecord;
 }
 
 export interface CanonEntry extends StateEntryBase {
@@ -1219,7 +1237,8 @@ export class FinalStateCommit {
    * @param finalCandidateId 最终选中的候选 id（必须与 staged 的 finalCandidateId 一致）
    * @param finalText 最终正文（A2：用于校验 sourceRef span 可追溯性 + 记录 hash）
    * @param plannedUpdate 可选：ChapterSeed/Intent 派生的计划状态（写入 store.planned）
-   * @returns { committed, store, rejected, finalTextHash, plannedPersisted }
+   * @param sourceRunId 可选：本次生成运行的来源 id（写入 MemoryCommitReceipt，供追溯）
+   * @returns { committed, store, rejected, finalTextHash, plannedPersisted, receipt }
    */
   commit(
     store: NarrativeStateStore,
@@ -1227,8 +1246,9 @@ export class FinalStateCommit {
     finalText: string,
     workspaceId: string,
     projectRoot: string,
-    plannedUpdate?: StagedStateUpdate
-  ): { store: NarrativeStateStore; committed: number; rejected: Array<{ entry: NarrativeStateEntry; errors: string[] }>; finalTextHash: string; plannedPersisted: number } {
+    plannedUpdate?: StagedStateUpdate,
+    sourceRunId?: string
+  ): { store: NarrativeStateStore; committed: number; rejected: Array<{ entry: NarrativeStateEntry; errors: string[] }>; finalTextHash: string; plannedPersisted: number; receipt: MemoryCommitReceipt | null } {
     if (this.settled) {
       throw new Error("FinalStateCommit 已 settled，不能重复 commit");
     }
@@ -1236,7 +1256,7 @@ export class FinalStateCommit {
 
     if (!this.staged) {
       // 无暂存：直接返回原 store（仍记录 finalText hash 供审计）
-      return { store, committed: 0, rejected: [], finalTextHash: computeFinalTextHash(finalText), plannedPersisted: 0 };
+      return { store, committed: 0, rejected: [], finalTextHash: computeFinalTextHash(finalText), plannedPersisted: 0, receipt: null };
     }
 
     // finalCandidateId 必须与暂存时一致（防止候选切换后误提交旧候选的状态）
@@ -1274,6 +1294,25 @@ export class FinalStateCommit {
         continue;
       }
       accepted.push(entry);
+    }
+
+    // ── MEMORY-RECORD-1：为 accepted entry 附加权威记忆信封 ──
+    // 把已通过校验（span/hash/语义均通过）的正式状态条目转换为 MemoryRecord，
+    // 供权威检索、回源、TTL 消费。转换失败的条目（无 #finalText: 的 sourceRef）
+    // 保留在 active state 但不附加信封（向后兼容旧 store）。
+    const sourceChapterNumber = chapterNumberFromChapter(this.staged.sourceChapter);
+    const memoryRecords: MemoryRecord[] = [];
+    for (let i = 0; i < accepted.length; i++) {
+      const rec = stateEntryToMemoryRecord(accepted[i], {
+        sourceChapter: sourceChapterNumber,
+        sourceRunId: sourceRunId ?? `run-${this.staged.sourceChapter}`,
+        finalText,
+      });
+      if (!rec) continue;
+      const v = validateMemoryRecord(rec);
+      if (!v.ok) continue; // 信封校验失败不阻断既有状态提交（信封为附加元数据）
+      accepted[i] = { ...accepted[i], memory: rec };
+      memoryRecords.push(rec);
     }
 
     // 应用 invalidations：从对应分类中移除被作废的 entry
@@ -1339,8 +1378,25 @@ export class FinalStateCommit {
     // 原子方式落盘，并在任一文件失败时回滚全部变更。
     saveStateStore(compacted, workspaceId, projectRoot);
 
+    // ── MEMORY-RECORD-1：构建 MemoryCommitReceipt ──
+    // 从已有 store 的 memory 信封 + 本次新增 memoryRecords 检测冲突，生成 receipt。
+    // 冲突检测为 advisory（报告供 trace/人工裁决），不自动覆盖既有状态。
+    const existingMemory: MemoryRecord[] = collectStoreMemory(store);
+    const memoryConflicts = detectMemoryConflicts(memoryRecords, existingMemory);
+    const receipt: MemoryCommitReceipt = buildMemoryCommitReceipt({
+      workspaceId,
+      sourceChapter: sourceChapterNumber,
+      finalTextHash,
+      sourceRunId: sourceRunId ?? `run-${this.staged.sourceChapter}`,
+      stateVersion: `${this.staged.sourceChapter}-${compacted.updatedAt}`,
+      committed: memoryRecords,
+      rejected: rejected.map((r) => ({ memoryId: r.entry.id, errors: r.errors })),
+      invalidatedIds: [...this.staged.invalidations],
+      conflicts: memoryConflicts,
+    });
+
     this.staged = null;
-    return { store: compacted, committed: accepted.length, rejected, finalTextHash, plannedPersisted: plannedEntries.length };
+    return { store: compacted, committed: accepted.length, rejected, finalTextHash, plannedPersisted: plannedEntries.length, receipt };
   }
 
   /** 查看当前暂存区（只读，测试用）。 */
@@ -1650,4 +1706,30 @@ function verifySourceRefSpan(sourceRef: string, finalText: string): string[] {
 
 export function createFinalStateCommit(): FinalStateCommit {
   return new FinalStateCommit();
+}
+
+// ============================================================================
+// MEMORY-RECORD-1 辅助函数
+// ============================================================================
+
+/** 从 "ch17" 解析章节号；无法解析返回 0（调用方按非章节来源处理） */
+function chapterNumberFromChapter(sourceChapter: string): number {
+  const m = sourceChapter.match(/(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+/** 收集 store 中所有已附加的 memory 信封（供冲突检测与回源） */
+function collectStoreMemory(store: NarrativeStateStore): MemoryRecord[] {
+  const out: MemoryRecord[] = [];
+  const push = (entries: NarrativeStateEntry[] | undefined): void => {
+    for (const e of entries ?? []) {
+      if (e.memory) out.push(e.memory);
+    }
+  };
+  push(store.canon);
+  push(store.character);
+  push(store.promise);
+  push(store.pattern);
+  push(store.expectation);
+  return out;
 }

@@ -19,6 +19,9 @@ import type {
   PatternEntry,
   PromiseEntry,
 } from "./final-state-commit.js";
+// MEMORY-6：权威感知检索。对已附加 memory 信封的状态条目，按权威/认识状态
+// 评估其是否可作为正式事实证据，并在评分中加权（旧条目无信封，行为不变）。
+import { isFormalFactEvidence } from "./memory/memory-record.js";
 // P4 M3 修复（2026-07-23）：type-only import，编译期擦除，无运行时耦合。
 // OverdueAlertEntry 形状与 post-raw buildOverdueAlerts 对齐，供 pre-write 通道复用。
 import type { OverdueAlertEntry } from "./methodology-diagnostic-derived.js";
@@ -69,7 +72,7 @@ export interface FutureStateExcludedEntry {
   kind: "canon" | "character" | "promise" | "pattern" | "expectation";
   sourceChapter: string;
   sourceRef: string;
-  reason: "future_state" | "unparseable_chapter";
+  reason: "future_state" | "unparseable_chapter" | "memory_not_formal_fact";
   /** 解析出的章节号（future_state 时为当前章或更大；unparseable 时为 null） */
   parsedChapter?: number | null;
 }
@@ -158,6 +161,23 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
         parsedChapter: parsed,
       });
       continue;
+    }
+    // MEMORY-6：对已有 memory 信封的条目做权威感知过滤。
+    // 若信封显示该条目不可作为正式事实（expired/archived/conflicted/plan/hypothesis），
+    // 排除并记录诊断。旧条目（无信封）不受影响，保持既有行为。
+    if (entry.memory) {
+      const factCheck = isFormalFactEvidence(entry.memory);
+      if (!factCheck.usable) {
+        futureStateExcluded.push({
+          id: entry.id,
+          kind,
+          sourceChapter: entry.sourceChapter,
+          sourceRef: entry.sourceRef,
+          reason: "memory_not_formal_fact",
+          parsedChapter: parsed,
+        });
+        continue;
+      }
     }
     eligible.push(entry);
   }
@@ -349,6 +369,30 @@ export function computeOverdueAlertsFromRetrievalState(
 function scoreEntry(entry: AnyEntry, input: ContextRetrievalInput): { entry: AnyEntry; score: number; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
+  // MEMORY-6：权威/认识状态加权。对已附加 memory 信封的条目，author_declaration /
+  // final_text_explicit + confirmed 优先返回；system_derived 降权。旧条目（无信封）无加成。
+  if (entry.memory) {
+    if (entry.memory.authorityClass === "author_declaration") {
+      score += 50;
+      reasons.push("memory_author_declared");
+    } else if (entry.memory.authorityClass === "final_text_explicit") {
+      score += 40;
+      reasons.push("memory_final_text");
+    } else if (entry.memory.authorityClass === "committed_state") {
+      score += 30;
+      reasons.push("memory_committed");
+    } else if (entry.memory.authorityClass === "system_derived") {
+      score -= 20;
+      reasons.push("memory_system_derived");
+    }
+    if (entry.memory.epistemicStatus === "confirmed") {
+      score += 20;
+      reasons.push("memory_confirmed");
+    } else if (entry.memory.epistemicStatus === "derived") {
+      score -= 10;
+      reasons.push("memory_derived");
+    }
+  }
   const text = summarize(entry);
   if (entry.kind === "character" && input.relevantCharacters.includes(entry.characterId)) {
     score += 100;
