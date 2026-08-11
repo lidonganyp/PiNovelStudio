@@ -420,8 +420,6 @@ export function buildEnvelopeAbcTrajectory(
         timestamp: base,
         data: {
           systemAllowedTools: m.visibleTools,
-          selectedTools: m.selectedTools,
-          rejectedTools: [],
           visibleTools: m.visibleTools,
         },
       });

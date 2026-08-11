@@ -117,9 +117,11 @@ for (const t of snapshot.visibleTools) {
 }
 checks.push({ name: "allowedTools→runtime tools：visibleTools ⊆ systemAllowedTools", passed: link1 });
 
-// 链路2：rejectedTools ∩ visibleTools = ∅
-const link2 = snapshot.rejectedTools.every((t) => !snapshot.visibleTools.includes(t));
-checks.push({ name: "rejectedTools 不可见：rejectedTools ∩ visibleTools = ∅", passed: link2 });
+// 链路2：AGENTIC-EVIDENCE-MERGE-1 后快照只含 systemAllowedTools / visibleTools，
+// 不再含模型决策字段 selectedTools / rejectedTools（独立证据决策回合已退役）
+const link2 =
+  !("rejectedTools" in snapshot) && !("selectedTools" in snapshot);
+checks.push({ name: "快照不含 rejectedTools/selectedTools（模型决策字段已移除）", passed: link2 });
 
 // 链路3：runtime tools / schema — 过滤后的真实工具 == visibleTools，且可注入
 const searchService = createNarrativeSearchService({
@@ -171,8 +173,6 @@ const report = {
   trajectoryCopiedTo: join(OUTPUT_DIR, "replay-trajectory.jsonl"),
   tool_visibility: {
     systemAllowedTools: snapshot.systemAllowedTools,
-    selectedTools: snapshot.selectedTools,
-    rejectedTools: snapshot.rejectedTools,
     visibleTools: snapshot.visibleTools,
   },
   tool_call_metrics: metricsSummary,
@@ -199,8 +199,6 @@ const md = [
   "## tool_visibility 快照",
   "",
   `- systemAllowedTools：${snapshot.systemAllowedTools.join(", ")}`,
-  `- selectedTools：${snapshot.selectedTools.join(", ")}`,
-  `- rejectedTools：${snapshot.rejectedTools.join(", ")}`,
   `- visibleTools：${snapshot.visibleTools.join(", ")}`,
   "",
   "## 实际工具调用",

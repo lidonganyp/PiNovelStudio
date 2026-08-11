@@ -1,21 +1,20 @@
 /**
- * NovelOS Evidence Plan（OPT-9.1）
+ * NovelOS Evidence Plan（AGENTIC-EVIDENCE-MERGE-1）
  *
- * EvidencePlan schema：Known / Unknown / MustVerify / AllowedTools / StopConditions。
- * agent loop 每轮前评估 MustVerify 项，选择对应工具收集证据。
+ * EvidencePlan 是系统安全计划，不是模型决策输出。
+ * 系统建立安全边界（known / mustVerify / allowedTools / stopConditions / retrievalCallLimit），
+ * Agentic 在 ReAct 循环内自主决定是否检索、检索什么、何时停止。
  *
- * M1 策略：
+ * 设计原则：
  * - createEvidencePlan 从 chapterIntent + seedContext 提取关键实体/术语作为 MustVerify
- * - AllowedTools 默认全部 8 工具（可由调用方收窄）
- * - StopConditions 默认：连续 2 轮无进展即停
- * - 不做 LLM 意图分析（M1 用启发式提取，Phase 后续增强）
+ * - AllowedTools 由系统从 intent 推断（不再由模型选择）
+ * - retrievalCallLimit 是系统上限，不是模型必须消耗的配额
+ * - 不做 LLM 意图分析（纯启发式提取）
+ * - mustVerify、工具推断与 context 摘要逻辑由系统确定性生成
  *
- * Phase 2D（2026-08-06）：三缺口修复
- * - createEvidencePlan 支持传入结构化 ChapterIntent，优先从 intent 提取 mustVerify
- * - 新增 inferAllowedToolsFromIntent：从 intent 字段推断本章需要的工具集（不再默认全部 9 工具）
- * - 新增 extractKnownFromContext：从 CompiledContext 提取已知摘要（只注入摘要行，≤80字/条，≤12条）
- * - 新增 extractMustVerifyFromIntent：从 intent 的 inviolableFacts/authorMustInclude 等结构化字段提取
- * - 向后兼容：不传 intent 时行为完全不变
+ * 历史：Phase 2D 曾引入独立 EvidenceDecision 模型回合（novelos_evidence_decision），
+ * 该回合已在 AGENTIC-EVIDENCE-MERGE-1 中物理删除。unknown / queries / needRetrieval /
+ * retrievalDepth 等模型决策字段已移除，由系统风险预算 retrievalCallLimit 替代。
  */
 
 import type { ChapterIntent } from "../../v2/core/chapter-intent-builder.js";
@@ -65,29 +64,24 @@ export const DEFAULT_STOP_CONDITIONS: StopConditions = {
 export interface EvidencePlan {
   /** 已知事实（从 seed context 派生，无需验证） */
   known: string[];
-  /** 未知但可能需要的事实（模型可能需要检索） */
-  unknown: string[];
   /** 必须验证的关键点（优先检索目标） */
   mustVerify: string[];
-  /** 本轮允许使用的工具名（限定工具集防无界遍历） */
+  /** 系统授权的工具集（限定工具防无界遍历，不是模型选择结果） */
   allowedTools: string[];
   /** 停止条件 */
   stopConditions: StopConditions;
   /**
-   * 是否需要检索（Phase 2D 缺口三修复）。
+   * 系统检索调用上限（AGENTIC-EVIDENCE-MERGE-1）。
    *
-   * 由独立 EvidenceDecision 回合的模型输出合并而来：
-   * - true  → runAgentTurns 注入模型计划的具体 query + 深度，引导实际工具调用
-   * - false → 上下文足以保证事实/人物状态/因果正确，不鼓励无谓检索
+   * 由确定性策略生成，不被不可验证的结构化模型输出降低：
+   * - 无 mustVerify 且上下文摘要完整 -> 2
+   * - 存在 mustVerify -> 4
+   * - 多个关键状态/伏笔/bridge context 缺失/冲突 -> 6
    *
-   * createEvidencePlan 基线默认：mustVerify 非空时为 true（否则检索无从覆盖 P0/P1），
-   * 否则 false。经决策回合后由模型判定覆盖。
+   * 这是系统上限，不是模型必须消耗的配额。Agentic 可以使用 0 到该上限之间的任意调用数。
+   * runtime 的 beforeToolCall 在达到此上限后阻断后续检索工具调用。
    */
-  needRetrieval: boolean;
-  /** 模型建议的检索 query（来自 EvidenceDecision 回合，≤MAX_MODEL_QUERIES） */
-  queries: string[];
-  /** 检索深度（0=不检索，1=浅，2=中，3=深，clamp 到 [0,3]） */
-  retrievalDepth: number;
+  retrievalCallLimit: number;
 }
 
 // ============================================================================
@@ -372,21 +366,17 @@ export function createEvidencePlan(input: CreateEvidencePlanInput): EvidencePlan
 
   const stopConditions = { ...DEFAULT_STOP_CONDITIONS, ...input.stopConditions };
 
-  // Phase 2D 缺口三：needRetrieval/queries/retrievalDepth 基线默认。
-  // 决策回合会覆盖这三项；此处仅提供无决策回合时的安全基线：
-  // mustVerify 非空 → 需要检索（P0/P1 事实必须可被工具覆盖）；
-  // queries 默认空（未给出具体 query 时由 Agentic 自行构造检索词）；
-  // retrievalDepth 默认 mustVerify 非空 ? 2（中层） : 0（不检索）。
-  const needsVerify = mustVerify.length > 0;
+  // AGENTIC-EVIDENCE-MERGE-1：系统风险预算（确定性，不依赖模型决策）。
+  // 首版采用保守策略：mustVerify 非空 -> 4 次上限；为空 -> 2 次上限。
+  // 后续可用真实 replay 数据调整三级风险分类。
+  const retrievalCallLimit = mustVerify.length > 0 ? 4 : 2;
+
   return {
     known,
-    unknown: [], // 不预判未知，由 mustVerify 驱动检索
     mustVerify,
     allowedTools,
     stopConditions,
-    needRetrieval: needsVerify,
-    queries: [],
-    retrievalDepth: needsVerify ? 2 : 0,
+    retrievalCallLimit,
   };
 }
 

@@ -4,7 +4,7 @@
  * 验收口径（用户 Phase 0 边界）：
  * - 每个叙事工具登记能力域 / 必填输入 / 默认返回数 / 最大返回数 / 预计 token /
  *   evidenceLevel / sourceRef 规则 / timeout / 全量返回风险 / 空与失败语义
- * - 记录工具可见性快照（systemAllowedTools / selectedTools / rejectedTools / visibleTools）
+ * - 记录工具可见性快照（systemAllowedTools / visibleTools）
  * - 记录单次工具调用指标（latency / 字符数 / evidenceLevel / sourceRef / 空结果 / 超时 / 异常 / 重复 query）
  *
  * 测试策略：
@@ -83,17 +83,13 @@ test("Phase 0 · 全量返回风险工具被正确标记（缺省参数可能返
 // 2. 可见性快照
 // ============================================================================
 
-test("Phase 0 · createToolVisibilitySnapshot 固化四视角且不共享引用", () => {
+test("Phase 0 · createToolVisibilitySnapshot 固化系统允许与可见工具", () => {
   const src = {
     systemAllowedTools: ["a", "b"],
-    selectedTools: ["a"],
-    rejectedTools: ["c"],
     visibleTools: ["a", "b"],
   };
   const snap = createToolVisibilitySnapshot(src);
   assert.deepEqual(snap.systemAllowedTools, ["a", "b"]);
-  assert.deepEqual(snap.selectedTools, ["a"]);
-  assert.deepEqual(snap.rejectedTools, ["c"]);
   assert.deepEqual(snap.visibleTools, ["a", "b"]);
   // 快照不共享引用（拷贝）
   src.visibleTools.push("x");

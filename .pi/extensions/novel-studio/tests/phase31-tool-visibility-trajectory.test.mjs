@@ -73,14 +73,10 @@ test("Phase 3.1 · 完整 eval-only replay 产出持久化 tool_visibility traje
       );
     }
 
-    // 链路2：rejectedTools 不得出现在 visibleTools（被拒工具不可见）
-    assert.ok(Array.isArray(snapshot.rejectedTools), "rejectedTools 应为数组");
-    for (const t of snapshot.rejectedTools) {
-      assert.ok(
-        !snapshot.visibleTools.includes(t),
-        `rejectedTools={t} 不得出现在 visibleTools`,
-      );
-    }
+    // 链路2：AGENTIC-EVIDENCE-MERGE-1 后快照只记录 systemAllowedTools / visibleTools，
+    // 不再记录模型决策的 selectedTools / rejectedTools（独立证据决策回合已退役）。
+    assert.equal("rejectedTools" in snapshot, false, "快照不应再含 rejectedTools（模型决策字段已移除）");
+    assert.equal("selectedTools" in snapshot, false, "快照不应再含 selectedTools（模型决策字段已移除）");
 
     // 链路3：runtime tools / schema — 用与 runtime 相同的构造重建真实工具对象，
     // 断言「过滤后的真实工具名 == visibleTools」，且这些工具可被 injectToolSchemas 注入。

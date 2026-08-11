@@ -48,10 +48,6 @@ import {
 import { NARRATIVE_TOOL_NAMES, NARRATIVE_TOOL_NAMES_WITH_FACADE, RETRIEVAL_TOOL_NAMES } from "../tools/narrative-tools.js";
 import type { NarrativeToolMode } from "./evidence-plan.js";
 import {
-  runEvidenceDecisionRound,
-  retrievalCallBudgetForDepth,
-} from "./evidence-decision.js";
-import {
   createToolVisibilitySnapshot,
   attachToolMetricsTracer,
   recordToolVisibility,
@@ -282,9 +278,7 @@ export const AGENTIC_RAW_KIND = "agentic_raw";
  * NovelOS system prompt（Phase 2D 缺口二修复 2026-08-07）。
  *
  * 移除旧 system prompt 中"先检索、再生成正文"的强制语义。
- * 检索决策改由独立 EvidenceDecision 回合（needRetrieval/queries/retrievalDepth）与
- * 不确定性驱动规则（narrative-agent-loop 的 DEFAULT_UNCERTAINTY_DRIVEN_PROMPT）驱动：
- * 上下文足以保证事实/人物状态/因果关系时直接生成正文，缺关键信息才检索。
+ * 检索决策由 Agentic 在 ReAct 循环内自主判断（AGENTIC-EVIDENCE-MERGE-1），不再有独立 EvidenceDecision 回合。
  */
 export const NOVELOS_SYSTEM_PROMPT =
   "你是顶尖网文作家。你将基于本章意图、种子上下文与叙事证据生成章节正文。" +
@@ -459,22 +453,11 @@ export function createAgenticRawCandidateSource(
         toolMode,
       });
 
-      // ── 4b. 缺口三：模型参与的 EvidenceDecision 回合 ──────────────────
-      // 系统先提供安全事实与摘要（EvidencePlan）→ 模型独立判断未知点/工具/检索深度
-      // → 系统校验（selectedTools ∩ systemAllowedTools、mustVerify 不可删、事实真值不可改）
-      // → 合并出最终计划，用于下面过滤工具集。
-      // 决策回合失败 fail-safe 回退系统计划（source="fallback"），不阻断生成；
-      // 事实安全仍由 coverage gate + FactGuard 保证。
-      const decisionRound = await runEvidenceDecisionRound({
-        evidencePlan: evidencePlanBase,
-        chapterIntent: chapterIntentStr,
-        seedContext: seedContextStr,
-        modelGenerate: modelGenerateWithCapture,
-        route,
-        timeoutMs,
-      });
-      const evidencePlan = decisionRound.plan;
-      trajectory.recordContextDecision(decisionRound.decision);
+      // ── 4b. AGENTIC-EVIDENCE-MERGE-1：独立 EvidenceDecision 回合已删除 ──
+      // 系统直接使用 EvidencePlan 的安全边界（allowedTools / mustVerify / retrievalCallLimit）。
+      // Agentic 在 ReAct 循环内自主决定是否检索、检索什么、何时停止。
+      // 不再发起独立证据决策模型调用。
+      const evidencePlan = evidencePlanBase;
 
       // ── 5. 构造 NovelOS Runtime + Agent ──────────────────────────────
       // 工具列表从 registry 按 agent 角色获取（只读工具 + project_propose）
@@ -490,9 +473,7 @@ export function createAgenticRawCandidateSource(
       recordToolVisibility(
         trajectory,
         createToolVisibilitySnapshot({
-          systemAllowedTools: evidencePlanBase.allowedTools,
-          selectedTools: decisionRound.decision.request.selectedTools,
-          rejectedTools: decisionRound.decision.validation.rejectedTools,
+          systemAllowedTools: evidencePlan.allowedTools,
           visibleTools: tools.map((tool) => tool.name),
         }),
       );
@@ -511,13 +492,13 @@ export function createAgenticRawCandidateSource(
           // Phase 5 受控接入：facade 模式下白名单扩为 {9 专用工具, query_narrative_production}，
           // 使统一入口可被注入；默认生产仍为 NARRATIVE_TOOL_NAMES（9 工具），行为不变。
           allowedToolNames: facadeEnabled ? NARRATIVE_TOOL_NAMES_WITH_FACADE : NARRATIVE_TOOL_NAMES,
-          // 缺口三执行：把检索深度推导的调用次数预算传给 runtime。
+          // AGENTIC-EVIDENCE-MERGE-1：把系统检索调用上限传给 runtime。
           // runtime 统计检索工具调用并在达到预算时经 afterToolCall 停止 loop，
-          // 使"retrievalDepth → 工具调用次数/停止逻辑"成为系统强制约束（非仅 prompt 建议）。
+          // 使"retrievalCallLimit -> 工具调用次数/停止逻辑"成为系统强制约束（非仅 prompt 建议）。
           // Phase 5 受控接入：facade 模式下 query_narrative_production 也是检索工具，
           // 需计入检索预算（否则统一入口调用次数不受 budget 约束）；standard 用 9 工具集合。
           retrievalToolNames: facadeEnabled ? NARRATIVE_TOOL_NAMES_WITH_FACADE : RETRIEVAL_TOOL_NAMES,
-          retrievalBudget: retrievalCallBudgetForDepth(evidencePlan.retrievalDepth),
+          retrievalBudget: evidencePlan.retrievalCallLimit,
           budget,
           trajectory,
           kind: AGENTIC_RAW_KIND,

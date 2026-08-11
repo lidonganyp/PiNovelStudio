@@ -6,14 +6,23 @@
  * 设计见 docs/phase7-reasoning-budget-design.md。
  *
  * eval-only：只注册在 tsconfig.eval.json，不进入生产构建。
- * 生产路径不修改 DEFAULT_BUDGET_CONFIG，不修改 createEvidencePlan 的默认 retrievalDepth。
+ * 生产路径不修改 DEFAULT_BUDGET_CONFIG。生产已改用 retrievalCallLimit（mustVerify ? 4 : 2），不再使用 retrievalDepth。本文件保留 retrievalDepth 仅供 eval A/B/C 对照。
  */
 
 import type { BudgetConfig } from "../runtime/budget-policy.js";
 import { DEFAULT_BUDGET_CONFIG } from "../runtime/budget-policy.js";
-import { retrievalCallBudgetForDepth, MAX_RETRIEVAL_DEPTH } from "../agent/evidence-decision.js";
 import type { FactRiskLevel } from "../agent/must-verify-coverage-gate.js";
 import { assessMustVerifyRisk } from "../agent/must-verify-coverage-gate.js";
+
+/** 检索深度最大值（eval-only 内联，原 evidence-decision.ts 已删除） */
+const MAX_RETRIEVAL_DEPTH = 3;
+/** 检索深度 -> 调用次数映射（eval-only 内联） */
+const RETRIEVAL_CALLS_BY_DEPTH: Readonly<number[]> = [0, 2, 4, 6];
+/** 由检索深度推导检索工具调用次数上限 */
+function retrievalCallBudgetForDepth(depth: number): number {
+  const d = Math.max(0, Math.min(MAX_RETRIEVAL_DEPTH, Math.floor(depth)));
+  return RETRIEVAL_CALLS_BY_DEPTH[d] ?? 0;
+}
 
 // ============================================================================
 // 类型

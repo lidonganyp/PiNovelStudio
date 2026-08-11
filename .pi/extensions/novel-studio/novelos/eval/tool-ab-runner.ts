@@ -516,8 +516,6 @@ export function buildToolAbTrajectory(comparison: ToolAbComparison): Record<
         timestamp: base,
         data: {
           systemAllowedTools: m.visibleTools,
-          selectedTools: m.selectedTools,
-          rejectedTools: [],
           visibleTools: m.visibleTools,
         },
       });

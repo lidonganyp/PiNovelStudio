@@ -2099,8 +2099,6 @@ export function buildRealToolAbTrajectory(comparison: RealToolAbComparison): Rec
           timestamp: base,
           data: {
             systemAllowedTools: [m.toolSurface],
-            selectedTools: m.turns.filter((t) => t.selectedTool).map((t) => t.selectedTool),
-            rejectedTools: [],
             visibleTools: m.turns.filter((t) => t.selectedTool).map((t) => t.selectedTool),
             toolMode: m.toolMode,
             renderMode: m.renderMode,

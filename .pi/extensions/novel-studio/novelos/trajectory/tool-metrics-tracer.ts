@@ -2,7 +2,7 @@
  * NovelOS 工具可见性与调用指标观测（Phase 0：工具基线盘点与观测）
  *
  * 目标：为"工具接口设计"的 Phase 0 建立可观测基线，回答：
- * - 模型能看到什么（visibleTools / systemAllowedTools / selectedTools / rejectedTools）
+ * - 模型能看到什么（visibleTools / systemAllowedTools）
  * - 实际调用了什么（per-call latency / 返回字符数 / evidenceLevel / sourceRef 数量）
  * - 是否出现空结果 / 超时 / 异常 / 重复 query
  *
@@ -28,12 +28,8 @@ import type { EvidenceLevel } from "../tools/tool-protocol.js";
 
 /** 工具可见性快照（记录到 trajectory tool_visibility 条目） */
 export interface ToolVisibilitySnapshot {
-  /** 系统允许的能力边界（EvidenceDecision 前系统的 plan.allowedTools） */
+  /** 系统授权的工具集（EvidencePlan.allowedTools） */
   systemAllowedTools: string[];
-  /** 模型在决策回合实际选择的工具（未过滤前） */
-  selectedTools: string[];
-  /** 模型请求但被系统拒绝的工具（不在 systemAllowedTools 内） */
-  rejectedTools: string[];
   /** 最终注入 runtime 的可见工具名（模型能看到的 schema） */
   visibleTools: string[];
 }
@@ -93,14 +89,10 @@ export interface ToolObservationSummary {
 /** 构建可见性快照 */
 export function createToolVisibilitySnapshot(parts: {
   systemAllowedTools: string[];
-  selectedTools: string[];
-  rejectedTools: string[];
   visibleTools: string[];
 }): ToolVisibilitySnapshot {
   return {
     systemAllowedTools: [...parts.systemAllowedTools],
-    selectedTools: [...parts.selectedTools],
-    rejectedTools: [...parts.rejectedTools],
     visibleTools: [...parts.visibleTools],
   };
 }

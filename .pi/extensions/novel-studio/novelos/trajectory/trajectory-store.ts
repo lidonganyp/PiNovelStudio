@@ -33,7 +33,6 @@ export type TrajectoryEntryType =
   | "session_end"
   | "message"
   | "tool_event"
-  | "context_decision"
   | "checkpoint"
   | "output"
   | "failure"
@@ -99,10 +98,6 @@ export class TrajectoryStore {
     this.push("tool_event", event);
   }
 
-  recordContextDecision(decision: unknown): void {
-    this.push("context_decision", decision);
-  }
-
   recordCheckpoint(checkpoint: NovelSessionCheckpoint): void {
     this.push("checkpoint", checkpoint);
   }
@@ -144,8 +139,9 @@ export class TrajectoryStore {
   }
 
   /**
-   * Phase 0：记录本会话工具可见性快照（systemAllowedTools / selectedTools / rejectedTools / visibleTools）。
+   * 记录本会话工具可见性快照（systemAllowedTools / visibleTools）。
    * 用于观测"模型能看到什么、系统允许什么、最终注入什么"三者是否一致。
+   * AGENTIC-EVIDENCE-MERGE-1 后不再记录模型决策的 selectedTools / rejectedTools。
    */
   recordToolVisibility(visibility: unknown): void {
     this.push("tool_visibility", visibility);

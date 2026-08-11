@@ -373,44 +373,16 @@ export class NarrativeAgentLoop {
         "",
       );
     }
-    // Phase 2D（缺口三）：注入模型判定的未知点，引导 Agentic 在正文需要时优先查证。
-    // 这些未知点来自独立 EvidenceDecision 回合（模型参与计划），非系统预判。
-    if (plan.unknown.length > 0) {
+    // AGENTIC-EVIDENCE-MERGE-1：不再注入模型决策字段（unknown/queries/needRetrieval/retrievalDepth 已移除）。
+    // Agentic 在同一 ReAct 循环内自主决定是否检索。
+    // 系统通过 mustVerify 注入 + retrievalCallLimit（runtime beforeToolCall 强制）保证安全。
+    if (plan.mustVerify.length === 0) {
       promptParts.push(
-        "需查证的未知点（若正文需要这些信息且会影响事实/人物状态/因果关系，请优先检索查证）：",
-        ...plan.unknown.map((item) => `  - ${item}`),
+        "当前上下文已充分，如无必要可直接基于本章意图与种子上下文生成正文。",
         "",
       );
     }
-    // Phase 2D（缺口三修复）：让模型判定的检索计划真正驱动执行。
-    // - needRetrieval=true → 注入具体 query + 深度，引导实际工具调用（消费模型计划）
-    // - needRetrieval=false 且无 mustVerify → 明确告知上下文已充分，不鼓励无谓检索
-    if (plan.needRetrieval) {
-      const depthLabel =
-        ["不检索", "浅层检索", "中层检索", "深度检索"][plan.retrievalDepth] ??
-        "检索";
-      promptParts.push(
-        "检索执行计划（来自本章证据规划）：",
-        `  - 判定：需要检索，深度=${depthLabel}（${plan.retrievalDepth}）`,
-      );
-      if (plan.queries.length > 0) {
-        promptParts.push(
-          `  - 建议检索 query：${plan.queries.map((q) => `"${q}"`).join("、")}`,
-          "  请据此调用最相关的证据工具查证上述 query；若已获得足够证据可提前停止。",
-        );
-      } else {
-        promptParts.push(
-          "  - 未给出具体 query，请根据上述未知点/必须验证点自行构造最相关检索词。",
-        );
-      }
-      promptParts.push("");
-    } else if (plan.mustVerify.length === 0) {
-      promptParts.push(
-        "当前上下文已充分，无需调用证据工具；直接基于本章意图与种子上下文生成正文。",
-        "",
-      );
-    }
-    // Phase 2D（缺口二）：默认使用不确定性驱动的检索决策规则。
+    // AGENTIC-EVIDENCE-MERGE-1：默认使用不确定性驱动的检索决策规则。
     // eval-only：retrievalPromptOverride 覆盖默认 prompt（A/B 对照实验用）。
     // - 生产路径不传此字段 → 使用 DEFAULT_UNCERTAINTY_DRIVEN_PROMPT（不确定性驱动）
     // - eval A 组 → 传入 FORCED_RETRIEVAL_PROMPT（保持旧强制检索行为）
