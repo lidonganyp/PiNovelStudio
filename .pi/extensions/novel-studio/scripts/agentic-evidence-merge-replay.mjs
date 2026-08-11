@@ -325,6 +325,31 @@ async function main() {
     (r) => (r.traceMetrics.hardFindingCount ?? 0) > 0 || (r.traceMetrics.unresolvedFindings ?? 0) > 0,
   ).length;
 
+  // 自动恢复率：从 trace 的 failureEnvelopes 中检测可恢复失败
+  // 即使章节最终成功，trace 中仍会保留中间发生的可恢复失败记录
+  const chaptersWithRecoverableFailure = withTrace.filter((r) => {
+    const envelopes = r.traceMetrics.lastEnvelope;
+    // 检查 trace 中是否有任何 recoverable=true 的 failure envelope
+    // lastEnvelope 是最后一个；但一个章节可能有多个 envelope
+    // 这里用 chapterResults 中已记录的 recoverable 标志 + trace 中的 lastEnvelope
+    return r.recoverable === true ||
+      (envelopes && (envelopes.recoverable === true || envelopes.severity === "recoverable"));
+  });
+  const recoveredAfterRetry = chaptersWithRecoverableFailure.filter((r) => r.status === "ok").length;
+  const totalRecoverable = chaptersWithRecoverableFailure.length;
+  const recoveryRate = totalRecoverable > 0
+    ? Math.round((recoveredAfterRetry / totalRecoverable) * 1000) / 10
+    : null;
+  const recoveryRateNote = totalRecoverable === 0
+    ? "N/A（本次无可恢复失败）"
+    : `${recoveredAfterRetry}/${totalRecoverable} 恢复成功`;
+
+  // 阻断分类
+  const hardBlocked = chapterResults.filter((r) => r.status !== "ok" && !r.recoverable).length;
+  const preflightCascade = chapterResults.filter(
+    (r) => r.status !== "ok" && r.failureStage === "preflight",
+  ).length;
+
   const report = {
     schema: "agentic-evidence-merge-replay/v1",
     timestamp: new Date().toISOString(),
@@ -339,6 +364,8 @@ async function main() {
     traceRetained,
     evidenceDecisionTotal,
     zeroRetrievalOk,
+    hardBlocked,
+    preflightCascade,
     totals: {
       tokensIn: totalTokensIn,
       tokensOut: totalTokensOut,
@@ -347,8 +374,8 @@ async function main() {
       mustVerifyCovered: mvCovered,
       mustVerifyCoverageRate: mvTotal > 0 ? Math.round((mvCovered / mvTotal) * 1000) / 10 : null,
       factualErrorChapters: factualErrors,
-      recoveryRate: recoverableBlocked > 0 ? null : null,
-      recoveryRateNote: recoverableBlocked === 0 ? "N/A（本次无可恢复失败；2 个阻断均为 hard/preflight 安全块）" : `${recoverableBlocked} 个可恢复阻断`,
+      recoveryRate,
+      recoveryRateNote,
       successRate: MAX_CHAPTERS > 0 ? Math.round((okCount / MAX_CHAPTERS) * 1000) / 10 : null,
       traceRetentionRate: MAX_CHAPTERS > 0 ? Math.round((traceRetained / MAX_CHAPTERS) * 1000) / 10 : null,
     },
@@ -366,7 +393,7 @@ async function main() {
   md += `## 汇总\n\n`;
   md += `| 指标 | 值 |\n|---|---|\n`;
   md += `| 成功章节 | ${report.okCount} |\n`;
-  md += `| 阻断章节 | ${report.blockedCount} |\n`;
+  md += `| 阻断章节 | ${report.blockedCount}（${hardBlocked} 个 hard block + ${preflightCascade} 个 preflight 级联） |\n`;
   md += `| 未分类失败 | ${report.uncategorizedFailures} |\n`;
   md += `| 可恢复阻断（重试后成功） | ${report.recoverableBlocked} |\n`;
   md += `| trace 留存率 | ${report.totals.traceRetentionRate}% (${report.traceRetained}/${report.totalChapters}) |\n`;
