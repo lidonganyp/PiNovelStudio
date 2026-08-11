@@ -1770,15 +1770,95 @@ function chapterNumberFromChapter(sourceChapter: string): number {
 /** 收集 store 中所有已附加的 memory 信封（供冲突检测与回源） */
 function collectStoreMemory(store: NarrativeStateStore): MemoryRecord[] {
   const out: MemoryRecord[] = [];
-  const push = (entries: NarrativeStateEntry[] | undefined): void => {
+  // 旧工作区条目可能没有 kind 字段（legacy 格式靠所在数组标识类型），
+  // 因此按数组显式传入类型，不能依赖 entry.kind 推断。
+  const push = (entries: NarrativeStateEntry[] | undefined, kind: string): void => {
     for (const e of entries ?? []) {
-      if (e.memory) out.push(e.memory);
+      if (e.memory) {
+        out.push(e.memory);
+      } else {
+        // P0（legacy 兼容）：旧工作区条目没有 memory 信封，若只在 collectStoreMemory
+        // 收集带信封条目，冲突检测会漏检旧 Canon。这里把无信封的 canon/character/promise
+        // 转换为轻量 MemoryRecord 一并纳入冲突检测，防止"旧 Canon 被同 ID 新值静默覆盖"。
+        const legacy = legacyEntryToMemoryRecord(e, kind);
+        if (legacy) out.push(legacy);
+      }
     }
   };
-  push(store.canon);
-  push(store.character);
-  push(store.promise);
-  push(store.pattern);
-  push(store.expectation);
+  push(store.canon, "canon");
+  push(store.character, "character");
+  push(store.promise, "promise");
+  push(store.pattern, "pattern");
+  push(store.expectation, "expectation");
   return out;
+}
+
+/**
+ * P0（legacy 兼容）：把无 memory 信封的旧状态条目转换为冲突检测用的轻量 MemoryRecord。
+ *
+ * 与 stateEntryToMemoryRecord 的区别：不要求 sourceRef 含 `#finalText:`（旧条目可能
+ * 是 `seed:*` 或旧格式），只需提供 memoryId / memoryType / payload.data.key|value /
+ * supersedesMemoryIds，供 detectMemoryConflicts 做同键值比较。仅用于冲突检测，
+ * 不进入权威检索/回源（无 sourceRef/hash）。
+ */
+function legacyEntryToMemoryRecord(entry: NarrativeStateEntry, kind: string): MemoryRecord | null {
+  const base = {
+    sourceChapter: null,
+    sourceRef: [] as string[],
+    textHash: [] as string[],
+    sourceRunId: "",
+    sourceFinalTextHash: null as string | null,
+    createdAt: "",
+    updatedAt: entry.lastUpdated ?? "",
+    expiresAt: null as string | null,
+    confidence: entry.confidence,
+    derivedFromMemoryIds: [] as string[],
+    supersedesMemoryIds:
+      (entry as unknown as { supersedes?: string }).supersedes
+        ? [(entry as unknown as { supersedes: string }).supersedes]
+        : [] as string[],
+    authorityClass: "committed_state" as const,
+    epistemicStatus: "confirmed" as const,
+    lifecycleStatus: "active" as const,
+  };
+  switch (kind) {
+    case "canon":
+      return {
+        ...base,
+        memoryId: entry.id,
+        memoryType: "canon",
+        payload: { memoryType: "canon", data: { value: (entry as unknown as { fact: string }).fact, category: (entry as unknown as { category: string }).category, key: entry.id } },
+      };
+    case "character":
+      return {
+        ...base,
+        memoryId: entry.id,
+        memoryType: "character",
+        payload: {
+          memoryType: "character",
+          data: {
+            value: (entry as unknown as { value: string }).value,
+            category: (entry as unknown as { field: string }).field,
+            key: `character:${(entry as unknown as { characterId: string }).characterId}:${(entry as unknown as { field: string }).field}`,
+          },
+        },
+      };
+    case "promise":
+      return {
+        ...base,
+        memoryId: entry.id,
+        memoryType: "promise",
+        payload: {
+          memoryType: "promise",
+          data: {
+            promiseId: (entry as unknown as { promiseId: string }).promiseId,
+            description: (entry as unknown as { description: string }).description,
+            status: (entry as unknown as { status: string }).status as "open" | "advancing" | "broken" | "fulfilled",
+            currentHeat: (entry as unknown as { currentHeat: number }).currentHeat,
+          },
+        },
+      };
+    default:
+      return null;
+  }
 }
