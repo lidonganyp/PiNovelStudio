@@ -10,6 +10,10 @@
  * 与 pi-agent-core AgentTool 的关系：ToolProtocol 扩展 AgentTool，
  * 追加 requiredPermission / sideEffect / timeoutMs / evidenceLevel 约束元数据。
  * NarrativeToolRegistry 负责把 ToolProtocol 转成 AgentTool 供 Agent 消费。
+ *
+ * Tool Interface Contract v1 子任务3：对每个工具真正执行 bounded timeout。
+ * 工具执行由 pi-agent-core 内部派发，tool.timeoutMs 不能只作为元数据——必须用
+ * withToolTimeout 包装 execute，使超时/中止真正中断工具调用并转成结构化错误结果。
  */
 
 import type { AgentTool } from "../adapters/pi-agent-core-adapter.js";
@@ -166,6 +170,89 @@ export function makeNarrativeToolResult(
   return {
     content: [{ type: "text", text }],
     details,
+  };
+}
+
+/**
+ * 结构化工具执行超时错误（Tool Interface Contract v1 子任务3）。
+ *
+ * 工具 execute 被 withToolTimeout 包装后，若在 tool.timeoutMs 内未完成或收到
+ * abort 信号，则抛出此错误。pi-agent-core 捕获后生成 error tool result
+ * （isError=true），runtime 订阅写入 trajectory，ToolCallMetricsTracer 据错误
+ * 文本标记 timeout=true。绝不静默降级——超时是显式的结构化失败。
+ */
+export class ToolExecutionTimeoutError extends Error {
+  readonly toolName: string;
+  readonly timeoutMs: number;
+  readonly aborted: boolean;
+
+  constructor(toolName: string, timeoutMs: number, aborted = false) {
+    const reason = aborted
+      ? `工具 "${toolName}" 执行被中止（abort signal）`
+      : `工具 "${toolName}" 执行超时（>${timeoutMs}ms）`;
+    super(reason);
+    this.name = "ToolExecutionTimeoutError";
+    this.toolName = toolName;
+    this.timeoutMs = timeoutMs;
+    this.aborted = aborted;
+  }
+}
+
+/**
+ * 工具默认执行超时 ms（ToolProtocol.timeoutMs 未声明时兜底，与 legacy 默认一致）。
+ */
+export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
+
+/**
+ * 用 bounded timeout 包装工具的 execute（Tool Interface Contract v1 子任务3）。
+ *
+ * 工具执行由 pi-agent-core 内部派发，但 tool.timeoutMs 此前只作为元数据传给
+ * LLM 调用，未作用于工具本身。此包装用 Promise.race 对 execute 施加真实超时：
+ * - 未在 timeoutMs 内完成 → 抛 ToolExecutionTimeoutError（结构化失败，不降级）
+ * - 收到 abort signal → 抛 ToolExecutionTimeoutError({aborted:true})
+ * - 正常完成 → 透传原结果（含结构化 details，空结果语义不变）
+ *
+ * 超时后原 execute 若仍在运行，其结果会被丢弃（Promise.race 竞速语义），
+ * 不会污染 agent 状态。适用于所有 NovelOS 叙事工具。
+ *
+ * @param tool 待包装的 ToolProtocol（其 timeoutMs 作为超时上限）
+ * @returns 包装后的 ToolProtocol（元数据不变，execute 受 bounded timeout 约束）
+ */
+export function withToolTimeout<
+  TParameters extends TSchema = TSchema,
+>(
+  tool: ToolProtocol<TParameters>,
+): ToolProtocol<TParameters> {
+  const timeoutMs = tool.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
+  const rawExecute = tool.execute;
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        const rejectTimeout = (): void =>
+          reject(new ToolExecutionTimeoutError(tool.name, timeoutMs, false));
+        const rejectAbort = (): void =>
+          reject(new ToolExecutionTimeoutError(tool.name, timeoutMs, true));
+        timer = setTimeout(rejectTimeout, timeoutMs);
+        // 已中止 → 立即拒绝；否则监听 signal 的 abort
+        if (signal) {
+          if (signal.aborted) {
+            rejectAbort();
+          } else {
+            signal.addEventListener("abort", rejectAbort, { once: true });
+          }
+        }
+      });
+      try {
+        return await Promise.race([
+          rawExecute(toolCallId, params, signal, onUpdate),
+          timeoutPromise,
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    },
   };
 }
 

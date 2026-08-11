@@ -16,6 +16,7 @@ import type { ToolProtocol, ToolPermission } from "../tools/tool-protocol.js";
 import type { Role, PermissionPolicy } from "../security/permission-policy.js";
 import type { TSchema } from "typebox";
 import { createNarrativeTools } from "../tools/narrative-tools.js";
+import { validateToolCapabilitiesAgainstRuntime, TOOL_CAPABILITIES } from "../tools/tool-capability.js";
 import { createQueryNarrativeProductionFacadeTool } from "../tools/query-narrative-facade.js";
 import type { NarrativeSearchService } from "./narrative-search-service.js";
 
@@ -47,6 +48,16 @@ export class NarrativeToolRegistry {
     for (const tool of tools) {
       this.register(tool);
     }
+    // Tool Interface Contract v1 子任务1：启动校验 —— tool-capability.ts 是单一真相源，
+    // 实际工具定义必须与登记表对齐（timeoutMs/sideEffect/requiredPermission/名称集合）。
+    // 只校验内置 9 工具；facade 是受控变体（canary opt-in），不纳入 base 契约校验。
+    const contractFailures = validateToolCapabilitiesAgainstRuntime(tools);
+    if (contractFailures.length > 0) {
+      throw new Error(
+        `Tool Interface Contract 校验失败（tool-capability.ts 与实际工具定义不一致）：\n` +
+          contractFailures.map((f) => `  - ${f}`).join("\n"),
+      );
+    }
     // Phase 5 受控接入：仅 when enableFacade=true 额外注册 facade runtime 变体。
     // 默认（非 canary workspace）不注册，保持 9 专用工具执行面不变。
     // 注意：useCompactEnvelope 不传（默认 false）--compact envelope 已在 Phase 5.3
@@ -59,12 +70,20 @@ export class NarrativeToolRegistry {
     }
   }
 
-  /** 注册一个工具（校验权限约束） */
+  /** 注册一个工具（校验权限约束 + TOOL_CAPABILITIES 白名单 fail-closed） */
   register(tool: ToolProtocol<TSchema>): void {
-    // 硬性边界：工具不能要求 final_commit
+    // 硬性安全边界：工具不能要求 final_commit（必须在白名单检查之前，确保任何
+    // final_commit 工具无论是否在白名单内都被拒绝，且错误信息包含 final_commit）。
     if (tool.requiredPermission === "final_commit") {
       throw new Error(
         `工具 "${tool.name}" 要求 final_commit 权限，agent 不可注册此类工具。final_commit 只能由统一编排器在最终选择后执行。`,
+      );
+    }
+    // Tool Interface Contract v1 子任务1/子任务4：tool-capability.ts 是单一真相源，
+    // 注册白名单外的工具必须 fail-closed 拒绝（未知工具不得进入执行面）。
+    if (!TOOL_CAPABILITIES[tool.name]) {
+      throw new Error(
+        `工具 "${tool.name}" 未在 TOOL_CAPABILITIES 登记（workspace_read 白名单外），拒绝注册（fail-closed）。`,
       );
     }
     // 校验：read_only 工具应要求 workspace_read

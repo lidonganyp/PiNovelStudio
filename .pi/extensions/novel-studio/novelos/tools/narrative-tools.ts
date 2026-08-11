@@ -22,7 +22,7 @@
 import { Type } from "typebox";
 import type { TSchema } from "typebox";
 import type { ToolProtocol, NarrativeToolResultDetails } from "./tool-protocol.js";
-import { makeNarrativeToolResult } from "./tool-protocol.js";
+import { makeNarrativeToolResult, withToolTimeout } from "./tool-protocol.js";
 import type { NarrativeSearchService } from "../agent/narrative-search-service.js";
 
 /** facade runtime 变体工具名（单一来源；query-narrative-facade.ts 从这引用，避免环形依赖） */
@@ -206,7 +206,7 @@ const searchNarrativeEvidenceFactory: ToolFactory = (ctx) => ({
   parameters: Type.Object({
     query: Type.String({ description: "搜索关键词或短语" }),
     maxResults: Type.Optional(
-      Type.Number({ description: "最大返回数（默认 10）", default: 10 }),
+      Type.Number({ description: "最大返回数（默认 10，上限 50）", default: 10 }),
     ),
   }),
   requiredPermission: "workspace_read",
@@ -272,10 +272,10 @@ const searchChapterSpanFactory: ToolFactory = (ctx) => ({
   parameters: Type.Object({
     query: Type.String({ description: "搜索关键词或短语" }),
     maxChapters: Type.Optional(
-      Type.Number({ description: "搜索最近多少章（默认 10）", default: 10 }),
+      Type.Number({ description: "搜索最近多少章（默认 10，上限 200）", default: 10 }),
     ),
     maxResults: Type.Optional(
-      Type.Number({ description: "最大返回数（默认 10）", default: 10 }),
+      Type.Number({ description: "最大返回数（默认 10，上限 50）", default: 10 }),
     ),
   }),
   requiredPermission: "workspace_read",
@@ -738,9 +738,13 @@ export const NARRATIVE_TOOL_FACTORIES: ToolFactory[] = [
 
 /**
  * 创建全部 9 个叙事工具（接收 NarrativeSearchService）。
+ *
+ * Tool Interface Contract v1 子任务3：每个工具都用 withToolTimeout 包装，
+ * 使 tool.timeoutMs 真正作用于工具执行（超时/abort 抛结构化 ToolExecutionTimeoutError），
+ * 而非仅作为元数据。元数据（含 timeoutMs）保持不变，registry 契约校验不受影响。
  */
 export function createNarrativeTools(
   ctx: ToolFactoryContext,
 ): ToolProtocol<TSchema>[] {
-  return NARRATIVE_TOOL_FACTORIES.map((f) => f(ctx));
+  return NARRATIVE_TOOL_FACTORIES.map((f) => withToolTimeout(f(ctx)));
 }

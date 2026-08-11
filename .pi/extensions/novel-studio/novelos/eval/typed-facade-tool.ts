@@ -243,11 +243,9 @@ export function createTypedFacadeTool(ctx: {
     name: QUERY_NARRATIVE_NAME,
     description:
       "统一叙事查询入口：按查询意图路由到对应的叙事专用工具。" +
-      "事实核验类查询**优先使用「跨源证据检索」意图**；返回的结果带来源引用与证据等级。" +
+      "事实核验类查询优先使用「跨源证据检索」意图；返回结果带来源引用与证据等级。" +
       guidanceBlock +
-      "查询构造：evidence/chapter_span 的 query 复用待验证事实原文短语（检索按子串匹配）；" +
-      "canon 意图传 category 返回该类全部事实。必须逐项遍历 mustVerify 列出的全部待验证事实，逐项查询，" +
-      "全部覆盖后再输出终止标记；每次只查一个事实，不得在覆盖未完成时提前收敛。",
+      "查询构造：evidence/chapter_span 的 query 复用待验证事实原文短语；canon 意图传 category 返回该类全部事实。",
     label: "Query Narrative (Typed Facade)",
     parameters: Type.Object({
       intent: Type.Union(

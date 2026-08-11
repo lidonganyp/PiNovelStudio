@@ -16,6 +16,7 @@
 
 import type { AgentTool } from "./pi-agent-core-adapter.js";
 import { localizeLlmText } from "../../utils/llm-language-guard.js";
+import { TOOL_CAPABILITIES } from "../tools/tool-capability.js";
 
 // ============================================================================
 // 常量
@@ -149,6 +150,11 @@ export function injectToolSchemas(
       parts.push("");
       parts.push(paramsDesc);
     }
+    // Tool Interface Contract v1 子任务2：模型可见风险提示。
+    // 内部权限名只在运行时校验，不暴露给模型；这里只给简洁的行为边界：
+    // 只读、不写文件、证据等级、结果可能被截断。
+    parts.push("");
+    parts.push(localizeLlmText(describeRiskNote(tool.name)));
     parts.push("");
   }
 
@@ -202,6 +208,39 @@ function describeParameters(tool: AgentTool): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Tool Interface Contract v1 子任务2：生成模型可见的风险提示行。
+ *
+ * 原则：
+ * - 全部 9 个叙事工具都是 read_only（只读、不写文件）——统一提示，不逐条暴露内部权限名。
+ * - 证据等级从 TOOL_CAPABILITIES 读取（只给"结果证据强度"的通俗说明，帮助模型判断可信度）。
+ * - 截断风险从 canReturnFullData / maxReturnCount 推断（未指定过滤参数可能返回宽结果）。
+ * - 内部权限名（workspace_read 等）只在运行时校验，不进入模型可见 schema。
+ */
+function describeRiskNote(toolName: string): string {
+  const cap = TOOL_CAPABILITIES[toolName];
+  const evidenceNote = cap
+    ? `证据等级：${evidenceLevelHuman(cap.evidenceLevel)}`
+    : "证据等级：未知";
+  const truncationNote =
+    cap && cap.canReturnFullData
+      ? "注意：未指定过滤参数时可能返回大量数据，结果可能被截断，请用过滤参数收窄"
+      : "注意：结果可能被截断，必要时减少请求量或用更具体的关键词";
+  return `（只读工具：不写文件、无副作用；${evidenceNote}。${truncationNote}）`;
+}
+
+/** 把 EvidenceLevel 转成模型可读的通俗说明 */
+function evidenceLevelHuman(level: string): string {
+  const map: Record<string, string> = {
+    confirmed_state: "已确认长期状态",
+    exact_chapter_span: "章节原文精确匹配",
+    confirmed: "有明确来源支持",
+    inferred: "由已有证据推导（非直接原文）",
+    profile_only: "仅风格档案参考（非确定事实）",
+  };
+  return map[level] ?? level;
 }
 
 const TOOL_NAME_MAP: Record<string, string> = {

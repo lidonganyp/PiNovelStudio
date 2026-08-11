@@ -18,6 +18,31 @@
 - **历史负向验证（已退役，保留为门禁有效性记录）**：`rel-000` 是 dev-bootstrap 审批，非生产审批（缺 `reviewTransport`、`releaseManifestHash="bootstrap-dev"`）；对 dev-mode ch18 trace 复检 20/23 FAIL 证明门禁会拒绝未审批 dev 产物。当前生产路径不再使用 `rel-000`，该记录仅说明门禁在 dev 产物下正确拒绝。
 - **生产运营节奏**：每次发布前执行 drift check（环境指纹）、release gate（`evaluateProductionReleaseGate`）、加固复检（reverify）；持续归档章节 trace 与状态提交证据；监控 fallback、FailureEnvelope、预算封顶（A 组 soft=6/hard=10）与状态/hash 不一致。任何代码/配置变更后需重新 capture release 并走审批晋级（新 commit 会改变 codeCommit 指纹）。
 
+## Tool Interface Contract v1 验收口径修正 + A 组冻结基线（2026-08-11）
+
+**验收结论（修正后口径）**：当前生产 A 基线（9 专用工具，真实 Gemini route `v2_rawstage2_gemini31`）运行稳定；facade 与 compact envelope 未通过门禁，暂不切换 production pointer。
+
+> ⚠️ 口径修正说明：不得用「6 项指标生产路径均无劣化」描述 B/C 相对 A 的结果。真实报告中 B 相对 A 的 empty/errors/timeouts 为 4 vs 3、invalid sourceRef 为 4 vs 3；C 的 mustVerify 覆盖率为 0.583，低于 A 的 0.667，且 B/C 均 `allPassed=false`。上一版 `reports/tool-interface-baseline.json`（2026-08-07）是零模型调用的确定性 stub（无 seed、无 schemaTokenCost、无真实模型指纹、无 stopRate），**不能**作为 B/C 的「同模型同 seed 同场景」对照基线。因此上述修正口径成立。
+
+**A 组冻结基线**（真实 replay，`reports/phase4-tool-ab-real-gemini/`，route=`v2_rawstage2_gemini31`，provider=gemini31，model=gemini-3.1-pro-preview，temperature=0.72，maxTokens=2048，`gemini_validation` cost profile，`DISABLE_FALLBACK=1`，场景 SC1/SC6/SC7 × seed 0/1，共 6 arm 样本）：
+
+| 指标 | 冻结值 |
+|------|--------|
+| schemaTokenCost | 9208 |
+| mustVerify（avgCoverageRatio） | 0.667 |
+| sourceRefCompleteness | 0.400 |
+| emptyResults | 3 |
+| errors | 3 |
+| timeouts | 3 |
+| stopRate | 0.500（3/6） |
+| truncatedResults | 0 |
+| invalidToolSelections | 0 |
+| parseErrors | 0 |
+| evidenceLevelCounts | confirmed_state=2, exact_chapter_span=2 |
+| firstValidEvidenceLatencyMs | 2 |
+
+**后续研究红线**：进入「上下文压缩/记忆层」研究后，所有压缩方案必须与 A 组冻结基线做**同模型、同 seed、同场景**对照；任一指标不劣化方可通过，不得以历史 stub 基线或跨模型结果替代对照。
+
 ## Phase 1 整改（2026-07-28）
 
 审计发现 P0 回归：风格优化失败时把 Agentic 初稿伪装成优化稿保存（`selectedSource="editorial"` 但实际返回 raw）。Phase 1 整改修复以下问题：

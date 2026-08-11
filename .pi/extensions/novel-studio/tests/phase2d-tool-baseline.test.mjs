@@ -71,9 +71,9 @@ test("Phase 0 · 每个工具能力字段完整且在合法域内", () => {
 });
 
 test("Phase 0 · 全量返回风险工具被正确标记（缺省参数可能返回宽结果）", () => {
-  // query_character_state 未指定 characterId 时可能返回全部角色状态
-  assert.equal(TOOL_CAPABILITIES.query_character_state.canReturnFullData, true);
-  assert.equal(TOOL_CAPABILITIES.query_character_state.maxReturnCount, null);
+  // query_character_state 未指定 characterId 时返回全部角色状态（有界上限 DEFAULT_LIST_LIMIT=50）
+  assert.equal(TOOL_CAPABILITIES.query_character_state.canReturnFullData, false);
+  assert.equal(TOOL_CAPABILITIES.query_character_state.maxReturnCount, 50);
   // search_narrative_evidence 有明确上限，不返回全量
   assert.equal(TOOL_CAPABILITIES.search_narrative_evidence.canReturnFullData, false);
   assert.ok(TOOL_CAPABILITIES.search_narrative_evidence.maxReturnCount > 0);

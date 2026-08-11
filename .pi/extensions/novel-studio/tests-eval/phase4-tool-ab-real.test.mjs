@@ -399,6 +399,33 @@ describe("PHASE4-TOOL-AB-REAL-6：evidenceLevel 累计强度比较", () => {
     );
     assert.ok(pass, "B 在每个累计阈值均不低于 A 时应通过");
   });
+
+  it("B 多做证据收集调用（totalCalls > A）但绝对命中数 ≥ A 时应通过（SC7 双轨制修正）", async () => {
+    const runner = await importRunner();
+    // SC7 真实 replay 场景：A=5 calls 全部返回 confirmed_state+exact_chapter_span，
+    // B=8 calls（模型多做 3 次证据收集），5 次返回 exact_chapter_span。
+    // per-call 率 5/8=0.625 < 5/5=1.0，但绝对命中数 5≥5，不应判为降级。
+    const pass = runner.evidenceLevelsCumulativeNonDegraded(
+      { confirmed: 0, confirmed_state: 5, exact_chapter_span: 5 },
+      5,
+      { confirmed: 0, confirmed_state: 8, exact_chapter_span: 5 },
+      8,
+    );
+    assert.ok(pass, "B 绝对命中数 ≥ A 但 per-call 率较低时不应判为降级（thoroughness 非失败）");
+  });
+
+  it("B 多做调用且用更弱等级顶替更强等级时仍应失败（双轨制不放过反向替代）", async () => {
+    const runner = await importRunner();
+    // B 总 calls=200 但 confirmed_state=0（全靠 exact_chapter_span），A calls=100 全 confirmed_state。
+    // per-call 率和绝对命中数在 confirmed_state 上同时降级 → 仍应失败。
+    const fail = runner.evidenceLevelsCumulativeNonDegraded(
+      { confirmed: 0, confirmed_state: 100, exact_chapter_span: 0 },
+      100,
+      { confirmed: 0, confirmed_state: 0, exact_chapter_span: 200 },
+      200,
+    );
+    assert.equal(fail, false, "B 用更弱等级顶替更强等级时即使总 calls 更多也应失败");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

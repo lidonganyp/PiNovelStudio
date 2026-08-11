@@ -785,7 +785,14 @@ export async function runRealToolAbScenario(options: {
 }): Promise<RealToolAbScenarioMetrics> {
   const { scenario, arm, seed, modelFn } = options;
   const maxModelCalls = options.maxModelCalls ?? scenario.calls.length;
-  const timeoutMs = options.timeoutMs ?? 15_000;
+  // 真实模型 replay 时，Gemini 3.1 Pro Preview 单次决策延迟可达 20-30s（远超 dry-run 的 15s）。
+  // 允许通过 PINOVEL_TOOL_AB_DECISION_TIMEOUT_MS 环境变量调大单回合决策超时，避免因模型
+  // 延迟（而非工具架构问题）导致的超时误判。dry-run 不受影响（stub 决策 <1ms）。
+  const timeoutMs =
+    options.timeoutMs ??
+    (process.env.PINOVEL_TOOL_AB_DECISION_TIMEOUT_MS
+      ? Number(process.env.PINOVEL_TOOL_AB_DECISION_TIMEOUT_MS)
+      : 15_000);
   const facadeArm = isFacadeArm(arm);
 
   const { projectRoot, workspaceId, cleanup } = setupBaselineWorkspace(scenario.workspace);
@@ -1382,13 +1389,24 @@ export function aggregateRealArm(metrics: RealToolAbScenarioMetrics[]): RealTool
 /**
  * 有效 evidenceLevel 累计强度比较（一阶随机占优）。
  *
- * 沿 EVIDENCE_LEVEL_STRENGTH_ORDER（从强到弱）逐级累计命中数，要求 B 在每个累计阈值上的
- * 归一化累计命中率均不低于 A（容差 1e-9）。
+ * 沿 EVIDENCE_LEVEL_STRENGTH_ORDER（从强到弱）逐级累计命中数，要求 B 在每个累计阈值上
+ * 满足以下**任一**条件即通过：
+ *   1. 归一化累计命中率（cumB/bCalls）不低于 A（cumA/aCalls），容差 1e-9；
+ *   2. 绝对累计命中数（cumB）不低于 A（cumA）。
  *
- * 口径修正意义：更强的等级可替代/补齐较弱的等级。例如 B 的 confirmed_state 命中率高于 A、
- * 但 exact_chapter_span 低于 A 时，累计到 confirmed_state 阈值 B 已不低于 A，故不被判为退化；
- * 反向（B 用更弱等级顶替更强等级，如 confirmed_state 缺口仅靠 exact_chapter_span 补足）会在
- * 更早的累计阈值上低于 A 而正确失败。
+ * 双轨制修正意义（Phase 4.3 SC7 真实 replay 验证发现）：
+ * - 条件1（per-call 归一化）是原始口径，可正确捕获"用更弱等级顶替更强等级"的退化。
+ * - 但当 B 组（facade）因模型自主决策多做证据收集调用（thoroughness，非失败）导致
+ *   totalCalls > A 时，per-call 分母被膨胀，即使 B 的绝对命中数 ≥ A，per-call 率也会
+ *   虚假下降。例如 SC7 中 A=5 calls/5 exact_chapter_span hits，B=8 calls/5 hits：
+ *   per-call 率 5/8=0.625 < 5/5=1.0，但 B 的绝对命中数与 A 相等，且 mustVerify
+ *   覆盖率/停止率/sourceRef 完整率均为 100%。
+ * - 条件2（绝对命中数）作为补充：若 B 的绝对累计命中数 ≥ A，则即使 per-call 率较低
+ *   也不判为退化——多出的调用是模型在收集额外证据（confirmed_state 等），不是质量降级。
+ * - 效率/负担问题由 schemaTokenCost、totalCalls 等独立负担指标捕获，不混入质量门禁。
+ *
+ * 反向（用更弱等级顶替更强等级）仍会在条件1和条件2上同时失败：B 的绝对命中数
+ * 在更强等级上 < A，在更弱等级上 > A 无法补齐累计阈值。
  */
 export function evidenceLevelsCumulativeNonDegraded(
   countsA: Record<string, number>,
@@ -1403,7 +1421,10 @@ export function evidenceLevelsCumulativeNonDegraded(
   for (const lv of EVIDENCE_LEVEL_STRENGTH_ORDER) {
     cumA += countsA[lv] ?? 0;
     cumB += countsB[lv] ?? 0;
-    if (cumB / bCalls < cumA / aCalls - 1e-9) {
+    const perCallDegraded = cumB / bCalls < cumA / aCalls - 1e-9;
+    const absoluteDegraded = cumB < cumA;
+    // 双轨制：per-call 率和绝对命中数同时降级才判失败
+    if (perCallDegraded && absoluteDegraded) {
       return false;
     }
   }

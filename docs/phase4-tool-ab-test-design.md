@@ -1,8 +1,14 @@
-# Phase 4 — 工具接口 A/B 实验设计（specialized-9-tools vs typed facade）
+# Phase 4 - 工具接口 A/B 实验设计（specialized-9-tools vs typed facade）
 
-> 状态：**设计评审**（未改生产代码）
+> 状态：**Phase 4 设计评审完成 + Phase 5 受控生产接入已实现 + Gemini 生产路由验证完成**（2026-08-11 更新）
 > 前置：Phase 3.1 收口已完成（`e7db26c`，tool_visibility trajectory 全链路核对通过）
-> 本文档为 Phase 4 A/B 实验的**设计契约**，先评审后实现。全文不涉及生产代码改动。
+> 本文档原为 Phase 4 A/B 实验的**设计契约**。Phase 4.3 设计评审已通过，Phase 5（§9）已实现受控生产接入（runtime facade `query_narrative_production`，仅 canary opt-in，默认生产仍为 9 专用工具）。
+>
+> **Gemini 生产路由验证（2026-08-11）**：
+> - **SC7 单场景 5 seed**（`reports/phase4-tool-ab-real-gemini-v2/`）：B 组在 mustVerify 覆盖率（1.000）、有效证据引用率（1.000）、停止率（100%）、失败行为上**全面与 A 组持平**，schema token 改善 21.5%。
+> - **全场景 3 seed**（SC1/SC6/SC7，`reports/phase4-tool-ab-real-gemini-full/`）：B 组 mustVerify 覆盖率稳定 1.000，但 SC7 出现 sourceRef 降级（0.600 vs 1.000）、空结果 4 次、非法 intent 4 次。两次 replay 的 SC7 结果差异表明 **B 组在 Gemini 下的表现存在 seed 级方差**，尚不具备生产晋级稳定性。
+> - **evidenceLevel 门禁双轨制修正**：per-call 率 + 绝对命中数同时降级才判失败（详见 §8 ADR）。修正后 evidenceLevel 门禁通过，但 sourceRef/empty 门禁仍失败。
+> - **生产准入决策**：保留 9 专用工具为默认生产注入；受引导 facade 保持 canary opt-in，不晋级为默认。
 
 ---
 
@@ -136,12 +142,15 @@ Phase 4 评估一个假设：**9 个 narrow 工具是否比单个 typed facade �
 3. 复用确定性阶段指标采集，聚合均值 / 分布。
 4. 产出对比报告，供人工审阅。
 
-### Phase 4.3 — 生产接入设计评审（设计稿，非实现）
+### Phase 4.3 - 生产接入设计评审（设计稿，已于 Phase 5 实现）
 
-> **范围与边界声明（硬约束）**：本阶段是**设计评审**，产出受控接入蓝图，**不实现、不注册、不切换**。
-> - `query_narrative` 保持 **eval-only**（`novelos/eval/typed-facade-tool.ts`），既不进入 `tools/register-tools.ts` 的 6 公开工具，也不进入 `createNarrativeTools`（`novelos/tools/narrative-tools.ts`）。
-> - 统一主链路（`novel_generate_chapter`）**不被切换**；生产 NovelOS Agentic 仍注入 9 专用工具。
-> - 本设计仅作为未来独立接入 Phase 的实现蓝图，须经后续独立 Phase 实现并再次评审后才可落地。
+> **范围与边界声明**：本阶段原为**设计评审**，产出受控接入蓝图。
+> **更新（2026-08-08）**：Phase 5（§9）已按本蓝图实现受控生产接入--runtime facade 变体
+> `query_narrative_production` 进入生产闭包（`tsconfig.prod.json` -> `dist/`），仅在 canary
+> workspace 显式 opt-in（`toolMode="facade"`）时注册。默认生产仍为 9 专用工具，**未全量切换**。
+> - eval-only 的 `query_narrative`（`novelos/eval/typed-facade-tool.ts`）仍保持 eval-only，不进入 `dist/`。
+> - 统一主链路（`novel_generate_chapter`）**未被切换**；生产 NovelOS Agentic 默认仍注入 9 专用工具。
+> - 本设计作为 Phase 5 实现的蓝图，Phase 5 已完成受控接入实现与验证（详见 §9）。
 
 **4.3.1 生产接入点（注入路径）**
 
@@ -192,18 +201,20 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 
 - [x] 真实 replay（GLM/Doubao，`fallback=[]`）在**稳定 commit** 上全门禁通过，含修正后 evidenceLevel 口径（`rankedEvidenceLevels` + `evidenceLevelsCumulativeNonDegraded` 累计强度比较）与 `empty/truncated` 逐场景门禁。
   - 2026-08-08：证据等级门禁从逐级独立比较修正为累计强度比较（commit `9702eef`），并在 `reports/phase4-real-glm-full-v3/` 补跑 3 场景 × 3 seed 真实 replay（glm-5.2，`fallback=[]`）→ `allPassed=true`。修正后 real replay 门禁不再阻断，Phase 4.3 设计评审条件满足；**仍不切生产**，生产接入须等独立实现 + 生产 canary + G6 全通过。
-- [ ] 若需把"intent 引导"与"接口形态"解耦，补跑**无 `INTENT_USAGE` 的 B0 facade 对照**，否则结论归属保持"受引导的 facade vs 9 工具"。
-- [ ] 本设计评审通过后，才可进入独立实现 Phase（届时仍须保持"不注册公开工具、不切换统一主链路"直到生产 canary + G6 全通过）。
+- [x] 若需把"intent 引导"与"接口形态"解耦，补跑**无 `INTENT_USAGE` 的 B0 facade 对照**，否则结论归属保持"受引导的 facade vs 9 工具"。
+  - 2026-08-09：B0 对照已在 `reports/phase4-real-glm-b0-v1/` 至 `v3` 多轮 replay 中完成。B0（无引导）在全部场景全面恶化，确认"引导是 facade 价值的必要前提"。
+- [x] 本设计评审通过后，才可进入独立实现 Phase（届时仍须保持"不注册公开工具、不切换统一主链路"直到生产 canary + G6 全通过）。
+  - 2026-08-08：Phase 5（§9）已按蓝图实现受控生产接入。runtime facade `query_narrative_production` 进入生产闭包，仅 canary opt-in 注册，默认生产仍为 9 专用工具。
 
 ---
 
 ## 7. 验收产物
 
-- [ ] `novelos/eval/tool-ab-runner.ts`（eval-only，A/B 双 runner）
-- [ ] `novelos/eval/typed-facade-tool.ts`（eval-only，B 组 facade，复用现有工具）
-- [ ] `tests-eval/phase4-tool-ab.test.mjs`（确定性断言：底线不降级 + 指标可提取）
-- [ ] `reports/phase4-tool-ab/`（确定性 + 真实模型对比报告，含 trajectory 副本）
-- [ ] 本设计评审通过后，先提交 Phase 4.1 实现（RED/GREEN 分开提交）
+- [x] `novelos/eval/tool-ab-runner.ts`（eval-only，A/B 双 runner）
+- [x] `novelos/eval/typed-facade-tool.ts`（eval-only，B 组 facade，复用现有工具）
+- [x] `tests-eval/phase4-tool-ab.test.mjs`（确定性断言：底线不降级 + 指标可提取）
+- [x] `reports/phase4-tool-ab/`（确定性 + 真实模型对比报告，含 trajectory 副本）
+- [x] 本设计评审通过后，Phase 4.1 实现 + Phase 5 受控生产接入均已提交（详见 §9）
 
 ---
 
@@ -226,6 +237,9 @@ registry.getToolsForRole("agent")   // narrative-tool-registry.ts，来源 creat
 | eating-canary: SC1 修复后受引导 facade 达到"全覆盖 + 高停止率 + 低负担"三优，但需全场景复验方能晋级（Phase 4.2） | SC1 定向重跑证明早终止问题已解决；但本轮仅重跑 SC1（1 场景），未覆盖 SC6/SC7。B0 在 v2 仍全面恶化（引用率 0.667、空结果 3、非法工具 3、停止率 0%），纯单入口界面仍不成立。**9 工具仍为默认**；是否晋级 facade 需对 SC6/SC7 全场景真实 canary 复验，且评估 evidenceLevel 偏好差异是否可接受 |
 | eating-canary: 全场景复验最终结论——**保留 9 专用工具为默认**，受控 opt-in facade 已无覆盖回归风险（Phase 4.2，2026-08-09） | 合并 `phase4-real-glm-b0-v2`（SC1）+ `v3`（SC6/SC7）全 3 场景真实 canary（glm-5.2×3 seed×A/B/B0）：修复后 B 的 mustVerify 覆盖**全场景全 seed 稳定 1.000 = A**（不再回归），停止率与 A 持平（SC1=100%、SC6/SC7=67%），失败行为（空结果/截断/错误/超时/非法工具）全部不恶化。但 B 在 SC7 有效证据引用率略逊 A（0.727 vs 0.833）、无效 sourceRef 微增（no_match 3 vs 1），系引导让模型对无需检索项也发起 evidence 查询的**查询精度差异，非覆盖缺陷**；SC1 的 `exact_chapter_span` 命中率差异同为引导偏好。B0 无引导在全部场景仍全面恶化（引用率 0.500、空结果/非法工具 3、SC7 门禁 FAIL）→ 纯单入口界面不成立，**引导是 facade 价值的必要前提**。决策：**保留 9 专用工具为默认生产注入**；修复后的受控 opt-in facade 因覆盖稳定可作显式选用的复用路径，但无数据支持晋升为默认或混合结构 |
 | eating-canary: B-safe 混合接口未通过门禁，协议纠正收益不稳定（Phase 5.3.3，2026-08-09） | B-safe = B0 facade（无引导）+ 协议层纠正（3 层策略：已知工具名映射 / 未知工具名+args含合法intent路由 / 工具名合法但intent非法→`inferIntentFromArgs`推断）+ 空结果 bounded retry。4 次独立 replay（glm-5.2，3 场景×3 seed×3 arm×3 批次）覆盖率高度波动（0.926/0.951/0.778/0.877），平均 0.883 ≈ B0 0.877（+0.6%），未证明稳定正向收益。门禁 4/4 FAIL：Run3 覆盖率/sourceRef 降级（0.778<0.877），Run4 invalidIntents 超容差（4>1+1）。协议纠正被触发（correctedToolSelections 2-5）但无法稳定通过门禁。结论：**B-safe 不作为生产方案**，保留 9 专用工具为默认 |
+| Gemini 生产路由 SC7 验证：受引导 facade 全质量指标与 9 工具持平，负担显著改善（Phase 4.3，2026-08-11） | 使用 Gemini 3.1 Pro Preview（`v2_rawstage2_gemini31`，当前生产默认 writer）对最复杂场景 SC7-multi-tool-mixed 做 5 seed 真实 A/B/B0/C replay（`reports/phase4-tool-ab-real-gemini-v2/`）。**B 组全质量指标 = A 组**：mustVerify 覆盖 1.000=1.000、有效证据引用率 1.000=1.000、停止率 100%=100%、零 errors/timeouts/empty/非法工具/解析失败。**负担改善**：schema token 8918 < 11370（−21.5%）、首证据延迟 1.4ms < 1.8ms。B0（无引导）在 SC7 仍全面恶化（引用率 0.450、非法 intent 11、停止率 40%）→ 引导仍是必要前提。C（envelope）引用率 0.889 < 1.000、停止率 80% < 100% → envelope 剪裁有损 |
+| evidenceLevel 门禁双轨制修正：per-call 率 + 绝对命中数同时降级才判失败（Phase 4.3，2026-08-11） | SC7 Gemini replay 发现 `evidenceLevelsCumulativeNonDegraded` 在 `exact_chapter_span` 上误判 B 降级：A=5 calls/5 hits（per-call 1.0），B=8 calls/5 hits（per-call 0.625）。B 多出的 3 次调用是模型自主证据收集（thoroughness），返回 `confirmed_state`（有效证据），非失败。修正：双轨制——per-call 率和绝对命中数**同时**降级才判失败。修正后 B vs A evidenceLevel 门禁从 ✗ 变为 ✓。效率/负担由 `schemaTokenCost`/`totalCalls` 独立捕获，不混入质量门禁。测试 `tests-eval/phase4-tool-ab-real.test.mjs` 新增 2 个用例验证双轨制行为 |
+| Gemini 全场景验证最终结论——**保留 9 专用工具为默认，facade 保持 canary opt-in 不晋级**（Phase 4.3，2026-08-11） | 全场景 3 seed replay（SC1/SC6/SC7，`reports/phase4-tool-ab-real-gemini-full/`）：B 组 mustVerify 覆盖率稳定 1.000（全覆盖），但 SC7 出现 sourceRef 降级（0.600 vs A=1.000）、空结果 4 次（A=0）、非法 intent 4 次（A=0）。SC7 单场景 5 seed replay（`reports/phase4-tool-ab-real-gemini-v2/`）中 B 组这些指标均为 0/1.000。两次 replay 的 SC7 结果差异表明 **Gemini 3.1 Pro Preview 在 facade 形态下存在 seed 级方差**：部分 seed 下模型会生成非法 intent（如 `query` 未填或填错）并触发空结果，而 9 专用工具形态不受影响。决策：**9 专用工具保持默认生产注入**；受引导 facade 保持 canary opt-in 路径，不晋级为默认。后续改进方向：(1) facade 空结果自动重试（当前 B-safe 已尝试但不稳定）；(2) intent 参数 schema 加严（必填校验）；(3) 扩大 seed 样本至 10+ 统计方差 |
 
 ---
 

@@ -98,23 +98,33 @@ const mod = await import(MODULE_PATH);
 const mode = values.mode === "real" ? "real" : "dry-run";
 let modelFn = undefined;
 if (mode === "real") {
-  // 项目记忆硬约束：临时/批量测试只用 GLM/Doubao，必须 PINOVEL_DISABLE_FALLBACK=1
-  // + PINOVEL_BENCHMARK_COST_PROFILE=package_screening（provider allowlist 守卫）。
+  const route = values.route ?? process.env.PINOVEL_TOOL_AB_ROUTE ?? "narrator_testing_glm";
+
+  // Gemini 生产 route（默认生产 writer provider=gemini31）。Phase 3 Tool Interface
+  // Contract v1 验收：用默认 Gemini 生产 route 做真实 replay，验证 mustVerify/sourceRef/
+  // evidenceLevel/empty/truncated/errors/timeouts 均不劣化。显式授权后允许。
+  // `gemini_validation` cost profile 只放行 gemini31 provider，并强制禁用 fallback。
+  const GEMINI_ROUTES = new Set(["v2_rawstage2_gemini31", "v2_amplified_gemini31"]);
+  const isGemini = GEMINI_ROUTES.has(route);
+
+  // 项目记忆硬约束：临时/批量测试必须 PINOVEL_DISABLE_FALLBACK=1
+  // + PINOVEL_BENCHMARK_COST_PROFILE（provider allowlist 守卫）。
+  // - GLM/Doubao → package_screening（只允许 glm/doubao）
+  // - Gemini 生产 route → gemini_validation（只允许 gemini31）
   process.env.PINOVEL_PROJECT_ROOT = PROJECT_ROOT;
   process.env.PINOVEL_DISABLE_FALLBACK = "1";
-  process.env.PINOVEL_BENCHMARK_COST_PROFILE = "package_screening";
+  process.env.PINOVEL_BENCHMARK_COST_PROFILE = isGemini ? "gemini_validation" : "package_screening";
 
-  // 显式授权开关：real 模式必须显式 --require-auth 确认 GLM/Doubao 临时授权，
+  // 显式授权开关：real 模式必须显式 --require-auth 确认模型临时授权，
   // 防止在未授权情况下无意识触发真实模型计费调用。
   if (!values["require-auth"]) {
     log("real 模式拒绝执行：未传入 --require-auth 显式授权开关。");
-    log("请确认已获 GLM/Doubao 临时调用授权，并显式加 --require-auth 后重试。");
+    log("请确认已获 GLM/Doubao/Gemini 临时调用授权，并显式加 --require-auth 后重试。");
     process.exit(1);
   }
 
-  // route allowlist：仅允许 GLM/Doubao 测试路由（provider-gated），
-  // 禁止用户凭 --route 指定按量模型（GPT/Claude）或其他生产路由。
-  const route = values.route ?? process.env.PINOVEL_TOOL_AB_ROUTE ?? "narrator_testing_glm";
+  // route allowlist：仅允许 GLM/Doubao 测试路由 + 显式 Gemini 生产 route（provider-gated），
+  // 禁止用户凭 --route 指定其他按量模型（GPT/Claude）或未列出的生产路由。
   const REAL_ROUTE_ALLOWLIST = new Set([
     "narrator_testing_glm", // glm-5.2
     "narrator_testing", // doubao-seed-2-1-pro
@@ -128,14 +138,15 @@ if (mode === "real") {
     "nb4_generate_doubao",
     "nb4_judge_doubao",
     "nb5_judge_doubao",
+    ...GEMINI_ROUTES, // v2_rawstage2_gemini31 / v2_amplified_gemini31（默认 Gemini 生产 writer）
   ]);
   if (!REAL_ROUTE_ALLOWLIST.has(route)) {
-    log(`real 模式拒绝执行：路由 "${route}" 不在 GLM/Doubao 测试 allowlist 内。`);
+    log(`real 模式拒绝执行：路由 "${route}" 不在 allowlist 内。`);
     log(`允许路由：${[...REAL_ROUTE_ALLOWLIST].join(", ")}`);
     process.exit(1);
   }
 
-  log(`--mode real：注入真实模型决策 fn（route=${route}，GLM/Doubao 授权，DISABLE_FALLBACK=1）`);
+  log(`--mode real：注入真实模型决策 fn（route=${route}，${isGemini ? "Gemini 生产 route" : "GLM/Doubao"}授权，DISABLE_FALLBACK=1，costProfile=${process.env.PINOVEL_BENCHMARK_COST_PROFILE}）`);
   modelFn = await mod.createRealToolAbModelDecide({
     route,
     maxTokens: values.maxTokens ? Number(values.maxTokens) : 2048,
