@@ -4,7 +4,7 @@
   "productionRoutingChanged": false,
   "productionPointerChanged": false,
   "probeDate": "2026-08-11T09:56:15Z",
-  "probeScriptCommit": "pending (this commit)",
+  "probeScriptCommit": "5bc0eb9",
   "model": "gemini-3.1-pro-preview",
   "endpoint": "https://api.solov.cc/v1/chat/completions",
   "endpointSource": "GOOGLE_GEMINI_BASE_URL env (third-party proxy)",
@@ -45,17 +45,18 @@
   },
   "conclusion": {
     "verdict": "NOT_EFFECTIVE_THROUGH_PROXY",
-    "summary": "当前第三方代理（api.solov.cc）不支持 Gemini reasoning control 参数。参数被静默接受但不生效，无法通过 reasoning_effort/thinking_budget 控制 evidence_decision 的隐藏 thinking token 消耗。",
+    "summary": "当前 api.solov.cc 第三方 OpenAI-compatible 代理不支持 reasoning_effort/thinking_budget 控制。参数被静默接受但不生效。此结论仅限定于当前代理端点，不扩大解释为 Gemini 原生 API 不支持；若未来更换 provider 或 endpoint，必须重新探测。",
     "implications": [
-      "不能通过 reasoning_effort/thinking_budget 降低 evidence_decision 的 token 消耗",
-      "baseline v2 中 9 次 evidence_decision 共消耗 136,106 token 的隐藏 thinking token 无法通过 API 参数控制",
+      "不能通过当前代理的 reasoning_effort/thinking_budget 降低 evidence_decision 的 token 消耗",
+      "baseline v2 中 9 次 evidence_decision 共消耗 136,106 token 的隐藏 thinking token 无法通过当前代理的 API 参数控制",
       "completion_tokens（1245-1805）远超 maxTokens=512，证实隐藏 thinking token 被计入 completion",
       "需探索替代方案：prompt 简化、减少 evidence_decision 调用次数、或切换到支持 reasoning control 的端点"
     ],
     "nextSteps": [
-      "不进入基于 reasoning_effort/thinking_budget 的正式 A/B",
+      "不进入基于 reasoning_effort/thinking_budget 的正式 A/B（当前代理端点）",
       "不修改生产路由或 production pointer",
-      "考虑替代预算优化方向：prompt 精简、结构化输出约束、或 evidence_decision 调用频率优化"
+      "若未来更换 provider 或 endpoint，必须重新探测 reasoning control 参数有效性",
+      "转向 evidence_decision prompt inventory 和最小 prompt 压缩候选"
     ]
   },
   "rawReportPath": "reports/reasoning-budget-baseline/capability-probe.json",

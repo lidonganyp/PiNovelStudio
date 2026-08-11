@@ -1,6 +1,6 @@
 # 思考/推理预算研究 — Phase 1 统一主链路基线
 
-> 状态：**Phase 1 baseline v1（3 章 / 1 workspace）已冻结**（2026-08-11）；**Phase 1 baseline v2（9 章 / 2 workspaces）已冻结**（2026-08-11）；**Gemini reasoning-control capability probe 已完成**（2026-08-11，21 次真实调用，结论：当前代理端点不支持 reasoning control 参数）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。**capability probe 证明 reasoning_effort/thinking_budget 在当前代理端点不生效，不进入基于该参数的 A/B；替代预算方向见 §9.4。**
+> 状态：**Phase 1 baseline v1（3 章 / 1 workspace）已冻结**（2026-08-11）；**Phase 1 baseline v2（9 章 / 2 workspaces）已冻结**（2026-08-11）；**Gemini reasoning-control capability probe 已完成**（2026-08-11，21 次真实调用，结论：当前 `api.solov.cc` 代理不支持 reasoning_effort/thinking_budget 控制，不扩大为 Gemini 原生 API 不支持）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。**capability probe 证明 reasoning_effort/thinking_budget 在当前代理端点不生效，不进入基于该参数的 A/B；若未来更换 provider 或 endpoint 必须重新探测。替代预算方向见 §9.4。**
 
 ## 1. 目标
 
@@ -292,7 +292,9 @@ baseline v2 数据显示，固定每章一次的 `novelos_evidence_decision` 调
 
 ### 9.4 结论
 
-**判定：NOT_EFFECTIVE_THROUGH_PROXY — 当前代理端点不支持 reasoning control 参数。**
+**判定：NOT_EFFECTIVE_THROUGH_PROXY - 当前 `api.solov.cc` 第三方 OpenAI-compatible 代理不支持 reasoning_effort/thinking_budget 控制。**
+
+> 此结论仅限定于当前代理端点，不扩大解释为 Gemini 原生 API 不支持。若未来更换 provider 或 endpoint，必须重新探测。
 
 **证据**：
 
