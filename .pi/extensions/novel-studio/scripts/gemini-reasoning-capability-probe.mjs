@@ -23,10 +23,27 @@
  *     运行前必须获得用户对预估成本的确认。
  */
 import { parseArgs } from "node:util";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// ── .env 加载（与 probe-gemini-health.mjs / index.ts 一致的手动解析）────────
+// 探测脚本是独立进程，不经过 index.ts，必须自行加载 .env。
+const __filename = fileURLToPath(import.meta.url);
+const SCRIPT_DIR = resolve(__filename, "..");
+const EXTENSION_ROOT = resolve(SCRIPT_DIR, "..");
+const PROJECT_ROOT = resolve(EXTENSION_ROOT, "..", "..", "..");
+const ENV_PATH = join(PROJECT_ROOT, ".env");
+try {
+  const envContent = readFileSync(ENV_PATH, "utf-8");
+  for (const line of envContent.split("\n")) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
+  }
+} catch {
+  // .env 不存在时静默跳过（依赖环境变量已在外部设置）
+}
 
 const { values } = parseArgs({
   options: {
@@ -55,24 +72,37 @@ if (values.help) {
   process.exit(0);
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const SCRIPT_DIR = resolve(__filename, "..");
-const EXTENSION_ROOT = resolve(SCRIPT_DIR, "..");
-const PROJECT_ROOT = resolve(EXTENSION_ROOT, "..", "..", "..");
 const OUTPUT_DIR = values.output
   ? resolve(values.output)
   : join(PROJECT_ROOT, "reports", "reasoning-budget-baseline");
 
 const SAMPLES = Math.max(1, parseInt(values.samples, 10) || 3);
 
-const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
-const GEMINI_MODEL = "gemini-3.1-pro-preview";
+// ── Gemini 端点解析 ──────────────────────────────────────────────────────
+// 优先使用 GOOGLE_GEMINI_BASE_URL（第三方代理，OpenAI 兼容 /v1/chat/completions 路径），
+// 与生产 fallback-manager.ts 的 getBaseUrl("google_gemini") 一致。
+// 无代理时回退到 Google 官方 OpenAI 兼容端点 /v1beta/openai/chat/completions。
+const GEMINI_PROXY_BASE = process.env.GOOGLE_GEMINI_BASE_URL;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-pro-preview";
 const API_KEY = process.env.GEMINI_API_KEY;
+
+let GEMINI_ENDPOINT;
+if (GEMINI_PROXY_BASE) {
+  // 代理走 OpenAI 标准路径 /v1/chat/completions
+  const base = GEMINI_PROXY_BASE.replace(/\/+$/, "");
+  GEMINI_ENDPOINT = `${base}/v1/chat/completions`;
+} else {
+  // Google 官方 OpenAI 兼容端点
+  GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+}
 
 if (!API_KEY) {
   console.error("GEMINI_API_KEY 环境变量未设置");
   process.exit(1);
 }
+
+// 超时控制：与生产 PINOVEL_MODEL_REQUEST_TIMEOUT_MS 一致，默认 300000ms
+const REQUEST_TIMEOUT_MS = parseInt(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS || "300000", 10);
 
 function log(msg) {
   process.stderr.write(`[capability-probe] ${msg}\n`);
@@ -174,7 +204,7 @@ if (Object.keys(configs).length === 0) {
 const totalCalls = Object.keys(configs).length * SAMPLES;
 log(`配置数: ${Object.keys(configs).length}, 每配置采样: ${SAMPLES}, 总调用: ${totalCalls}`);
 log(`模型: ${GEMINI_MODEL}`);
-log(`端点: ${GEMINI_BASE_URL}chat/completions`);
+log(`端点: ${GEMINI_ENDPOINT}`);
 log(`预估成本: 见设计文档`);
 
 // ── 单次调用 ────────────────────────────────────────────────────────────
@@ -193,27 +223,33 @@ async function callGemini(configName, config, sampleIndex) {
 
   const startMs = Date.now();
   let response, error = null;
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
-    response = await fetch(`${GEMINI_BASE_URL}chat/completions`, {
+    response = await fetch(GEMINI_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${API_KEY}`,
       },
       body: JSON.stringify(requestBody),
+      signal: ctrl.signal,
     });
   } catch (err) {
     error = err;
+  } finally {
+    clearTimeout(timeout);
   }
 
   const elapsedMs = Date.now() - startMs;
 
   if (error) {
+    const errMsg = error.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS}ms` : error.message;
     return {
       config: configName,
       sample: sampleIndex,
       status: "network_error",
-      error: error.message,
+      error: errMsg,
       elapsedMs,
       requestBody: { ...requestBody, Authorization: "[redacted]" },
     };
@@ -287,7 +323,7 @@ const summary = {
   probeType: "gemini-reasoning-control-capability",
   evalOnly: true,
   model: GEMINI_MODEL,
-  endpoint: `${GEMINI_BASE_URL}chat/completions`,
+  endpoint: GEMINI_ENDPOINT,
   systemPromptHash: createHash("sha256").update(SYSTEM_PROMPT).digest("hex"),
   userPromptHash: createHash("sha256").update(USER_PROMPT).digest("hex"),
   configuredMaxTokens: 512,
@@ -350,7 +386,7 @@ L.push("# Gemini Reasoning-Control Capability Probe");
 L.push("");
 L.push("- **eval-only**：不修改生产路由、不进入 novel_generate_chapter 路径");
 L.push(`- 模型: \`${GEMINI_MODEL}\``);
-L.push(`- 端点: \`${GEMINI_BASE_URL}chat/completions\``);
+L.push(`- 端点: \`${GEMINI_ENDPOINT}\``);
 L.push(`- 每配置采样: ${SAMPLES}，总调用: ${totalCalls}`);
 L.push(`- 固定 max_tokens=512, temperature=0.72（与生产 evidence_decision 一致）`);
 L.push("");

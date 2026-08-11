@@ -1,0 +1,63 @@
+{
+  "probeType": "gemini-reasoning-control-capability",
+  "evalOnly": true,
+  "productionRoutingChanged": false,
+  "productionPointerChanged": false,
+  "probeDate": "2026-08-11T09:56:15Z",
+  "probeScriptCommit": "pending (this commit)",
+  "model": "gemini-3.1-pro-preview",
+  "endpoint": "https://api.solov.cc/v1/chat/completions",
+  "endpointSource": "GOOGLE_GEMINI_BASE_URL env (third-party proxy)",
+  "configuredMaxTokens": 512,
+  "configuredTemperature": 0.72,
+  "samplesPerConfig": 3,
+  "totalCalls": 21,
+  "allCallsSucceeded": true,
+  "systemPromptHash": "749e3aca1c186507a717fcd272f847c21f46cabe65657ac20e1a19421efe9d21",
+  "userPromptHash": "62f0302e81be3a1c278fcab323fbc914a8befc7f257c21ce6f1486d8360d9c32",
+  "configs": {
+    "baseline": { "label": "无 reasoning control（当前生产行为）", "extra": {} },
+    "reasoning_effort_low": { "label": "reasoning_effort=low", "extra": { "reasoning_effort": "low" } },
+    "reasoning_effort_medium": { "label": "reasoning_effort=medium", "extra": { "reasoning_effort": "medium" } },
+    "reasoning_effort_high": { "label": "reasoning_effort=high", "extra": { "reasoning_effort": "high" } },
+    "thinking_budget_0": { "label": "thinking_budget=0（禁用 thinking）", "extra": { "thinking_budget": 0 } },
+    "thinking_budget_1024": { "label": "thinking_budget=1024", "extra": { "thinking_budget": 1024 } },
+    "reasoning_effort_low_maxtok_512": { "label": "reasoning_effort=low + max_tokens=512", "extra": { "reasoning_effort": "low" }, "maxTokensOverride": 512 }
+  },
+  "perConfigSummary": [
+    { "config": "baseline", "ok": 3, "jsonValid": 2, "completionAvg": 1436, "completionRange": "1322-1515", "reasoningAvg": null, "cachedAvg": null, "latencyAvgMs": 15454, "latencyRangeMs": "14601-16471" },
+    { "config": "reasoning_effort_low", "ok": 3, "jsonValid": 2, "completionAvg": 1543, "completionRange": "1349-1681", "reasoningAvg": null, "cachedAvg": null, "latencyAvgMs": 16108, "latencyRangeMs": "15530-16833" },
+    { "config": "reasoning_effort_medium", "ok": 3, "jsonValid": 2, "completionAvg": 1450, "completionRange": "1325-1542", "reasoningAvg": null, "cachedAvg": null, "latencyAvgMs": 16862, "latencyRangeMs": "13689-22263" },
+    { "config": "reasoning_effort_high", "ok": 3, "jsonValid": 1, "completionAvg": 1328, "completionRange": "1245-1431", "reasoningAvg": null, "cachedAvg": null, "latencyAvgMs": 15381, "latencyRangeMs": "14096-16805" },
+    { "config": "thinking_budget_0", "ok": 3, "jsonValid": 3, "completionAvg": 1647, "completionRange": "1404-1805", "reasoningAvg": null, "cachedAvg": null, "latencyAvgMs": 16050, "latencyRangeMs": "13780-17210" },
+    { "config": "thinking_budget_1024", "ok": 3, "jsonValid": 3, "completionAvg": 1659, "completionRange": "1488-1781", "reasoningAvg": null, "cachedAvg": null, "latencyAvgMs": 17133, "latencyRangeMs": "15014-18866" },
+    { "config": "reasoning_effort_low_maxtok_512", "ok": 3, "jsonValid": 1, "completionAvg": 1608, "completionRange": "1478-1697", "reasoningAvg": null, "cachedAvg": null, "latencyAvgMs": 16634, "latencyRangeMs": "15381-18076" }
+  ],
+  "keyFindings": {
+    "parametersAccepted": true,
+    "parametersEffective": false,
+    "reasoningTokensReturned": false,
+    "cachedTokensReturned": false,
+    "completionExceedsMaxTokens": true,
+    "completionRangeAll": "1245-1805",
+    "maxTokensConfigured": 512,
+    "explanation": "代理端点静默接受 reasoning_effort/thinking_budget 参数（无 HTTP 错误），但不返回 completion_tokens_details/prompt_tokens_details，且 completion_tokens 无一致性规律（reasoning_effort_high 反而低于 baseline，thinking_budget_0 反而高于 baseline），delta 均在噪声范围内。参数未真正生效。"
+  },
+  "conclusion": {
+    "verdict": "NOT_EFFECTIVE_THROUGH_PROXY",
+    "summary": "当前第三方代理（api.solov.cc）不支持 Gemini reasoning control 参数。参数被静默接受但不生效，无法通过 reasoning_effort/thinking_budget 控制 evidence_decision 的隐藏 thinking token 消耗。",
+    "implications": [
+      "不能通过 reasoning_effort/thinking_budget 降低 evidence_decision 的 token 消耗",
+      "baseline v2 中 9 次 evidence_decision 共消耗 136,106 token 的隐藏 thinking token 无法通过 API 参数控制",
+      "completion_tokens（1245-1805）远超 maxTokens=512，证实隐藏 thinking token 被计入 completion",
+      "需探索替代方案：prompt 简化、减少 evidence_decision 调用次数、或切换到支持 reasoning control 的端点"
+    ],
+    "nextSteps": [
+      "不进入基于 reasoning_effort/thinking_budget 的正式 A/B",
+      "不修改生产路由或 production pointer",
+      "考虑替代预算优化方向：prompt 精简、结构化输出约束、或 evidence_decision 调用频率优化"
+    ]
+  },
+  "rawReportPath": "reports/reasoning-budget-baseline/capability-probe.json",
+  "rawMarkdownPath": "reports/reasoning-budget-baseline/capability-probe.md"
+}

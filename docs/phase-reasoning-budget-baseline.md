@@ -1,6 +1,6 @@
 # 思考/推理预算研究 — Phase 1 统一主链路基线
 
-> 状态：**Phase 1 baseline v1（3 章 / 1 workspace）已冻结**（2026-08-11）；**Phase 1 baseline v2（9 章 / 2 workspaces）已冻结**（2026-08-11）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。**baseline v2 完成后，再基于跨 workspace 分布设计第一个预算候选；在此之前不修改生产预算或 production pointer。**
+> 状态：**Phase 1 baseline v1（3 章 / 1 workspace）已冻结**（2026-08-11）；**Phase 1 baseline v2（9 章 / 2 workspaces）已冻结**（2026-08-11）；**Gemini reasoning-control capability probe 已完成**（2026-08-11，21 次真实调用，结论：当前代理端点不支持 reasoning control 参数）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。**capability probe 证明 reasoning_effort/thinking_budget 在当前代理端点不生效，不进入基于该参数的 A/B；替代预算方向见 §9.4。**
 
 ## 1. 目标
 
@@ -213,13 +213,15 @@ node scripts/reasoning-budget-baseline.mjs --dir <目录>    # 递归扫描 *-qu
 ## 7. 下一步
 
 - **Phase 1 baseline v1 与 v2 均已冻结**。v2 覆盖 9 章、2 workspaces，跨 workspace 分布已记录。
-- **设计第一个预算候选（尚未启用）**：基于以下跨 workspace 分布观察，提出候选"思考/推理预算"策略，再进入 A/B 验证；**在候选设计完成前不修改生产预算或 production pointer**。
-- 候选方向（基于 v2 分布）：
+- **Gemini reasoning-control capability probe 已完成**（§9）：当前代理端点不支持 `reasoning_effort` / `thinking_budget` 参数，不进入基于该参数的 A/B。
+- **替代预算候选方向（尚未启用）**：基于 v2 分布观察 + capability probe 结论，提出候选预算策略；**在候选设计完成前不修改生产预算或 production pointer**。
+- 候选方向（基于 v2 分布 + probe 结论）：
   - **上下文规模是首要驱动**：`xinmo-eval` 输入 token/章约 42.5k（每章 4 次调用），`fuben-eval` 约 19k（3 次调用）。预算候选应优先针对 **NovelOS Agentic 的输入 token 预算**（其占阶段耗时 58.5%），而非单一调用次数上限。
   - **`agentic_raw` 检索轮次差异**：`xinmo-eval` 多数章节 2 次 `agentic_raw`，`fuben-eval` 全部 1 次。候选可评估是否按上下文规模/证据充分度阈值化 `agentic_raw` 的检索轮次上限（当前无上限，soft model budget 6/hard 10 未触顶）。
   - **作者风格优化**：每章固定 1 次，输入约 4.2k、输出约 8.3k，占耗时 41.3%；可考虑输出长度预算（soft/hard）。
   - **模型预算未触顶**：soft=6/hard=10 全部 `capped=false`，当前无调用次数压力；预算策略应关注 **token 成本**而非调用次数。
-  - **未来 `reasoning_tokens`**：如 provider 开始返回细分，需评估 reasoning 占比对预算成本的影响（当前全部留空）。
+  - **reasoning_effort / thinking_budget 不可用**（§9 probe 结论）：不能通过 API 参数控制 evidence_decision 的隐藏 thinking token 消耗；需从 prompt 精简、结构化输出约束、或 evidence_decision 调用频率方向探索。
+  - **端点切换可能性**：如需 reasoning control 能力，需评估直连 Google 官方端点或切换到支持 reasoning token 细分的代理（当前 `api.solov.cc` 不返回 `completion_tokens_details` / `prompt_tokens_details`）。
 
 ## 8. 产物索引
 
@@ -229,3 +231,91 @@ node scripts/reasoning-budget-baseline.mjs --dir <目录>    # 递归扫描 *-qu
 - 采集脚本：`.pi/extensions/novel-studio/scripts/reasoning-budget-real-baseline.mjs`
 - 聚合脚本：`.pi/extensions/novel-studio/scripts/reasoning-budget-baseline.mjs`
 - 采集元数据：`reports/reasoning-budget-baseline/real-baseline-meta.json`
+- v2 manifest（受版本控制）：`docs/evidence/reasoning-budget-baseline-v2-manifest.json`
+- capability probe 脚本：`.pi/extensions/novel-studio/scripts/gemini-reasoning-capability-probe.mjs`
+- capability probe 结果（受版本控制）：`docs/evidence/gemini-reasoning-capability-probe-result.json`
+- capability probe 原始报告：`reports/reasoning-budget-baseline/capability-probe.json` + `capability-probe.md`
+
+## 9. Gemini Reasoning-Control Capability Probe（eval-only，2026-08-11）
+
+### 9.1 背景与目标
+
+baseline v2 数据显示，固定每章一次的 `novelos_evidence_decision` 调用 9 次共消耗 136,106 token。虽然 `maxTokens=512`，completion usage 实际为 1,234–2,932，说明隐藏 reasoning token 可能占主要部分。
+
+本探测验证 Gemini 3.1 Pro Preview OpenAI-compatible 端点是否接受并真正生效 `reasoning_effort` / `thinking_budget` 参数，评估其对 token 使用、延迟和结构化输出的影响。
+
+**约束**：eval-only，不修改生产路由、不进入 `novel_generate_chapter` 路径。探测前已获得用户对真实模型调用成本的确认（21 次调用，预估 $0.50–$3.00 USD）。
+
+### 9.2 探测配置
+
+- **端点**：`https://api.solov.cc/v1/chat/completions`（`GOOGLE_GEMINI_BASE_URL` 代理，OpenAI 兼容路径）
+- **模型**：`gemini-3.1-pro-preview`
+- **固定参数**：`max_tokens=512`、`temperature=0.72`（与生产 `evidence_decision` 一致）
+- **prompt**：固定代表性 `evidence_decision` 风格结构化 JSON 任务（不包含 workspace 私有内容）
+- **每配置采样**：3 次
+- **总调用**：21 次（7 配置 × 3 采样）
+
+| 配置 | 说明 | 额外参数 |
+|------|------|------|
+| `baseline` | 无 reasoning control（当前生产行为） | `{}` |
+| `reasoning_effort_low` | OpenAI 兼容映射 thinking_level=low | `{reasoning_effort: "low"}` |
+| `reasoning_effort_medium` | Gemini 3.1 新增中档 | `{reasoning_effort: "medium"}` |
+| `reasoning_effort_high` | Deep Think Mini | `{reasoning_effort: "high"}` |
+| `thinking_budget_0` | 禁用 thinking（Gemini 2.5 兼容参数） | `{thinking_budget: 0}` |
+| `thinking_budget_1024` | 限制 thinking 到 1024 token | `{thinking_budget: 1024}` |
+| `reasoning_effort_low_maxtok_512` | reasoning_effort=low + max_tokens=512 组合 | `{reasoning_effort: "low"}` + maxTokens=512 |
+
+### 9.3 探测结果
+
+**全部 21 次调用成功**（HTTP 200，无 network_error / http_error）。
+
+| 配置 | ok | json有效 | completion avg (min-max) | reasoning | cached | 延迟 avg (min-max) ms |
+|------|------|------|------|------|------|------|
+| baseline | 3/3 | 2/3 | 1436 (1322-1515) | N/A | N/A | 15454 (14601-16471) |
+| reasoning_effort_low | 3/3 | 2/3 | 1543 (1349-1681) | N/A | N/A | 16108 (15530-16833) |
+| reasoning_effort_medium | 3/3 | 2/3 | 1450 (1325-1542) | N/A | N/A | 16862 (13689-22263) |
+| reasoning_effort_high | 3/3 | 1/3 | 1328 (1245-1431) | N/A | N/A | 15381 (14096-16805) |
+| thinking_budget_0 | 3/3 | 3/3 | 1647 (1404-1805) | N/A | N/A | 16050 (13780-17210) |
+| thinking_budget_1024 | 3/3 | 3/3 | 1659 (1488-1781) | N/A | N/A | 17133 (15014-18866) |
+| reasoning_effort_low_maxtok_512 | 3/3 | 1/3 | 1608 (1478-1697) | N/A | N/A | 16634 (15381-18076) |
+
+**vs baseline delta**：
+
+| 配置 | completion delta | reasoning delta | 延迟 delta |
+|------|------|------|------|
+| reasoning_effort_low | +107 | +0 | +654ms |
+| reasoning_effort_medium | +14 | +0 | +1408ms |
+| reasoning_effort_high | -108 | +0 | -73ms |
+| thinking_budget_0 | +211 | +0 | +596ms |
+| thinking_budget_1024 | +223 | +0 | +1679ms |
+| reasoning_effort_low_maxtok_512 | +172 | +0 | +1180ms |
+
+### 9.4 结论
+
+**判定：NOT_EFFECTIVE_THROUGH_PROXY — 当前代理端点不支持 reasoning control 参数。**
+
+**证据**：
+
+1. **参数被静默接受但不生效**：全部 7 个配置 21 次调用都返回 HTTP 200（OpenAI 兼容端点通常忽略未知字段），但：
+   - `completion_tokens_details` 和 `prompt_tokens_details` 始终为 `null` — 代理不返回 reasoning/cached token 细分
+   - `completion_tokens` 无一致性规律：
+     - `reasoning_effort_high` 反而 **低于** baseline（1328 vs 1436），与"高 reasoning 应增加 thinking"预期相反
+     - `thinking_budget_0`（应禁用 thinking）反而 **高于** baseline（1647 vs 1436），与预期相反
+     - 所有 delta（+107 到 +223）都在噪声范围内（baseline 自身波动 1322-1515，range=193）
+
+2. **延迟无显著差异**：所有配置 15-17s，参数不影响模型行为
+
+3. **completion 远超 maxTokens**：全部 1245-1805，远超 `max_tokens=512`，证实隐藏 thinking token 被计入 `completion_tokens`，但无法通过 API 参数控制
+
+**影响**：
+- 不能通过 `reasoning_effort` / `thinking_budget` 降低 `evidence_decision` 的 token 消耗
+- baseline v2 中 9 次 `evidence_decision` 共消耗 136,106 token 的隐藏 thinking token 无法通过 API 参数控制
+- completion_tokens（1245-1805）远超 maxTokens=512，证实隐藏 thinking token 被计入 completion
+
+**替代预算优化方向**（不修改生产路由）：
+1. **prompt 精简**：减少 `evidence_decision` 的 prompt 复杂度，可能降低 thinking 需求
+2. **结构化输出约束**：使用 JSON schema / response_format 约束输出长度
+3. **调用频率优化**：评估是否每章都需要独立的 `evidence_decision`，或可合并到 `agentic_raw` 的 ReAct 循环
+4. **端点切换评估**：如需 reasoning control，需评估直连 Google 官方端点或切换到支持 reasoning token 细分的代理
+
+**不进入正式 A/B**：在 capability probe 证明参数有效前，不进入基于 `reasoning_effort` / `thinking_budget` 的正式 A/B，也不修改 production pointer。当前结论是参数**不有效**，转向替代方向。
