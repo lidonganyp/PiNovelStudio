@@ -1,6 +1,6 @@
 # 思考/推理预算研究 — Phase 1 统一主链路基线
 
-> 状态：**Phase 1 baseline v1 已冻结**（2026-08-11）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。
+> 状态：**Phase 1 baseline v1（3 章 / 1 workspace）已冻结**（2026-08-11）；**Phase 1 baseline v2（9 章 / 2 workspaces）已冻结**（2026-08-11）。本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。真相源补充：本文档记录"思考/推理预算"研究 Phase 1 的基线建立方法、度量契约与真实基线结果。Phase 6.2 上下文压缩已收口（见 phase6-context-compression-design.md §15.12），本阶段不依赖任何压缩候选，生产保持 A 参数。**baseline v2 完成后，再基于跨 workspace 分布设计第一个预算候选；在此之前不修改生产预算或 production pointer。**
 
 ## 1. 目标
 
@@ -69,8 +69,16 @@ node scripts/reasoning-budget-baseline.mjs --dir <目录>    # 递归扫描 *-qu
 
 ### 5.1 采集配置
 
+**baseline v1（3 章 / 1 workspace）**
 - **来源 workspace**：`xinmo`（隔离 eval 副本 `xinmo-eval`，不修改原 workspace）
 - **章节范围**：第 22–24 章（第 21 章之后连续 3 章），各生成 1 次
+
+**baseline v2 扩展采样（9 章 / 2 workspaces）**
+- **来源 workspace**：`xinmo-eval`（第 22–27 章，6 章）+ `fuben-eval`（`fuben` 隔离副本，第 2–4 章，3 章）
+- **章节范围**：`xinmo-eval` ch22–27 + `fuben-eval` ch2–4，共 9 章，各生成 1 次
+- **隔离副本**：`fuben-eval` 由 `fuben` robocopy 复制（排除 `_archive`/`traces`），并已修正配置中 `workspaceId` 为 `fuben-eval`；不修改原 `fuben`/`xinmo`
+
+**共同固定配置**
 - **固定路由**：`v2_rawstage2_gemini31` / `v2_amplified_gemini31`（Gemini 3.1 Pro Preview）
 - **上下文**：当前默认 A 参数（不切 canary、不改 production pointer）
 - **工具面**：9 专用工具
@@ -88,95 +96,135 @@ node scripts/reasoning-budget-baseline.mjs --dir <目录>    # 递归扫描 *-qu
 
 > `PINOVEL_DEV_MODE=1` 绕过 g6_release_gate 环境指纹检查；所有治理字段为 null，不修改 active pointer。**本结果称为"真实 Gemini dev-eval 基线"，不得称为生产发布验收。**
 
-### 5.2 基线数据
+### 5.2 基线数据（baseline v2，9 章 / 2 workspaces）
 
 完整报告见 `reports/reasoning-budget-baseline/baseline.md`。关键指标：
 
 | 指标 | 数值 |
 |------|------|
-| 样本数 | 3（成功 3，成功率 100.0%） |
-| token 覆盖率 | 100%（11/11 次调用有精确 token） |
-| 模型调用次数（合计） | 11 |
-| 输入 token（合计） | 126,400 |
-| 输出 token（合计） | 52,699 |
-| token 合计 | 179,099 |
-| 总耗时（合计） | 455,806ms（~7.6 分钟） |
+| 样本数 | 9（成功 9，成功率 100.0%） |
+| token 覆盖率 | 100%（32/32 次调用有精确 token） |
+| 模型调用次数（合计） | 32 |
+| 输入 token（合计） | 311,954 |
+| 输出 token（合计） | 145,686 |
+| token 合计 | 457,640 |
+| 总耗时（合计） | 1,315,700ms（~21.9 分钟） |
 | 重试次数 | 0 |
 | 超时数 | 0 |
 | 错误数 | 0 |
 | FailureEnvelope | 0 |
 | 硬失败 | 0 |
 
+### 5.2.1 跨 workspace 分布
+
+| workspace | 章数 | 成功率 | 模型调用 | 输入token | 输出token | 总耗时(ms) |
+|------|------|------|------|------|------|------|
+| fuben-eval | 3 | 100% | 9 | 56,862 | 39,537 | 359,856 |
+| xinmo-eval | 6 | 100% | 23 | 255,092 | 106,149 | 955,844 |
+
+> 两个 workspace 均 100% 成功、零重试/超时/错误、token 覆盖 100%。每章均固定触发一次 `novelos_evidence_decision` + 一次 `author_style_optimization`；差异在 `agentic_raw` 检索轮次：`xinmo-eval` 多数章节 2 次（ch22/24/25/26/27），`fuben-eval` 全部 1 次。`xinmo-eval` 输入 token/章显著更高（约 42.5k vs 19k），由**章节上下文规模 + 更多检索轮次**驱动，而非模型随机性。
+
 ### 5.3 每章明细
 
-| 章节 | 耗时(ms) | 模型调用 | 输入token | 输出token | token覆盖 | selectedSource | projectGain |
-|------|------|------|------|------|------|------|------|
-| ch22 | 168,974 | 4 | 42,833 | 19,272 | 100% | v2_amplified | positive |
-| ch23 | 122,940 | 3 | 39,983 | 13,928 | 100% | v2_amplified | positive |
-| ch24 | 163,892 | 4 | 43,584 | 19,499 | 100% | v2_amplified | positive |
+| 章节 | 成功 | 耗时(ms) | 模型调用 | 输入token | 输出token | token覆盖 | selectedSource | projectGain |
+|------|------|------|------|------|------|------|------|------|
+| ch2 | ✓ | 110,312 | 3 | 21,318 | 11,837 | 100% | v2_amplified | positive |
+| ch3 | ✓ | 121,402 | 3 | 20,035 | 12,977 | 100% | v2_amplified | positive |
+| ch4 | ✓ | 128,142 | 3 | 15,509 | 14,723 | 100% | v2_amplified | positive |
+| ch22 | ✓ | 168,974 | 4 | 42,833 | 19,272 | 100% | v2_amplified | positive |
+| ch23 | ✓ | 122,940 | 3 | 39,983 | 13,928 | 100% | v2_amplified | positive |
+| ch24 | ✓ | 163,892 | 4 | 43,584 | 19,499 | 100% | v2_amplified | positive |
+| ch25 | ✓ | 184,083 | 4 | 44,076 | 17,991 | 100% | v2_amplified | positive |
+| ch26 | ✓ | 166,253 | 4 | 42,102 | 18,229 | 100% | v2_amplified | positive |
+| ch27 | ✓ | 149,702 | 4 | 42,514 | 17,230 | 100% | v2_amplified | positive |
+
+### 5.3.1 每章调用构成（完整调用明细）
+
+| 章节 | workspace | evidence_decision | agentic_raw | author_style_optimization | 调用合计 |
+|------|------|------|------|------|------|
+| ch2 | fuben-eval | 1 | 1 | 1 | 3 |
+| ch3 | fuben-eval | 1 | 1 | 1 | 3 |
+| ch4 | fuben-eval | 1 | 1 | 1 | 3 |
+| ch22 | xinmo-eval | 1 | 2 | 1 | 4 |
+| ch23 | xinmo-eval | 1 | 1 | 1 | 3 |
+| ch24 | xinmo-eval | 1 | 2 | 1 | 4 |
+| ch25 | xinmo-eval | 1 | 2 | 1 | 4 |
+| ch26 | xinmo-eval | 1 | 2 | 1 | 4 |
+| ch27 | xinmo-eval | 1 | 2 | 1 | 4 |
+
+> 每章固定 1 次 `novelos_evidence_decision` + 1 次 `author_style_optimization`；`agentic_raw` 为 NovelOS Agentic 的 ReAct 检索轮次，轮次不固定（1–2 次），是调用次数差异的唯一来源。
 
 ### 5.4 逐阶段耗时（平均）
 
 | 阶段 | 平均耗时(ms) | 占比 |
 |------|------|------|
-| stage1_novelosAgentic | 82,982 | 54.6% |
-| stage3_authorStyleOptimization | 68,744 | 45.2% |
-| stage6_commitAndSave | 150 | 0.1% |
-| stage4_storyPreservation | 37 | 0.0% |
-| stage2_agenticFactGuard | 13 | 0.0% |
-| stage5_finalFactRecheck | 10 | 0.0% |
+| stage1_novelosAgentic | 85,583 | 58.5% |
+| stage3_authorStyleOptimization | 60,441 | 41.3% |
+| stage6_commitAndSave | 112 | 0.1% |
+| stage4_storyPreservation | 34 | 0.0% |
+| stage2_agenticFactGuard | 10 | 0.0% |
+| stage5_finalFactRecheck | 8 | 0.0% |
 
 ### 5.5 逐模型调用（每章均值）
 
 | agent | 调用/章 | 输入token/章 | 输出token/章 | 耗时ms/章 | ok/章 | 重试/章 | token覆盖 |
 |------|------|------|------|------|------|------|------|
-| v2_rawstage2_gemini31 | 2.67 | 37,322 | 7,641 | 82,907 | 2.67 | 0 | 8/8 (100%) |
-| v2_amplified_gemini31 | 1 | 4,811 | 9,926 | 68,743 | 1 | 0 | 3/3 (100%) |
+| v2_rawstage2_gemini31 | 2.56 | 30,484 | 7,910 | 85,519 | 2.56 | 0 | 23/23 (100%) |
+| v2_amplified_gemini31 | 1 | 4,178 | 8,277 | 60,440 | 1 | 0 | 9/9 (100%) |
 
 ### 5.6 模型预算使用
 
 | 章节 | soft | hard | used | capped |
 |------|------|------|------|------|
+| ch2 | 6 | 10 | 3 | false |
+| ch3 | 6 | 10 | 3 | false |
+| ch4 | 6 | 10 | 3 | false |
 | ch22 | 6 | 10 | 4 | false |
 | ch23 | 6 | 10 | 3 | false |
 | ch24 | 6 | 10 | 4 | false |
+| ch25 | 6 | 10 | 4 | false |
+| ch26 | 6 | 10 | 4 | false |
+| ch27 | 6 | 10 | 4 | false |
 
 ### 5.7 关键观察
 
-1. **NovelOS Agentic + 作者风格优化占总耗时 99.9%**（151,726ms / 151,936ms），是推理预算的主要消耗点。其余阶段（FactGuard / StoryPreservation / FinalFactRecheck / CommitAndSave）合计仅 210ms，无模型调用。
-2. **零重试、零超时、零错误**：3 章均一次性通过，无 transient failure 触发 bounded recovery。
+1. **NovelOS Agentic + 作者风格优化占总耗时 99.9%**（146,024ms / 146,188ms），是推理预算的主要消耗点。其余阶段（FactGuard / StoryPreservation / FinalFactRecheck / CommitAndSave）合计仅 164ms，无模型调用。
+2. **零重试、零超时、零错误**：9 章均一次性通过，无 transient failure 触发 bounded recovery。
 3. **零 FailureEnvelope**：统一主链路无 silent degrade，所有阶段正常完成。
 4. **token 覆盖率 100%**：Gemini OpenAI-compatible 路径全部精确取自 `response.usage` 字段。
 5. **模型预算未触顶**：soft=6, hard=10，实际使用 3–4 次，`capped=false`。
-6. **NovelOS Agentic 调用数不固定**：ch22/ch24 各 3 次 rawstage2 调用（evidence_decision + agentic_raw + agentic_raw），ch23 仅 2 次（evidence_decision + agentic_raw）。每章固定 1 次 amplified 调用。
+6. **调用构成固定 + 检索轮次差异**：每章均固定 `novelos_evidence_decision` + `author_style_optimization` 各 1 次；`agentic_raw` 轮次不固定——`fuben-eval`（ch2–4）各 1 次，`xinmo-eval` 多数章节 2 次（ch22/24/25/26/27），仅 ch23 为 1 次。`agentic_raw` 轮次多一次，输入 token/章约 +42.5k vs 19k，是跨 workspace 输入分布的次要驱动（主要驱动为章节上下文规模）。
 
 ## 6. 验证状态
 
 - [x] prod/eval 构建通过。
 - [x] `fallback-timeout-behavioral.test.mjs` 新增 token 捕获断言（mock usage -> `inputTokens=1234`/`outputTokens=567`）。
+- [x] `fallback-timeout-behavioral.test.mjs` 新增 **reasoning/cached 细分断言**（mock usage 同时返回 `completion_tokens_details.reasoning_tokens=320` 与 `prompt_tokens_details.cached_tokens=1500`，断言进入 `LLMTimingEntry.reasoningTokens/cachedTokens`）；`npm run build:prod` 后运行 7/7 通过。
 - [x] `reasoning-budget-baseline.mjs --synthetic` 验证框架（样本=1，逐阶段/逐调用聚合正确）。
-- [x] **真实基线完成**：`xinmo-eval` workspace 第 22–24 章，3 章真实 Gemini 生成，token 覆盖率 100%，成功率 100%。
+- [x] **真实基线 v1 完成**：`xinmo-eval` workspace 第 22–24 章，3 章真实 Gemini 生成，token 覆盖率 100%，成功率 100%。
+- [x] **真实基线 v2 完成**：`xinmo-eval` ch22–27 + `fuben-eval` ch2–4，共 9 章、2 workspaces 真实 Gemini 生成，token 覆盖率 100%（32/32），成功率 100%（9/9）。
 - [x] 基线脚本适配真实 trace 格式（`gates_evidence` 而非 `performanceProfile`）。
 - [x] 报告含 token 覆盖率、逐阶段耗时、逐模型调用、重试、timeout、FailureEnvelope、最终成功率、模型预算使用。
+- [x] **跨 workspace 分布**：聚合脚本新增 `perWorkspace`，baseline.md 输出跨 workspace 分布表（fuben-eval 3 章 / xinmo-eval 6 章）。
 - [x] **环境元数据**：baseline.json/Markdown 明确 `environment=dev_eval` / `PINOVEL_DEV_MODE=1` / `releaseGateBypassed=true` / `productionPointerChanged=false`；标注为"真实 Gemini dev-eval 基线"。
-- [x] **trace 哈希登记**：`real-baseline-meta.json` 记录三条 trace 的 SHA-256 哈希、路径、生成时间。
-- [x] **token 细分检查**：Gemini 3.1 Pro Preview 是推理模型，`outputTokens`（= `completion_tokens`）可能包含 reasoning tokens；当前 provider 未返回 `completion_tokens_details` / `prompt_tokens_details` 细分。已在 `fallback-manager.ts` 新增 `reasoningTokens` / `cachedTokens` 提取逻辑，未来 trace 如 provider 返回细分将自动捕获。
+- [x] **trace 哈希登记**：`real-baseline-meta.json` 记录 9 条 trace 的 SHA-256 哈希、路径、生成时间、调用数与耗时。
+- [x] **token 细分检查**：Gemini 3.1 Pro Preview 是推理模型，`outputTokens`（= `completion_tokens`）可能包含 reasoning tokens；当前 provider 未返回 `completion_tokens_details` / `prompt_tokens_details` 细分（9 章 trace 的 `tokenUsage` 仅含 `in/out`）。已在 `fallback-manager.ts` 新增 `reasoningTokens` / `cachedTokens` 提取逻辑，未来 trace 如 provider 返回细分将自动捕获，并由上述单元测试覆盖。
 
 ## 7. 下一步
 
-- **Phase 1 baseline v1 已冻结**。本基线仅 3 章最小样本（1 个 workspace），不能据此直接制定生产预算策略。
-- 后续扩展到 **6–9 章**并至少覆盖 **两个 workspace**，再设计 evidence_decision 和作者风格优化的预算候选。
-- 基于逐阶段调用/token 分布提出候选"思考/推理预算"策略（如按阶段划分 token 预算/回合上限），再进入 A/B 验证。
-- 候选方向（待基线扩展后评估）：
-  - NovelOS Agentic 阶段占比 54.6%，是预算优化的首要目标；可考虑 evidence_decision 的 maxTokens（当前 512）是否可压缩。
-  - 作者风格优化阶段占比 45.2%，输入 token 仅 4,811 但输出 token 高达 9,926；可考虑输出长度预算。
-  - 模型预算 soft=6/hard=10 未触顶，当前无预算压力；预算策略应关注 token 成本而非调用次数限制。
-  - 未来 trace 如 provider 返回 `reasoning_tokens`，需评估 reasoning 占比对预算策略的影响。
+- **Phase 1 baseline v1 与 v2 均已冻结**。v2 覆盖 9 章、2 workspaces，跨 workspace 分布已记录。
+- **设计第一个预算候选（尚未启用）**：基于以下跨 workspace 分布观察，提出候选"思考/推理预算"策略，再进入 A/B 验证；**在候选设计完成前不修改生产预算或 production pointer**。
+- 候选方向（基于 v2 分布）：
+  - **上下文规模是首要驱动**：`xinmo-eval` 输入 token/章约 42.5k（每章 4 次调用），`fuben-eval` 约 19k（3 次调用）。预算候选应优先针对 **NovelOS Agentic 的输入 token 预算**（其占阶段耗时 58.5%），而非单一调用次数上限。
+  - **`agentic_raw` 检索轮次差异**：`xinmo-eval` 多数章节 2 次 `agentic_raw`，`fuben-eval` 全部 1 次。候选可评估是否按上下文规模/证据充分度阈值化 `agentic_raw` 的检索轮次上限（当前无上限，soft model budget 6/hard 10 未触顶）。
+  - **作者风格优化**：每章固定 1 次，输入约 4.2k、输出约 8.3k，占耗时 41.3%；可考虑输出长度预算（soft/hard）。
+  - **模型预算未触顶**：soft=6/hard=10 全部 `capped=false`，当前无调用次数压力；预算策略应关注 **token 成本**而非调用次数。
+  - **未来 `reasoning_tokens`**：如 provider 开始返回细分，需评估 reasoning 占比对预算成本的影响（当前全部留空）。
 
 ## 8. 产物索引
 
 - 基线报告：`reports/reasoning-budget-baseline/baseline.md` + `baseline.json`
-- trace 副本：`reports/reasoning-budget-baseline/traces/{22,23,24}-quality-trace.json`
+- trace 副本：`reports/reasoning-budget-baseline/traces/{2,3,4,22,23,24,25,26,27}-quality-trace.json`
 - trace 元数据（含 SHA-256 哈希）：`reports/reasoning-budget-baseline/real-baseline-meta.json`
 - 采集脚本：`.pi/extensions/novel-studio/scripts/reasoning-budget-real-baseline.mjs`
 - 聚合脚本：`.pi/extensions/novel-studio/scripts/reasoning-budget-baseline.mjs`

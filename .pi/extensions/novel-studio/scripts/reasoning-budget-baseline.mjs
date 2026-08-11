@@ -36,6 +36,7 @@ const { values } = parseArgs({
     "dir": { type: "string" },
     "output": { type: "string" },
     "synthetic": { type: "boolean", default: false },
+    "version": { type: "string", default: "v2" },
     "help": { type: "boolean", default: false },
   },
   allowPositionals: false,
@@ -356,8 +357,25 @@ function aggregateAll(traces) {
   const totalTokensCovered = agentRows.reduce((s, a) => s + a.tokensCovered, 0);
   const tokenCoverage = totalCalls ? +((totalTokensCovered / totalCalls) * 100).toFixed(1) : 0;
 
+  // 跨 workspace 分布
+  const byWorkspace = {};
+  for (const t of traces) {
+    const ws = t.workspaceId || "unknown";
+    const bucket = byWorkspace[ws] || (byWorkspace[ws] = { workspaceId: ws, chapters: 0, success: 0, modelCalls: 0, inputTokens: 0, outputTokens: 0, elapsedMs: 0 });
+    bucket.chapters += 1;
+    if (t.success) bucket.success += 1;
+    bucket.modelCalls += Object.values(t.agents).reduce((s, a) => s + a.calls, 0);
+    bucket.inputTokens += Object.values(t.agents).reduce((s, a) => s + a.inputTokens, 0);
+    bucket.outputTokens += Object.values(t.agents).reduce((s, a) => s + a.outputTokens, 0);
+    bucket.elapsedMs += t.totalElapsedMs;
+  }
+  const workspaceRows = Object.values(byWorkspace).map((b) => ({
+    ...b,
+    successRate: b.chapters ? +(b.success / b.chapters).toFixed(3) : 0,
+  })).sort((a, b2) => a.workspaceId.localeCompare(b2.workspaceId));
+
   return {
-    baselineVersion: "v1",
+    baselineVersion: values.version,
     baselineType: "真实 Gemini dev-eval 基线（不等于生产发布验收）",
     environment: {
       type: "dev_eval",
@@ -385,6 +403,7 @@ function aggregateAll(traces) {
     perStage: stageRows,
     perAgent: agentRows,
     perChapter,
+    perWorkspace: workspaceRows,
   };
 }
 
@@ -443,6 +462,14 @@ function renderMarkdown(summary) {
     L.push(`| ch${c.chapterId} | ${c.success ? "✓" : "✗"} | ${c.totalElapsedMs.toLocaleString()} | ${c.modelCalls} | ${c.inputTokens.toLocaleString()} | ${c.outputTokens.toLocaleString()} | ${c.tokenCoverage}% | ${sel.selectedSource || "-"} | ${sel.projectGain || "-"} | ${c.envSummary.count} |`);
   }
   L.push(``);
+  L.push(`## 跨 workspace 分布`);
+  L.push(``);
+  L.push(`| workspace | 章数 | 成功 | 成功率 | 模型调用 | 输入token | 输出token | 总耗时(ms) |`);
+  L.push(`|------|------|------|------|------|------|------|------|`);
+  for (const w of summary.perWorkspace) {
+    L.push(`| ${w.workspaceId} | ${w.chapters} | ${w.success} | ${(w.successRate * 100).toFixed(1)}% | ${w.modelCalls} | ${w.inputTokens.toLocaleString()} | ${w.outputTokens.toLocaleString()} | ${w.elapsedMs.toLocaleString()} |`);
+  }
+  L.push(``);
   L.push(`## 逐阶段耗时（平均）`);
   L.push(``);
   L.push(`| 阶段 | 运行章数 | 平均耗时(ms) | 占比 |`);
@@ -490,7 +517,7 @@ function renderMarkdown(summary) {
     L.push(`- 其余阶段（FactGuard / StoryPreservation / FinalFactRecheck / CommitAndSave）合计仅 ${otherStagesMs.toLocaleString()}ms，无模型调用`);
   }
   if (summary.totals.retries === 0 && summary.totals.timeouts === 0 && summary.totals.errors === 0) {
-    L.push(`- 零重试、零超时、零错误：3 章均一次性通过，无 transient failure 触发 bounded recovery`);
+    L.push(`- 零重试、零超时、零错误：${summary.sampleCount} 章均一次性通过，无 transient failure 触发 bounded recovery`);
   }
   if (summary.totals.failureEnvelopes === 0) {
     L.push(`- 零 FailureEnvelope：统一主链路无 silent degrade，所有阶段正常完成`);

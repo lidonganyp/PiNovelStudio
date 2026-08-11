@@ -1,0 +1,182 @@
+{
+  "baselineVersion": "v2",
+  "baselineType": "真实 Gemini dev-eval 基线（不等于生产发布验收）",
+  "frozenAt": "2026-08-11T09:20:00Z",
+  "frozenAtCommitParent": "0b2c2fc",
+  "frozenAtCommit": "pending（提交后由 git log 标识）",
+  "environment": {
+    "type": "dev_eval",
+    "pinovelDevMode": "1",
+    "releaseGateBypassed": true,
+    "productionPointerChanged": false,
+    "description": "PINOVEL_DEV_MODE=1 绕过 g6_release_gate 环境指纹检查；所有治理字段为 null，不修改 active pointer。本结果称为'真实 Gemini dev-eval 基线'，不得称为生产发布验收。"
+  },
+  "fixedConfig": {
+    "route": "v2_rawstage2_gemini31",
+    "model": "gemini-3.1-pro-preview",
+    "context": "A (default)",
+    "tools": "9 dedicated",
+    "disableFallback": true
+  },
+  "sampleCount": 9,
+  "summary": {
+    "successCount": 9,
+    "successRate": 1.0,
+    "tokenCoveragePct": 100.0,
+    "tokensCovered": 32,
+    "totals": {
+      "modelCalls": 32,
+      "inputTokens": 311954,
+      "outputTokens": 145686,
+      "tokenTotal": 457640,
+      "elapsedMs": 1315700,
+      "retries": 0,
+      "timeouts": 0,
+      "errors": 0,
+      "failureEnvelopes": 0,
+      "hardFailures": 0
+    }
+  },
+  "perWorkspace": [
+    {
+      "workspaceId": "fuben-eval",
+      "chapters": 3,
+      "success": 3,
+      "successRate": 1.0,
+      "modelCalls": 9,
+      "inputTokens": 56862,
+      "outputTokens": 39537,
+      "elapsedMs": 359856
+    },
+    {
+      "workspaceId": "xinmo-eval",
+      "chapters": 6,
+      "success": 3,
+      "successRate": 1.0,
+      "modelCalls": 23,
+      "inputTokens": 255092,
+      "outputTokens": 106149,
+      "elapsedMs": 955844
+    }
+  ],
+  "traces": [
+    {
+      "chapterId": "2",
+      "workspaceId": "fuben-eval",
+      "sha256": "5412f037566ee67ee468a4de6c57e08fe2df70c309a3de94558aa756667ac96b",
+      "createdAt": "2026-08-11T09:06:42.147Z",
+      "modelCalls": 3,
+      "totalElapsedMs": 110312
+    },
+    {
+      "chapterId": "3",
+      "workspaceId": "fuben-eval",
+      "sha256": "3693df8d11a0e52a06b33d9afb715821cd5f325e9a6c8d61c5a3ff4001d710fd",
+      "createdAt": "2026-08-11T09:08:43.597Z",
+      "modelCalls": 3,
+      "totalElapsedMs": 121402
+    },
+    {
+      "chapterId": "4",
+      "workspaceId": "fuben-eval",
+      "sha256": "8a6d3291494c1bb3533d1662aa9e0319541f07f44c1b8e42a64747cd674f7a50",
+      "createdAt": "2026-08-11T09:10:51.776Z",
+      "modelCalls": 3,
+      "totalElapsedMs": 128142
+    },
+    {
+      "chapterId": "22",
+      "workspaceId": "xinmo-eval",
+      "sha256": "becdfec12156f306148a480c5fb468b62ab84d5109312a5dc99781675ec36d43",
+      "createdAt": "2026-08-11T07:19:30.478Z",
+      "modelCalls": 4,
+      "totalElapsedMs": 168974
+    },
+    {
+      "chapterId": "23",
+      "workspaceId": "xinmo-eval",
+      "sha256": "d838b733f4dd6bbaa0f5e95f94ae81152ce9707ba5f0d15461a0ebeb8aa72b52",
+      "createdAt": "2026-08-11T07:21:41.320Z",
+      "modelCalls": 3,
+      "totalElapsedMs": 122940
+    },
+    {
+      "chapterId": "24",
+      "workspaceId": "xinmo-eval",
+      "sha256": "d5321f16152479b010091238a2de9db36b026f54810aad67329a70245a4d5e5b",
+      "createdAt": "2026-08-11T07:24:25.444Z",
+      "modelCalls": 4,
+      "totalElapsedMs": 163892
+    },
+    {
+      "chapterId": "25",
+      "workspaceId": "xinmo-eval",
+      "sha256": "bfb3da1301348d60614856c97d02dd32bdf3c337777f836c5969d57255b7d8c0",
+      "createdAt": "2026-08-11T08:59:19.222Z",
+      "modelCalls": 4,
+      "totalElapsedMs": 184083
+    },
+    {
+      "chapterId": "26",
+      "workspaceId": "xinmo-eval",
+      "sha256": "4bd313105bc82ad2dcce2b1e01b235b200a38041000b6093cfb7caf6a0007669",
+      "createdAt": "2026-08-11T09:02:05.729Z",
+      "modelCalls": 4,
+      "totalElapsedMs": 166253
+    },
+    {
+      "chapterId": "27",
+      "workspaceId": "xinmo-eval",
+      "sha256": "e5d94de234f85451911c5939741b360b0079ab0a1054b6df80025d94131c79b6",
+      "createdAt": "2026-08-11T09:04:35.673Z",
+      "modelCalls": 4,
+      "totalElapsedMs": 149702
+    }
+  ],
+  "perChapterCallComposition": {
+    "description": "每章调用构成。evidence_decision + author_style_optimization 各 1 次（固定）；agentic_raw 检索轮次不固定（1–2 次）。",
+    "callKinds": [
+      { "kind": "novelos_evidence_decision", "callsPerChapter": 1, "totalCalls": 9 },
+      { "kind": "agentic_raw", "callsPerChapter": "1–2", "totalCalls": 14 },
+      { "kind": "author_style_optimization", "callsPerChapter": 1, "totalCalls": 9 }
+    ],
+    "agenticRawBreakdown": {
+      "fuben-eval": { "ch2": 1, "ch3": 1, "ch4": 1 },
+      "xinmo-eval": { "ch22": 2, "ch23": 1, "ch24": 2, "ch25": 2, "ch26": 2, "ch27": 2 }
+    }
+  },
+  "evidenceDecisionFocus": {
+    "description": "capability probe 目标节点。maxTokens=512 但实际 completion_tokens 远超，说明隐藏 reasoning token 占主要部分。",
+    "totalCalls": 9,
+    "totalInputTokens": 121143,
+    "totalOutputTokens": 14963,
+    "totalTokens": 136106,
+    "configuredMaxTokens": 512,
+    "actualOutputRange": "1,234–2,932",
+    "outputToMaxRatio": "2.4×–5.7×（maxTokens=512 未限制 reasoning token）",
+    "perCall": [
+      { "chapterId": "2", "inputTokens": 8385, "outputTokens": 1356, "maxTokens": 512, "durationMs": 16494 },
+      { "chapterId": "3", "inputTokens": 7933, "outputTokens": 1543, "maxTokens": 512, "durationMs": 17095 },
+      { "chapterId": "4", "inputTokens": 5950, "outputTokens": 1913, "maxTokens": 512, "durationMs": 17839 },
+      { "chapterId": "22", "inputTokens": 16773, "outputTokens": 1401, "maxTokens": 512, "durationMs": 16151 },
+      { "chapterId": "23", "inputTokens": 16773, "outputTokens": 1506, "maxTokens": 512, "durationMs": 17510 },
+      { "chapterId": "24", "inputTokens": 16783, "outputTokens": 1784, "maxTokens": 512, "durationMs": 16453 },
+      { "chapterId": "25", "inputTokens": 16717, "outputTokens": 1294, "maxTokens": 512, "durationMs": 16577 },
+      { "chapterId": "26", "inputTokens": 16213, "outputTokens": 1234, "maxTokens": 512, "durationMs": 12485 },
+      { "chapterId": "27", "inputTokens": 15616, "outputTokens": 2932, "maxTokens": 512, "durationMs": 29821 }
+    ]
+  },
+  "reportsRef": {
+    "baselineReport": "reports/reasoning-budget-baseline/baseline.md（gitignored，本地存档）",
+    "baselineJson": "reports/reasoning-budget-baseline/baseline.json（gitignored，本地存档）",
+    "traceArchiveDir": "reports/reasoning-budget-baseline/traces/（gitignored，9 条 trace 副本）",
+    "note": "reports/* 被 .gitignore:169 排除；本 manifest 是受版本控制的精简冻结证据，trace 原始副本由本地存档。"
+  },
+  "scripts": {
+    "collector": ".pi/extensions/novel-studio/scripts/reasoning-budget-real-baseline.mjs",
+    "aggregator": ".pi/extensions/novel-studio/scripts/reasoning-budget-baseline.mjs",
+    "aggregatorVersion": "v2（新增 --version flag + perWorkspace 跨 workspace 分布）",
+    "unitTest": ".pi/extensions/novel-studio/tests/fallback-timeout-behavioral.test.mjs（7/7 通过，含 reasoning_tokens/cached_tokens 断言）"
+  },
+  "collectedAt": "2026-08-11T09:15:53.521Z"
+}

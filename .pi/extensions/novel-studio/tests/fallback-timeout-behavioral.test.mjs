@@ -213,6 +213,41 @@ describe("APIFallbackManager totalTimeoutMs behavior", () => {
     assert.equal(ok?.outputTokens, 567, "llmTimings 应精确捕获输出 token");
   });
 
+  test("ok 调用从 usage 捕获 reasoning_tokens / cached_tokens 细分到 llmTimings", async () => {
+    const manager = new APIFallbackManager();
+    const timings = [];
+    setLLMAttemptListener((entry) => timings.push(entry));
+    installMockContext(manager, 250);
+    manager.makeOpenAIChatCall = async (_baseUrl, _apiKey, _providerKey, model) => ({
+      id: "mock-response",
+      object: "chat.completion",
+      created: 0,
+      model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "reasoning-cached response" },
+        finish_reason: "stop",
+      }],
+      usage: {
+        prompt_tokens: 2000,
+        completion_tokens: 800,
+        total_tokens: 2800,
+        // Gemini 3.x 推理模型：completion_tokens 内拆分出 reasoning tokens
+        completion_tokens_details: { reasoning_tokens: 320 },
+        // Gemini 隐式缓存命中
+        prompt_tokens_details: { cached_tokens: 1500 },
+      },
+    });
+
+    await manager.callWithFallback("architect", [{ role: "user", content: "count my reasoning tokens" }]);
+
+    const ok = timings.find((entry) => entry.status === "ok");
+    assert.equal(ok?.inputTokens, 2000, "llmTimings 应捕获输入 token");
+    assert.equal(ok?.outputTokens, 800, "llmTimings 应捕获聚合 completion token");
+    assert.equal(ok?.reasoningTokens, 320, "llmTimings 应从 completion_tokens_details 捕获 reasoning token");
+    assert.equal(ok?.cachedTokens, 1500, "llmTimings 应从 prompt_tokens_details 捕获 cached token");
+  });
+
   test("allows fallback success when no total timeout budget is configured", async () => {
     const manager = new APIFallbackManager();
     const attempts = [];
