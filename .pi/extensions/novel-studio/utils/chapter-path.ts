@@ -179,7 +179,7 @@ export function resolveChapterDirFromChaptersDir(
 // 兼容读取（只读，不写）。canonical 优先，避免读到旧分裂产物。
 // ============================================================================
 
-export type ChapterPathFormat = "canonical" | "numeric" | "padded2" | "padded3" | "double_prefix";
+export type ChapterPathFormat = "canonical" | "numeric" | "ch-prefixed" | "padded2" | "padded3" | "double_prefix";
 
 export interface ResolvedChapterPath {
   path: string;
@@ -200,6 +200,7 @@ function chapterFileCandidates(
   return [
     { path: join(chaptersDir, `chapter-${id}.md`), format: "canonical" },
     { path: join(chaptersDir, `${id}.md`), format: "numeric" },
+    { path: join(chaptersDir, `ch${id}.md`), format: "ch-prefixed" },
     { path: join(chaptersDir, `chapter-${padded2}.md`), format: "padded2" },
     { path: join(chaptersDir, `chapter-${padded3}.md`), format: "padded3" },
     { path: join(chaptersDir, `chapter-chapter-${id}.md`), format: "double_prefix" },

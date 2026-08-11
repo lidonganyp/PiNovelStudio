@@ -416,3 +416,48 @@ export function shareSignificantContent(
 export function getExtractableEvents(events: ExtractedEvent[]): ExtractedEvent[] {
   return events.filter((e) => e.extractable);
 }
+
+// ============================================================================
+// 引语共享检测（真实长程 replay 误杀治理）
+// ============================================================================
+
+/**
+ * 提取文本中的所有引号内内容（「」/“”/‘’/『』），用于判断两段文字是否引用同一段对话。
+ */
+function extractQuotedSegments(text: string): string[] {
+  const result: string[] = [];
+  const patterns: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+    [/『([^』]*)』/g, (m) => m[1] ?? ""],
+    [/「([^」]*)」/g, (m) => m[1] ?? ""],
+    [/“([^”]*)”/g, (m) => m[1] ?? ""],
+    [/‘([^’]*)’/g, (m) => m[1] ?? ""],
+  ];
+  for (const [pattern, extract] of patterns) {
+    for (const m of text.matchAll(pattern)) {
+      const seg = (extract(m) ?? "").trim();
+      if (seg.length >= 2) result.push(seg);
+    }
+  }
+  return result;
+}
+
+/**
+ * 判断 raw 与 editorial 两段文字是否共享同一段引语（对话内容）。
+ *
+ * 真实长程误杀治理：编辑对同一段对白的引导语改写（如 "装出一副茫然的样子苦笑道"
+ * → "苦笑着摇了摇头说道"）时，raw/editorial 仍承载同一句对话。这类改写是正常的
+ * 风格润饰，不是故事事件替换，不应判为低相似度替换事件。
+ *
+ * 只要两段文字含有重叠的引语内容（≥2 字），即视为同一言语事件。
+ */
+export function hasSharedQuotedSpeech(rawSentence: string, editorialSentence: string): boolean {
+  const rawQuotes = extractQuotedSegments(rawSentence);
+  const edQuotes = extractQuotedSegments(editorialSentence);
+  if (rawQuotes.length === 0 || edQuotes.length === 0) return false;
+  for (const rq of rawQuotes) {
+    for (const eq of edQuotes) {
+      if (rq.length >= 2 && eq.length >= 2 && (rq.includes(eq) || eq.includes(rq))) return true;
+    }
+  }
+  return false;
+}

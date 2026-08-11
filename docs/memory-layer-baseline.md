@@ -218,4 +218,4 @@ flowchart LR
 - [x] 盘点四类长期状态 schema / 写入点 / 读取点（§2）
 - [x] 标记自由文本摘要、状态推断、历史正文索引（§2.4 / R1）
 - [x] 确认 FinalStateCommit 与 AtomicSave 真实事务顺序（§1.2）
-- [x] 建立 20/50/100 章 replay 基线 → 由 `scripts/memory-long-form-replay.mjs` 提供（确定性模拟，见 MEMORY-7）
+- [x] 建立 20/50/100 章 replay 基线 → 由 `scripts/memory-long-form-replay.mjs` 提供（确定性模拟，真实性=eval 证据，无真实模型调用，**不视为真实生产 replay**；真实生产 replay 必须经 `novel_generate_chapter` 完整主链路的真实 workspace 运行，见 rel-prod-108 manifest claims）

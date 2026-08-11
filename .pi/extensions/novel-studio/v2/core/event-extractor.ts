@@ -44,6 +44,73 @@ import {
 } from "./event-sentence-splitter.js";
 
 // ============================================================================
+// 常量（真实长程 replay 误杀治理，见 docs/memory-layer-baseline.md）
+// ============================================================================
+
+/**
+ * 方式状语式否定排除表。
+ *
+ * "毫无预兆地""不约而同地"等是方式状语（描述动作发生的形态），其中的"无/不"
+ * 不是对动作本身的否定。若把这类状语里的否定标记误判为动作否定，会在
+ * editorial 同义改写时触发"否定语义反转"误杀（critical，单条即阻断）。
+ *
+ * 例："毫无预兆地突然从青衣少女的肚子里传了出来" —— "毫无预兆地"是方式状语，
+ * 动作"传了出来"并未被否定，不应设 negated=true。
+ */
+const NON_NEGATING_ADVERBIALS: readonly string[] = [
+  "毫无预兆地",
+  "毫无预兆",
+  "毫无声息地",
+  "毫无声息",
+  "不约而同地",
+  "不由自主地",
+  "毫不犹豫地",
+  "毫不犹豫",
+  "毫不迟疑地",
+  "毫不留情地",
+  "毫无保留地",
+  "不动声色地",
+  "不假思索地",
+  "不慌不忙地",
+  "不紧不慢地",
+];
+
+/**
+ * 含"不/无"但并非否定动作的前缀动词。
+ *
+ * 真实长程样本："不顾林婉儿的阻拦" —— "不顾"=不理会/不吝惜，后接宾语（阻拦），
+ * 不是对后接动作"上前"的否定。若把"不"当否定标记，会误判 raw 否定 → editorial
+ * 肯定（"否定语义反转"误杀，单个即阻断）。
+ *
+ * 否定判断前先剔除这些前缀，避免"不"被误判为动作否定标记。
+ */
+const NON_NEGATING_PREFIX_VERBS: readonly string[] = [
+  "不顾",
+  "不管",
+  "不问",
+  "不论",
+  "不由自主",
+  "不约而同",
+  "不假思索",
+];
+
+/**
+ * 动作动词在复合名词中的误匹配排除表。
+ *
+ * 单字动作动词（如"杀"）作为子串出现在名词复合词中（如"杀戮""杀手""杀意"）
+ * 时，不是动作动词。若不排除，会把纯描述句（如"不再只有冰冷的杀戮与算计"）
+ * 误判为动作事件，进而触发 editorial-only 关键事件误杀（critical，单条即阻断）。
+ *
+ * key 为动作动词，value 为该动词作为子串出现的复合名词列表。
+ */
+const ACTION_VERB_NON_ACTION_COMPOUNDS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["杀", ["杀戮", "杀手", "杀意", "杀气", "杀机", "杀招", "杀伐"]],
+  // "吃"在"吃力"（形容词）、"吃惊"（形容词）等复合词中不是动作动词。
+  // 真实长程样本："显得有些吃力"被误抽出动作"吃"，进而触发"否定语义反转"误杀。
+  ["吃", ["吃力", "吃惊", "吃紧", "吃苦", "吃亏", "吃香"]],
+]);
+
+// ============================================================================
 // 类型定义
 // ============================================================================
 
@@ -317,7 +384,15 @@ function analyzeEventStructure(
   // 旧逻辑 ACTION_VERBS.find 按 array order 返回 "攻击"，导致 "防御攻击"→"主动攻击"
   // 被误判为 action 相同（都是"攻击"），不触发 critical replacement。
   const stateChangeVerb = findEarliestVerb(sentence, STATE_CHANGE_VERBS);
-  const actionVerb = findEarliestVerb(sentence, ACTION_VERBS);
+  let actionVerb = findEarliestVerb(sentence, ACTION_VERBS);
+  // 真实长程误杀治理："杀"等单字动作动词作为子串出现在名词复合词中
+  // （"杀戮""杀手""杀意"等）时不是动作动词，跳过以免把纯描述句误判为动作事件。
+  if (actionVerb) {
+    const compounds = ACTION_VERB_NON_ACTION_COMPOUNDS.get(actionVerb);
+    if (compounds && compounds.some((c) => sentence.includes(c))) {
+      actionVerb = undefined;
+    }
+  }
 
   // ── 纯判断/指认句检测 ─────────────────────────────────────────────
   if (!actionVerb && !stateChangeVerb) {
@@ -388,7 +463,18 @@ function analyzeEventStructure(
   // 检查动词前是否有否定标记（没有/未/不曾 等）或未遂标记（差点/几乎/险些 等）
   // "没有攻击" → negated=true；"差点杀死" → nearMiss=true
   const beforeVerb = sentence.slice(0, actionIdx);
-  const negated = NEGATION_MARKERS.some((m) => beforeVerb.includes(m));
+  // 真实长程误杀治理：先剔除方式状语（"毫无预兆地"等），再判断动作否定。
+  // 方式状语里的"无/不"不是对动作的否定，剔除后可避免"否定语义反转"误杀。
+  const beforeVerbWithoutAdverbials = NON_NEGATING_ADVERBIALS.reduce(
+    (acc, adv) => acc.split(adv).join(""),
+    beforeVerb,
+  );
+  // 再剔除"不顾"类前缀动词（"不顾阻拦"里的"不"不是对动作的否定）。
+  const beforeVerbWithoutNegVerbPrefixes = NON_NEGATING_PREFIX_VERBS.reduce(
+    (acc, prefix) => acc.split(prefix).join(""),
+    beforeVerbWithoutAdverbials,
+  );
+  const negated = NEGATION_MARKERS.some((m) => beforeVerbWithoutNegVerbPrefixes.includes(m));
   const nearMiss = NEAR_MISS_MARKERS.some((m) => beforeVerb.includes(m));
 
   return {

@@ -35,7 +35,10 @@ import {
   jaccardSimilarity,
   type ExtractedEvent,
 } from "./event-extractor.js";
-import { findSubjectObjectSwapPreMatch } from "./event-comparator-helpers.js";
+import {
+  findSubjectObjectSwapPreMatch,
+  hasSharedQuotedSpeech,
+} from "./event-comparator-helpers.js";
 import type {
   ReplacedEventEvidence,
   AdvisorySimilarityEvidence,
@@ -671,6 +674,18 @@ export function matchAndDetectReplacements(
         (!hasSubjectMatch && rawHasObject) ||
         (hasSubjectMatch && rawHasObject && sharesContentBeyondEntity)
       ) {
+        // 真实长程误杀治理：若 raw/editorial 承载同一段引语（对白内容），说明是
+        // 同一言语事件、仅引导语被风格改写（如"苦笑道"→"苦笑着摇了摇头说道"），
+        // 不构成事件替换，降为 advisory。
+        if (hasSharedQuotedSpeech(rawEvent.sentence, bestMatch.event.sentence)) {
+          advisorySimilarities.push({
+            rawEventId: rawEvent.id,
+            editorialEventId: bestMatch.event.id,
+            similarity: bestMatch.similarity,
+            sharesBigram: sharesContentBeyondEntity,
+            note: `subject '${rawEvent.subject}' 相同、共享同一段引语（同一言语事件，仅引导语改写），action/object 不同不构成事件替换`,
+          });
+        } else {
         // 低相似度替换（累计阈值阻断）：
         // - bare verb + 有 object → 按位置匹配可靠，记为低相似度替换
         // - 同角色 + 有 object + 共享显著内容 → 同一事件被改写，记为低相似度替换
@@ -691,6 +706,7 @@ export function matchAndDetectReplacements(
           rawCriticalAction: null,
           reason: `事件结构替换：subject '${rawEvent.subject}' 相同但 action/object 完全不同（raw action='${rawEvent.action}' object='${rawEvent.object}' → editorial action='${bestMatch.event.action}' object='${bestMatch.event.object}'），疑似事件被改写`,
         });
+        }
       } else {
         // 同角色但不共享显著内容（同角色不同事件）→ advisory，不阻断
         advisorySimilarities.push({

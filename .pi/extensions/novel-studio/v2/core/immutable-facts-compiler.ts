@@ -159,6 +159,42 @@ const REALM_SUFFIX_PATTERN = /[\u4e00-\u9fff]{1,4}(?:境|阶|级|重|层|期)/g;
 /** 明确表示修为/层级已经变化的语境；刻意不包含普通的"跨越/进入"。 */
 const UPGRADE_CONTEXT_PATTERN = /(?:突破|晋升|进阶|升(?:至|到|入)|跃升|提升(?:至|到)?|修炼(?:至|到)|达到|到达|踏入|迈入|成为)/;
 
+/**
+ * 非境界后缀短语（含境界/层级后缀，但并非修为境界或层级跃迁）。
+ *
+ * upgrade_result 动态检测按 REALM_SUFFIX_PATTERN 扫描，容易把普通词汇误判为
+ * 未授权境界跃迁。本集合用于排除常见误报：
+ * - 时间状语："关键时期"（突破的关键时期）、"期间"
+ * - 功法层数："第三层"（第X层，功法修炼层次，非修为境界）—— 本世界层级授权为
+ *   "练气/筑基"（境/期），"层"不作为境界，故"第X层"应视为功法层而非修为跃迁
+ * - 抽象层级："层次"、"阶层"
+ *
+ * 注意：仅当整个匹配词命中这些排除项时才跳过，避免误放过真实境界（如"筑基期"）。
+ */
+const NON_REALM_SUFFIX_PHRASES: readonly string[] = [
+  "时期",
+  "期间",
+  "层次",
+  "阶层",
+  "意境",
+  "境地",
+  "境况",
+];
+
+/** 功法层数（第X层/第X重），如"第三层"，非修为境界，排除。 */
+const NUMBERED_LAYER_PATTERN = /第[一二三四五六七八九十百千万\d]+(?:层|重)$/;
+
+/**
+ * 判断 upgrade_result 扫描到的后缀词是否为非境界词汇（应排除）。
+ *
+ * 注意：REALM_SUFFIX_PATTERN 会连同升级语境前缀一起捕获（如"到了第三层"、
+ * "破到化神境"），因此必须基于词尾判断，而非整词。
+ */
+function isNonRealmSuffixPhrase(term: string): boolean {
+  if (NUMBERED_LAYER_PATTERN.test(term)) return true;
+  return NON_REALM_SUFFIX_PHRASES.some((p) => term.endsWith(p));
+}
+
 // ============================================================================
 // 1. compileImmutableFacts — 从 6 个来源编译本章硬事实
 // ============================================================================
@@ -468,6 +504,8 @@ export function checkUnauthorizedHighImpactSettings(
   let match: RegExpExecArray | null;
   while ((match = REALM_SUFFIX_PATTERN.exec(text)) !== null) {
     const term = match[0];
+    // 排除非境界词汇（功法层数"第三层"、时间状语"关键时期"等）
+    if (isNonRealmSuffixPhrase(term)) continue;
     const isAuthorized = isTermAuthorized(term, "upgrade_result", authorizedTerms);
     if (!isAuthorized && hasUpgradeResultContext(text, match.index, match.index + term.length)) {
       diagnostics.push({

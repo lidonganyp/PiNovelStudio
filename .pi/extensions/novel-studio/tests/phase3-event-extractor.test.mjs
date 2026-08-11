@@ -219,4 +219,90 @@ describe("Phase 3A: event-extractor — 结构化事件抽取", () => {
     // 无已知实体时，无法确定主体 → 不可提取
     assert.equal(extractable.length, 0, "无实体文本应无可提取事件");
   });
+
+  // ── 真实长程 replay 误杀治理回归（docs/memory-layer-baseline.md）──
+  it("回归：方式状语\"毫无预兆地\"不触发动作否定（否定语义反转误杀）", () => {
+    // ch2 真实样本：raw 与 editorial 均为"传了出来"，editorial 加了"毫无预兆地"
+    // 方式状语，其"无"不是对动作的否定，不应设 negated=true。
+    const text = "毫无预兆地突然从青衣少女平坦的肚子里传了出来。";
+    const result = extractEvents(text, ["青衣少女"], { entityCoverage: "full_entities" });
+    const extractable = getExtractableEvents(result.events);
+    const negatedEvents = extractable.filter((e) => e.negated === true);
+    assert.equal(
+      negatedEvents.length,
+      0,
+      `"毫无预兆地"不应使动作变为否定，实际 negated: ${JSON.stringify(negatedEvents.map((e) => ({ action: e.action, negated: e.negated })))}`,
+    );
+  });
+
+  it("回归：真正的动作否定仍被识别（没有/未 等）", () => {
+    const text = "叶尘没有攻击林默。";
+    const result = extractEvents(text, ["叶尘", "林默"], { entityCoverage: "full_entities" });
+    const extractable = getExtractableEvents(result.events);
+    const attack = extractable.find((e) => e.action === "攻击");
+    assert.ok(attack, "应抽取攻击事件");
+    assert.equal(attack.negated, true, "\"没有攻击\" 应被识别为否定动作");
+  });
+
+  it("回归：\"杀戮\"等复合名词中的\"杀\"不匹配为动作动词", () => {
+    // ch2 真实样本："不再只有冰冷的杀戮与算计" —— "杀戮"是名词，不是动作"杀"。
+    const text = "她不再只有冰冷的杀戮与算计。";
+    const result = extractEvents(text, ["她"], { entityCoverage: "full_entities" });
+    const extractable = getExtractableEvents(result.events);
+    const killEvents = extractable.filter((e) => e.action === "杀");
+    assert.equal(
+      killEvents.length,
+      0,
+      `\"杀戮\"中的\"杀\"不应匹配为动作，实际: ${JSON.stringify(killEvents.map((e) => ({ action: e.action, sentence: e.sentence })))}`,
+    );
+  });
+
+  it("回归：真实动作\"杀\"仍被识别", () => {
+    const text = "叶尘杀了来袭的妖兽。";
+    const result = extractEvents(text, ["叶尘", "妖兽"], { entityCoverage: "full_entities" });
+    const extractable = getExtractableEvents(result.events);
+    const kill = extractable.find((e) => e.action === "杀");
+    assert.ok(kill, "真实\"杀了\"应被识别为动作");
+    assert.equal(kill.subject, "叶尘");
+  });
+
+  it("回归：\"吃力\"中的\"吃\"不匹配为动作动词", () => {
+    // ch7 真实样本："显得有些吃力" —— "吃力"是形容词，不是动作"吃"。
+    const text = "她的身法在如此紊乱的灵气中也显得有些吃力。";
+    const result = extractEvents(text, ["苏影"], { entityCoverage: "full_entities" });
+    const extractable = getExtractableEvents(result.events);
+    const eatEvents = extractable.filter((e) => e.action === "吃");
+    assert.equal(
+      eatEvents.length,
+      0,
+      `\"吃力\"中的\"吃\"不应匹配为动作，实际: ${JSON.stringify(eatEvents.map((e) => ({ action: e.action, sentence: e.sentence })))}`,
+    );
+  });
+
+  it("回归：\"不顾阻拦\"中的\"不\"不触发动作否定", () => {
+    // ch7 真实样本："不顾林婉儿的阻拦" —— "不顾"=不理会，不是对动作"上前"的否定。
+    const text = "不顾林婉儿的阻拦径直上前一步举起碎星剑。";
+    const result = extractEvents(text, ["林婉儿", "碎星剑"], { entityCoverage: "full_entities" });
+    const extractable = getExtractableEvents(result.events);
+    const stepEvent = extractable.find((e) => e.action === "上前");
+    assert.ok(stepEvent, "应抽取上前动作");
+    assert.equal(
+      stepEvent.negated,
+      false,
+      `\"不顾阻拦\"中的\"不\"不应使动作否定，实际 negated: ${JSON.stringify(stepEvent)}`,
+    );
+  });
+
+  it("回归：真正的动作否定仍被识别（有\"不\"的语境）", () => {
+    // 确保剔除"不顾"后，真实的动作否定仍生效
+    const text = "叶尘没有上前，而是退回一步。";
+    const result = extractEvents(text, ["叶尘"], { entityCoverage: "full_entities" });
+    const extractable = getExtractableEvents(result.events);
+    const backEvent = extractable.find((e) => e.action === "退回" || e.action === "退");
+    // 前句"没有上前"的上前应被识别为否定
+    const stepEvents = extractable.filter((e) => e.action === "上前");
+    for (const e of stepEvents) {
+      assert.equal(e.negated, true, `\"没有上前\"应识别为否定动作`);
+    }
+  });
 });

@@ -539,6 +539,7 @@ function loadPreviousChapterTextContinuation(
   const fileNames = [...new Set([
     `${previousNumber}.md`,
     `chapter-${previousNumber}.md`,
+    `ch${previousNumber}.md`,
     `chapter-${String(previousNumber).padStart(2, "0")}.md`,
   ])];
   for (const fileName of fileNames) {

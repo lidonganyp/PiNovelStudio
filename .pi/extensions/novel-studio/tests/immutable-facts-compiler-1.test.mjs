@@ -367,3 +367,45 @@ test("IMMUTABLE-FACTS-COMPILER-1 · 诊断含 span/category/term/reason/sourceRe
   assert.ok(d.span && typeof d.span.start === "number" && typeof d.span.end === "number",
     `诊断.span 必须含 start/end，实际: ${JSON.stringify(d)}`);
 });
+
+// ============================================================================
+// 6. 真实长程 replay 误报治理回归（docs/memory-layer-baseline.md）
+// ============================================================================
+
+test("回归：功法层数\"修炼到了第三层\"不误报为境界跃迁", () => {
+  // ch1 真实样本：《水云秘法》修炼到"第三层"是功法层级，不是修为境界跃迁。
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "《水云秘法》我也修炼到了第三层。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  const upgrades = diagnostics.filter((d) => d.category === "upgrade_result");
+  assert.deepEqual(
+    upgrades,
+    [],
+    `"第三层"是功法层数，不应误报为未授权境界跃迁：${JSON.stringify(upgrades)}`,
+  );
+});
+
+test("回归：时间状语\"突破的关键时期\"不误报为境界跃迁", () => {
+  // ch1 真实样本："正处于突破的关键时期"——"关键时期"是时间状语，非境界。
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "你如今正处于突破的关键时期，更需要这些。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  const upgrades = diagnostics.filter((d) => d.category === "upgrade_result");
+  assert.deepEqual(
+    upgrades,
+    [],
+    `"关键时期"是时间状语，不应误报为未授权境界跃迁：${JSON.stringify(upgrades)}`,
+  );
+});
+
+test("回归：排除非境界词汇后，真实未授权境界仍被检测", () => {
+  // 排除"第三层/关键时期"等误报，不得削弱对真实未授权境界（如"化神境"）的检测。
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "他路过第三层关卡时，处于突破的关键时期，猛然突破到化神境。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  const upgrades = diagnostics.filter((d) => d.category === "upgrade_result");
+  assert.ok(
+    upgrades.some((d) => d.term.endsWith("化神境")),
+    `真实未授权境界"化神境"仍应被检测：${JSON.stringify(upgrades)}`,
+  );
+});

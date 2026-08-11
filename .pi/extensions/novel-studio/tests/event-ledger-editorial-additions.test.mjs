@@ -156,3 +156,55 @@ test("P0-2 防误报: 同组已知实体做不同事，replacedEvents 由现有�
     }
   }
 });
+
+// ============================================================================
+// 用例 4：真实长程 replay 误杀治理 — 共享引语的同义改写不构成事件替换
+// ============================================================================
+
+test("回归：共享同一段引语的引导语改写不判为事件替换（preserved=true）", () => {
+  // ch2 真实样本抽取：raw 与 editorial 承载同一句对白"这位姑娘说笑了"，
+  // 仅引导语被风格改写（"装出一副茫然的样子苦笑道" → "苦笑着摇了摇头说道"）。
+  const rawText = "叶尘装出一副茫然的样子苦笑道：“这位姑娘说笑了……”";
+  const editorialText = "叶尘苦笑着摇了摇头说道：“这位姑娘说笑了……”";
+  const knownEntities = ["叶尘"];
+
+  const report = checkEditorialStoryPreservation({
+    rawText,
+    editorialText,
+    knownEntities,
+    entityCoverage: "full_entities",
+  });
+
+  // 同一言语事件、仅引导语改写，不应判定为故事骨架漂移
+  assert.equal(
+    report.preserved,
+    true,
+    `共享同一段引语的对白改写应通过 story preservation。实际: ${JSON.stringify(report).slice(0, 400)}`,
+  );
+});
+
+// ============================================================================
+// 用例 5：真实长程 replay 误杀治理 — 同义抓握动作改写不构成事件替换
+// ============================================================================
+
+test("回归：\"拉住\"→\"死死拽住\"同义改写不判为关键动作替换（preserved=true）", () => {
+  // ch7 真实样本：raw"一把拉住叶尘的衣袖" → editorial"一把死死拽住叶尘的衣袖"。
+  // "拉住"是关键动作，"拽住"属同义抓握族，风格改写不应触发"动作→非动作"关键替换。
+  const rawText = "苏影一把拉住叶尘的衣袖低喝道：“停下！”";
+  const editorialText = "苏影一把死死拽住叶尘的衣袖，沉声道：“停下！”";
+  const knownEntities = ["苏影", "叶尘"];
+
+  const report = checkEditorialStoryPreservation({
+    rawText,
+    editorialText,
+    knownEntities,
+    entityCoverage: "full_entities",
+  });
+
+  // 同义抓握动作改写，应通过 story preservation
+  assert.equal(
+    report.preserved,
+    true,
+    `\"拉住\"→\"拽住\"同义改写应通过 story preservation。实际: ${JSON.stringify(report).slice(0, 400)}`,
+  );
+});
