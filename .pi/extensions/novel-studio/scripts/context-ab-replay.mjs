@@ -1,22 +1,29 @@
 /**
- * Phase 6.1 上下文压缩 A/B/C replay 脚本
+ * Phase 6.1 上下文压缩 A/B/C replay 脚本（走生产 buildHistoricalContext 注入路径）
  *
- * 目标：验证长期状态注入对模型工具选择和证据覆盖的影响
- *   - A 组（完整）：完整 LongTermStateSnapshot，摘要 160 字符/条
- *   - B 组（压缩）：压缩快照，摘要 80 字符/条，排除 PatternMemory/Planned
+ * 目标：验证长期状态注入压缩对模型工具选择和证据覆盖的影响
+ *   - A 组（完整）：生产默认注入参数（canon 4×2400、character 6×1800、pattern 4×1000）
+ *   - B 组（压缩）：maxEntries 减半、maxChars 减半、排除 PatternMemory
  *   - C 组（无状态）：不注入长期状态（基线）
+ *
+ * 口径（Gemini 冻结基线，2026-08-11）：
+ *   - route = v2_rawstage2_gemini31，provider = gemini31，model = gemini-3.1-pro-preview
+ *   - temperature = 0.72，maxTokens = 2048，DISABLE_FALLBACK=1
+ *   - 场景 = SC1/SC6/SC7（高信号集），seed 0/1，共 6 arm 样本
+ *   - schemaTokenCost 与状态注入正交（工具 schema 成本），不作为本轮压缩收益
+ *   - 压缩收益只度量 contextBlockTokens；质量底线是 mustVerify/sourceRef/empty/errors/timeouts/stopRate
  *
  * 用法：
  *   # dry-run（验证框架，零 API）
  *   node scripts/context-ab-replay.mjs --dry-run
  *
- *   # 真实模型（需 GLM 授权）
+ *   # 真实 Gemini 模型
  *   $env:PINOVEL_DISABLE_FALLBACK="1"
- *   node scripts/context-ab-replay.mjs --require-auth --batches=3
+ *   node scripts/context-ab-replay.mjs --require-auth --batches=1 --seeds=0,1
  *
  * 输出：
- *   {repo_root}/reports/phase6-context-ab/context-ab-comparison.json
- *   {repo_root}/reports/phase6-context-ab/context-ab-comparison.md
+ *   {repo_root}/reports/phase6-context-ab/real/context-ab-comparison.json
+ *   {repo_root}/reports/phase6-context-ab/real/context-ab-comparison.md
  */
 
 import { join, dirname } from "node:path";
@@ -33,7 +40,9 @@ const PROJECT_ROOT = join(EXT_ROOT, "..", "..", "..");
 const DRY_RUN = process.argv.includes("--dry-run");
 const REQUIRE_AUTH = process.argv.includes("--require-auth");
 const batchesArg = process.argv.find((a) => a.startsWith("--batches="));
-const BATCHES = batchesArg ? parseInt(batchesArg.split("=")[1], 10) : 3;
+const BATCHES = batchesArg ? parseInt(batchesArg.split("=")[1], 10) : 1;
+const seedsArg = process.argv.find((a) => a.startsWith("--seeds="));
+const SEEDS = seedsArg ? seedsArg.split("=")[1].split(",").map((s) => parseInt(s.trim(), 10)) : [0, 1];
 
 if (!DRY_RUN && !REQUIRE_AUTH) {
   console.error("[context-ab] 非 dry-run 模式必须显式传 --require-auth");
@@ -48,13 +57,16 @@ if (!DRY_RUN && process.env.PINOVEL_DISABLE_FALLBACK !== "1") {
 const MODE_DIR = DRY_RUN ? "dry-run" : "real";
 const REPORT_DIR = join(PROJECT_ROOT, "reports", "phase6-context-ab", MODE_DIR);
 
-const MODEL_ROUTE = process.env.PINOVEL_TOOL_AB_ROUTE ?? "narrator_testing_glm";
+// Gemini 冻结基线路由（唯一真相源为 config/model-routing.json v4.31.0）
+const MODEL_ROUTE = process.env.PINOVEL_TOOL_AB_ROUTE ?? "v2_rawstage2_gemini31";
+const PROVIDER = "gemini31";
+const MODEL = "gemini-3.1-pro-preview";
 const TEMPERATURE = 0.72;
 const MAX_TOKENS = 2048;
-const SEEDS = [0, 1, 2];
 
-console.log("[context-ab] 上下文压缩 A/B/C replay 启动");
+console.log("[context-ab] 上下文压缩 A/B/C replay 启动（生产 buildHistoricalContext 注入路径）");
 console.log(`[context-ab] 模式=${DRY_RUN ? "dry-run" : "real"}, 批次数=${BATCHES}, seeds=${SEEDS.join(",")}`);
+console.log(`[context-ab] 路由=${MODEL_ROUTE} (${PROVIDER}/${MODEL}), temp=${TEMPERATURE}, maxTokens=${MAX_TOKENS}`);
 console.log(`[context-ab] 变体：A(完整) / B(压缩) / C(无状态)`);
 
 const runner = await import(
@@ -66,7 +78,15 @@ const gateMod = await import(
 );
 const { aggregate, evaluateGate } = gateMod;
 
-const scenarios = runner.getContextAbScenarios();
+// SC1/SC6/SC7 高信号场景（冻结基线口径）：从 tool-ab-real-runner 导入 getBaselineScenarios
+const realBaseline = await import(
+  `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "tool-ab-real-runner.js")}`
+);
+const scenarios = realBaseline.getBaselineScenarios();
+if (scenarios.length === 0) {
+  console.error("[context-ab] 未找到高信号场景（SC1/SC6/SC7）");
+  process.exit(1);
+}
 const variants = [
   { label: "A", arm: "A" },
   { label: "B", arm: "B" },
@@ -79,7 +99,6 @@ if (DRY_RUN) {
   // Dry-run stub：按场景 calls 顺序输出工具调用，最后输出终止标记
   modelFn = (ctx) => {
     const round = ctx.round;
-    // 简单 stub：前几回合调用工具，最后输出终止标记
     if (round < 2) {
       return Promise.resolve({
         kind: "tool_call",
@@ -92,9 +111,6 @@ if (DRY_RUN) {
 } else {
   const realRunner = await import(
     `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "tool-ab-real-runner.js")}`
-  );
-  const { clearUnhealthyProviders, clearChapterTimeoutCounts } = await import(
-    `file://${join(EXT_ROOT, "dist-eval", "api", "fallback-manager.js")}`
   );
   modelFn = await realRunner.createRealToolAbModelDecide({
     route: MODEL_ROUTE,
@@ -115,6 +131,7 @@ async function runOne(scenario, seed, variant) {
     });
     const tc = m.totalCalls ?? 0;
     const sv = m.sourceRefsValid ?? 0;
+    const counts = m.injectionCounts ?? { canon: 0, character: 0, pattern: 0, total: 0 };
     return {
       coverage: m.mustVerify?.coverageRatio ?? 0,
       stopped: m.stopped ? 1 : 0,
@@ -130,18 +147,27 @@ async function runOne(scenario, seed, variant) {
       parseErrors: m.parseErrors ?? 0,
       invalidToolSelections: m.invalidToolSelections ?? 0,
       invalidIntents: m.invalidIntents ?? 0,
-      // Phase 6 专属指标
+      // Phase 6 压缩指标（收益度量 = contextBlockTokens）
       contextBlockTokens: m.contextBlockTokens ?? 0,
       contextBlockChars: m.contextBlockChars ?? 0,
       contextItemCount: m.contextItemCount ?? 0,
-      contextCanonTokens: m.contextTokenBreakdown?.canon ?? 0,
-      contextCharacterTokens: m.contextTokenBreakdown?.character ?? 0,
-      contextPromiseTokens: m.contextTokenBreakdown?.promise ?? 0,
-      contextPatternTokens: m.contextTokenBreakdown?.pattern ?? 0,
-      contextExpectationTokens: m.contextTokenBreakdown?.expectation ?? 0,
-      contextPlannedTokens: m.contextTokenBreakdown?.planned ?? 0,
+      contextCanonTokens: counts.canon,
+      contextCharacterTokens: counts.character,
+      contextPromiseTokens: 0,
+      contextPatternTokens: counts.pattern,
+      contextExpectationTokens: 0,
+      contextPlannedTokens: 0,
       firstValidEvidenceCall: m.firstValidEvidence?.callIndex ?? -1,
       provenance: m.provenance ?? null,
+      // 各状态类别实际保留条目数（B 压缩对照）
+      injectCanonCount: counts.canon,
+      injectCharacterCount: counts.character,
+      injectPatternCount: counts.pattern,
+      injectTotalCount: counts.total,
+      // 生产注入三段原始文本（trajectory 用）
+      historicalContinuity: m.historicalContinuity ?? [],
+      historicalCharacterState: m.historicalCharacterState ?? [],
+      recentPatternMemory: m.recentPatternMemory ?? [],
     };
   } catch (err) {
     return {
@@ -153,6 +179,8 @@ async function runOne(scenario, seed, variant) {
       contextCanonTokens: 0, contextCharacterTokens: 0, contextPromiseTokens: 0,
       contextPatternTokens: 0, contextExpectationTokens: 0, contextPlannedTokens: 0,
       firstValidEvidenceCall: -1, provenance: null,
+      injectCanonCount: 0, injectCharacterCount: 0, injectPatternCount: 0, injectTotalCount: 0,
+      historicalContinuity: [], historicalCharacterState: [], recentPatternMemory: [],
     };
   }
 }
@@ -161,7 +189,6 @@ async function runOne(scenario, seed, variant) {
 const allBatchResults = [];
 let globalProvenance = null;
 
-// 导入 clearUnhealthyProviders（真实模式）
 let clearUnhealthyProviders = null;
 let clearChapterTimeoutCounts = null;
 if (!DRY_RUN) {
@@ -194,7 +221,7 @@ for (let batch = 0; batch < BATCHES; batch++) {
         batchEntries[v.label].push(r);
         console.log(
           `cov=${r.coverage.toFixed(3)}, stop=${r.stopped}, ref=${r.sourceRefCompleteness.toFixed(3)}, ` +
-          `calls=${r.totalCalls}, ctxTokens=${r.contextBlockTokens}, ctxItems=${r.contextItemCount}`,
+          `calls=${r.totalCalls}, ctxTokens=${r.contextBlockTokens}, ctxItems=${r.injectTotalCount}`,
         );
       }
     }
@@ -217,6 +244,58 @@ const crossC = crossBatchAggregate("C");
 
 const gate = evaluateGate(crossB, crossC, crossA);
 
+// ── 逐场景/逐 seed trajectory ──
+function buildTrajectory() {
+  const rows = [];
+  for (const scenario of scenarios) {
+    for (const seed of SEEDS) {
+      const row = { scenarioId: scenario.id, seed };
+      for (const v of variants) {
+        const entries = allBatchResults.flatMap((b) =>
+          (b.rawEntries[v.label] ?? []).filter(
+            (r) => r.scenarioId === scenario.id && r.seed === seed,
+          ),
+        );
+        const agg = aggregate(entries);
+        row[v.label] = {
+          coverage: +agg.avgCoverage.toFixed(3),
+          stopRate: +agg.stopRate.toFixed(3),
+          sourceRef: +agg.avgSourceRef.toFixed(3),
+          empty: agg.totalEmpty,
+          errors: agg.totalErrors,
+          timeouts: agg.totalTimeouts,
+          stopCount: agg.totalChars > 0 ? entries.filter((e) => e.stopped).length : 0,
+          contextBlockTokens: agg.totalContextBlockTokens,
+          canonCount: entries.reduce((s, e) => s + (e.injectCanonCount ?? 0), 0),
+          characterCount: entries.reduce((s, e) => s + (e.injectCharacterCount ?? 0), 0),
+          patternCount: entries.reduce((s, e) => s + (e.injectPatternCount ?? 0), 0),
+          itemCount: +agg.avgContextItemCount.toFixed(1),
+        };
+      }
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+const trajectory = buildTrajectory();
+
+// ── 压缩比例（B vs A，按 contextBlockTokens 与条目数） ──
+function compressionRatio() {
+  const aTokens = crossA.totalContextBlockTokens;
+  const bTokens = crossB.totalContextBlockTokens;
+  const aItems = crossA.avgContextItemCount;
+  const bItems = crossB.avgContextItemCount;
+  return {
+    tokenReductionPct: aTokens > 0 ? +((1 - bTokens / aTokens) * 100).toFixed(1) : 0,
+    itemReductionPct: aItems > 0 ? +((1 - bItems / aItems) * 100).toFixed(1) : 0,
+    aTokens,
+    bTokens,
+    aItems: +aItems.toFixed(1),
+    bItems: +bItems.toFixed(1),
+  };
+}
+const compression = compressionRatio();
+
 // ── 生成 JSON ──
 const report = {
   schema: "context-ab-comparison/v1",
@@ -224,33 +303,39 @@ const report = {
   mode: DRY_RUN ? "dry-run" : "real",
   batches: BATCHES,
   provenance: globalProvenance ?? (DRY_RUN ? { mode: "stub" } : {
-    provider: "glm",
-    model: "glm-5.2",
+    provider: PROVIDER,
+    model: MODEL,
     route: MODEL_ROUTE,
     temperature: TEMPERATURE,
     fallbackDisabled: true,
   }),
   config: {
     modelRoute: MODEL_ROUTE,
+    provider: PROVIDER,
+    model: MODEL,
     temperature: TEMPERATURE,
     maxTokens: MAX_TOKENS,
     seeds: SEEDS,
     scenarios: scenarios.map((s) => s.id),
     batches: BATCHES,
+    injectionPath: "production buildHistoricalContext (boundedEntries)",
     compressionParams: {
-      A: { summaryCharLimit: 160, maxItems: 48, injectPattern: true, injectExpectation: true, injectPlanned: true },
-      B: { summaryCharLimit: 80, maxItems: 24, injectPattern: false, injectExpectation: true, injectPlanned: false },
-      C: { summaryCharLimit: 0, maxItems: 0, injectPattern: false, injectExpectation: false, injectPlanned: false },
+      A: { canon: "4×2400", character: "6×1800", pattern: "4×1000" },
+      B: { canon: "2×1200", character: "3×900", pattern: "excluded" },
+      C: { inject: "none" },
     },
+    note: "schemaTokenCost 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 contextBlockTokens。",
   },
   crossBatchAggregation: { A: crossA, B: crossB, C: crossC },
+  compressionRatio: compression,
   gate,
+  trajectory,
   perBatch: allBatchResults.map((b) => ({
     batch: b.batch,
     aggregation: b.aggregation,
     gate: evaluateGate(b.aggregation.B, b.aggregation.C, b.aggregation.A),
   })),
-  note: "Phase 6.1: A=完整长期状态/B=压缩/C=无状态。固定9专用工具，只变化上下文注入量。",
+  note: "Phase 6.1: A=完整长期状态(生产默认)/B=压缩/C=无状态。固定9专用工具，走生产 buildHistoricalContext 注入路径，只变化长期状态注入压缩。",
 };
 
 mkdirSync(REPORT_DIR, { recursive: true });
@@ -262,7 +347,7 @@ function fmt(v, d = 3) { return (typeof v === "number" ? v.toFixed(d) : String(v
 function pct(v) { return `${(v * 100).toFixed(0)}%`; }
 
 const md = [
-  "# Phase 6.1 上下文压缩 A/B/C replay 报告",
+  "# Phase 6.1 上下文压缩 A/B/C replay 报告（生产 buildHistoricalContext 注入路径）",
   "",
   `**时间**：${report.timestamp}`,
   `**模式**：${report.mode}`,
@@ -272,9 +357,11 @@ const md = [
   "",
   "## 三组定义",
   "",
-  "- **A 组（完整）**：完整 LongTermStateSnapshot，摘要 160 字符/条，maxItems 48，全部四类状态",
-  "- **B 组（压缩）**：摘要 80 字符/条，maxItems 24，排除 PatternMemory/Planned",
+  "- **A 组（完整）**：生产默认注入参数（canon 4×2400、character 6×1800、pattern 4×1000）",
+  "- **B 组（压缩）**：maxEntries 减半、maxChars 减半、排除 PatternMemory",
   "- **C 组（无状态）**：不注入长期状态（基线）",
+  "",
+  "> 注入路径：生产 `buildHistoricalContext`（boundedEntries 三段）。`schemaTokenCost` 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 `contextBlockTokens`。",
   "",
   "## 跨批次聚合对比",
   "",
@@ -286,21 +373,28 @@ const md = [
   `| 总调用数 | ${crossA.totalCalls} | ${crossB.totalCalls} | ${crossC.totalCalls} |`,
   `| 空结果数 | ${crossA.totalEmpty} | ${crossB.totalEmpty} | ${crossC.totalEmpty} |`,
   `| 错误数 | ${crossA.totalErrors} | ${crossB.totalErrors} | ${crossC.totalErrors} |`,
+  `| 超时数 | ${crossA.totalTimeouts} | ${crossB.totalTimeouts} | ${crossC.totalTimeouts} |`,
   `| 非法工具选择 | ${crossA.totalInvalidTool} | ${crossB.totalInvalidTool} | ${crossC.totalInvalidTool} |`,
+  `| schemaTokenCost | ${crossA.schemaTokenCost} | ${crossB.schemaTokenCost} | ${crossC.schemaTokenCost} |`,
   `| 上下文 token | ${crossA.totalContextBlockTokens} | ${crossB.totalContextBlockTokens} | ${crossC.totalContextBlockTokens} |`,
   `| 上下文条目数 | ${fmt(crossA.avgContextItemCount, 1)} | ${fmt(crossB.avgContextItemCount, 1)} | ${fmt(crossC.avgContextItemCount, 1)} |`,
   `| 首证据延迟 | ${fmt(crossA.avgFirstValidEvidenceCall, 1)} | ${fmt(crossB.avgFirstValidEvidenceCall, 1)} | ${fmt(crossC.avgFirstValidEvidenceCall, 1)} |`,
   "",
-  "### 逐类 token 明细（A 组）",
+  "## 压缩比例（B vs A）",
   "",
-  "| 状态类 | token |",
-  "|--------|-------|",
-  `| CanonState | ${crossA.totalCanonTokens} |`,
-  `| CharacterState | ${crossA.totalCharacterTokens} |`,
-  `| PromiseLedger | ${crossA.totalPromiseTokens} |`,
-  `| PatternMemory | ${crossA.totalPatternTokens} |`,
-  `| Expectation | ${crossA.totalExpectationTokens} |`,
-  `| Planned | ${crossA.totalPlannedTokens} |`,
+  `- **contextBlockTokens 下降**：${compression.tokenReductionPct}%`,
+  `- **注入条目数下降**：${compression.itemReductionPct}%`,
+  "",
+  "## 每场景 trajectory（A/B/C × seed）",
+  "",
+  "| 场景 | seed | 臂 | 覆盖 | 停止 | sourceRef | empty | errors | timeouts | ctxTokens | canon | char | pattern | items |",
+  "|------|------|-----|-----|------|-----------|-------|--------|----------|-----------|-------|------|---------|-------|",
+  ...trajectory.flatMap((row) =>
+    ["A", "B", "C"].map((v) => {
+      const m = row[v];
+      return `| ${row.scenarioId} | ${row.seed} | ${v} | ${fmt(m.coverage)} | ${pct(m.stopRate)} | ${fmt(m.sourceRef)} | ${m.empty} | ${m.errors} | ${m.timeouts} | ${m.contextBlockTokens} | ${m.canonCount} | ${m.characterCount} | ${m.patternCount} | ${m.itemCount} |`;
+    }),
+  ),
   "",
   "## B 组门禁（压缩不降级）",
   "",
@@ -310,22 +404,14 @@ const md = [
   `| sourceRef >= A | ${gate.bGate.sourceRefGteA ? "PASS" : "FAIL"} | ${fmt(crossB.avgSourceRef)} vs ${fmt(crossA.avgSourceRef)} |`,
   `| 失败不劣于 A | ${gate.bGate.failuresNotWorseThanA ? "PASS" : "FAIL"} | errors/timeouts/parse/empty/invTool/truncated/invIntents |`,
   `| 停止率不降级 | ${gate.bGate.stopRateNotDegraded ? "PASS" : "FAIL"} | ${pct(crossB.stopRate)} vs ${pct(crossA.stopRate)} |`,
-  `| token 下降 >10% | ${gate.bGate.tokenReduced ? "PASS" : "FAIL"} | ${gate.bGate.tokenReductionPct} |`,
+  `| token 下降 >10% | ${gate.bGate.tokenReduced ? "PASS" : "FAIL"} | ${gate.bGate.tokenReductionPct}（contextBlockTokens） |`,
   `| 首证据不延迟 | ${gate.bGate.firstEvidenceNotDelayed ? "PASS" : "FAIL"} | ${fmt(crossB.avgFirstValidEvidenceCall, 1)} vs ${fmt(crossA.avgFirstValidEvidenceCall, 1)} |`,
   `| **整体门禁** | ${gate.bGate.allPassed ? "PASS" : "FAIL"} | |`,
-  "",
-  "## C 组 delta（无状态基线，记录不阻断）",
-  "",
-  "| 指标 | A - C delta | 说明 |",
-  "|------|------------|------|",
-  `| 覆盖率 delta | ${fmt(gate.cDelta.coverageDelta)} | ${gate.cDelta.marginalValueInsufficient ? "<5% 边际价值不足" : ">=5% 有边际价值"} |`,
-  `| sourceRef delta | ${fmt(gate.cDelta.sourceRefDelta)} | |`,
-  `| token delta | ${gate.cDelta.tokenDelta} | 长期状态注入的 token 成本 |`,
   "",
   "## 结论",
   "",
   gate.bGate.allPassed
-    ? "B 组压缩上下文**通过**门禁：token 显著下降且覆盖不降级。可作 Phase 6.2 生产 canary 候选。"
+    ? "B 组压缩上下文**通过**门禁：contextBlockTokens 显著下降且覆盖不降级。可作 Phase 6.2 单因素消融候选；组合方案通过只能说明组合有效，不能直接归因 PatternMemory，需后续单因素消融。"
     : "B 组压缩上下文**未通过**门禁。需检查具体失败项。",
   "",
   gate.cDelta.marginalValueInsufficient
@@ -338,4 +424,4 @@ writeFileSync(join(REPORT_DIR, "context-ab-comparison.md"), md.join("\n"));
 console.log(`\n[context-ab] 报告已生成：`);
 console.log(`  JSON: ${join(REPORT_DIR, "context-ab-comparison.json")}`);
 console.log(`  MD:   ${join(REPORT_DIR, "context-ab-comparison.md")}`);
-console.log(`[context-ab] B 组门禁：${gate.bGate.allPassed ? "PASS" : "FAIL"}`);
+console.log(`[context-ab] B 组门禁：${gate.bGate.allPassed ? "PASS" : "FAIL"}（token 下降 ${compression.tokenReductionPct}%）`);

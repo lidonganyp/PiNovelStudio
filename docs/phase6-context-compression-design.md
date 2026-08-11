@@ -576,3 +576,74 @@ Phase 6 固定工具集为 9 专用工具（Phase 4/5 已证明其为最优生�
 ### 后续
 
 Phase 6 冻结。下一研究模块：**思考/推理预算设计**（eval-only A/B，不触碰生产链路）。
+
+---
+
+## 15. 上下文压缩/记忆层研究 — Gemini 冻结基线口径（2026-08-11）
+
+> **状态**：**研究重启并锁定对照口径**。上文的 Phase 6 冻结决策（GLM 5.2 两轮消融无稳定显著差）基于 `narrator_testing_glm` 路由与独立 `buildContextBlock` 路径，**不构成**以 Gemini 生产路由为基线的压缩结论的依据。本节重建以 A 组冻结基线为准的对照口径。
+
+### 15.1 对照基线（A 组冻结，唯一参照）
+
+真实 Gemini replay，`reports/phase4-tool-ab-real-gemini/`，route=`v2_rawstage2_gemini31`，provider=gemini31，model=gemini-3.1-pro-preview，temperature=0.72，maxTokens=2048，`gemini_validation` cost profile，`DISABLE_FALLBACK=1`，场景 SC1/SC6/SC7 × seed 0/1，共 6 arm 样本。
+
+| 指标 | 冻结值 |
+|------|--------|
+| schemaTokenCost | 9208 |
+| mustVerify（avgCoverageRatio） | 0.667 |
+| sourceRefCompleteness | 0.400 |
+| emptyResults | 3 |
+| errors | 3 |
+| timeouts | 3 |
+| stopRate | 0.500（3/6） |
+| truncatedResults | 0 |
+| invalidToolSelections | 0 |
+| parseErrors | 0 |
+| evidenceLevelCounts | confirmed_state=2, exact_chapter_span=2 |
+| firstValidEvidenceLatencyMs | 2 |
+
+### 15.2 研究红线（不可违反）
+
+1. **所有压缩方案必须与 A 组冻结基线做同模型、同 seed、同场景对照**。不得以历史 stub 基线（`tool-interface-baseline.json` 2026-08-07，零模型调用确定性 stub）或跨模型结果（GLM 5.2）替代对照。
+2. **任一冻结指标不劣化方可通过**：schemaTokenCost / mustVerify / sourceRef / empty / errors / timeouts / stopRate。
+3. **生产注入路径才是对照路径**：生产长期状态经 `buildHistoricalContext` 的 `boundedEntries` 输出注入（`historicalContinuity` 4×2400 字符、`historicalCharacterState` 6×1800、`recentPatternMemory` 4×1000）。独立 `buildContextBlock`（`compressed-context-builder.ts`）仅作 eval 参考，**不得**作为生产注入等价物。
+4. **schemaTokenCost 与状态注入正交**：`schemaTokenCost=9208` 是工具 schema 注入成本（`estimateSystemPromptTokens × turns.length`），压缩候选（针对状态注入）不改变它；压缩研究的收益度量是 `contextBlockTokens`，质量底线是 mustVerify/sourceRef/empty/errors/timeouts/stopRate。
+
+### 15.3 现状与可压缩热点（已盘点）
+
+- 注入链路：`ContextCompiler.compile → deriveLongTermState → retrieveNarrativeContext(JIT) → LongTermStateSnapshot → buildRawPrompt → buildChapterContract → buildHistoricalContext`。
+- 真实存量（xinmo ch21）：character=125（生产仅注入 6 条相关）、pattern=89（注入 4 条）、canon=17、promise=14、planned=490（不注入 prompt，仅 trace）、expectation=0。
+- 热点：character 冗余最高（125→6），pattern 次之（89→4）；压缩空间集中在「低相关度条目保留策略 + 摘要长度」。
+- B 组压缩参数（maxItems 24 + 摘要 80 + 排 Pattern）曾在 GLM 历史报告 token 降 38% 且覆盖不降级——但**模型与路径均不符合本节口径，需重跑确认**。
+
+### 15.4 B 方案真实 Gemini replay 结果（2026-08-11）— B 不通过，保持 A 基线
+
+**执行口径**：`scripts/context-ab-replay.mjs`，`reports/phase6-context-ab/real/context-ab-comparison.json`，route=`v2_rawstage2_gemini31`（Gemini 3.1 Pro Preview），temperature=0.72，maxTokens=2048，`DISABLE_FALLBACK=1`，SC1/SC6/SC7 × seed 0/1 共 6 样本，工具面固定 A 组 9 专用工具，唯一变量为长期状态注入压缩；走生产 `buildHistoricalContext`（`boundedEntries`）注入路径。
+
+**B 组压缩参数**（`HistoricalContextOverrides`，生产默认不传）：canon `2×1200`（生产 4×2400）、character `3×900`（生产 6×1800）、pattern `inject:false`（生产 4×1000）。C 组为哨兵 `null` 不注入。
+
+**压缩收益（contextBlockTokens，与 schemaTokenCost 正交）**：
+
+| 指标（跨 6 样本合计） | A（完整） | B（压缩） | 变化 |
+|------|--------|--------|------|
+| contextBlockTokens | 386 | 250 | **-35.2%** |
+| 平均条目数 itemCount | 2.33 | 1.33 | -42.9% |
+| schemaTokenCost（工具 schema，与本轮正交） | 14963 | 11510 | 不列为收益 |
+
+**质量指标同场景/同 seed 对照（任一劣化则 B 不通过）**：
+
+| 指标 | A | B | 判定 |
+|------|-----|-----|------|
+| mustVerify avgCoverage | 1.000 | **0.833** | ❌ 劣化 |
+| sourceRef avgCompleteness | 0.667 | **0.500** | ❌ 劣化 |
+| empty / errors / timeouts | 0 / 0 / 0 | 0 / 0 / 0 | ✅ 未劣化 |
+| stopRate | 1.000 | 1.000 | ✅ 持平 |
+| bGate allPassed | — | **false** | ❌ 不通过 |
+
+**跨 seed 不稳定（决定性失败）**：SC1-canon-fact seed1 下，A coverage=1 / sourceRef=1，B **coverage=0 / sourceRef=0**（其余 5 样本 B 均 coverage=1）。压缩后同一场景在 seed1 完全丢失证据覆盖，违反"结果跨 seed 不稳定则保持 A 基线"红线。
+
+**结论**：
+1. **B 不通过**：`coverageGteA=false`（0.833 < 1.0）、`sourceRefGteA=false`（0.5 < 0.667），且 SC1:s1:B coverage=0 跨 seed 不稳定；`bGate.allPassed=false`。
+2. **保持 A 基线**：不进入生产，不切 canary，不改 production pointer；生产 ContextCompiler 参数未改动。
+3. **不可归因于单一因素**：B 同时改变 maxItems、摘要长度并排除 PatternMemory，属组合方案；虽 token 降 35.2%，但质量劣化，**不能**据此得出"PatternMemory 应排除"的结论。后续如需继续，应先做**单因素消融**（分别消融 maxItems、摘要长度、PatternMemory 影响），并扩大 seed 数验证稳定性，才能区分各因素贡献。
+4. **C 组（无状态注入）参考**：coverage=1.0、sourceRef=0.667，token 降到 138（-64.2%），`marginalValueInsufficient=true`——样本内不注入长期状态在本次 6 样本下未现覆盖损失，但样本量小不足以支撑"删减长期状态"的结论，仅作参考，不改变生产保持完整注入的冻结决策。

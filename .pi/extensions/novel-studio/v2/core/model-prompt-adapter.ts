@@ -171,7 +171,27 @@ function chapterNumber(value: string): number {
   return match ? Number(match[1]) : 0;
 }
 
-function buildHistoricalContext(input: UnifiedOrchestratorInput): Pick<
+/**
+ * Phase 6.1 eval-only：历史上下文注入的压缩覆盖参数。
+ *
+ * 生产默认不传（undefined），保持当前生产行为（canon 4×2400、character 6×1800、
+ * pattern 4×1000）。eval 压缩研究通过 overrides 在走生产 buildHistoricalContext
+ * 注入路径的前提下调整各状态类别的条目上限 / 字符预算 / 是否注入。
+ * schemaTokenCost 与状态注入正交，不随 overrides 变化。
+ */
+export interface HistoricalContextOverrides {
+  /** CanonState/historicalContinuity 覆盖 */
+  canon?: { maxEntries?: number; maxChars?: number; inject?: boolean };
+  /** CharacterState/historicalCharacterState 覆盖 */
+  character?: { maxEntries?: number; maxChars?: number; inject?: boolean };
+  /** PatternMemory/recentPatternMemory 覆盖（B 方案排除） */
+  pattern?: { maxEntries?: number; maxChars?: number; inject?: boolean };
+}
+
+export function buildHistoricalContext(
+  input: UnifiedOrchestratorInput,
+  overrides?: HistoricalContextOverrides,
+): Pick<
   ChapterContract,
   "historicalContinuity" | "historicalCharacterState" | "recentPatternMemory"
 > {
@@ -186,25 +206,38 @@ function buildHistoricalContext(input: UnifiedOrchestratorInput): Pick<
   const newestFirst = <T extends { sourceChapter: string }>(entries: ReadonlyArray<T>): T[] =>
     [...entries].sort((left, right) => chapterNumber(right.sourceChapter) - chapterNumber(left.sourceChapter));
 
+  const canonCfg = overrides?.canon ?? {};
+  const characterCfg = overrides?.character ?? {};
+  const patternCfg = overrides?.pattern ?? {};
+
   return {
-    historicalContinuity: boundedEntries(
-      newestFirst(state.canon).map((entry) => `${entry.sourceChapter}｜${entry.fact}`),
-      4,
-      2400,
-    ),
-    historicalCharacterState: boundedEntries(
-      newestFirst(state.character)
-        .filter((entry) => relevantNames.has(entry.characterId))
-        .map((entry) => `${entry.sourceChapter}｜${entry.characterId}.${entry.field}：${entry.value}`),
-      6,
-      1800,
-    ),
-    recentPatternMemory: boundedEntries(
-      newestFirst(state.pattern).map((entry) =>
-        `${entry.sourceChapter}｜${entry.patternType}：${entry.description}（累计 ${entry.occurrenceCount} 次）`),
-      4,
-      1000,
-    ),
+    historicalContinuity:
+      canonCfg.inject === false
+        ? []
+        : boundedEntries(
+            newestFirst(state.canon).map((entry) => `${entry.sourceChapter}｜${entry.fact}`),
+            canonCfg.maxEntries ?? 4,
+            canonCfg.maxChars ?? 2400,
+          ),
+    historicalCharacterState:
+      characterCfg.inject === false
+        ? []
+        : boundedEntries(
+            newestFirst(state.character)
+              .filter((entry) => relevantNames.has(entry.characterId))
+              .map((entry) => `${entry.sourceChapter}｜${entry.characterId}.${entry.field}：${entry.value}`),
+            characterCfg.maxEntries ?? 6,
+            characterCfg.maxChars ?? 1800,
+          ),
+    recentPatternMemory:
+      patternCfg.inject === false
+        ? []
+        : boundedEntries(
+            newestFirst(state.pattern).map((entry) =>
+              `${entry.sourceChapter}｜${entry.patternType}：${entry.description}（累计 ${entry.occurrenceCount} 次）`),
+            patternCfg.maxEntries ?? 4,
+            patternCfg.maxChars ?? 1000,
+          ),
   };
 }
 
