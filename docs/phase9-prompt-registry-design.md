@@ -1,7 +1,7 @@
 # Phase 9：Prompt 版本管理与评测流程
 
 > **状态**：产品级验收已通过（2026-08-10），当前版本作为稳定生产基线运行，进入生产运营期（2026-08-11）。
-> - 生产基线 active_prod：active pointer=rel-prod-103（合法生产审批，reviewTransport=network，审批 `approval-rel-prod-103-1786379908606-42cfb37a`，环境指纹 57abb60c），`PINOVEL_DEV_MODE=0`，暂不启动 canary。
+> - 生产基线 active_prod：active pointer=rel-prod-104（合法生产审批，reviewTransport=network，审批 `approval-rel-prod-104-1786448975869-e1f76869`，环境指纹 6e1e1387，codeCommit a05d9d9），`PINOVEL_DEV_MODE=0`，暂不启动 canary。rel-prod-104 迁移范围仅含遥测能力（Tool Interface v1 + token telemetry + FailureEnvelope + trace diagnostics），行为不变，production prompt / tool schema / context / budget hash 全部未变，drift check 4/4 通过。
 > - 基线回放完成：7/7 hash 一致性通过，registry 已初始化（4 active + 2 rejected P-B）。
 > - `verify:prompt-registry` 命令链路全绿：drift check 4/4 + governance tests 20/20 + production smoke 2/2。
 > - 真实生产基线（xinmo ch19，2026-08-10，rel-prod-101）：novel_generate_chapter 完整主链路 150.5s，4 次模型调用（Gemini 3.1），budget used=4/soft=6/hard=10（A 组预算），19.md 原子保存 5616 bytes，selectedSource=v2_amplified，trace 完整，narrative-state ch19 hash 217 处引用，无 silent degrade，release gate 通过（devMode=false，releaseId=rel-prod-101，指纹 4e129c8f，approvalRef 齐全）。该基线已由 rel-prod-103 继承。
