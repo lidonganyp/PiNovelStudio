@@ -1,5 +1,7 @@
 /**
- * Phase 6.1.1 专用测试：验证 JSON 结构、门禁逻辑和产物隔离。
+ * Phase 6.2 专用测试：验证 JSON 结构、门禁逻辑、产物隔离和 arm 参数语义。
+ *
+ * 覆盖 A / B / C / D_pm 当前 arm 语义（historicalOverridesOfArm）。
  *
  * 运行方式：
  *   node --import ./tests/setup-test-env.mjs --test tests/phase6-context-ab.test.mjs
@@ -13,13 +15,10 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from "node
 const gateMod = await import(
   `file://${join(process.cwd(), "dist-eval", "novelos", "eval", "context-ab-gate.js")}`
 );
-const { aggregate, evaluateGate } = gateMod;
-// Phase 6.2.1：导入消融 runner 和 builder 模块
+const { aggregate, evaluateGate, evaluateAblationGate } = gateMod;
+// Phase 6.2：导入 runner 模块（historicalOverridesOfArm）
 const runnerMod = await import(
   `file://${join(process.cwd(), "dist-eval", "novelos", "eval", "context-ab-runner.js")}`
-);
-const builderMod = await import(
-  `file://${join(process.cwd(), "dist-eval", "novelos", "eval", "compressed-context-builder.js")}`
 );
 
 // ── 门禁逻辑测试 ──────────────────────────────────────────────────────────
@@ -60,80 +59,73 @@ describe("Phase 6.1.1 门禁逻辑（从 gate 模块导入）", () => {
   });
 });
 
-// ── 消融 arm 参数测试（Phase 6.2.1） ─────────────────────────────────────
+// ── historicalOverridesOfArm 参数测试（Phase 6.2） ───────────────────────
 
-describe("Phase 6.2.1 消融 arm 参数验证", () => {
-  it("每个消融 arm 只关闭一个状态类别", () => {
-    const arms = ["A-Canon", "A-Character", "A-Promise", "A-Pattern"];
+describe("Phase 6.2 historicalOverridesOfArm arm 参数验证", () => {
+  it("A 组返回 undefined（生产默认参数，行为与生产完全一致）", () => {
+    const overrides = runnerMod.historicalOverridesOfArm("A");
+    // A 组返回 undefined（经类型断言后），表示生产默认不传 overrides
+    assert.ok(overrides === undefined || overrides === "none", `A 组应返回 undefined 或 "none"，实际：${overrides}`);
+  });
+
+  it("B 组压缩 overrides：canon/character 减半且排除 PatternMemory", () => {
+    const overrides = runnerMod.historicalOverridesOfArm("B");
+    assert.ok(overrides && overrides !== "none" && overrides !== null, "B 组应返回 overrides 对象");
+    assert.equal(overrides.canon.maxEntries, 2, "B 组 canon maxEntries 应为 2（生产 4 减半）");
+    assert.equal(overrides.canon.maxChars, 1200, "B 组 canon maxChars 应为 1200（生产 2400 减半）");
+    assert.equal(overrides.character.maxEntries, 3, "B 组 character maxEntries 应为 3（生产 6 减半）");
+    assert.equal(overrides.character.maxChars, 900, "B 组 character maxChars 应为 900（生产 1800 减半）");
+    assert.equal(overrides.pattern.inject, false, "B 组 pattern inject 应为 false（排除 PatternMemory）");
+  });
+
+  it("C 组返回 null（哨兵，不注入）", () => {
+    const overrides = runnerMod.historicalOverridesOfArm("C");
+    assert.equal(overrides, null, "C 组应返回 null（不注入）");
+  });
+
+  it("D_pm 组单因素消融：只排除 PatternMemory，canon/character 保持 A 默认", () => {
+    const overrides = runnerMod.historicalOverridesOfArm("D_pm");
+    assert.ok(overrides && overrides !== "none" && overrides !== null, "D_pm 组应返回 overrides 对象");
+    assert.equal(overrides.pattern.inject, false, "D_pm 组 pattern inject 应为 false（排除 PatternMemory）");
+    // canon 和 character 未设置（undefined），表示走生产默认（4×2400、6×1800）
+    assert.equal(overrides.canon, undefined, "D_pm 组 canon 应为 undefined（保持 A 默认）");
+    assert.equal(overrides.character, undefined, "D_pm 组 character 应为 undefined（保持 A 默认）");
+  });
+
+  it("B 组与 D_pm 组的差异：B 改 maxItems/摘要长度，D_pm 不改", () => {
+    const bOverrides = runnerMod.historicalOverridesOfArm("B");
+    const dpmOverrides = runnerMod.historicalOverridesOfArm("D_pm");
+    // B 组有 canon/character 压缩参数，D_pm 没有
+    assert.ok(bOverrides.canon && bOverrides.character, "B 组应有 canon/character overrides");
+    assert.equal(dpmOverrides.canon, undefined, "D_pm 组不应有 canon overrides");
+    assert.equal(dpmOverrides.character, undefined, "D_pm 组不应有 character overrides");
+    // 两者都排除 PatternMemory
+    assert.equal(bOverrides.pattern.inject, false, "B 组排除 PatternMemory");
+    assert.equal(dpmOverrides.pattern.inject, false, "D_pm 组排除 PatternMemory");
+  });
+
+  it("ContextAbArm 类型包含 A/B/C/D_pm 四种", () => {
+    // 验证所有合法 arm 都能正常返回
+    const arms = ["A", "B", "C", "D_pm"];
     for (const arm of arms) {
-      const params = runnerMod.compressionParamsOfArm(arm);
-      // 统计关闭的字段数
-      const offCount = [
-        !params.injectCanon,
-        !params.injectCharacter,
-        !params.injectPromise,
-        !params.injectPattern,
-        !params.injectExpectation,
-        !params.injectPlanned,
-      ].filter(Boolean).length;
-      assert.equal(offCount, 1, `${arm} 应只关闭 1 个状态类别，实际关闭 ${offCount} 个`);
+      const result = runnerMod.historicalOverridesOfArm(arm);
+      // 只要不抛异常即为合法 arm
+      assert.ok(result !== undefined || arm === "A", `${arm} 应为合法 arm`);
     }
   });
 
-  it("A-Canon 只关闭 CanonState", () => {
-    const params = runnerMod.compressionParamsOfArm("A-Canon");
-    assert.equal(params.injectCanon, false);
-    assert.equal(params.injectCharacter, true);
-    assert.equal(params.injectPromise, true);
-    assert.equal(params.injectPattern, true);
+  it("消融门禁 evaluateAblationGate 可从 gate 模块导入", () => {
+    assert.equal(typeof evaluateAblationGate, "function", "evaluateAblationGate 应从 gate 模块导出");
   });
 
-  it("A-Character 只关闭 CharacterState", () => {
-    const params = runnerMod.compressionParamsOfArm("A-Character");
-    assert.equal(params.injectCanon, true);
-    assert.equal(params.injectCharacter, false);
-    assert.equal(params.injectPromise, true);
-    assert.equal(params.injectPattern, true);
-  });
-
-  it("A-Promise 只关闭 PromiseLedger", () => {
-    const params = runnerMod.compressionParamsOfArm("A-Promise");
-    assert.equal(params.injectCanon, true);
-    assert.equal(params.injectCharacter, true);
-    assert.equal(params.injectPromise, false);
-    assert.equal(params.injectPattern, true);
-  });
-
-  it("A-Pattern 只关闭 PatternMemory", () => {
-    const params = runnerMod.compressionParamsOfArm("A-Pattern");
-    assert.equal(params.injectCanon, true);
-    assert.equal(params.injectCharacter, true);
-    assert.equal(params.injectPromise, true);
-    assert.equal(params.injectPattern, false);
-  });
-
-  it("A 组（完整）全部注入", () => {
-    const params = runnerMod.compressionParamsOfArm("A");
-    assert.equal(params.injectCanon, true);
-    assert.equal(params.injectCharacter, true);
-    assert.equal(params.injectPromise, true);
-    assert.equal(params.injectPattern, true);
-    assert.equal(params.injectExpectation, true);
-    assert.equal(params.injectPlanned, true);
-  });
-
-  it("消融 arm 的 maxItems 和 summaryCharLimit 与 A 组一致", () => {
-    const aParams = runnerMod.compressionParamsOfArm("A");
-    for (const arm of ["A-Canon", "A-Character", "A-Promise", "A-Pattern"]) {
-      const params = runnerMod.compressionParamsOfArm(arm);
-      assert.equal(params.maxItems, aParams.maxItems, `${arm} maxItems 应与 A 一致`);
-      assert.equal(params.summaryCharLimit, aParams.summaryCharLimit, `${arm} summaryCharLimit 应与 A 一致`);
-    }
-  });
-
-  it("消融门禁从 gate 模块导入（无内联副本）", () => {
-    // 确认 evaluateAblationGate 可从 gate 模块导入
-    assert.equal(typeof gateMod.evaluateAblationGate, "function", "evaluateAblationGate 应从 gate 模块导出");
+  it("evaluateAblationGate 对 D_pm 不降级时 allPassed=true", () => {
+    const aAgg = { avgCoverage: 1.0, avgSourceRef: 0.6, totalErrors: 0, totalTimeouts: 0, totalParseErrors: 0, totalEmpty: 0, totalInvalidTool: 0, totalTruncated: 0, totalInvalidIntents: 0, stopRate: 1.0, totalContextBlockTokens: 579 };
+    const dpmAgg = { avgCoverage: 1.0, avgSourceRef: 0.667, totalErrors: 0, totalTimeouts: 0, totalParseErrors: 0, totalEmpty: 0, totalInvalidTool: 0, totalTruncated: 0, totalInvalidIntents: 0, stopRate: 1.0, totalContextBlockTokens: 375 };
+    const gate = evaluateAblationGate(dpmAgg, aAgg, "D_pm");
+    assert.equal(gate.coverageGteA, true, "D_pm coverage >= A");
+    assert.equal(gate.sourceRefGteA, true, "D_pm sourceRef >= A");
+    assert.equal(gate.allPassed, true, "D_pm allPassed 应为 true");
+    assert.equal(gate.arm, "D_pm");
   });
 });
 
@@ -171,8 +163,8 @@ describe("Phase 6.1.1 产物路径隔离", () => {
 
 // ── JSON 结构测试 ─────────────────────────────────────────────────────────
 
-describe("Phase 6.1.1 JSON 结构", () => {
-  it("真实 replay 报告包含必需字段", () => {
+describe("Phase 6.2 JSON 结构", () => {
+  it("真实 replay 报告包含必需字段（A + D_pm）", () => {
     const reportPath = join("D:/CODE/PiNovelStudio/reports/phase6-context-ab/real/context-ab-comparison.json");
     if (!existsSync(reportPath)) {
       // real 产物可能尚未重新生成，跳过（不 fail）
@@ -182,10 +174,10 @@ describe("Phase 6.1.1 JSON 结构", () => {
     assert.equal(report.schema, "context-ab-comparison/v1");
     assert.equal(report.mode, "real");
     assert.ok(report.crossBatchAggregation.A, "缺少 A 组聚合");
-    assert.ok(report.crossBatchAggregation.B, "缺少 B 组聚合");
-    assert.ok(report.crossBatchAggregation.C, "缺少 C 组聚合");
-    assert.ok(report.gate.bGate, "缺少 B 组门禁");
-    assert.ok(report.gate.cDelta, "缺少 C 组 delta");
+    assert.ok(report.crossBatchAggregation.D_pm, "缺少 D_pm 组聚合");
+    assert.ok(report.gate.bGate, "缺少门禁（bGate 字段名保留，实际评估 D_pm vs A）");
+    assert.ok(report.compressionRatio, "缺少压缩比例");
+    assert.ok(report.trajectory, "缺少 trajectory");
     // Phase 6.1.1 新增字段
     assert.ok(report.crossBatchAggregation.A.avgFirstValidEvidenceCallValid !== undefined, "缺少 avgFirstValidEvidenceCallValid");
     assert.ok(report.crossBatchAggregation.A.noEvidenceCount !== undefined, "缺少 noEvidenceCount");
