@@ -616,9 +616,23 @@ Phase 6 冻结。下一研究模块：**思考/推理预算设计**（eval-only 
 - 热点：character 冗余最高（125→6），pattern 次之（89→4）；压缩空间集中在「低相关度条目保留策略 + 摘要长度」。
 - B 组压缩参数（maxItems 24 + 摘要 80 + 排 Pattern）曾在 GLM 历史报告 token 降 38% 且覆盖不降级——但**模型与路径均不符合本节口径，需重跑确认**。
 
-### 15.4 B 方案真实 Gemini replay 结果（2026-08-11）— B 不通过，保持 A 基线
+### 15.4 两类基线区分（不可混称）
 
-**执行口径**：`scripts/context-ab-replay.mjs`，`reports/phase6-context-ab/real/context-ab-comparison.json`，route=`v2_rawstage2_gemini31`（Gemini 3.1 Pro Preview），temperature=0.72，maxTokens=2048，`DISABLE_FALLBACK=1`，SC1/SC6/SC7 × seed 0/1 共 6 样本，工具面固定 A 组 9 专用工具，唯一变量为长期状态注入压缩；走生产 `buildHistoricalContext`（`boundedEntries`）注入路径。
+本节涉及两类性质不同的 A 基线，必须严格区分：
+
+| 基线 | 来源 | 性质 | 冻结指标 | 用途 |
+|------|------|------|---------|------|
+| **Tool Interface A** | `reports/phase4-tool-ab-real-gemini/real-ab-comparison.json`（工具面 A/B/B0/C 实验） | 工具面（9 专用工具 vs 1 facade）对照的冻结基线 | schemaTokenCost=9208、mustVerify=0.667、sourceRef=0.400、empty=3、errors=3、timeouts=3、stopRate=0.500 | 工具面改造的对照基线；与状态注入压缩**无关** |
+| **Context Replay A** | `reports/phase6-context-ab/real/context-ab-comparison.json`（本轮状态注入压缩实验） | 状态注入压缩实验的控制组（生产默认 `buildHistoricalContext` 参数） | contextBlockTokens=386、coverage=1.0、sourceRef=0.667、empty/errors/timeouts=0、stopRate=1.0 | **状态注入压缩实验的唯一对照** |
+
+**关键澄清**：
+1. **不可混称**：Tool Interface A 的 schemaTokenCost=9208 与 Context Replay A 的 schemaTokenCost=14963 是两个不同实验的值，差异来自 turns.length 和工具面配置（9 专用工具 vs 本轮内部固定 arm="A" 9 工具但 turns 结构不同），**不是同一个数值基线**。
+2. **schemaTokenCost 仅诊断**：Context Replay 报告中的 schemaTokenCost（A=14963、B=11510）是工具 schema 注入成本，**与状态注入压缩正交**，仅作诊断输出，**不纳入状态压缩质量门禁**。
+3. **状态压缩门禁指标**：contextBlockTokens（收益度量）、mustVerify coverage、sourceRef completeness、empty/errors/timeouts/stopRate（质量底线）——按**逐场景逐 seed** 对照 Context Replay A，任一劣化即不通过。
+
+### 15.5 B 方案真实 Gemini replay 结果（2026-08-11）— B 不通过，保持 A 基线
+
+**执行口径**：`scripts/context-ab-replay.mjs`，`reports/phase6-context-ab/real/context-ab-comparison.json`，route=`v2_rawstage2_gemini31`（Gemini 3.1 Pro Preview），temperature=0.72，maxTokens=2048，`DISABLE_FALLBACK=1`，SC1/SC6/SC7 × seed 0/1 共 6 样本，工具面固定 A 组 9 专用工具，唯一变量为长期状态注入压缩；走生产 `buildHistoricalContext`（`boundedEntries`）注入路径。对照基线为 **Context Replay A**（§15.4），非 Tool Interface A。
 
 **B 组压缩参数**（`HistoricalContextOverrides`，生产默认不传）：canon `2×1200`（生产 4×2400）、character `3×900`（生产 6×1800）、pattern `inject:false`（生产 4×1000）。C 组为哨兵 `null` 不注入。
 
@@ -647,3 +661,47 @@ Phase 6 冻结。下一研究模块：**思考/推理预算设计**（eval-only 
 2. **保持 A 基线**：不进入生产，不切 canary，不改 production pointer；生产 ContextCompiler 参数未改动。
 3. **不可归因于单一因素**：B 同时改变 maxItems、摘要长度并排除 PatternMemory，属组合方案；虽 token 降 35.2%，但质量劣化，**不能**据此得出"PatternMemory 应排除"的结论。后续如需继续，应先做**单因素消融**（分别消融 maxItems、摘要长度、PatternMemory 影响），并扩大 seed 数验证稳定性，才能区分各因素贡献。
 4. **C 组（无状态注入）参考**：coverage=1.0、sourceRef=0.667，token 降到 138（-64.2%），`marginalValueInsufficient=true`——样本内不注入长期状态在本次 6 样本下未现覆盖损失，但样本量小不足以支撑"删减长期状态"的结论，仅作参考，不改变生产保持完整注入的冻结决策。
+
+### 15.6 D_pm 单因素消融真实 Gemini replay 结果（2026-08-11）— D_pm 通过门禁
+
+**背景**：B 方案（§15.5）同时改变 maxItems、摘要长度并排除 PatternMemory，组合方案失败。按用户要求，本轮为 PatternMemory 单因素消融：保持 A 的 maxItems/摘要长度不变，只排除 PatternMemory。
+
+**执行口径**：`scripts/context-ab-replay.mjs`，`reports/phase6-context-ab/real/context-ab-comparison.json`，route=`v2_rawstage2_gemini31`（Gemini 3.1 Pro Preview），temperature=0.72，maxTokens=2048，`DISABLE_FALLBACK=1`，SC1/SC6/SC7 × seed 0/1/2 共 9 arm 样本（扩大 seed 数验证稳定性），工具面固定 A 组 9 专用工具，唯一变量为排除 PatternMemory；走生产 `buildHistoricalContext`（`boundedEntries`）注入路径。对照基线为 **Context Replay A**（§15.4）。
+
+**D_pm 组压缩参数**（`HistoricalContextOverrides`，生产默认不传）：canon 不变（4×2400）、character 不变（6×1800）、pattern `inject:false`（生产 4×1000）。
+
+**压缩收益（contextBlockTokens，与 schemaTokenCost 正交）**：
+
+| 指标（跨 9 样本合计） | A（完整） | D_pm（排 Pattern） | 变化 |
+|------|--------|--------|------|
+| contextBlockTokens | 579 | 375 | **-35.2%** |
+| 平均条目数 itemCount | 2.3 | 1.3 | -42.9% |
+| schemaTokenCost（诊断，不纳入门禁） | 26473 | 18416 | 不列为收益 |
+
+**质量指标逐场景逐 seed 对照（任一劣化则 D_pm 不通过）**：
+
+| 场景 | seed | A cov | D_pm cov | A ref | D_pm ref | 判定 |
+|------|------|-------|----------|-------|----------|------|
+| SC1-canon-fact | 0 | 1.000 | 1.000 | 1.000 | 1.000 | ✅ 持平 |
+| SC1-canon-fact | 1 | 1.000 | 1.000 | 1.000 | 1.000 | ✅ 持平 |
+| SC1-canon-fact | 2 | 1.000 | 1.000 | 1.000 | 1.000 | ✅ 持平 |
+| SC6-low-risk | 0 | 1.000 | 1.000 | 0.000 | 0.000 | ✅ 持平 |
+| SC6-low-risk | 1 | 1.000 | 1.000 | 0.000 | 0.000 | ✅ 持平 |
+| SC6-low-risk | 2 | 1.000 | 1.000 | 0.000 | 0.000 | ✅ 持平 |
+| SC7-multi-tool | 0 | 1.000 | 1.000 | 1.000 | 1.000 | ✅ 持平 |
+| SC7-multi-tool | 1 | 1.000 | 1.000 | 0.750 | **1.000** | ✅ D_pm 更优 |
+| SC7-multi-tool | 2 | 1.000 | 1.000 | 0.750 | **1.000** | ✅ D_pm 更优 |
+
+| 聚合指标 | A | D_pm | 判定 |
+|------|-----|------|------|
+| mustVerify avgCoverage | 1.000 | 1.000 | ✅ 持平 |
+| sourceRef avgCompleteness | 0.611 | **0.667** | ✅ D_pm 更优 |
+| empty / errors / timeouts | 0 / 0 / 0 | 0 / 0 / 0 | ✅ 未劣化 |
+| stopRate | 1.000 | 1.000 | ✅ 持平 |
+| d_pmGate allPassed | — | **true** | ✅ 通过 |
+
+**结论**：
+1. **D_pm 通过门禁**：所有 9 个样本 coverage=1.000，跨 seed 稳定（无 B 方案 SC1:s1 coverage=0 的不稳定问题）；sourceRef 反而略优（0.667 vs 0.611，SC7:s1/s2 的 D_pm sourceRef=1.000 而 A=0.750）。
+2. **初步结论**：排除 PatternMemory 对模型工具选择和证据覆盖**无负面影响**，token 降 35.2%。
+3. **仍需后续消融**：D_pm 通过只能说明排除 PatternMemory 在当前 9 样本下安全；maxItems 和摘要长度的单因素消融仍需分别测试（需构造足量条目/长摘要确保限制确实生效），才能完整区分各压缩因素的贡献。
+4. **生产保持 A 基线**：本轮仍为 eval-only，不改生产、不切 canary、不改 production pointer。D_pm 通过门禁为后续生产改造提供证据，但不直接进入生产——需等 maxItems/摘要长度消融也完成后再做整体决策。

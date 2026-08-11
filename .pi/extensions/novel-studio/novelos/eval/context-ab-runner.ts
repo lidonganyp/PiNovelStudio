@@ -33,7 +33,7 @@ import { deriveSnapshotFromScenario } from "./context-ab-fixtures.js";
 
 // ── 类型 ──────────────────────────────────────────────────────────────────
 
-export type ContextAbArm = "A" | "B" | "C";
+export type ContextAbArm = "A" | "B" | "C" | "D_pm";
 
 /** 各状态类别实际保留条目数（走生产注入后 boundedEntries 的真实输出） */
 export interface ContextInjectionCounts {
@@ -73,8 +73,9 @@ export interface ContextAbRunOptions {
 
 /**
  * A 组：返回 undefined（生产默认参数，行为与生产完全一致）。
- * B 组：压缩 overrides —— maxEntries 减半、maxChars 减半、排除 PatternMemory。
+ * B 组：压缩 overrides —— maxEntries 减半、maxChars 减半、排除 PatternMemory（组合方案）。
  * C 组：哨兵 null（不注入）。
+ * D_pm 组：单因素消融 —— 保持 A 的 maxItems/摘要长度，只排除 PatternMemory。
  */
 export function historicalOverridesOfArm(arm: ContextAbArm): HistoricalContextOverrides | "none" | null {
   switch (arm) {
@@ -87,10 +88,15 @@ export function historicalOverridesOfArm(arm: ContextAbArm): HistoricalContextOv
       };
     }
     case "C": return null;
+    case "D_pm": {
+      return {
+        pattern: { inject: false },
+      };
+    }
   }
 }
 
-/** 是否注入（A/B 注入，C 不注入） */
+/** 是否注入（A/B/D_pm 注入，C 不注入） */
 function shouldInject(arm: ContextAbArm): boolean {
   return arm !== "C";
 }

@@ -1,17 +1,17 @@
 /**
- * Phase 6.1 上下文压缩 A/B/C replay 脚本（走生产 buildHistoricalContext 注入路径）
+ * Phase 6.2 PatternMemory 单因素消融 A/D_pm replay 脚本（走生产 buildHistoricalContext 注入路径）
  *
- * 目标：验证长期状态注入压缩对模型工具选择和证据覆盖的影响
+ * 目标：验证排除 PatternMemory 对模型工具选择和证据覆盖的影响（单因素消融）
  *   - A 组（完整）：生产默认注入参数（canon 4×2400、character 6×1800、pattern 4×1000）
- *   - B 组（压缩）：maxEntries 减半、maxChars 减半、排除 PatternMemory
- *   - C 组（无状态）：不注入长期状态（基线）
+ *   - D_pm 组（单因素消融）：保持 A 的 maxItems/摘要长度不变，只排除 PatternMemory
  *
  * 口径（Gemini 冻结基线，2026-08-11）：
  *   - route = v2_rawstage2_gemini31，provider = gemini31，model = gemini-3.1-pro-preview
  *   - temperature = 0.72，maxTokens = 2048，DISABLE_FALLBACK=1
- *   - 场景 = SC1/SC6/SC7（高信号集），seed 0/1，共 6 arm 样本
+ *   - 场景 = SC1/SC6/SC7（高信号集），seed 0/1/2，共 9 arm 样本
  *   - schemaTokenCost 与状态注入正交（工具 schema 成本），不作为本轮压缩收益
  *   - 压缩收益只度量 contextBlockTokens；质量底线是 mustVerify/sourceRef/empty/errors/timeouts/stopRate
+ *   - 对照基线为 Context Replay A（§15.4），非 Tool Interface A（§15.1）
  *
  * 用法：
  *   # dry-run（验证框架，零 API）
@@ -19,7 +19,7 @@
  *
  *   # 真实 Gemini 模型
  *   $env:PINOVEL_DISABLE_FALLBACK="1"
- *   node scripts/context-ab-replay.mjs --require-auth --batches=1 --seeds=0,1
+ *   node scripts/context-ab-replay.mjs --require-auth --batches=1 --seeds=0,1,2
  *
  * 输出：
  *   {repo_root}/reports/phase6-context-ab/real/context-ab-comparison.json
@@ -42,7 +42,7 @@ const REQUIRE_AUTH = process.argv.includes("--require-auth");
 const batchesArg = process.argv.find((a) => a.startsWith("--batches="));
 const BATCHES = batchesArg ? parseInt(batchesArg.split("=")[1], 10) : 1;
 const seedsArg = process.argv.find((a) => a.startsWith("--seeds="));
-const SEEDS = seedsArg ? seedsArg.split("=")[1].split(",").map((s) => parseInt(s.trim(), 10)) : [0, 1];
+const SEEDS = seedsArg ? seedsArg.split("=")[1].split(",").map((s) => parseInt(s.trim(), 10)) : [0, 1, 2];
 
 if (!DRY_RUN && !REQUIRE_AUTH) {
   console.error("[context-ab] 非 dry-run 模式必须显式传 --require-auth");
@@ -64,10 +64,10 @@ const MODEL = "gemini-3.1-pro-preview";
 const TEMPERATURE = 0.72;
 const MAX_TOKENS = 2048;
 
-console.log("[context-ab] 上下文压缩 A/B/C replay 启动（生产 buildHistoricalContext 注入路径）");
+console.log("[context-ab] PatternMemory 单因素消融 A/D_pm replay 启动（生产 buildHistoricalContext 注入路径）");
 console.log(`[context-ab] 模式=${DRY_RUN ? "dry-run" : "real"}, 批次数=${BATCHES}, seeds=${SEEDS.join(",")}`);
 console.log(`[context-ab] 路由=${MODEL_ROUTE} (${PROVIDER}/${MODEL}), temp=${TEMPERATURE}, maxTokens=${MAX_TOKENS}`);
-console.log(`[context-ab] 变体：A(完整) / B(压缩) / C(无状态)`);
+console.log(`[context-ab] 变体：A(完整) / D_pm(排PatternMemory, 其余不变)`);
 
 const runner = await import(
   `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "context-ab-runner.js")}`
@@ -89,8 +89,7 @@ if (scenarios.length === 0) {
 }
 const variants = [
   { label: "A", arm: "A" },
-  { label: "B", arm: "B" },
-  { label: "C", arm: "C" },
+  { label: "D_pm", arm: "D_pm" },
 ];
 
 // ── modelFn 构建 ──
@@ -239,10 +238,10 @@ function crossBatchAggregate(variantLabel) {
 }
 
 const crossA = crossBatchAggregate("A");
-const crossB = crossBatchAggregate("B");
-const crossC = crossBatchAggregate("C");
+const crossDpm = crossBatchAggregate("D_pm");
 
-const gate = evaluateGate(crossB, crossC, crossA);
+// 单因素消融：D_pm vs A，不使用 C 组；cAgg 传 crossDpm 使 cDelta 归零（无意义但不报错）
+const gate = evaluateGate(crossDpm, crossDpm, crossA);
 
 // ── 逐场景/逐 seed trajectory ──
 function buildTrajectory() {
@@ -279,19 +278,19 @@ function buildTrajectory() {
 }
 const trajectory = buildTrajectory();
 
-// ── 压缩比例（B vs A，按 contextBlockTokens 与条目数） ──
+// ── 压缩比例（D_pm vs A，按 contextBlockTokens 与条目数） ──
 function compressionRatio() {
   const aTokens = crossA.totalContextBlockTokens;
-  const bTokens = crossB.totalContextBlockTokens;
+  const dTokens = crossDpm.totalContextBlockTokens;
   const aItems = crossA.avgContextItemCount;
-  const bItems = crossB.avgContextItemCount;
+  const dItems = crossDpm.avgContextItemCount;
   return {
-    tokenReductionPct: aTokens > 0 ? +((1 - bTokens / aTokens) * 100).toFixed(1) : 0,
-    itemReductionPct: aItems > 0 ? +((1 - bItems / aItems) * 100).toFixed(1) : 0,
+    tokenReductionPct: aTokens > 0 ? +((1 - dTokens / aTokens) * 100).toFixed(1) : 0,
+    itemReductionPct: aItems > 0 ? +((1 - dItems / aItems) * 100).toFixed(1) : 0,
     aTokens,
-    bTokens,
+    dTokens,
     aItems: +aItems.toFixed(1),
-    bItems: +bItems.toFixed(1),
+    dItems: +dItems.toFixed(1),
   };
 }
 const compression = compressionRatio();
@@ -321,21 +320,20 @@ const report = {
     injectionPath: "production buildHistoricalContext (boundedEntries)",
     compressionParams: {
       A: { canon: "4×2400", character: "6×1800", pattern: "4×1000" },
-      B: { canon: "2×1200", character: "3×900", pattern: "excluded" },
-      C: { inject: "none" },
+      D_pm: { canon: "4×2400（不变）", character: "6×1800（不变）", pattern: "excluded（单因素）" },
     },
-    note: "schemaTokenCost 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 contextBlockTokens。",
+    note: "schemaTokenCost 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 contextBlockTokens。D_pm 为 PatternMemory 单因素消融：保持 A 的 maxItems/摘要长度，只排除 PatternMemory。",
   },
-  crossBatchAggregation: { A: crossA, B: crossB, C: crossC },
+  crossBatchAggregation: { A: crossA, D_pm: crossDpm },
   compressionRatio: compression,
   gate,
   trajectory,
   perBatch: allBatchResults.map((b) => ({
     batch: b.batch,
     aggregation: b.aggregation,
-    gate: evaluateGate(b.aggregation.B, b.aggregation.C, b.aggregation.A),
+    gate: evaluateGate(b.aggregation.D_pm ?? b.aggregation["D_pm"], b.aggregation.D_pm ?? b.aggregation["D_pm"], b.aggregation.A),
   })),
-  note: "Phase 6.1: A=完整长期状态(生产默认)/B=压缩/C=无状态。固定9专用工具，走生产 buildHistoricalContext 注入路径，只变化长期状态注入压缩。",
+  note: "Phase 6.2 单因素消融：A=完整长期状态(生产默认)/D_pm=只排除PatternMemory(其余不变)。固定9专用工具，走生产 buildHistoricalContext 注入路径。",
 };
 
 mkdirSync(REPORT_DIR, { recursive: true });
@@ -347,7 +345,7 @@ function fmt(v, d = 3) { return (typeof v === "number" ? v.toFixed(d) : String(v
 function pct(v) { return `${(v * 100).toFixed(0)}%`; }
 
 const md = [
-  "# Phase 6.1 上下文压缩 A/B/C replay 报告（生产 buildHistoricalContext 注入路径）",
+  "# Phase 6.2 PatternMemory 单因素消融 A/D_pm replay 报告（生产 buildHistoricalContext 注入路径）",
   "",
   `**时间**：${report.timestamp}`,
   `**模式**：${report.mode}`,
@@ -355,68 +353,64 @@ const md = [
   `**Provenance**：${DRY_RUN ? "stub" : `provider=${p.provider ?? "?"}, model=${p.model ?? "?"}, route=${p.route ?? "?"}, temp=${p.temperature ?? "?"}`}`,
   `**场景**：${report.config.scenarios.join(", ")} | **Seeds**：${SEEDS.join(", ")}`,
   "",
-  "## 三组定义",
+  "## 两组定义",
   "",
   "- **A 组（完整）**：生产默认注入参数（canon 4×2400、character 6×1800、pattern 4×1000）",
-  "- **B 组（压缩）**：maxEntries 减半、maxChars 减半、排除 PatternMemory",
-  "- **C 组（无状态）**：不注入长期状态（基线）",
+  "- **D_pm 组（单因素消融）**：保持 A 的 maxItems/摘要长度不变，只排除 PatternMemory",
   "",
   "> 注入路径：生产 `buildHistoricalContext`（boundedEntries 三段）。`schemaTokenCost` 与状态注入正交（工具 schema 成本），不作为压缩收益；收益只度量 `contextBlockTokens`。",
+  "> 对照基线为 **Context Replay A**（§15.4），非 Tool Interface A（§15.1）。",
   "",
   "## 跨批次聚合对比",
   "",
-  "| 指标 | A 完整 | B 压缩 | C 无状态 |",
-  "|------|--------|--------|---------|",
-  `| 平均覆盖率 | ${fmt(crossA.avgCoverage)} | ${fmt(crossB.avgCoverage)} | ${fmt(crossC.avgCoverage)} |`,
-  `| 停止率 | ${pct(crossA.stopRate)} | ${pct(crossB.stopRate)} | ${pct(crossC.stopRate)} |`,
-  `| sourceRef 完整率 | ${fmt(crossA.avgSourceRef)} | ${fmt(crossB.avgSourceRef)} | ${fmt(crossC.avgSourceRef)} |`,
-  `| 总调用数 | ${crossA.totalCalls} | ${crossB.totalCalls} | ${crossC.totalCalls} |`,
-  `| 空结果数 | ${crossA.totalEmpty} | ${crossB.totalEmpty} | ${crossC.totalEmpty} |`,
-  `| 错误数 | ${crossA.totalErrors} | ${crossB.totalErrors} | ${crossC.totalErrors} |`,
-  `| 超时数 | ${crossA.totalTimeouts} | ${crossB.totalTimeouts} | ${crossC.totalTimeouts} |`,
-  `| 非法工具选择 | ${crossA.totalInvalidTool} | ${crossB.totalInvalidTool} | ${crossC.totalInvalidTool} |`,
-  `| schemaTokenCost | ${crossA.schemaTokenCost} | ${crossB.schemaTokenCost} | ${crossC.schemaTokenCost} |`,
-  `| 上下文 token | ${crossA.totalContextBlockTokens} | ${crossB.totalContextBlockTokens} | ${crossC.totalContextBlockTokens} |`,
-  `| 上下文条目数 | ${fmt(crossA.avgContextItemCount, 1)} | ${fmt(crossB.avgContextItemCount, 1)} | ${fmt(crossC.avgContextItemCount, 1)} |`,
-  `| 首证据延迟 | ${fmt(crossA.avgFirstValidEvidenceCall, 1)} | ${fmt(crossB.avgFirstValidEvidenceCall, 1)} | ${fmt(crossC.avgFirstValidEvidenceCall, 1)} |`,
+  "| 指标 | A 完整 | D_pm 排Pattern |",
+  "|------|--------|---------------|",
+  `| 平均覆盖率 | ${fmt(crossA.avgCoverage)} | ${fmt(crossDpm.avgCoverage)} |`,
+  `| 停止率 | ${pct(crossA.stopRate)} | ${pct(crossDpm.stopRate)} |`,
+  `| sourceRef 完整率 | ${fmt(crossA.avgSourceRef)} | ${fmt(crossDpm.avgSourceRef)} |`,
+  `| 总调用数 | ${crossA.totalCalls} | ${crossDpm.totalCalls} |`,
+  `| 空结果数 | ${crossA.totalEmpty} | ${crossDpm.totalEmpty} |`,
+  `| 错误数 | ${crossA.totalErrors} | ${crossDpm.totalErrors} |`,
+  `| 超时数 | ${crossA.totalTimeouts} | ${crossDpm.totalTimeouts} |`,
+  `| 非法工具选择 | ${crossA.totalInvalidTool} | ${crossDpm.totalInvalidTool} |`,
+  `| schemaTokenCost（诊断） | ${crossA.schemaTokenCost} | ${crossDpm.schemaTokenCost} |`,
+  `| 上下文 token | ${crossA.totalContextBlockTokens} | ${crossDpm.totalContextBlockTokens} |`,
+  `| 上下文条目数 | ${fmt(crossA.avgContextItemCount, 1)} | ${fmt(crossDpm.avgContextItemCount, 1)} |`,
+  `| 首证据延迟 | ${fmt(crossA.avgFirstValidEvidenceCall, 1)} | ${fmt(crossDpm.avgFirstValidEvidenceCall, 1)} |`,
   "",
-  "## 压缩比例（B vs A）",
+  "## 压缩比例（D_pm vs A）",
   "",
   `- **contextBlockTokens 下降**：${compression.tokenReductionPct}%`,
   `- **注入条目数下降**：${compression.itemReductionPct}%`,
   "",
-  "## 每场景 trajectory（A/B/C × seed）",
+  "## 每场景 trajectory（A/D_pm × seed）",
   "",
   "| 场景 | seed | 臂 | 覆盖 | 停止 | sourceRef | empty | errors | timeouts | ctxTokens | canon | char | pattern | items |",
   "|------|------|-----|-----|------|-----------|-------|--------|----------|-----------|-------|------|---------|-------|",
   ...trajectory.flatMap((row) =>
-    ["A", "B", "C"].map((v) => {
+    ["A", "D_pm"].map((v) => {
       const m = row[v];
       return `| ${row.scenarioId} | ${row.seed} | ${v} | ${fmt(m.coverage)} | ${pct(m.stopRate)} | ${fmt(m.sourceRef)} | ${m.empty} | ${m.errors} | ${m.timeouts} | ${m.contextBlockTokens} | ${m.canonCount} | ${m.characterCount} | ${m.patternCount} | ${m.itemCount} |`;
     }),
   ),
   "",
-  "## B 组门禁（压缩不降级）",
+  "## D_pm 组门禁（排除 PatternMemory 不降级）",
   "",
   "| 门禁项 | 结果 | 说明 |",
   "|--------|------|------|",
-  `| 覆盖率 >= A | ${gate.bGate.coverageGteA ? "PASS" : "FAIL"} | ${fmt(crossB.avgCoverage)} vs ${fmt(crossA.avgCoverage)} |`,
-  `| sourceRef >= A | ${gate.bGate.sourceRefGteA ? "PASS" : "FAIL"} | ${fmt(crossB.avgSourceRef)} vs ${fmt(crossA.avgSourceRef)} |`,
+  `| 覆盖率 >= A | ${gate.bGate.coverageGteA ? "PASS" : "FAIL"} | ${fmt(crossDpm.avgCoverage)} vs ${fmt(crossA.avgCoverage)} |`,
+  `| sourceRef >= A | ${gate.bGate.sourceRefGteA ? "PASS" : "FAIL"} | ${fmt(crossDpm.avgSourceRef)} vs ${fmt(crossA.avgSourceRef)} |`,
   `| 失败不劣于 A | ${gate.bGate.failuresNotWorseThanA ? "PASS" : "FAIL"} | errors/timeouts/parse/empty/invTool/truncated/invIntents |`,
-  `| 停止率不降级 | ${gate.bGate.stopRateNotDegraded ? "PASS" : "FAIL"} | ${pct(crossB.stopRate)} vs ${pct(crossA.stopRate)} |`,
+  `| 停止率不降级 | ${gate.bGate.stopRateNotDegraded ? "PASS" : "FAIL"} | ${pct(crossDpm.stopRate)} vs ${pct(crossA.stopRate)} |`,
   `| token 下降 >10% | ${gate.bGate.tokenReduced ? "PASS" : "FAIL"} | ${gate.bGate.tokenReductionPct}（contextBlockTokens） |`,
-  `| 首证据不延迟 | ${gate.bGate.firstEvidenceNotDelayed ? "PASS" : "FAIL"} | ${fmt(crossB.avgFirstValidEvidenceCall, 1)} vs ${fmt(crossA.avgFirstValidEvidenceCall, 1)} |`,
+  `| 首证据不延迟 | ${gate.bGate.firstEvidenceNotDelayed ? "PASS" : "FAIL"} | ${fmt(crossDpm.avgFirstValidEvidenceCall, 1)} vs ${fmt(crossA.avgFirstValidEvidenceCall, 1)} |`,
   `| **整体门禁** | ${gate.bGate.allPassed ? "PASS" : "FAIL"} | |`,
   "",
   "## 结论",
   "",
   gate.bGate.allPassed
-    ? "B 组压缩上下文**通过**门禁：contextBlockTokens 显著下降且覆盖不降级。可作 Phase 6.2 单因素消融候选；组合方案通过只能说明组合有效，不能直接归因 PatternMemory，需后续单因素消融。"
-    : "B 组压缩上下文**未通过**门禁。需检查具体失败项。",
-  "",
-  gate.cDelta.marginalValueInsufficient
-    ? "C 组 delta < 5%：长期状态注入边际价值不足，当前注入量可能过大。"
-    : "C 组 delta >= 5%：长期状态注入有正收益，当前注入量合理。",
+    ? "D_pm 组（排除 PatternMemory）**通过**门禁：contextBlockTokens 下降且覆盖不降级。可初步认为 PatternMemory 排除对质量无负面影响。"
+    : "D_pm 组（排除 PatternMemory）**未通过**门禁。排除 PatternMemory 导致质量劣化，保持 A 基线。",
 ];
 
 writeFileSync(join(REPORT_DIR, "context-ab-comparison.md"), md.join("\n"));
@@ -424,4 +418,4 @@ writeFileSync(join(REPORT_DIR, "context-ab-comparison.md"), md.join("\n"));
 console.log(`\n[context-ab] 报告已生成：`);
 console.log(`  JSON: ${join(REPORT_DIR, "context-ab-comparison.json")}`);
 console.log(`  MD:   ${join(REPORT_DIR, "context-ab-comparison.md")}`);
-console.log(`[context-ab] B 组门禁：${gate.bGate.allPassed ? "PASS" : "FAIL"}（token 下降 ${compression.tokenReductionPct}%）`);
+console.log(`[context-ab] D_pm 组门禁：${gate.bGate.allPassed ? "PASS" : "FAIL"}（token 下降 ${compression.tokenReductionPct}%）`);
