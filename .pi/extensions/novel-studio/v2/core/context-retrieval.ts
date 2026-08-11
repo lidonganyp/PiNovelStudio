@@ -215,20 +215,83 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
   const itemLimit = Math.max(0, Math.floor(input.maxItems));
   const perKindFloor = Math.min(4, Math.floor(itemLimit / 4));
   const selectedIdSet = new Set<string>();
+
+  // PEA-1 v2：advisory 专用召回通道（先于正式事实预留恒定名额）。
+  //
+  // 背景（P1-REPLAY-1 暴露）：原实现把 advisory 注入定位为"itemLimit 剩余名额"，
+  // 只有当正式事实未占满 itemLimit 时才有空位。真实长篇（如 20 章）中 canon/
+  // character 等正式事实数量远超 itemLimit，会先占满全部名额，导致 PatternMemory
+  // 永远拿不到任何空位——P1 在真实场景下并未彻底解决。
+  //
+  // 修复：advisory 通道不再依赖"剩余名额"，而是像 forcedRecall 一样**预留**一个
+  // 恒定预算（advisoryFloor = max(1, floor(itemLimit/8))）并优先注入。然后将
+  // 正式事实的填充预算降为 (itemLimit - advisoryInjected.length)，保证正式事实
+  // 始终有主体名额，同时 PatternMemory 恒定有少量低权重上下文名额。
+  //
+  // PatternMemory 等 advisory 类型（system_derived -20 / derived -10 降权后，无关键词
+  // 命中时最高分 = recency 上限 20 - 30 = -10）分数恒低于 passingScore 阈值 10，
+  // 无法经常规通道进入 workingSet，因此本通道是它们唯一的生产入口。
+  const advisoryEntries = eligible.filter((entry) => isAdvisoryEntry(entry));
+  const advisoryFloor = Math.min(advisoryEntries.length, Math.max(1, Math.floor(itemLimit / 8)));
+  const advisoryInjected: string[] = [];
+  // PEA-1 v3（P1-PRODUCTION-REPLAY-1）：advisory 通道优先注入**带 memory 信封**的
+  // 正式 PatternMemory，无信封的派生 pattern（如 backfill 的 accepted-ending）仅作后备。
+  //
+  // P1-REPLAY-1 暴露：v2 预留预算后，advisory 通道仍按通用 scoreEntry 排序取前
+  // advisoryFloor 个。而正式 PatternMemory（system_derived -20 / derived -10）降权后
+  // score 恒为负，被 backfill 为每章生成的无信封 pattern（如 ch20 的 accepted-ending，
+  // 无降权、recency 分高）挤到末尾，永远选不中——P1 在真实长篇中仍未彻底解决
+  // （正式 PatternMemory 进不了生产工作集）。
+  //
+  // 修复：advisory 候选按"是否带 memory 信封"分层。优先注入带信封的正式 PatternMemory
+  // （持久记忆资产），耗尽后再补无信封的派生 pattern。保证正式 PatternMemory 恒定
+  // 有入口，同时不妨碍无信封派生 pattern 在名额富余时补充。
+  const advisoryWithMemory = advisoryEntries.filter((entry) => entry.memory);
+  const advisoryFallback = advisoryEntries.filter((entry) => !entry.memory);
+  const injectAdvisory = (candidates: typeof advisoryEntries): void => {
+    for (const item of scored) {
+      if (advisoryInjected.length >= advisoryFloor) break;
+      if (!candidates.some((candidate) => candidate.id === item.entry.id)) continue;
+      if (!selectedIdSet.has(item.entry.id)) {
+        selectedIdSet.add(item.entry.id);
+        advisoryInjected.push(item.entry.id);
+      }
+    }
+  };
+  // 优先正式 PatternMemory（带 memory 信封），保证 P1 核心资产进入工作集。
+  injectAdvisory(advisoryWithMemory);
+  // 正式 PatternMemory 不足时，再补无信封的派生 pattern（backfill 等）。
+  injectAdvisory(advisoryFallback);
+  const formalBudget = Math.max(0, itemLimit - advisoryInjected.length);
+
+  // 正式事实填充 remaining budget（canon/pattern perKindFloor + passingScore 全局），
+  // 上限为 formalBudget。advisory 已预留名额，正式事实不会因注入而丢失。
+  //
+  // P1-PRODUCTION-REPLAY-1 修正：formalBudget 是"正式事实可新增"的数量上限，
+  // 判断必须用独立的 formalAdded 计数，而不能用 selectedIdSet.size >= formalBudget——
+  // 后者会把 advisory 已预留的名额也算入，导致正式事实少填、工作集总量不足
+  // （future-state-isolation-1.test.mjs 期望 retrieved 填满 maxItems 时暴露）。
+  let formalAdded = 0;
   for (const kind of ["canon", "pattern"] as const) {
-    for (const item of passingScore.filter((candidate) => candidate.entry.kind === kind).slice(0, perKindFloor)) {
+    for (const item of passingScore
+      .filter((candidate) => candidate.entry.kind === kind && !selectedIdSet.has(candidate.entry.id))
+      .slice(0, perKindFloor)) {
+      if (formalAdded >= formalBudget) break;
       selectedIdSet.add(item.entry.id);
+      formalAdded++;
     }
   }
   for (const item of passingScore) {
-    if (selectedIdSet.size >= itemLimit) break;
+    if (formalAdded >= formalBudget) break;
+    if (selectedIdSet.has(item.entry.id)) continue;
     selectedIdSet.add(item.entry.id);
+    formalAdded++;
   }
 
   // P3 H2：forcedRecallIds 强制通道——必需 promise 虽 +120 加分但可能被更高分
   // 条目挤出 itemLimit。此处把通过 FUTURE-STATE-ISOLATION-1（已存在于 eligible）
   // 的 forced 条目强制纳入 selectedIdSet，不受 itemLimit 约束。force 通道只从
-  // eligible 选取，未来条目已在上方被排除，不得绕过 future 过滤。
+  //  eligible 选取，未来条目已在上方被排除，不得绕过 future 过滤。
   const forcedIdSet = new Set(input.forcedRecallIds ?? []);
   const forcedEligible = forcedIdSet.size > 0
     ? eligible.filter((entry) => isForcedEntry(entry, forcedIdSet))
@@ -238,25 +301,6 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
     if (!selectedIdSet.has(entry.id)) {
       selectedIdSet.add(entry.id);
       forcedAdded.push(entry.id);
-    }
-  }
-
-  // PEA-1：advisory 专用召回通道。
-  // PatternMemory 等 advisory 类型（system_derived -20 / derived -10 降权后，无关键词
-  // 命中时最高分 = recency 上限 20 - 30 = -10）分数恒低于 passingScore 阈值 10，
-  // 永远无法经常规通道进入 workingSet。作为低权重上下文，此处用 itemLimit 剩余名额
-  // 补充召回：按评分从高到低取 advisory 条目，填入尚未占满的名额，不挤占正式事实。
-  // 数量受 advisoryFloor 上限约束（与 canon/pattern perKindFloor 同量级），避免过量注入。
-  const advisoryEntries = eligible.filter((entry) => isAdvisoryEntry(entry));
-  const advisoryFloor = Math.min(advisoryEntries.length, Math.max(1, Math.floor(itemLimit / 8)));
-  const advisoryInjected: string[] = [];
-  for (const item of scored) {
-    if (selectedIdSet.size >= itemLimit) break;
-    if (!isAdvisoryEntry(item.entry)) continue;
-    if (advisoryInjected.length >= advisoryFloor) break;
-    if (!selectedIdSet.has(item.entry.id)) {
-      selectedIdSet.add(item.entry.id);
-      advisoryInjected.push(item.entry.id);
     }
   }
 
