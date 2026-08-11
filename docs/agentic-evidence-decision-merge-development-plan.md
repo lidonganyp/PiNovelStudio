@@ -4,7 +4,7 @@
 **版本**：v1.0  
 **日期**：2026-08-11  
 **决策**：采用方案 A，将独立 `EvidenceDecision` 模型回合合并到 NovelOS Agentic 首轮  
-**状态**：实现完成；真实 replay 验收待补齐（2026-08-12；build / typecheck / test / test:eval 全部通过；首轮 replay 暴露脚本统计缺陷与 mustVerify 匹配误报，已修复，待重跑验收）  
+**状态**：实现完成；基线对照已完成，检索路径与 coverage 负例待补齐（2026-08-12；build / typecheck / test / test:eval 全部通过；改造前后基线对照已验证：ch1 模型调用 4→2（−50%），输入 token 9,000→5,738（−36.2%），延迟 199.5s→179.2s（−10.2%），EvidenceDecision 调用 2→0）
 **适用范围**：统一生产主链路 `novel_generate_chapter → NovelOS Agentic`  
 
 ## 1. 背景与问题
