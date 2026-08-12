@@ -364,3 +364,92 @@ CI 和发布门禁校验：从当前生产常量重新计算 4 类 hash（prompt
 3. **Registry 损坏 fail-closed**：缺失/损坏/schema 不匹配的 registry 文件导致 `loadRegistry` 抛错。
 4. **Manifest 版本化**：固定维度变更时 `manifestVersion` 变化。
 5. **Premature done 门禁**：`prematureDoneRate > tolerance` 时门禁 `passed=false`。
+
+---
+
+## 9. 模型版本隔离与 Eval 驱动的 Prompt 进化（MODEL-PROMPT-EVOLUTION-1，2026-08-12）
+
+> **任务**：`docs/model-version-isolation-prompt-evolution-development-plan.md`（v1.0，2026-08-12）。
+> **状态**：t1 基线盘点、t2 Bundle 指纹、t3 安全/实验分层、t4 候选差异与 Eval Manifest、t5 确定性硬门 + 链路指标、t6 测试（28/28 pass）均已实现。本任务只补齐**完整 Bundle 指纹 + Eval 门禁 + 候选差异**基础设施，**不改变任何生产调用行为**；生产 Prompt 常量、路由与主链路零变更。真人盲评与生产收敛（t7 之后的生产替换）需真实模型 replay，待模型配额恢复/切换 provider 后进行。
+
+本节把 Phase 9 的「system prompt / toolSchema / context / budget」4 类 hash，扩展为**完整 Prompt Bundle 指纹**，使 renderer、parser、termination、provider capability、模型版本等任何行为环境变化都能被 Registry 精确识别，避免「system prompt 未变但实际行为环境已变」的错误归因。
+
+### 9.1 Prompt Profile 与 Prompt Bundle 的区分
+
+- **PromptProfile**（`gemini_writer_v2` / `claude_writer_v1` 等）是**路由身份**；`resolveWriterPromptProfile()` 按其解析渲染与路由选择。
+- **PromptBundle** 是**模型实际看到的完整行为环境**，是 Eval、漂移检查和生产准入的完整归因单位。`bundleId` 由完整内容规范化序列化后的 hash 派生，**不能只由 system prompt hash 派生**。
+
+### 9.2 PromptBundleManifest（`novelos/eval/prompt-bundle-manifest.ts`）
+
+```ts
+interface PromptBundleManifest {
+  bundleId: string;                 // 由下方全部 hash 规范化派生
+  modelVersion: string;
+  provider: string;
+  route: string;
+  profileId: string;
+  systemPromptHash: string;         // system prompt
+  userPromptRendererHash: string;   // 用户 prompt renderer
+  chapterContractRendererHash: string; // ChapterContract 平铺/分层渲染器
+  toolSchemaHash: string;           // 工具 schema
+  toolProtocolHash: string;         // 工具调用协议
+  contextCompilerHash: string;      // 上下文编译器
+  outputParserHash: string;         // 输出解析器
+  terminationProtocolHash: string;  // <done> 等终止协议
+  providerCapabilityHash: string;   // provider 能力声明
+  budgetHash: string;               // 预算
+  temperature: number | null;
+  maxTokens: number | null;
+  status: BundleStatus;             // draft | eval | held | canary | active | rejected
+}
+```
+
+- `computeBundleManifest(content, status)` 对每个组成字段计算规范化 SHA-256，再合并派生 `bundleId`。同一 Bundle 输入恒产生同一 `bundleId`；任一组成变化即改变 `bundleId`。
+- `prompt-bundle-fingerprint-collector.ts` 的 `collectProductionBundleFingerprint()` 从生产常量（`NOVELOS_SYSTEM_PROMPT`、renderer、parser、工具名、budget、provider capability 声明表）自动采集内容，无需手写 hash，杜绝「手写未变化字段」绕过指纹。
+
+### 9.3 不可变安全契约与可实验空间（`novelos/eval/prompt-security-contract.ts`）
+
+- **10 条不可变安全契约**（`IMMUTABLE_RULES`）：不得篡改已确认事实、不得凭空新增关键设定、`mustVerify` 必覆盖、工具仅授权集合、检索/预算上限系统强制、事实/完整性门禁、Agentic 初稿不得直接交付、状态仅最终确认后提交、正文输出边界与原子保存、FailureEnvelope/trace 契约。
+- **可实验表面**：`user_prompt_renderer`（实验主载体）、指令顺序、上下文分层、标签表达、示例数量/位置等。
+- **系统边界表面**：`tool_schema`、`context_compiler`、`system_prompt`、`termination_protocol`、`output_parser` 等。
+- `validateCandidateSurfaces(changedSurfaces)` 拦截系统边界变化并映射到契约规则；未知表面 **fail-closed** 拦截。
+
+### 9.4 Prompt 候选差异（`novelos/eval/prompt-candidate-diff.ts`）
+
+```json
+{
+  "baseBundleId": "gemini-3.1-pro-preview/production-001",
+  "candidateId": "gemini-3.1-pro-preview/candidate-002",
+  "changes": [
+    { "surface": "user_prompt_renderer", "operation": "reorder", "id": "known_before_must_verify" }
+  ],
+  "hypothesis": "减少重复规划提示，同时保持验证覆盖和工具调用正确性",
+  "modelVersion": "gemini-3.1-pro-preview",
+  "provider": "gemini",
+  "route": "gemini_writer_v2"
+}
+```
+
+- `diffManifests(base, candidate, hypothesis)` 自动从两份 manifest 推导变更集。
+- 系统边界变化自动标记为**敏感**（requireManualConfirm）；`remove` / `weaken` 操作同样标记敏感。候选携带模型身份，不同 modelVersion / provider / route 的 evidence 不互相合并。
+
+### 9.5 三层 Eval 门禁（`novelos/eval/prompt-eval-gates.ts`）
+
+- **第一层：确定性行为门**（`evaluateDeterministicHardGate`）：`prematureDoneRate`、未授权工具、事实硬错、未分类失败默认=0（绝对安全门，任一 >0 即 reject）；`trace留存率`=1.0；coverage / sourceRef 相对基线不降级（降级→reject）。相对指标降级但无绝对安全门违规→`held`（人工复查）。
+- **第二层：生成链路指标**（`compareLinkMetrics`）：模型调用、token、检索调用、首证据延迟、恢复率、保存结果等。成本类恶化仅**标记不阻断**，不能抵消第一层安全回归。
+- **第三层：文学质量**：真人匿名 A/B + 人工确认（机器评分仅诊断，不决定生产 winner）。本任务未实现真实盲评运行，需真实模型 replay。
+
+### 9.6 Registry 集成与 Bundle 级漂移检查
+
+- `prompt-registry.ts` 的 `PromptVersion` 新增 `bundleManifest?: PromptBundleManifest`；`createProductionSnapshot` / `createEvalCandidate` 可携带 bundleManifest（候选不接生产指针）。
+- `prompt-registry-drift-check.ts` + `scripts/prompt-registry-drift-check.mjs` 新增 `runBundleDriftCheck`：从实现源码采集完整 Bundle 指纹，与 registry 基线对比。语义：**仅当存在 bundle 基线且发生真实漂移才 hard block**；无基线（未接入）为告警不阻断。CLI 支持 `--route / --provider / --model-version / --temperature / --max-tokens` 覆盖身份。
+
+### 9.7 测试（`tests-eval/model-prompt-evolution.test.mjs`，28/28 pass）
+
+覆盖 t2-t6：同一 Bundle 确定性 bundleId、hash 对 renderer/parser/termination/provider capability 变化敏感、10 条安全契约、系统边界拦截、diffManifests 自动推导、绝对安全门 reject / 相对降级 held、链路成本指标不抵消安全门、10 固定场景→硬门映射、createProductionSnapshot/createEvalCandidate 携带 bundleManifest。
+
+### 9.8 边界与后续
+
+- 本任务**不改生产行为**：生产仍直接引用硬编码 Prompt 常量；Registry 仍是被动观测层。
+- 尚未完成（需真实模型 replay，待配额恢复或切换 provider）：真实 Prompt 候选 Eval replay、真人匿名 A/B、生产 Bundle 替换与旧逻辑物理删除。
+- 版本收敛原则持续生效：生产替换后旧生产 Prompt 逻辑物理删除，不维护多套并行运行时版本。

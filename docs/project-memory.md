@@ -17,6 +17,18 @@
 
 > 文档表述统一为：EvidencePlan 由系统建立安全边界；是否检索及检索顺序由 NovelOS Agentic 在同一 ReAct 循环内决定；系统通过工具白名单、调用上限、MustVerifyCoverageGate 和 FactGuard 保证安全。历史 `evidence-decision-prompt-inventory.md` 与 `phase-reasoning-budget-baseline.md` 保留为只读研究证据，不再描述为生产阶段。
 
+## MODEL-PROMPT-EVOLUTION-1：模型版本隔离与 Eval 驱动的 Prompt 进化（2026-08-12）
+
+**状态：t1-t6 已完成（build:eval 通过，`tests-eval/model-prompt-evolution.test.mjs` 28/28 pass）。本任务零生产行为变更。** 计划文档 `docs/model-version-isolation-prompt-evolution-development-plan.md`（v1.1），设计落地见 `docs/phase9-prompt-registry-design.md` §9。
+
+- **完整 Prompt Bundle 指纹**（`novelos/eval/prompt-bundle-manifest.ts` + `prompt-bundle-fingerprint-collector.ts`）：`bundleId` 由 system prompt / user renderer / ChapterContract renderer / toolSchema / toolProtocol / contextCompiler / outputParser / termination / providerCapability / budget / 模型版本 / route / temperature / maxTokens 的规范化 hash 派生。**避免「system prompt 未变但行为环境已变」的错误归因。**
+- **安全/实验分层**（`prompt-security-contract.ts`）：10 条不可变安全契约（事实不可篡改、mustVerify 必覆盖、工具仅授权集合、预算上限、门禁、初稿不直接交付、状态事务、原子保存、trace 契约等）与可实验 Prompt 空间（user_prompt_renderer 为主载体）明确分离；`validateCandidateSurfaces` 对系统边界变化 fail-closed 拦截。
+- **候选差异**（`prompt-candidate-diff.ts`）：`diffManifests` 自动推导 base→candidate 变更集；系统边界变化与 remove/weaken 操作标记为敏感（需人工确认）；候选携带模型身份，不同 modelVersion/provider/route 的 evidence 不互相合并。
+- **三层 Eval 门禁**（`prompt-eval-gates.ts`）：第一层确定性行为门（prematureDone / 未授权工具 / 事实硬错 / 未分类失败 =0 绝对安全门，trace 留存=1.0，coverage/sourceRef 相对基线不降级）、第二层链路指标（成本恶化仅标记不阻断，不能抵消安全门）、第三层文学质量（真人盲评）。
+- **Registry 集成**：`PromptVersion` 新增 `bundleManifest`；`createProductionSnapshot` / `createEvalCandidate` 可携带（候选不接生产指针）。`runBundleDriftCheck` 仅当存在 bundle 基线且发生真实漂移才 hard block；无基线为告警不阻断。
+- **未引入**：固定 thinking token、未验证 provider 隐藏推理参数、机器文学裁判、生产行为变更或新增并行运行时版本。生产仍直接引用硬编码 Prompt 常量，Registry 仍是被动观测层。
+- **剩余（需真实模型 replay，待配额恢复/切换 provider）**：真人匿名 A/B、小范围候选验证（通用 vs 专属 Prompt）、生产 Bundle 替换与旧逻辑物理删除（遵循版本收敛原则）。
+
 ## Phase 9 生产运营期 active_prod（2026-08-11）
 
 **当前状态：生产运营期，稳定生产基线运行中。** 项目已从"开发/验收阶段"转入"生产运营与按需迭代"。active production pointer 已切换到 `rel-prod-103`（`active-production.json → rel-prod-103`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。

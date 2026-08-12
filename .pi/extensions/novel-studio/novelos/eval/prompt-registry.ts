@@ -29,6 +29,7 @@ import { NARRATIVE_TOOL_NAMES } from "../tools/narrative-tools.js";
 import { REAL_SYSTEM_PROMPT_BASE } from "./tool-ab-real-runner.js";
 import { GEMINI_RETRIEVAL_SYSTEM_PROMPT_BASE, GEMINI_SYSTEM_PROMPT } from "./gemini-prompt-library.js";
 import { DEFAULT_BUDGET_CONFIG } from "../runtime/budget-policy.js";
+import type { PromptBundleManifest } from "./prompt-bundle-manifest.js";
 
 // ============================================================================
 // 常量
@@ -137,6 +138,14 @@ export interface PromptVersion {
   evalManifestId?: string;
   /** 评测报告路径 */
   evalReportPath?: string;
+  /**
+   * MODEL-PROMPT-EVOLUTION-1（t2）：完整 Prompt Bundle 指纹（可选）。
+   *
+   * 4 类 hash（PromptHashes）只覆盖 system prompt / tool / context / budget；
+   * bundleManifest 覆盖 renderer / parser / termination / provider capability /
+   * 模型版本等完整行为环境。drift check 优先用 bundleId 检测完整 Bundle 变化。
+   */
+  bundleManifest?: PromptBundleManifest;
   /** 拒绝原因（status=rejected 时必填） */
   rejectedReason?: string;
   /** 创建时间 ISO */
@@ -292,6 +301,8 @@ export function transitionStatus(
  * 为指定 slot 创建生产快照版本。
  *
  * 从当前生产常量计算 hash，创建 draft 状态版本。
+ * 可附带完整 PromptBundleManifest（t2），记录 renderer/parser/termination/
+ * provider capability/模型版本等完整行为环境指纹。
  */
 export function createProductionSnapshot(
   slot: PromptSlot,
@@ -300,6 +311,7 @@ export function createProductionSnapshot(
   modelRoute: string,
   systemPrompt: string,
   writerProfile?: string,
+  bundleManifest?: PromptBundleManifest,
 ): PromptVersion {
   const now = new Date().toISOString();
   return {
@@ -315,6 +327,7 @@ export function createProductionSnapshot(
       contextHash: computeProductionContextHash(),
       budgetHash: computeProductionBudgetHash(),
     },
+    bundleManifest,
     status: "draft",
     statusHistory: [],
     createdAt: now,
@@ -326,7 +339,7 @@ export function createProductionSnapshot(
  * 创建 eval-only prompt 版本（如 Gemini 专属 Prompt 候选）。
  *
  * 与生产快照共享 toolSchemaHash/contextHash/budgetHash（固定维度一致），
- * 只 promptHash 不同。
+ * 只 promptHash 不同。可附带完整 PromptBundleManifest（t2）。
  */
 export function createEvalCandidate(
   slot: PromptSlot,
@@ -335,6 +348,7 @@ export function createEvalCandidate(
   modelRoute: string,
   systemPrompt: string,
   writerProfile?: string,
+  bundleManifest?: PromptBundleManifest,
 ): PromptVersion {
   const now = new Date().toISOString();
   return {
@@ -350,6 +364,7 @@ export function createEvalCandidate(
       contextHash: computeProductionContextHash(),
       budgetHash: computeProductionBudgetHash(),
     },
+    bundleManifest,
     status: "draft",
     statusHistory: [],
     createdAt: now,
