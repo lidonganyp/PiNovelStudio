@@ -165,6 +165,10 @@ export interface V2TraceRecord {
   failureEnvelope?: FailureEnvelope;
   /** 上下文 hash（所有阶段都记录，便于关联） */
   contextHash?: string;
+  /** MODEL-PROMPT-EVOLUTION-1：生产 Bundle hash（system prompt + toolSchema + budget + identity） */
+  bundleId?: string;
+  /** MODEL-PROMPT-EVOLUTION-1：bundle hash 覆盖的维度（供审计判断覆盖范围） */
+  bundleHashDimensions?: string[];
   /** Phase D 新增：rawStage2 候选 id（rawstage2_generated 阶段） */
   rawStage2CandidateId?: string;
   /** Phase D 新增：rawStage2 候选正文长度（rawstage2_generated 阶段） */

@@ -19,15 +19,18 @@
 
 ## MODEL-PROMPT-EVOLUTION-1：模型版本隔离与 Eval 驱动的 Prompt 进化（2026-08-12）
 
-**状态：t1-t6 已完成（build:eval 通过，`tests-eval/model-prompt-evolution.test.mjs` 28/28 pass）。本任务零生产行为变更。** 计划文档 `docs/model-version-isolation-prompt-evolution-development-plan.md`（v1.1），设计落地见 `docs/phase9-prompt-registry-design.md` §9。
+**状态：有条件完成。** 核心基础设施、真实 Gemini A/B 验证（P-B 被 reject）、生产 trace bundleId 接入、Registry bundle baseline 初始化均已实现。本任务零生产行为变更。计划文档 `docs/model-version-isolation-prompt-evolution-development-plan.md`（v1.1），设计落地见 `docs/phase9-prompt-registry-design.md` §9。
 
 - **完整 Prompt Bundle 指纹**（`novelos/eval/prompt-bundle-manifest.ts` + `prompt-bundle-fingerprint-collector.ts`）：`bundleId` 由 system prompt / user renderer / ChapterContract renderer / toolSchema / toolProtocol / contextCompiler / outputParser / termination / providerCapability / budget / 模型版本 / route / temperature / maxTokens 的规范化 hash 派生。**避免「system prompt 未变但行为环境已变」的错误归因。**
 - **安全/实验分层**（`prompt-security-contract.ts`）：10 条不可变安全契约（事实不可篡改、mustVerify 必覆盖、工具仅授权集合、预算上限、门禁、初稿不直接交付、状态事务、原子保存、trace 契约等）与可实验 Prompt 空间（user_prompt_renderer 为主载体）明确分离；`validateCandidateSurfaces` 对系统边界变化 fail-closed 拦截。
 - **候选差异**（`prompt-candidate-diff.ts`）：`diffManifests` 自动推导 base→candidate 变更集；系统边界变化与 remove/weaken 操作标记为敏感（需人工确认）；候选携带模型身份，不同 modelVersion/provider/route 的 evidence 不互相合并。
 - **三层 Eval 门禁**（`prompt-eval-gates.ts`）：第一层确定性行为门（prematureDone / 未授权工具 / 事实硬错 / 未分类失败 =0 绝对安全门，trace 留存=1.0，coverage/sourceRef 相对基线不降级）、第二层链路指标（成本恶化仅标记不阻断，不能抵消安全门）、第三层文学质量（真人盲评）。
 - **Registry 集成**：`PromptVersion` 新增 `bundleManifest`；`createProductionSnapshot` / `createEvalCandidate` 可携带（候选不接生产指针）。`runBundleDriftCheck` 仅当存在 bundle 基线且发生真实漂移才 hard block；无基线为告警不阻断。
+- **生产 trace bundleId 接入**（`v2/core/production-bundle-hash.ts`）：生产 trace 每条 record 写入 `bundleId`（system prompt + toolSchema + budget + identity 的轻量级 hash）。这是完整 PromptBundleManifest 的子集，不含 renderer/parser/protocol/termination 源码 hash（那些需要读文件，属 eval-only 范畴）。**未经真实章节生成端到端验证**。
+- **Registry bundle baseline**（`scripts/prompt-bundle-baseline-init.mjs`）：4 个 active 版本已填充完整 `bundleManifest`，drift check bundle 级 4/4 PASS（不再是"无 bundle baseline"告警）。
+- **eval 报告数据质量声明**：报告区分实测指标（覆盖率/sourceRef/调用数/token/prematureDone 等）、估算指标（input/output token 拆分）、固定默认值（恢复率/保存率/StoryPreservation=1.0，不代表生产实测）、未覆盖项（生产链路指标/真人盲评）。
 - **未引入**：固定 thinking token、未验证 provider 隐藏推理参数、机器文学裁判、生产行为变更或新增并行运行时版本。生产仍直接引用硬编码 Prompt 常量，Registry 仍是被动观测层。
-- **剩余（需真实模型 replay，待配额恢复/切换 provider）**：真人匿名 A/B、小范围候选验证（通用 vs 专属 Prompt）、生产 Bundle 替换与旧逻辑物理删除（遵循版本收敛原则）。
+- **剩余**：生产 trace bundleId 的真实章节生成端到端验证；未来有新 Prompt 候选通过门禁时的真人盲评和生产替换。
 
 ### 真实 Gemini A/B replay 结果（2026-08-12）
 

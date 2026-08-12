@@ -40,7 +40,27 @@
         }
       ],
       "createdAt": "2026-08-10T12:29:32.205Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z"
+      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "bundleManifest": {
+        "bundleId": "4a4286681f8f2b93efb525d5726cc7872485a977db229e4740520229058cbe54",
+        "modelVersion": "gemini-3.1-pro-preview",
+        "provider": "gemini",
+        "route": "novelos_agentic",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "fab363a154538ac88db6132eea8d99d9417881bd14122337d462726fb1a86d24",
+        "userPromptRendererHash": "29217d2c2e283087881f0b3ba13625cfc7c5ae4838b9a3937e45da277a2e5d57",
+        "chapterContractRendererHash": "2e43dba1b8053bc83558f97f4d82cd4180f70e8082d36ad3743386d4eef448b3",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "3d32d3e8e82a65d3365e44c778d9ebd2d46ad6d3cfe1f5aa002ae47baf19d820",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "be7628ae5fc9167a1873f7c85a6664c19ec46a812f7394b48c0b8a972c71f29b",
+        "terminationProtocolHash": "fc7a4b044bc3a5f27fa657c32075bb3df0aed33e7475d7d3df51e361a708f721",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 2048,
+        "status": "active"
+      }
     },
     {
       "versionId": "style_optimizer-v1",
@@ -79,7 +99,27 @@
         }
       ],
       "createdAt": "2026-08-10T12:29:32.206Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z"
+      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "bundleManifest": {
+        "bundleId": "446e5223b1d6dbff5b4b96442027a172605466ae83bacf70c547d6ee494d74e0",
+        "modelVersion": "gemini-3.1-pro-preview",
+        "provider": "gemini",
+        "route": "v2_amplified_gemini31",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "fab363a154538ac88db6132eea8d99d9417881bd14122337d462726fb1a86d24",
+        "userPromptRendererHash": "29217d2c2e283087881f0b3ba13625cfc7c5ae4838b9a3937e45da277a2e5d57",
+        "chapterContractRendererHash": "2e43dba1b8053bc83558f97f4d82cd4180f70e8082d36ad3743386d4eef448b3",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "3d32d3e8e82a65d3365e44c778d9ebd2d46ad6d3cfe1f5aa002ae47baf19d820",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "be7628ae5fc9167a1873f7c85a6664c19ec46a812f7394b48c0b8a972c71f29b",
+        "terminationProtocolHash": "fc7a4b044bc3a5f27fa657c32075bb3df0aed33e7475d7d3df51e361a708f721",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 8192,
+        "status": "active"
+      }
     },
     {
       "versionId": "writer_adapter-v1",
@@ -119,7 +159,27 @@
         }
       ],
       "createdAt": "2026-08-10T12:29:32.206Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z"
+      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "bundleManifest": {
+        "bundleId": "d3e9babeed054262fc44cd1d0efc8a1c94a4931ab02e82e0710c0aba71087dce",
+        "modelVersion": "gemini-3.1-pro-preview",
+        "provider": "gemini",
+        "route": "v2_rawstage2_gemini31",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "fab363a154538ac88db6132eea8d99d9417881bd14122337d462726fb1a86d24",
+        "userPromptRendererHash": "29217d2c2e283087881f0b3ba13625cfc7c5ae4838b9a3937e45da277a2e5d57",
+        "chapterContractRendererHash": "2e43dba1b8053bc83558f97f4d82cd4180f70e8082d36ad3743386d4eef448b3",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "3d32d3e8e82a65d3365e44c778d9ebd2d46ad6d3cfe1f5aa002ae47baf19d820",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "be7628ae5fc9167a1873f7c85a6664c19ec46a812f7394b48c0b8a972c71f29b",
+        "terminationProtocolHash": "fc7a4b044bc3a5f27fa657c32075bb3df0aed33e7475d7d3df51e361a708f721",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 8192,
+        "status": "active"
+      }
     },
     {
       "versionId": "retrieval_eval-v1",
@@ -158,7 +218,27 @@
         }
       ],
       "createdAt": "2026-08-10T12:29:32.207Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z"
+      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "bundleManifest": {
+        "bundleId": "99dd5ba6e0fae5e463e0902866f5a2f5966df5199704fb3a00c91600c6c62ecf",
+        "modelVersion": "gemini-3.1-pro-preview",
+        "provider": "gemini",
+        "route": "narrator_primary",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "fab363a154538ac88db6132eea8d99d9417881bd14122337d462726fb1a86d24",
+        "userPromptRendererHash": "29217d2c2e283087881f0b3ba13625cfc7c5ae4838b9a3937e45da277a2e5d57",
+        "chapterContractRendererHash": "2e43dba1b8053bc83558f97f4d82cd4180f70e8082d36ad3743386d4eef448b3",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "3d32d3e8e82a65d3365e44c778d9ebd2d46ad6d3cfe1f5aa002ae47baf19d820",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "be7628ae5fc9167a1873f7c85a6664c19ec46a812f7394b48c0b8a972c71f29b",
+        "terminationProtocolHash": "fc7a4b044bc3a5f27fa657c32075bb3df0aed33e7475d7d3df51e361a708f721",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 2048,
+        "status": "active"
+      }
     },
     {
       "versionId": "retrieval_eval-v2",

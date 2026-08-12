@@ -66,6 +66,7 @@ import {
   type JudgeRoundTrace,
 } from "../adapters/legacy-trace-adapter.js";
 import { atomicSave } from "./orchestrator-commit-save.js";
+import { computeProductionBundleHash } from "./production-bundle-hash.js";
 import type { FailureEnvelope } from "../../craft/failure-envelope.js";
 import {
   loadStrategyPolicyStore,
@@ -754,6 +755,7 @@ function buildTraceRecordsFromOrchResult(
   orchResult: UnifiedOrchestratorOutput,
   contextHash: string,
   releaseGovernance?: V2TraceRecord["releaseGovernance"],
+  bundleInfo?: { bundleId: string; hashDimensions: string[] },
 ): V2TraceRecord[] {
   const records: V2TraceRecord[] = [];
   const now = new Date().toISOString();
@@ -982,6 +984,14 @@ function buildTraceRecordsFromOrchResult(
       novelos: novelosData,
       contextHash,
     });
+  }
+
+  // MODEL-PROMPT-EVOLUTION-1：为每条 trace record 注入 bundleId
+  if (bundleInfo) {
+    for (const r of records) {
+      r.bundleId = bundleInfo.bundleId;
+      r.bundleHashDimensions = bundleInfo.hashDimensions;
+    }
   }
 
   return records;
@@ -1927,7 +1937,25 @@ export async function runUnifiedPipeline(
   let tracePath: string | undefined;
   if (!effectiveFullPipelinePreview) {
     const contextHash = deriveContextHashFromCompiled(context);
-    const traceRecords = buildTraceRecordsFromOrchResult(orchResult, contextHash, releaseGovernanceTrace);
+    // MODEL-PROMPT-EVOLUTION-1：计算生产 Bundle hash 写入 trace
+    const modelVersion = (orchResult.stageResults.modelVersion as string | undefined) ?? "unknown";
+    const SOFT = Number(process.env.PINOVEL_MODEL_CALL_SOFT ?? 6);
+    const HARD = Number(process.env.PINOVEL_MODEL_CALL_HARD ?? 10);
+    const bundleHash = computeProductionBundleHash({
+      modelVersion,
+      route: generationModelLock.route,
+      provider: generationModelLock.provider,
+      temperature: null,
+      maxTokens: null,
+      budgetMaxTurns: 10,
+      budgetMaxToolCalls: 20,
+      orchestratorSoft: SOFT,
+      orchestratorHard: HARD,
+    });
+    const traceRecords = buildTraceRecordsFromOrchResult(
+      orchResult, contextHash, releaseGovernanceTrace,
+      { bundleId: bundleHash.bundleId, hashDimensions: bundleHash.hashDimensions },
+    );
     const tracePersistence = persistUnifiedTraceWithFallback({
       projectRoot,
       workspaceId,

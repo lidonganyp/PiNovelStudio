@@ -3,7 +3,7 @@
 **任务编号**：MODEL-PROMPT-EVOLUTION-1  
 **版本**：v1.1  
 **日期**：2026-08-12  
-**状态**：t1-t6（基线盘点 / Bundle 指纹 / 安全实验分层 / 候选差异与 Eval Manifest / 确定性硬门 + 链路指标 / 测试 28/28 pass）已实现；t7-t8（真人盲评基础设施 / 小范围候选验证）已通过真实 Gemini replay 验证——P-B（Gemini 专属 Prompt）被绝对安全门 reject（prematureDoneRate=1.0、coverage=0.125、sourceRef=0.000），确认「专属 Prompt 未胜出」，保持通用 Prompt 生产基线。t9 生产收敛无正收益候选可替换，维持当前基线；t10 文档收敛完成。本任务不改生产行为，生产 Prompt 常量与主链路零变更。
+**状态**：有条件完成。核心基础设施（Bundle 指纹 / 安全契约 / 候选差异 / 三层门禁 / 28 测试通过）、真实 Gemini A/B 验证（P-B 被 reject）、生产 trace bundleId 接入、Registry bundle baseline 初始化均已实现。但生产 trace 中的 bundleId 尚未经真实章节生成端到端验证，第二层链路指标部分为估算/固定值（已在报告中诚实标注）。本任务不改生产行为，生产 Prompt 常量与主链路零变更。
 **适用范围**：统一生产主链路 `novel_generate_chapter → NovelOS Agentic → 作者风格整章优化`
 
 ## 1. 核心决策
@@ -440,10 +440,13 @@ npm run test:eval
 | 4 | 候选差异与 Eval Manifest：candidate diff + 隔离 replay，不接生产指针 | ✅ 完成 | `prompt-candidate-diff.ts` |
 | 5 | 确定性硬门 + 链路指标 | ✅ 完成 | `prompt-eval-gates.ts` |
 | 6 | 测试：单元/契约 + eval 回归（10 固定场景） | ✅ 完成 | `tests-eval/model-prompt-evolution.test.mjs` 28/28 pass |
-| 7 | 真人盲评：匿名 A/B + 人工确认 | ✅ 基础设施完成 | `prompt-evolution-eval.mjs` 集成三层门禁；P-B 被 reject 不需真人盲评 |
+| 7 | 真人盲评：匿名 A/B + 人工确认 | ✅ 基础设施完成 | `prompt-evolution-eval.mjs` 集成三层门禁 + 数据质量声明；P-B 被 reject 不需真人盲评 |
 | 8 | 小范围候选验证：至少一个通用 + 一个专属 Prompt 候选 | ✅ 完成（结论：专属未胜出） | 真实 Gemini replay：P-A 覆盖率 0.975 vs P-B 0.125，P-B prematureDoneRate=1.0 |
 | 9 | 生产收敛：确认正收益后替换唯一 Bundle，物理删除旧逻辑 | ✅ 维持当前基线 | 无正收益候选，保持通用 Prompt 为唯一生产 Bundle |
 | 10 | 文档收敛：更新 Registry、架构文档、项目记忆 | ✅ 完成 | `phase9-prompt-registry-design.md` §9、本计划、`docs/project-memory.md` |
+| 11 | 生产 trace bundleId 接入 | ✅ 完成 | `v2/core/production-bundle-hash.ts` + `unified-entry.ts` 注入；`V2TraceRecord` 新增 `bundleId` |
+| 12 | Registry bundle baseline 初始化 | ✅ 完成 | `scripts/prompt-bundle-baseline-init.mjs`；4 active 版本已填充 bundleManifest；drift check 4/4 PASS |
+| 13 | eval 报告数据质量声明 | ✅ 完成 | 区分实测/估算/固定默认值/未覆盖四类指标 |
 
 **实现要点**（详见 `docs/phase9-prompt-registry-design.md` §9）：
 

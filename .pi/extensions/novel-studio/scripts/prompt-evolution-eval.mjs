@@ -167,16 +167,16 @@ function mapToDeterministicInput(aggA, aggB) {
 function mapToLinkMetrics(agg) {
   return {
     modelCalls: agg.totalCalls,
-    inputTokens: Math.round(agg.totalEstimateTokens * 0.3), // 估算拆分
-    outputTokens: Math.round(agg.totalEstimateTokens * 0.7),
+    inputTokens: Math.round(agg.totalEstimateTokens * 0.3), // ⚠️ 估算拆分（评测不区分 input/output token）
+    outputTokens: Math.round(agg.totalEstimateTokens * 0.7), // ⚠️ 估算拆分
     retrievalCalls: agg.totalCalls,
     avgFirstEvidenceLatencyMs: agg.avgFirstEvidenceLatencyMs,
-    autoRecoverySuccessRate: 1.0, // 评测无恢复逻辑
-    chapterSaveSuccessRate: 1.0, // 评测不保存章节
+    autoRecoverySuccessRate: 1.0, // ⚠️ 固定值：评测无恢复逻辑，不代表生产实测
+    chapterSaveSuccessRate: 1.0, // ⚠️ 固定值：评测不保存章节，不代表生产实测
     budgetExhausted: 0,
     timeouts: agg.timeouts,
     retries: 0,
-    storyPreservationRate: 1.0, // 评测不含 StoryPreservation
+    storyPreservationRate: 1.0, // ⚠️ 固定值：评测不含 StoryPreservation，不代表生产实测
   };
 }
 
@@ -301,6 +301,31 @@ async function main() {
         note: "第三层需真人匿名 A/B 盲评，机器评分仅诊断",
       },
     },
+    // 数据质量声明：区分实测 vs 估算/固定值
+    dataQuality: {
+      measured: [
+        "mustVerifyCoverage", "sourceRefCompleteness", "stopRate",
+        "totalCalls", "totalEstimateTokens", "invalidToolSelections",
+        "parseErrors", "emptyResults", "errors", "timeouts",
+        "avgFirstEvidenceLatencyMs", "prematureDoneRate",
+      ],
+      estimated: [
+        "inputTokens（按 30% 估算拆分，评测不区分 input/output）",
+        "outputTokens（按 70% 估算拆分）",
+      ],
+      fixedDefaults: [
+        "autoRecoverySuccessRate=1.0（评测无恢复逻辑，不代表生产实测）",
+        "chapterSaveSuccessRate=1.0（评测不保存章节，不代表生产实测）",
+        "storyPreservationRate=1.0（评测不含 StoryPreservation，不代表生产实测）",
+        "factHardErrors=0（评测场景不含事实硬错，由生产 FactGuard 覆盖）",
+        "traceRetentionRate=1.0（评测脚本保证 trace 留存）",
+      ],
+      notCovered: [
+        "生产链路指标（需真实 novel_generate_chapter trace）",
+        "StoryPreservation / FinalFactRecheck / Completeness 门禁",
+        "真人文学质量评价",
+      ],
+    },
     conclusion: {
       oldGatePass: oldGate.allHardPassed,
       newGatePass: newHardGate.passed,
@@ -385,13 +410,26 @@ async function main() {
     `**恶化项数**：${linkComparison.regressions.length}`,
     `> 成本类恶化仅标记不阻断，不能抵消第一层安全回归。`,
     "",
-    "## 5. 新门禁 — 第三层：文学质量",
+    "## 5. 数据质量声明",
+    "",
+    "本报告第二层链路指标的数据来源区分如下：",
+    "",
+    "| 类别 | 指标 | 说明 |",
+    "|------|------|------|",
+    "| ✅ 实测 | mustVerifyCoverage, sourceRefCompleteness, stopRate, totalCalls, totalEstimateTokens, invalidToolSelections, parseErrors, emptyResults, errors, timeouts, avgFirstEvidenceLatencyMs, prematureDoneRate | 从真实模型 A/B replay 聚合 |",
+    "| ⚠️ 估算 | inputTokens, outputTokens | 按 30%/70% 估算拆分，评测不区分 input/output token |",
+    "| 🔧 固定默认值 | autoRecoverySuccessRate, chapterSaveSuccessRate, storyPreservationRate, factHardErrors, traceRetentionRate | 评测不覆盖这些生产链路环节，固定为安全默认值，**不代表生产实测** |",
+    "| ❌ 未覆盖 | 生产链路指标、StoryPreservation/FinalFactRecheck/Completeness 门禁、真人文学评价 | 需真实 novel_generate_chapter trace 和真人盲评 |",
+    "",
+    "> **重要**：本报告是 Prompt 候选 A/B 评测，不是生产链路验收。生产链路指标需从真实章节生成的 quality-trace.json 中提取。",
+    "",
+    "## 6. 新门禁 — 第三层：文学质量",
     "",
     "| 状态 | 说明 |",
     "|------|------|",
     "| 待真人盲评 | 第三层需真人匿名 A/B 盲评，机器评分仅诊断 |",
     "",
-    "## 6. 综合结论",
+    "## 7. 综合结论",
     "",
     `| 维度 | 结论 |`,
     `|------|------|`,
