@@ -29,6 +29,19 @@
 - **未引入**：固定 thinking token、未验证 provider 隐藏推理参数、机器文学裁判、生产行为变更或新增并行运行时版本。生产仍直接引用硬编码 Prompt 常量，Registry 仍是被动观测层。
 - **剩余（需真实模型 replay，待配额恢复/切换 provider）**：真人匿名 A/B、小范围候选验证（通用 vs 专属 Prompt）、生产 Bundle 替换与旧逻辑物理删除（遵循版本收敛原则）。
 
+### 真实 Gemini A/B replay 结果（2026-08-12）
+
+通过 `scripts/prompt-evolution-eval.mjs` 运行真实 Gemini 3.1 Pro Preview A/B replay（1 批次 × 3 seed × 8 场景，route=narrator_primary，fallback=[]，含配额重试）：
+
+| 指标 | P-A（通用 Prompt 基线） | P-B（Gemini 专属 Prompt 候选） |
+|---|---:|---:|
+| mustVerify 覆盖率 | 0.975 | 0.125 |
+| sourceRef 完整率 | 0.814 | 0.000 |
+| 总调用 | 43 | 0 |
+| prematureDoneRate | 0 | 1.0 |
+
+**结论**：P-B 被新门禁第一层**绝对安全门 reject**（prematureDone=1.0 + coverage 降级 + sourceRef 降级）。旧门禁同样 FAIL。**确认「专属 Prompt 未胜出」**，保持通用 Prompt 为唯一生产 Bundle。生产无变更，无需真人盲评（被 reject 的候选不进入第三层）。报告存于 `reports/prompt-evolution-eval/eval-real-*.md`。
+
 ## Phase 9 生产运营期 active_prod（2026-08-11）
 
 **当前状态：生产运营期，稳定生产基线运行中。** 项目已从"开发/验收阶段"转入"生产运营与按需迭代"。active production pointer 已切换到 `rel-prod-103`（`active-production.json → rel-prod-103`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。
