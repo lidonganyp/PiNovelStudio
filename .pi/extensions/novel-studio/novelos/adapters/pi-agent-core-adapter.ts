@@ -108,11 +108,16 @@ export function createPlaceholderModel(route: string): Model<string> {
  * @param modelGenerate 项目模型调用函数（来自 legacy-model-route-adapter 或 stub）
  * @param route 模型路由名（如 narrator_primary / narrator_testing_ernie）
  * @param kind 候选 kind 标签（默认 novelos_agentic）
+ * @param defaultTimeoutMs 默认单次请求超时 ms（AGENTIC-EVIDENCE-MERGE-1 修复：
+ *   pi-agent-core 调用 streamFn 时 options.timeoutMs 通常为 undefined，导致
+ *   candidateTimeoutMs 从编排器到 fetchWithTimeout 的链路断裂。此处闭包捕获
+ *   runtime 传入的 timeoutMs 作为默认值，确保超时能到达 fetchWithTimeout。）
  */
 export function createProjectStreamFn(
   modelGenerate: ModelGenerateFn,
   route: string,
   kind = "novelos_agentic",
+  defaultTimeoutMs?: number,
 ): (model: Model<string>, context: Context, options?: { signal?: AbortSignal; timeoutMs?: number }) => AssistantMessageEventStream {
   return (_model: Model<string>, context: Context, options?: { signal?: AbortSignal; timeoutMs?: number }) => {
     const systemPrompt = localizeLlmText(context.systemPrompt ?? "");
@@ -144,7 +149,7 @@ export function createProjectStreamFn(
           systemPrompt,
           userPrompt,
           kind,
-          timeoutMs: options?.timeoutMs,
+          timeoutMs: options?.timeoutMs ?? defaultTimeoutMs,
         });
         if (aborted) return; // 已 abort，丢弃过期结果
 
@@ -323,7 +328,7 @@ export function createNovelOSAgent(options: CreateNovelOSAgentOptions): Agent {
   } = options;
 
   const model = createPlaceholderModel(route);
-  const streamFn = createProjectStreamFn(modelGenerate, route, kind);
+  const streamFn = createProjectStreamFn(modelGenerate, route, kind, timeoutMs);
   // 注入 ReAct 工具调用约定 + 工具 schema 到 system prompt（幂等）
   // 缺口一：allowedToolNames 白名单使注入边界 fail-closed，拒绝白名单外工具。
   const systemPromptWithTools = injectToolSchemas(systemPrompt, tools, allowedToolNames);

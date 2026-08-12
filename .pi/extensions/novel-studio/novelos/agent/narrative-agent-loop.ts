@@ -228,6 +228,11 @@ export class NarrativeAgentLoop {
             turns.toolCalls,
             coverageGateResult,
             coverageGateRetries,
+            {
+              firstAction: turns.firstAction,
+              actualRetrievalCalls: turns.actualRetrievalCalls,
+              draftModelCalls: turns.draftModelCalls,
+            },
           );
         }
 
@@ -243,12 +248,30 @@ export class NarrativeAgentLoop {
         recoverable: true,
         retryPlan: "fallback to one_shot_raw",
       });
-      return this.makeFallback(plan, [], "model_error", [], 0, coverageGateResult, coverageGateRetries);
+      // AGENTIC-EVIDENCE-MERGE-1 修复：把底层错误消息传入 lineage.failureReason，
+      // 让 agentic-raw-candidate-source.ts 的 classifyFailureKind 能识别超时模式
+      // （"timed out" / "超时" / "aborted" 等），从而触发 model_timeout 重试条件。
+      // 之前只传 stopReason="model_error"，导致所有模型异常都被归为 model_error，
+      // 工具层 chapter_level_retry 永远不可达。
+      return this.makeFallback(plan, [], "model_error", [], 0, coverageGateResult, coverageGateRetries, undefined, errMsg);
     }
 
     // ── 预算耗尽或无 draft → fallback ────────────────────────────────────
     if (turns.stopReason === "budget_exhausted") {
-      return this.makeFallback(plan, turns.sourceRefs, "budget_exhausted", turns.evidenceFacts, turns.toolCalls);
+      return this.makeFallback(
+        plan,
+        turns.sourceRefs,
+        "budget_exhausted",
+        turns.evidenceFacts,
+        turns.toolCalls,
+        undefined,
+        0,
+        {
+          firstAction: turns.firstAction,
+          actualRetrievalCalls: turns.actualRetrievalCalls,
+          draftModelCalls: turns.draftModelCalls,
+        },
+      );
     }
     if (turns.draftText.trim().length === 0) {
       this.trajectory.recordFailure({
@@ -258,7 +281,23 @@ export class NarrativeAgentLoop {
         recoverable: true,
         retryPlan: "fallback to one_shot_raw",
       });
-      return this.makeFallback(plan, turns.sourceRefs, "model_error", turns.evidenceFacts, turns.toolCalls);
+      return this.makeFallback(
+        plan,
+        turns.sourceRefs,
+        "model_error",
+        turns.evidenceFacts,
+        turns.toolCalls,
+        undefined,
+        0,
+        {
+          firstAction: turns.firstAction,
+          actualRetrievalCalls: turns.actualRetrievalCalls,
+          draftModelCalls: turns.draftModelCalls,
+        },
+        // AGENTIC-EVIDENCE-MERGE-1 修复：传递底层模型错误消息（如超时），
+        // 让 classifyFailureKind 能识别 "timed out" 等超时模式 → model_timeout。
+        turns.modelErrorMessage,
+      );
     }
 
     // ── 3. 写 draft.md ──────────────────────────────────────────────────
@@ -510,6 +549,23 @@ export class NarrativeAgentLoop {
       stopReason = "model_declares_sufficient";
     }
 
+    // AGENTIC-EVIDENCE-MERGE-1 修复：从 assistant 消息提取模型错误消息。
+    // streamFn 把 modelGenerate 异常转为 stream error 事件，pi-agent-core
+    // 把 error.errorMessage 存入 assistant 消息。此处提取供 makeFallback
+    // 传入 lineage.failureReason，让 classifyFailureKind 能识别超时模式。
+    let modelErrorMessage: string | undefined;
+    for (const msg of messages) {
+      const m = msg as { role?: string; errorMessage?: string; stopReason?: string };
+      if (m.role === "assistant" && typeof m.errorMessage === "string" && m.errorMessage.length > 0) {
+        modelErrorMessage = m.errorMessage;
+        // 若检测到模型错误，且 draft 为空，覆盖 stopReason 为 model_error
+        if (draftText.trim().length === 0 && stopReason !== "budget_exhausted") {
+          stopReason = "model_error";
+        }
+        break;
+      }
+    }
+
     return {
       draftText,
       sourceRefs,
@@ -519,6 +575,7 @@ export class NarrativeAgentLoop {
       firstAction,
       actualRetrievalCalls,
       draftModelCalls,
+      ...(modelErrorMessage ? { modelErrorMessage } : {}),
     };
   }
 
@@ -835,6 +892,21 @@ export class NarrativeAgentLoop {
     toolCalls = 0,
     coverageGate?: CoverageGateResult,
     coverageGateRetries = 0,
+    /**
+     * AGENTIC-EVIDENCE-MERGE-1：fallback 仍应保留已发生的首动作 / 检索次数，
+     * 避免 coverage 负例与 model_error 路径把可观测字段清零成 not_run/0。
+     * 未提供时（如 runtime 异常未进入 turns）才回退到 draft/0。
+     */
+    observed?: {
+      firstAction?: "draft" | "tool_call";
+      actualRetrievalCalls?: number;
+      draftModelCalls?: number;
+    },
+    /**
+     * AGENTIC-EVIDENCE-MERGE-1 修复：底层错误消息（来自 catch 块的 errMsg）。
+     * 传入 lineage.failureReason，让 source 的 classifyFailureKind 能识别超时模式。
+     */
+    failureReason?: string,
   ): AgentLoopResult {
     const lineage: AgentLoopLineage = {
       evidencePlan: plan,
@@ -845,12 +917,16 @@ export class NarrativeAgentLoop {
       evidenceFacts,
       verifierCleared: false,
       hardFindingCount: 0,
-      // fallback 路径：首回合动作未知（未产出 draft），保守标记为 tool_call 不适用时用 draft 兜底
-      firstAction: "draft",
-      actualRetrievalCalls: 0,
-      modelCallsByKind: { draft: 0, patch: 0, verify: 0 },
+      firstAction: observed?.firstAction ?? "draft",
+      actualRetrievalCalls: observed?.actualRetrievalCalls ?? 0,
+      modelCallsByKind: {
+        draft: observed?.draftModelCalls ?? 0,
+        patch: 0,
+        verify: 0,
+      },
       ...(coverageGate ? { coverageGate } : {}),
       ...(coverageGateRetries > 0 ? { coverageGateRetries } : {}),
+      ...(failureReason ? { failureReason } : {}),
     };
     this.candidateWorkspace.saveLineage(lineage);
     this.trajectory.recordFailure({

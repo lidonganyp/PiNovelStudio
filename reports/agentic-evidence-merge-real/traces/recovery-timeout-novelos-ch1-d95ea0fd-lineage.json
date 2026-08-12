@@ -1,0 +1,60 @@
+{
+  "evidencePlan": {
+    "known": [
+      "叶尘：{\"role\":\"主角\"}",
+      "林婉儿：{\"role\":\"主角团成员\"}",
+      "[规则]这个世界是仙侠世界。",
+      "[规则]叶尘是主角。",
+      "[规则]林婉儿是主角团成员。",
+      "[规则]宗门与门派是仙侠世界的主要势力组织。",
+      "[规则]法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+      "[规则]心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+      "[规则]封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+      "[规则]碎星剑是叶尘的神兵。"
+    ],
+    "mustVerify": [
+      "这个世界是仙侠世界。",
+      "叶尘是主角。",
+      "林婉儿是主角团成员。",
+      "宗门与门派是仙侠世界的主要势力组织。",
+      "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+      "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+      "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+      "碎星剑是叶尘的神兵。"
+    ],
+    "allowedTools": [
+      "search_narrative_evidence",
+      "query_pattern_memory",
+      "query_canon",
+      "query_character_knowledge_boundary"
+    ],
+    "stopConditions": {
+      "maxStagnantRounds": 2,
+      "verifierHardErrorsCleared": true,
+      "modelDeclaresSufficient": true
+    },
+    "retrievalCallLimit": 4
+  },
+  "toolCalls": 0,
+  "sourceRefs": [],
+  "stopReason": "model_error",
+  "budgetSnapshot": {
+    "turns": 1,
+    "toolCalls": 0,
+    "latencyMs": 0,
+    "tokensIn": 0,
+    "tokensOut": 0,
+    "modelCalls": 1,
+    "exhausted": false
+  },
+  "evidenceFacts": [],
+  "verifierCleared": false,
+  "hardFindingCount": 0,
+  "firstAction": "draft",
+  "actualRetrievalCalls": 0,
+  "modelCallsByKind": {
+    "draft": 1,
+    "patch": 0,
+    "verify": 0
+  }
+}

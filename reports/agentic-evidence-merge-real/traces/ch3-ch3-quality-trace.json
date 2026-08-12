@@ -1,0 +1,3262 @@
+{
+  "schemaVersion": 1,
+  "workspaceId": "agentic-evidence-merge-replay",
+  "chapterId": "ch3",
+  "createdAt": "2026-08-12T03:59:23.631Z",
+  "events": [],
+  "patches": [],
+  "gates": [
+    {
+      "stage": "v2_agentic_fact_guard",
+      "status": "ERROR",
+      "passed": false,
+      "blocked": true,
+      "score": 0,
+      "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+      "issueTypes": [],
+      "revisionHints": [],
+      "evidence": {
+        "stage": "agentic_fact_guard",
+        "timestamp": "2026-08-12T03:59:23.630Z",
+        "error": {
+          "message": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+          "code": "agentic_fact_guard",
+          "recoverable": false
+        },
+        "failureEnvelope": {
+          "stage": "agentic_fact_guard",
+          "gate": "agentic_fact_guard",
+          "severity": "hard_block",
+          "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+          "evidence": {
+            "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+            "blockCategory": null,
+            "candidateDisposition": null,
+            "stageResults": {
+              "qualitySelectionPolicy": {
+                "mode": "user_feedback",
+                "automaticQualityWinnerSelectionEnabled": false,
+                "rawRole": "not_deliverable"
+              },
+              "judgeAlignmentGate": {
+                "automaticLiterarySelectionEnabled": false,
+                "mode": "disabled_by_user_decision"
+              },
+              "controlPlane": {
+                "packet": {
+                  "packetId": "novel-task:NOVEL-GENERATE:agentic-evidence-merge-replay:ch3:aea92a272ec2fb03",
+                  "packetHash": "aea92a272ec2fb03845f05f44dccb6a3b7411c17d73540032e4ff442409c76e0",
+                  "taskId": "NOVEL-GENERATE:agentic-evidence-merge-replay:ch3",
+                  "objective": "通过统一主链路生成 ch3",
+                  "source": "trusted-entry",
+                  "valid": true,
+                  "errors": []
+                },
+                "policy": {
+                  "profileId": "NOVEL-GENERATE:agentic-evidence-merge-replay:ch3:capabilities",
+                  "source": "trusted-entry",
+                  "scope": "context read | chapter generation | literary judge | final persistence",
+                  "configured": {
+                    "network.model_call": "allow",
+                    "model.generate": "allow",
+                    "model.judge": "allow",
+                    "state.read": "allow",
+                    "state.stage": "allow",
+                    "state.commit": "allow",
+                    "chapter.save": "allow",
+                    "artifact.export": "allow"
+                  }
+                },
+                "decisions": [
+                  {
+                    "capability": "state.read",
+                    "mode": "allow",
+                    "source": "trusted-entry",
+                    "scope": "context read | chapter generation | literary judge | final persistence",
+                    "reason": "load workspace context: agentic-evidence-merge-replay",
+                    "allowed": true,
+                    "consumed": false,
+                    "timestamp": "2026-08-12T03:57:58.916Z"
+                  },
+                  {
+                    "capability": "state.stage",
+                    "mode": "allow",
+                    "source": "trusted-entry",
+                    "scope": "context read | chapter generation | literary judge | final persistence",
+                    "reason": "stage narrative state update: ch3",
+                    "allowed": true,
+                    "consumed": false,
+                    "timestamp": "2026-08-12T03:57:58.918Z"
+                  },
+                  {
+                    "capability": "model.generate",
+                    "mode": "allow",
+                    "source": "trusted-entry",
+                    "scope": "context read | chapter generation | literary judge | final persistence",
+                    "reason": "generationModelGenerate:agentic_raw",
+                    "allowed": true,
+                    "consumed": false,
+                    "timestamp": "2026-08-12T03:57:58.923Z"
+                  },
+                  {
+                    "capability": "network.model_call",
+                    "mode": "allow",
+                    "source": "trusted-entry",
+                    "scope": "context read | chapter generation | literary judge | final persistence",
+                    "reason": "generationModelGenerate:agentic_raw",
+                    "allowed": true,
+                    "consumed": false,
+                    "timestamp": "2026-08-12T03:57:58.923Z"
+                  },
+                  {
+                    "capability": "artifact.export",
+                    "mode": "allow",
+                    "source": "trusted-entry",
+                    "scope": "context read | chapter generation | literary judge | final persistence",
+                    "reason": "quality evidence report export",
+                    "allowed": true,
+                    "consumed": false,
+                    "timestamp": "2026-08-12T03:59:23.627Z"
+                  }
+                ],
+                "denials": [],
+                "modelLocks": {
+                  "generation": {
+                    "expectedRoute": "v2_rawstage2_gemini31",
+                    "expectedProvider": "gemini31",
+                    "expectedModel": "gemini-3.1-pro-preview",
+                    "executionRoute": "v2_rawstage2_gemini31",
+                    "executionProvider": "gemini31",
+                    "executionModel": "gemini-3.1-pro-preview",
+                    "matched": true,
+                    "errors": []
+                  },
+                  "judge": {
+                    "expectedRoute": "v2_opportunity_judge",
+                    "expectedProvider": "gpt",
+                    "expectedModel": "gpt-5.6-sol",
+                    "executionRoute": "v2_opportunity_judge",
+                    "executionProvider": "gpt",
+                    "executionModel": "gpt-5.6-sol",
+                    "matched": true,
+                    "errors": []
+                  }
+                }
+              },
+              "contextBudgetReport": {
+                "manifestHash": "e1408286dd6223409990bd9be1a3ad0c731ec7989432f4f774428aa6824fbf30",
+                "modelWindowTokens": 128000,
+                "outputReserveTokens": 8192,
+                "safetyMarginTokens": 4096,
+                "inputBudgetTokens": 115712,
+                "estimatedOriginalTokens": 861,
+                "estimatedRetainedTokens": 553,
+                "recompileAttempts": 0,
+                "retained": [
+                  {
+                    "id": "p0:intent:fact:0",
+                    "priority": "P0",
+                    "estimatedTokens": 15,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:1",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:2",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:3",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:4",
+                    "priority": "P0",
+                    "estimatedTokens": 17,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:5",
+                    "priority": "P0",
+                    "estimatedTokens": 23,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:6",
+                    "priority": "P0",
+                    "estimatedTokens": 26,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:7",
+                    "priority": "P0",
+                    "estimatedTokens": 21,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:8",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p1:character:叶尘",
+                    "priority": "P1",
+                    "estimatedTokens": 16,
+                    "sourceRefs": [
+                      "character:叶尘"
+                    ]
+                  },
+                  {
+                    "id": "p1:character:林婉儿",
+                    "priority": "P1",
+                    "estimatedTokens": 18,
+                    "sourceRefs": [
+                      "character:林婉儿"
+                    ]
+                  },
+                  {
+                    "id": "p1:character:苏影",
+                    "priority": "P1",
+                    "estimatedTokens": 16,
+                    "sourceRefs": [
+                      "character:苏影"
+                    ]
+                  },
+                  {
+                    "id": "p1:chapter-function",
+                    "priority": "P1",
+                    "estimatedTokens": 12,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts"
+                    ]
+                  },
+                  {
+                    "id": "p1:overallPlotDirection:0",
+                    "priority": "P1",
+                    "estimatedTokens": 28,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts"
+                    ]
+                  },
+                  {
+                    "id": "p2:readerExperience:0",
+                    "priority": "P2",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts"
+                    ]
+                  },
+                  {
+                    "id": "p2:concreteDelivery:0",
+                    "priority": "P2",
+                    "estimatedTokens": 15,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts"
+                    ]
+                  },
+                  {
+                    "id": "p2:concreteDelivery:1",
+                    "priority": "P2",
+                    "estimatedTokens": 14,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts"
+                    ]
+                  },
+                  {
+                    "id": "p2:concreteDelivery:2",
+                    "priority": "P2",
+                    "estimatedTokens": 14,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts"
+                    ]
+                  },
+                  {
+                    "id": "p3:fact:fact:high_level_background",
+                    "priority": "P3",
+                    "estimatedTokens": 31,
+                    "sourceRefs": [
+                      "series/outline.md"
+                    ]
+                  },
+                  {
+                    "id": "p3:fact:fact:chapter_intent",
+                    "priority": "P3",
+                    "estimatedTokens": 28,
+                    "sourceRefs": [
+                      "chapter-seed-builder"
+                    ]
+                  },
+                  {
+                    "id": "p3:world:world:genre",
+                    "priority": "P3",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p3:world:world:power_system",
+                    "priority": "P3",
+                    "estimatedTokens": 57,
+                    "sourceRefs": [
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "id": "p4:style:style:agentic-evidence-merge-replay",
+                    "priority": "P4",
+                    "estimatedTokens": 124,
+                    "sourceRefs": [
+                      "style:fingerprint"
+                    ]
+                  }
+                ],
+                "dropped": [],
+                "merged": [
+                  {
+                    "id": "p0:intent:fact:0",
+                    "priority": "P0",
+                    "estimatedTokens": 15,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:0",
+                      "p0:world:world:immutable:0"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:1",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:1",
+                      "p0:world:world:immutable:1"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:2",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:2",
+                      "p0:world:world:immutable:2"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:3",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:3",
+                      "p0:world:world:immutable:3"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:4",
+                    "priority": "P0",
+                    "estimatedTokens": 17,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:4",
+                      "p0:world:world:immutable:4"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:5",
+                    "priority": "P0",
+                    "estimatedTokens": 23,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:5",
+                      "p0:world:world:immutable:5"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:6",
+                    "priority": "P0",
+                    "estimatedTokens": 26,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:6",
+                      "p0:world:world:immutable:6"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:7",
+                    "priority": "P0",
+                    "estimatedTokens": 21,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:7",
+                      "p0:world:world:immutable:7"
+                    ]
+                  },
+                  {
+                    "id": "p0:intent:fact:8",
+                    "priority": "P0",
+                    "estimatedTokens": 13,
+                    "sourceRefs": [
+                      "chapter-seed",
+                      "chapter-seed:intent",
+                      "chapter-seed:intent.targetEmotions",
+                      "chapter-seed:characters",
+                      "chapter-seed:relevance-signals",
+                      "chapter-seed:immutableFacts",
+                      "config.json"
+                    ],
+                    "mergedIds": [
+                      "p0:intent:knowledge:8",
+                      "p0:world:world:immutable:8"
+                    ]
+                  }
+                ],
+                "conflicted": [],
+                "truncated": []
+              },
+              "preflightStyleProfile": {
+                "passed": true
+              },
+              "modelCalls": [
+                {
+                  "route": "v2_rawstage2",
+                  "kind": "agentic_raw",
+                  "model": "gemini-3.1-pro-preview",
+                  "durationMs": 84683,
+                  "ts": 1786507078923,
+                  "finishReason": "stop",
+                  "tokenUsage": {
+                    "in": 2192,
+                    "out": 9152
+                  },
+                  "provider": "gemini31",
+                  "requestedRoute": "v2_rawstage2_gemini31",
+                  "expectedProvider": "gemini31",
+                  "expectedModel": "gemini-3.1-pro-preview",
+                  "actualProvider": "gemini31",
+                  "actualModel": "gemini-3.1-pro-preview"
+                }
+              ],
+              "stageTiming": {
+                "stage1_novelosAgentic": 84702,
+                "stage2_agenticFactGuard": 4
+              },
+              "modelBudget": {
+                "soft": 6,
+                "hard": 10,
+                "used": 1,
+                "capped": false
+              },
+              "chapterIntent": {
+                "summary": {
+                  "chapterFunction": "setting",
+                  "concreteDelivery": [
+                    "推进本章功能：setting",
+                    "落地章节主题：第开端阶段",
+                    "释放目标情绪：好奇、温馨"
+                  ],
+                  "focusCharacters": [],
+                  "selectedPromisesCount": 0,
+                  "irreversibleChangeCount": 0
+                },
+                "fieldSourceRefs": {
+                  "concreteDelivery": [
+                    "chapter-seed:intent",
+                    "chapter-seed:intent.chapterTheme",
+                    "chapter-seed:intent.targetEmotions"
+                  ],
+                  "factAndCharacterKnowledgeForbiddenZones": [
+                    "chapter-seed:immutableFacts"
+                  ],
+                  "chapterFunction": [
+                    "chapter-seed:intent"
+                  ]
+                },
+                "consumedFields": [
+                  "identityContract",
+                  "overallPlotDirection",
+                  "chapterFunction",
+                  "readerExperience",
+                  "relevantCharacters",
+                  "relevantCharacterStates",
+                  "inviolableFacts"
+                ]
+              },
+              "chapterContract": {
+                "workIdentity": [],
+                "readerPromises": [],
+                "genrePromises": [],
+                "protagonistCoreConflict": [],
+                "thematicQuestions": [],
+                "forbiddenDrift": [],
+                "overallPlotDirection": [
+                  "[主线] 叶尘从废物少年崛起，获得碎星剑，与林婉儿、苏影结盟，最终解除上古封印。"
+                ],
+                "chapterFunction": [
+                  "setting"
+                ],
+                "readerExperience": [
+                  "目标情绪：好奇、温馨"
+                ],
+                "currentPressure": [],
+                "previousState": [],
+                "relevantCharacters": [
+                  "叶尘",
+                  "苏影",
+                  "林婉儿"
+                ],
+                "relevantCharacterStates": [
+                  "叶尘｜身份：主角",
+                  "林婉儿｜身份：主角团成员",
+                  "苏影｜身份：主角"
+                ],
+                "historicalContinuity": [],
+                "historicalCharacterState": [],
+                "recentPatternMemory": [],
+                "characterMotivations": [],
+                "focusCharacterGoals": [],
+                "resistance": [],
+                "choicesAndCosts": [],
+                "expectedIrreversibleChange": [],
+                "selectedPromisesToAdvance": [],
+                "selectedExpectationsToAdvance": [],
+                "causalEndPressure": [],
+                "eventSummaries": [],
+                "mustInclude": [],
+                "stateChanges": [],
+                "foreshadowing": [],
+                "causalRelations": [],
+                "endingTarget": [],
+                "inviolableFacts": [
+                  "这个世界的背景是仙侠世界。",
+                  "叶尘是主角团成员。",
+                  "林婉儿是主角团成员。",
+                  "苏影是主角团成员。",
+                  "宗门与门派是仙侠世界的主要势力组织。",
+                  "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+                  "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+                  "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+                  "苏影来自海外修仙界。"
+                ],
+                "stateConstraints": [],
+                "wordCountTarget": {
+                  "min": 2000,
+                  "max": 3000
+                },
+                "forbidReferenceLeakage": true,
+                "preserveEstablishedState": true
+              },
+              "promptAdapter": {
+                "profile": "gemini_writer_v2",
+                "runtimePolicy": {
+                  "samplingSource": "model-routing",
+                  "structuredOutput": false,
+                  "outputProtocol": "chapter_prose_only",
+                  "allowMultipleCandidates": false,
+                  "editScope": "chapter",
+                  "retryStrategy": "empty_output_only"
+                },
+                "route": "v2_rawstage2"
+              },
+              "rawPromptConstraintAudit": {
+                "type": "editorial",
+                "tokensIn": 304,
+                "containsDialogueRatio": false,
+                "containsParagraphLengthConstraint": false,
+                "containsControlChecklist": false,
+                "containsMechanicalMetric": false,
+                "contractIds": []
+              },
+              "methodologyPolicy": {
+                "policyVersion": "1.0",
+                "rules": [
+                  {
+                    "id": "author_story_contract",
+                    "source": "author chapter outline and story direction",
+                    "authority": "author",
+                    "role": "intent",
+                    "enforcement": "generation_context",
+                    "runtimeFields": [
+                      "overallPlotDirection",
+                      "chapterFunction",
+                      "previousState",
+                      "relevantCharacters",
+                      "characterMotivations",
+                      "authorEventSummaries",
+                      "authorMustInclude",
+                      "authorStateChanges",
+                      "foreshadowing",
+                      "causalRelations",
+                      "endingTarget"
+                    ],
+                    "matchedFields": [
+                      "overallPlotDirection",
+                      "chapterFunction",
+                      "relevantCharacters"
+                    ],
+                    "consumedByRawPrompt": true
+                  },
+                  {
+                    "id": "established_story_state",
+                    "source": "accepted text and validated narrative state",
+                    "authority": "accepted_text",
+                    "role": "fact",
+                    "enforcement": "hard_boundary",
+                    "runtimeFields": [
+                      "inviolableFacts",
+                      "factAndCharacterKnowledgeForbiddenZones",
+                      "identityContract",
+                      "ontologyContract",
+                      "historicalContinuity",
+                      "historicalCharacterState",
+                      "recentPatternMemory",
+                      "knowledgeConsumption"
+                    ],
+                    "matchedFields": [
+                      "inviolableFacts",
+                      "identityContract"
+                    ],
+                    "consumedByRawPrompt": true
+                  },
+                  {
+                    "id": "creative_constitution",
+                    "source": "author creative constitution",
+                    "authority": "author",
+                    "role": "intent",
+                    "enforcement": "generation_context",
+                    "runtimeFields": [
+                      "constitution.workIdentity",
+                      "constitution.readerPromise",
+                      "constitution.genrePromises",
+                      "constitution.protagonistCoreConflict",
+                      "constitution.thematicQuestions",
+                      "constitution.forbiddenDrift"
+                    ],
+                    "matchedFields": [],
+                    "consumedByRawPrompt": false
+                  },
+                  {
+                    "id": "scene_solution_strategy",
+                    "source": "methodology scene-solution hypothesis",
+                    "authority": "methodology",
+                    "role": "strategy",
+                    "enforcement": "candidate_only",
+                    "runtimeFields": [
+                      "sceneSolution"
+                    ],
+                    "matchedFields": [],
+                    "consumedByRawPrompt": false
+                  },
+                  {
+                    "id": "craft_strategy_hypotheses",
+                    "source": "validated or experimental craft strategies",
+                    "authority": "methodology",
+                    "role": "strategy",
+                    "enforcement": "candidate_only",
+                    "runtimeFields": [
+                      "craftGenes",
+                      "promptPatterns",
+                      "candidateStrategyId"
+                    ],
+                    "matchedFields": [],
+                    "consumedByRawPrompt": false
+                  },
+                  {
+                    "id": "craft_diagnostics",
+                    "source": "methodology review and evidence scanners",
+                    "authority": "methodology",
+                    "role": "diagnostic",
+                    "enforcement": "review_only",
+                    "runtimeFields": [
+                      "promiseContext",
+                      "expectationContext",
+                      "genreContract",
+                      "dialogueCraft",
+                      "emotionRhythm",
+                      "supportingFunction",
+                      "characterVoiceContext",
+                      "worldPresentationContext",
+                      "ensembleLayeringContext",
+                      "craftPhenomenonReport"
+                    ],
+                    "matchedFields": [],
+                    "consumedByRawPrompt": false
+                  },
+                  {
+                    "id": "prose_execution_heuristics",
+                    "source": "sensory, sentence, dialogue, paragraph, and style heuristics",
+                    "authority": "heuristic",
+                    "role": "strategy",
+                    "enforcement": "excluded_from_raw",
+                    "runtimeFields": [
+                      "candidateAnchors",
+                      "aestheticDirection",
+                      "voiceFingerprint",
+                      "styleFingerprint",
+                      "proseTemplate"
+                    ],
+                    "matchedFields": [],
+                    "consumedByRawPrompt": false
+                  }
+                ],
+                "violations": []
+              },
+              "constitutionConsumption": {
+                "raw": [],
+                "editorial": [],
+                "judge": []
+              },
+              "promiseContext": {
+                "entries": [],
+                "sourceRefs": [],
+                "consumedByRawPrompt": false,
+                "emptyReason": "无 selectedPromisesToAdvance 且无 longTermState.promise，本章无可用承诺状态"
+              },
+              "expectationContext": {
+                "entries": [],
+                "sourceRefs": [],
+                "consumedByRawPrompt": false,
+                "emptyReason": "无 selectedExpectationsToAdvance 且无 longTermState.expectation，本章无可用读者期待状态"
+              },
+              "genreContract": {
+                "declaredGenre": "仙侠 / 东方玄幻",
+                "declaredGenreSourceRef": "context.worldRules:world:genre",
+                "driftGenre": null,
+                "driftGenreSourceRef": null,
+                "genreDriftDetected": false,
+                "entries": [],
+                "sourceRefs": [
+                  "context.worldRules:world:genre"
+                ],
+                "consumedByRawPrompt": false,
+                "emptyReason": "declaredGenre=\"仙侠 / 东方玄幻\" 不在本地清洗后 dataset 中，且无 constitution.genrePromises；不伪造类型模板承诺"
+              },
+              "dialogueCraft": {
+                "speakingCharacters": [
+                  {
+                    "characterId": "叶尘",
+                    "name": "叶尘",
+                    "hasFingerprint": false,
+                    "fingerprintSourceRef": null,
+                    "recoveryMode": "character_voice_weak_proxy",
+                    "weakProxyHints": [],
+                    "sourceRef": "characterStates:叶尘",
+                    "confidence": 0.3
+                  },
+                  {
+                    "characterId": "苏影",
+                    "name": "苏影",
+                    "hasFingerprint": false,
+                    "fingerprintSourceRef": null,
+                    "recoveryMode": "character_voice_weak_proxy",
+                    "weakProxyHints": [],
+                    "sourceRef": "characterStates:苏影",
+                    "confidence": 0.3
+                  },
+                  {
+                    "characterId": "林婉儿",
+                    "name": "林婉儿",
+                    "hasFingerprint": false,
+                    "fingerprintSourceRef": null,
+                    "recoveryMode": "character_voice_weak_proxy",
+                    "weakProxyHints": [],
+                    "sourceRef": "characterStates:林婉儿",
+                    "confidence": 0.3
+                  }
+                ],
+                "blindTestEligible": false,
+                "dialogueCraftAdvisory": [],
+                "sourceRefs": [
+                  "characterStates:叶尘",
+                  "characterStates:叶尘:role",
+                  "characterStates:苏影",
+                  "characterStates:苏影:role",
+                  "characterStates:林婉儿",
+                  "characterStates:林婉儿:role"
+                ],
+                "consumedByRawPrompt": false,
+                "advisoryOnly": true,
+                "canTriggerEditorialOpportunity": false,
+                "proxyNote": "本 compact block 中 recoveryMode=character_voice_weak_proxy 的角色仅用 CharacterStateFact 的 mentality/pendingTension 作为弱代理；完整 voice fingerprint（句式/词汇/称呼习惯）需从接受稿/样章抽取，本编译器不调用模型抽取"
+              },
+              "emotionRhythm": {
+                "targetEmotions": [
+                  "目标情绪：好奇、温馨"
+                ],
+                "previousEmotionState": null,
+                "emotionTransitions": [],
+                "chapterEndEmotion": null,
+                "sourceRefs": [
+                  "intent:readerExperience"
+                ],
+                "consumedByRawPrompt": false,
+                "advisoryOnly": true,
+                "canTriggerEditorialOpportunity": false,
+                "humanReviewFocus": "raw 生成前无正文可扫描；待 raw 生成后再次调用以检测事件驱动转折"
+              },
+              "supportingFunction": {
+                "assignments": [
+                  {
+                    "characterId": "叶尘",
+                    "name": "叶尘",
+                    "primaryFunction": null,
+                    "functionEvidenceSpan": null,
+                    "goal": null,
+                    "verified": false,
+                    "confidence": 0.3,
+                    "sourceRef": "intent:relevantCharacters:叶尘"
+                  },
+                  {
+                    "characterId": "苏影",
+                    "name": "苏影",
+                    "primaryFunction": null,
+                    "functionEvidenceSpan": null,
+                    "goal": null,
+                    "verified": false,
+                    "confidence": 0.3,
+                    "sourceRef": "intent:relevantCharacters:苏影"
+                  },
+                  {
+                    "characterId": "林婉儿",
+                    "name": "林婉儿",
+                    "primaryFunction": null,
+                    "functionEvidenceSpan": null,
+                    "goal": null,
+                    "verified": false,
+                    "confidence": 0.3,
+                    "sourceRef": "intent:relevantCharacters:林婉儿"
+                  }
+                ],
+                "sourceRefs": [
+                  "intent:relevantCharacters:叶尘",
+                  "intent:relevantCharacters:苏影",
+                  "intent:relevantCharacters:林婉儿"
+                ],
+                "consumedByRawPrompt": false,
+                "advisoryOnly": true,
+                "canTriggerEditorialOpportunity": false,
+                "humanReviewFocus": "raw 生成前无正文可扫描；待 raw 生成后再次调用以检测功能行为证据",
+                "proxyNote": "本最小切片只为激活配角编译本章叙事功能 hypothesis（foil/witness/obstacle/helper/cost-bearer）；功能必须由正文行为 span 支持才 verified=true；不恢复固定轮转、人数配额、群像硬门；不更新永久角色身份（角色 identity 由 IdentityContract 管理）；advisory 非硬门"
+              },
+              "knowledgeConsumption": {
+                "entries": [],
+                "totalTokenCost": 0,
+                "totalChars": 0,
+                "channel": "empty",
+                "sourceRefs": [],
+                "manifestApproved": false,
+                "consumedByRawPrompt": false,
+                "advisoryOnly": true,
+                "emptyReason": "manifest 未批准（approved=false），不得静默加载示例",
+                "lossReport": {
+                  "truncations": [],
+                  "duplicateDrops": [],
+                  "budgetDrops": [],
+                  "provenanceDrops": [],
+                  "totalTokenBudget": 390
+                },
+                "proxyNote": "本切片只编译 FewshotSelector 已检索的示例为审计条目（provenance/score/reason/tokenCost）；示例是 advisory 参考非强制模仿模板；不全量加载场景/技法库；无 manifest 准入数据不得静默加载；收益验证由 EDITORIAL-BENEFIT-2 或独立授权完成"
+              },
+              "characterVoiceContext": {
+                "entries": [
+                  {
+                    "characterId": "叶尘",
+                    "name": "叶尘",
+                    "role": "主角",
+                    "voiceHints": [],
+                    "sourceRef": "characterStates:叶尘",
+                    "confidence": 0.6
+                  },
+                  {
+                    "characterId": "苏影",
+                    "name": "苏影",
+                    "role": "主角",
+                    "voiceHints": [],
+                    "sourceRef": "characterStates:苏影",
+                    "confidence": 0.6
+                  },
+                  {
+                    "characterId": "林婉儿",
+                    "name": "林婉儿",
+                    "role": "主角团成员",
+                    "voiceHints": [],
+                    "sourceRef": "characterStates:林婉儿",
+                    "confidence": 0.6
+                  }
+                ],
+                "sourceRefs": [
+                  "characterStates:叶尘",
+                  "characterStates:苏影",
+                  "characterStates:林婉儿"
+                ],
+                "consumedByRawPrompt": false,
+                "proxyNote": "本最小切片只用 CompiledContext.characterStates 的 mentality/pendingTension 作为弱代理；完整 voice fingerprint（句式/词汇/称呼习惯）属于未来增强（D 资产：角色档案 .md 解析）"
+              },
+              "worldPresentationContext": {
+                "entries": [
+                  {
+                    "ruleId": "world:genre",
+                    "description": "仙侠 / 东方玄幻",
+                    "type": "genre",
+                    "chapterActivated": false,
+                    "sourceRef": "context.worldRules:world:genre",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:power_system",
+                    "description": "# 修炼体系\n\n仙侠修炼体系：练气、筑基等境界，宗门门派林立，修士修炼功法、心法、秘法、秘术、禁术、上古功法、上古心法、神功，以法宝（神器、仙器、至宝、圣物、天器）对敌，以封印、禁制、阵法御敌。\n",
+                    "type": "power_system",
+                    "chapterActivated": false,
+                    "sourceRef": "context.worldRules:world:power_system",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:0",
+                    "description": "这个世界的背景是仙侠世界。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:0",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:1",
+                    "description": "叶尘是主角团成员。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:1",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:2",
+                    "description": "林婉儿是主角团成员。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:2",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:3",
+                    "description": "苏影是主角团成员。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:3",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:4",
+                    "description": "宗门与门派是仙侠世界的主要势力组织。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:4",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:5",
+                    "description": "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:5",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:6",
+                    "description": "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:6",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:7",
+                    "description": "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:7",
+                    "confidence": 0.7
+                  },
+                  {
+                    "ruleId": "world:immutable:8",
+                    "description": "苏影来自海外修仙界。",
+                    "type": "immutable_fact",
+                    "chapterActivated": true,
+                    "sourceRef": "context.worldRules:world:immutable:8",
+                    "confidence": 0.7
+                  }
+                ],
+                "genrePromises": [],
+                "sourceRefs": [
+                  "context.worldRules:world:genre",
+                  "context.worldRules:world:power_system",
+                  "context.worldRules:world:immutable:0",
+                  "context.worldRules:world:immutable:1",
+                  "context.worldRules:world:immutable:2",
+                  "context.worldRules:world:immutable:3",
+                  "context.worldRules:world:immutable:4",
+                  "context.worldRules:world:immutable:5",
+                  "context.worldRules:world:immutable:6",
+                  "context.worldRules:world:immutable:7",
+                  "context.worldRules:world:immutable:8"
+                ],
+                "consumedByRawPrompt": false
+              },
+              "ensembleLayeringContext": {
+                "entries": [
+                  {
+                    "characterId": "叶尘",
+                    "name": "叶尘",
+                    "isFocus": false,
+                    "layeringTag": "在场",
+                    "sourceRef": "intent:relevantCharacters:叶尘",
+                    "confidence": 0.7
+                  },
+                  {
+                    "characterId": "苏影",
+                    "name": "苏影",
+                    "isFocus": false,
+                    "layeringTag": "在场",
+                    "sourceRef": "intent:relevantCharacters:苏影",
+                    "confidence": 0.7
+                  },
+                  {
+                    "characterId": "林婉儿",
+                    "name": "林婉儿",
+                    "isFocus": false,
+                    "layeringTag": "在场",
+                    "sourceRef": "intent:relevantCharacters:林婉儿",
+                    "confidence": 0.7
+                  }
+                ],
+                "sourceRefs": [
+                  "intent:relevantCharacters:叶尘",
+                  "intent:relevantCharacters:苏影",
+                  "intent:relevantCharacters:林婉儿"
+                ],
+                "consumedByRawPrompt": false,
+                "proxyNote": "本最小切片只做焦点/在场分层（是否在 focusCharacterGoals 中）；完整群像功能（foil/witness/obstacle/角色交互/轮转调度）属于未来增强（D 资产：legacy EnsembleDirector/EnsembleDetector 为 LLM-based C/D，replay-only）；不恢复固定轮转、人数配额、群像硬门（E 退役）"
+              },
+              "identityContract": {
+                "schema": "pinovel.identity-contract",
+                "version": "1.0",
+                "contractId": "identity-040a1e6b7a807115",
+                "contractHash": "040a1e6b7a807115",
+                "entries": [
+                  {
+                    "characterId": "叶尘",
+                    "name": "叶尘",
+                    "aliases": [],
+                    "role": "主角",
+                    "stableIdentity": "叶尘（主角）",
+                    "sourceRefs": [
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "characterId": "林婉儿",
+                    "name": "林婉儿",
+                    "aliases": [],
+                    "role": "主角团成员",
+                    "stableIdentity": "林婉儿（主角团成员）",
+                    "sourceRefs": [
+                      "config.json"
+                    ]
+                  },
+                  {
+                    "characterId": "苏影",
+                    "name": "苏影",
+                    "aliases": [],
+                    "role": "主角",
+                    "stableIdentity": "苏影（主角）",
+                    "sourceRefs": [
+                      "config.json"
+                    ]
+                  }
+                ]
+              },
+              "ontologyContract": {
+                "schema": "pinovel.ontology-contract",
+                "version": "1.0",
+                "contractId": "ontology-e3b0c44298fc1c14",
+                "contractHash": "e3b0c44298fc1c14",
+                "available": false,
+                "emptyReason": "未提供或不可解析的 closed-world levels；本体门禁保持 unavailable",
+                "entries": []
+              },
+              "productionFlow": {
+                "mode": "agentic_style_full_pipeline",
+                "literaryAuthority": "user_feedback",
+                "oneShotRawCalled": false,
+                "machineJudgeCalled": false
+              },
+              "positiveGainCandidates": {
+                "status": "retired_from_production",
+                "failureReason": "global_scene_candidate_admission_retired"
+              },
+              "judgeArbitration": {
+                "skipped": true,
+                "reason": "机器文学裁判已退出生产；最终章节由用户评价反馈"
+              },
+              "novelos": {
+                "shadowEnabled": false,
+                "required": true,
+                "sessionId": "novelos-ch3-f70b2f91",
+                "trajectoryPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\novelos-sessions\\novelos-ch3-f70b2f91\\trajectory.jsonl",
+                "candidateId": "candidate:agentic_raw:ch3",
+                "candidateLength": 3988,
+                "stopReason": "verifier_cleared",
+                "failureReason": null,
+                "failureKind": null,
+                "budgetSnapshot": {
+                  "turns": 1,
+                  "toolCalls": 0,
+                  "latencyMs": 0,
+                  "tokensIn": 0,
+                  "tokensOut": 0,
+                  "modelCalls": 1,
+                  "exhausted": false
+                },
+                "sourceRefs": [],
+                "toolCalls": 0,
+                "verifierCleared": true,
+                "repairRounds": 0,
+                "hardFindingCount": 0,
+                "unresolvedFindings": [],
+                "decisionMode": "agentic_inline",
+                "firstAction": "draft",
+                "actualRetrievalCalls": 0,
+                "mustVerifyCount": 8,
+                "mustVerifyCoveredCount": 8,
+                "coverageResult": {
+                  "passed": true,
+                  "unverifiedHighRisk": [],
+                  "confirmedItems": [
+                    {
+                      "item": "这个世界的背景是仙侠世界。",
+                      "matchedEvidence": "context:这个世界的背景是仙侠世界。"
+                    },
+                    {
+                      "item": "叶尘是主角团成员。",
+                      "matchedEvidence": "context:叶尘是主角团成员。"
+                    },
+                    {
+                      "item": "林婉儿是主角团成员。",
+                      "matchedEvidence": "context:林婉儿是主角团成员。"
+                    },
+                    {
+                      "item": "苏影是主角团成员。",
+                      "matchedEvidence": "context:苏影是主角团成员。"
+                    },
+                    {
+                      "item": "宗门与门派是仙侠世界的主要势力组织。",
+                      "matchedEvidence": "context:宗门与门派是仙侠世界的主要势力组织。"
+                    },
+                    {
+                      "item": "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+                      "matchedEvidence": "context:法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。"
+                    },
+                    {
+                      "item": "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+                      "matchedEvidence": "context:心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。"
+                    },
+                    {
+                      "item": "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+                      "matchedEvidence": "context:封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。"
+                    }
+                  ],
+                  "skippedReason": "context_covered"
+                },
+                "modelCallsByKind": {
+                  "draft": 1,
+                  "patch": 0,
+                  "verify": 1
+                }
+              },
+              "agenticCompleteness": {
+                "status": "pass",
+                "passed": true,
+                "findings": []
+              },
+              "agenticFactGuard": {
+                "ok": false,
+                "errors": [
+                  "diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权"
+                ],
+                "report": {
+                  "hardBlocks": [
+                    {
+                      "id": "diag:unauthorized_high_impact_setting:0",
+                      "source": "unauthorized_high_impact_setting",
+                      "severity": "hard",
+                      "domain": "continuity",
+                      "span": {
+                        "start": 3726,
+                        "end": 3728,
+                        "excerpt": "。既然目标明确了，那接下来，我们可得好好计划一下了。据我所知，距离这里向东三百里的一"
+                      },
+                      "evidence": "未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权"
+                    }
+                  ],
+                  "allDiagnostics": [
+                    {
+                      "id": "diag:unauthorized_high_impact_setting:0",
+                      "source": "unauthorized_high_impact_setting",
+                      "severity": "hard",
+                      "domain": "continuity",
+                      "span": {
+                        "start": 3726,
+                        "end": 3728,
+                        "excerpt": "。既然目标明确了，那接下来，我们可得好好计划一下了。据我所知，距离这里向东三百里的一"
+                      },
+                      "evidence": "未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权"
+                    }
+                  ],
+                  "hasHardBlock": true,
+                  "constraintManifestHash": "e1408286dd6223409990bd9be1a3ad0c731ec7989432f4f774428aa6824fbf30",
+                  "ontologyContractId": "ontology-e3b0c44298fc1c14",
+                  "ontologyContractHash": "e3b0c44298fc1c14",
+                  "quoteExemptions": []
+                },
+                "constraintManifestHash": "e1408286dd6223409990bd9be1a3ad0c731ec7989432f4f774428aa6824fbf30"
+              },
+              "failureEnvelope": {
+                "stage": "agentic_fact_guard",
+                "severity": "hard",
+                "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+                "recoverable": false,
+                "degradedTo": "hard_block"
+              },
+              "chapterQualityEvidence": {
+                "structuralEvidence": [],
+                "structuralEvidenceMeta": {
+                  "skipped": true,
+                  "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                  "scannedCandidateId": "",
+                  "scannedTextLength": 0,
+                  "scannedAt": 1786507163627
+                }
+              },
+              "informationReleaseEvidence": {
+                "evidence": [
+                  {
+                    "dimensionId": "infodump_block",
+                    "status": "skipped",
+                    "findingId": "infoRelease:infodump_block:0",
+                    "sourceSpans": [],
+                    "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "readerImpact": "扫描跳过，无信息释放证据可提供",
+                    "suggestedOwner": "human_review",
+                    "confidence": 0
+                  },
+                  {
+                    "dimensionId": "action_bearing_release",
+                    "status": "skipped",
+                    "findingId": "infoRelease:action_bearing_release:1",
+                    "sourceSpans": [],
+                    "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "readerImpact": "扫描跳过，无行动承载证据可提供",
+                    "suggestedOwner": "human_review",
+                    "confidence": 0
+                  }
+                ],
+                "meta": {
+                  "skipped": true,
+                  "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                  "scannedCandidateId": "",
+                  "scannedTextLength": 0,
+                  "scannedAt": 1786507163627
+                }
+              },
+              "endingCraftEvidence": {
+                "evidence": [
+                  {
+                    "dimensionId": "tail_pressure",
+                    "status": "skipped",
+                    "findingId": "endingCraft:tail_pressure:0",
+                    "sourceSpans": [],
+                    "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "readerImpact": "扫描跳过，无尾段压力证据可提供",
+                    "suggestedOwner": "human_review",
+                    "confidence": 0
+                  },
+                  {
+                    "dimensionId": "flat_summary_ending",
+                    "status": "skipped",
+                    "findingId": "endingCraft:flat_summary_ending:1",
+                    "sourceSpans": [],
+                    "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "readerImpact": "扫描跳过，无总结式结尾证据可提供",
+                    "suggestedOwner": "human_review",
+                    "confidence": 0
+                  },
+                  {
+                    "dimensionId": "hook_or_question",
+                    "status": "skipped",
+                    "findingId": "endingCraft:hook_or_question:2",
+                    "sourceSpans": [],
+                    "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "readerImpact": "扫描跳过，无钩子证据可提供",
+                    "suggestedOwner": "human_review",
+                    "confidence": 0
+                  }
+                ],
+                "meta": {
+                  "skipped": true,
+                  "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                  "scannedCandidateId": "",
+                  "scannedTextLength": 0,
+                  "scannedAt": 1786507163627
+                }
+              },
+              "craftEvidenceEnvelope": {
+                "sourceReports": [
+                  {
+                    "source": "chapterQuality",
+                    "present": true,
+                    "skipped": true,
+                    "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "evidenceCount": 0,
+                    "scannedCandidateId": "",
+                    "scannedTextLength": 0,
+                    "scannedAt": 1786507163627
+                  },
+                  {
+                    "source": "informationRelease",
+                    "present": true,
+                    "skipped": true,
+                    "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "evidenceCount": 0,
+                    "scannedCandidateId": "",
+                    "scannedTextLength": 0,
+                    "scannedAt": 1786507163627
+                  },
+                  {
+                    "source": "endingCraft",
+                    "present": true,
+                    "skipped": true,
+                    "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                    "evidenceCount": 0,
+                    "scannedCandidateId": "",
+                    "scannedTextLength": 0,
+                    "scannedAt": 1786507163627
+                  }
+                ],
+                "findings": [],
+                "riskCounts": {
+                  "bySource": {
+                    "chapterQuality": 0,
+                    "informationRelease": 0,
+                    "endingCraft": 0
+                  },
+                  "total": 0
+                },
+                "humanReviewCount": {
+                  "bySource": {
+                    "chapterQuality": 0,
+                    "informationRelease": 0,
+                    "endingCraft": 0
+                  },
+                  "total": 0
+                },
+                "partialCount": {
+                  "bySource": {
+                    "chapterQuality": 0,
+                    "informationRelease": 0,
+                    "endingCraft": 0
+                  },
+                  "total": 0
+                },
+                "topFindings": [],
+                "meta": {
+                  "finalTextLength": 0,
+                  "finalCandidateId": "",
+                  "generatedAt": 1786507163627,
+                  "skipped": true,
+                  "skippedReason": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                  "missingSources": []
+                }
+              },
+              "qualityEvidenceRunReport": {
+                "runSummary": {
+                  "selectedSource": "blocked",
+                  "selectedCandidateId": "",
+                  "finalTextLength": 0,
+                  "hasEditorialCandidate": false,
+                  "judgeAttachmentPresent": false
+                },
+                "rawEvidenceSummary": {
+                  "riskCount": 0,
+                  "humanReviewCount": 0,
+                  "partialCount": 0,
+                  "topRawFindings": [],
+                  "envelopeSkipped": true
+                },
+                "candidateResponseSummary": {
+                  "candidateCount": 0,
+                  "addressedCount": 0,
+                  "partialCount": 0,
+                  "unchangedCount": 0,
+                  "unverifiedCount": 0,
+                  "riskAdvisoryLevels": [],
+                  "tracesSkipped": true
+                },
+                "judgeAuditSummary": {
+                  "attachmentCount": 0,
+                  "editorialAttachmentCount": 0,
+                  "rawAttachmentCount": 0,
+                  "unresolvedFindingRefs": [],
+                  "attachmentSkipped": true
+                },
+                "humanReviewFocus": [],
+                "proxyNote": "质量证据运行报告，非改写命令，非质量评分，非 winner 选择依据，非 hard gate",
+                "meta": {
+                  "compiledAt": 1786507163627,
+                  "source": "quality_evidence_run_report"
+                }
+              },
+              "qualityEvidenceReportPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\traces\\ch3-quality-evidence-report.json",
+              "qualityEvidenceReportExport": {
+                "exported": true,
+                "filePath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\traces\\ch3-quality-evidence-report.json",
+                "bytes": 927
+              },
+              "blockedCandidateEvidence": {
+                "saved": true,
+                "artifactPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\traces\\ch3-blocked-candidate-evidence.json",
+                "schemaId": "pinovel.blocked-candidate-evidence/v1",
+                "rawSha256": "216ad4b5cd09945be03c09f61db19b843f18353c2955ba6930a8eb54b0de914d",
+                "rawLength": 3988,
+                "diagnosticSpanCount": 1,
+                "redactionLog": [],
+                "candidateId": "candidate:agentic_raw:ch3",
+                "selectedSource": "raw",
+                "finalTextSha256": "216ad4b5cd09945be03c09f61db19b843f18353c2955ba6930a8eb54b0de914d",
+                "finalTextLength": 3988
+              }
+            }
+          },
+          "recoverable": false
+        },
+        "contextHash": "f2-l0-c3-w11-s1",
+        "modelCalls": [
+          {
+            "route": "v2_rawstage2",
+            "kind": "agentic_raw",
+            "model": "gemini-3.1-pro-preview",
+            "durationMs": 84683,
+            "ts": 1786507078923,
+            "finishReason": "stop",
+            "tokenUsage": {
+              "in": 2192,
+              "out": 9152
+            },
+            "provider": "gemini31",
+            "requestedRoute": "v2_rawstage2_gemini31",
+            "expectedProvider": "gemini31",
+            "expectedModel": "gemini-3.1-pro-preview",
+            "actualProvider": "gemini31",
+            "actualModel": "gemini-3.1-pro-preview"
+          }
+        ],
+        "stageTiming": {
+          "stage1_novelosAgentic": 84702,
+          "stage2_agenticFactGuard": 4
+        },
+        "modelBudget": {
+          "soft": 6,
+          "hard": 10,
+          "used": 1,
+          "capped": false
+        },
+        "releaseGovernance": {
+          "devMode": true,
+          "releaseId": null,
+          "environmentFingerprint": null,
+          "approvalRef": null,
+          "canaryEvidenceRunId": null
+        }
+      }
+    }
+  ],
+  "buildInfo": {
+    "buildTimestamp": "2026-08-12T03:50:27.377Z",
+    "gitHash": "3e1c320d322caf664f6b1ef32031b8ceb6b65209",
+    "nodeVersion": "v25.2.1"
+  },
+  "failureEnvelopes": [
+    {
+      "stage": "agentic_fact_guard",
+      "gate": "agentic_fact_guard",
+      "severity": "hard_block",
+      "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+      "evidence": {
+        "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+        "blockCategory": null,
+        "candidateDisposition": null,
+        "stageResults": {
+          "qualitySelectionPolicy": {
+            "mode": "user_feedback",
+            "automaticQualityWinnerSelectionEnabled": false,
+            "rawRole": "not_deliverable"
+          },
+          "judgeAlignmentGate": {
+            "automaticLiterarySelectionEnabled": false,
+            "mode": "disabled_by_user_decision"
+          },
+          "controlPlane": {
+            "packet": {
+              "packetId": "novel-task:NOVEL-GENERATE:agentic-evidence-merge-replay:ch3:aea92a272ec2fb03",
+              "packetHash": "aea92a272ec2fb03845f05f44dccb6a3b7411c17d73540032e4ff442409c76e0",
+              "taskId": "NOVEL-GENERATE:agentic-evidence-merge-replay:ch3",
+              "objective": "通过统一主链路生成 ch3",
+              "source": "trusted-entry",
+              "valid": true,
+              "errors": []
+            },
+            "policy": {
+              "profileId": "NOVEL-GENERATE:agentic-evidence-merge-replay:ch3:capabilities",
+              "source": "trusted-entry",
+              "scope": "context read | chapter generation | literary judge | final persistence",
+              "configured": {
+                "network.model_call": "allow",
+                "model.generate": "allow",
+                "model.judge": "allow",
+                "state.read": "allow",
+                "state.stage": "allow",
+                "state.commit": "allow",
+                "chapter.save": "allow",
+                "artifact.export": "allow"
+              }
+            },
+            "decisions": [
+              {
+                "capability": "state.read",
+                "mode": "allow",
+                "source": "trusted-entry",
+                "scope": "context read | chapter generation | literary judge | final persistence",
+                "reason": "load workspace context: agentic-evidence-merge-replay",
+                "allowed": true,
+                "consumed": false,
+                "timestamp": "2026-08-12T03:57:58.916Z"
+              },
+              {
+                "capability": "state.stage",
+                "mode": "allow",
+                "source": "trusted-entry",
+                "scope": "context read | chapter generation | literary judge | final persistence",
+                "reason": "stage narrative state update: ch3",
+                "allowed": true,
+                "consumed": false,
+                "timestamp": "2026-08-12T03:57:58.918Z"
+              },
+              {
+                "capability": "model.generate",
+                "mode": "allow",
+                "source": "trusted-entry",
+                "scope": "context read | chapter generation | literary judge | final persistence",
+                "reason": "generationModelGenerate:agentic_raw",
+                "allowed": true,
+                "consumed": false,
+                "timestamp": "2026-08-12T03:57:58.923Z"
+              },
+              {
+                "capability": "network.model_call",
+                "mode": "allow",
+                "source": "trusted-entry",
+                "scope": "context read | chapter generation | literary judge | final persistence",
+                "reason": "generationModelGenerate:agentic_raw",
+                "allowed": true,
+                "consumed": false,
+                "timestamp": "2026-08-12T03:57:58.923Z"
+              },
+              {
+                "capability": "artifact.export",
+                "mode": "allow",
+                "source": "trusted-entry",
+                "scope": "context read | chapter generation | literary judge | final persistence",
+                "reason": "quality evidence report export",
+                "allowed": true,
+                "consumed": false,
+                "timestamp": "2026-08-12T03:59:23.627Z"
+              }
+            ],
+            "denials": [],
+            "modelLocks": {
+              "generation": {
+                "expectedRoute": "v2_rawstage2_gemini31",
+                "expectedProvider": "gemini31",
+                "expectedModel": "gemini-3.1-pro-preview",
+                "executionRoute": "v2_rawstage2_gemini31",
+                "executionProvider": "gemini31",
+                "executionModel": "gemini-3.1-pro-preview",
+                "matched": true,
+                "errors": []
+              },
+              "judge": {
+                "expectedRoute": "v2_opportunity_judge",
+                "expectedProvider": "gpt",
+                "expectedModel": "gpt-5.6-sol",
+                "executionRoute": "v2_opportunity_judge",
+                "executionProvider": "gpt",
+                "executionModel": "gpt-5.6-sol",
+                "matched": true,
+                "errors": []
+              }
+            }
+          },
+          "contextBudgetReport": {
+            "manifestHash": "e1408286dd6223409990bd9be1a3ad0c731ec7989432f4f774428aa6824fbf30",
+            "modelWindowTokens": 128000,
+            "outputReserveTokens": 8192,
+            "safetyMarginTokens": 4096,
+            "inputBudgetTokens": 115712,
+            "estimatedOriginalTokens": 861,
+            "estimatedRetainedTokens": 553,
+            "recompileAttempts": 0,
+            "retained": [
+              {
+                "id": "p0:intent:fact:0",
+                "priority": "P0",
+                "estimatedTokens": 15,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:1",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:2",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:3",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:4",
+                "priority": "P0",
+                "estimatedTokens": 17,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:5",
+                "priority": "P0",
+                "estimatedTokens": 23,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:6",
+                "priority": "P0",
+                "estimatedTokens": 26,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:7",
+                "priority": "P0",
+                "estimatedTokens": 21,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:8",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p1:character:叶尘",
+                "priority": "P1",
+                "estimatedTokens": 16,
+                "sourceRefs": [
+                  "character:叶尘"
+                ]
+              },
+              {
+                "id": "p1:character:林婉儿",
+                "priority": "P1",
+                "estimatedTokens": 18,
+                "sourceRefs": [
+                  "character:林婉儿"
+                ]
+              },
+              {
+                "id": "p1:character:苏影",
+                "priority": "P1",
+                "estimatedTokens": 16,
+                "sourceRefs": [
+                  "character:苏影"
+                ]
+              },
+              {
+                "id": "p1:chapter-function",
+                "priority": "P1",
+                "estimatedTokens": 12,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts"
+                ]
+              },
+              {
+                "id": "p1:overallPlotDirection:0",
+                "priority": "P1",
+                "estimatedTokens": 28,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts"
+                ]
+              },
+              {
+                "id": "p2:readerExperience:0",
+                "priority": "P2",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts"
+                ]
+              },
+              {
+                "id": "p2:concreteDelivery:0",
+                "priority": "P2",
+                "estimatedTokens": 15,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts"
+                ]
+              },
+              {
+                "id": "p2:concreteDelivery:1",
+                "priority": "P2",
+                "estimatedTokens": 14,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts"
+                ]
+              },
+              {
+                "id": "p2:concreteDelivery:2",
+                "priority": "P2",
+                "estimatedTokens": 14,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts"
+                ]
+              },
+              {
+                "id": "p3:fact:fact:high_level_background",
+                "priority": "P3",
+                "estimatedTokens": 31,
+                "sourceRefs": [
+                  "series/outline.md"
+                ]
+              },
+              {
+                "id": "p3:fact:fact:chapter_intent",
+                "priority": "P3",
+                "estimatedTokens": 28,
+                "sourceRefs": [
+                  "chapter-seed-builder"
+                ]
+              },
+              {
+                "id": "p3:world:world:genre",
+                "priority": "P3",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p3:world:world:power_system",
+                "priority": "P3",
+                "estimatedTokens": 57,
+                "sourceRefs": [
+                  "config.json"
+                ]
+              },
+              {
+                "id": "p4:style:style:agentic-evidence-merge-replay",
+                "priority": "P4",
+                "estimatedTokens": 124,
+                "sourceRefs": [
+                  "style:fingerprint"
+                ]
+              }
+            ],
+            "dropped": [],
+            "merged": [
+              {
+                "id": "p0:intent:fact:0",
+                "priority": "P0",
+                "estimatedTokens": 15,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:0",
+                  "p0:world:world:immutable:0"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:1",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:1",
+                  "p0:world:world:immutable:1"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:2",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:2",
+                  "p0:world:world:immutable:2"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:3",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:3",
+                  "p0:world:world:immutable:3"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:4",
+                "priority": "P0",
+                "estimatedTokens": 17,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:4",
+                  "p0:world:world:immutable:4"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:5",
+                "priority": "P0",
+                "estimatedTokens": 23,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:5",
+                  "p0:world:world:immutable:5"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:6",
+                "priority": "P0",
+                "estimatedTokens": 26,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:6",
+                  "p0:world:world:immutable:6"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:7",
+                "priority": "P0",
+                "estimatedTokens": 21,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:7",
+                  "p0:world:world:immutable:7"
+                ]
+              },
+              {
+                "id": "p0:intent:fact:8",
+                "priority": "P0",
+                "estimatedTokens": 13,
+                "sourceRefs": [
+                  "chapter-seed",
+                  "chapter-seed:intent",
+                  "chapter-seed:intent.targetEmotions",
+                  "chapter-seed:characters",
+                  "chapter-seed:relevance-signals",
+                  "chapter-seed:immutableFacts",
+                  "config.json"
+                ],
+                "mergedIds": [
+                  "p0:intent:knowledge:8",
+                  "p0:world:world:immutable:8"
+                ]
+              }
+            ],
+            "conflicted": [],
+            "truncated": []
+          },
+          "preflightStyleProfile": {
+            "passed": true
+          },
+          "modelCalls": [
+            {
+              "route": "v2_rawstage2",
+              "kind": "agentic_raw",
+              "model": "gemini-3.1-pro-preview",
+              "durationMs": 84683,
+              "ts": 1786507078923,
+              "finishReason": "stop",
+              "tokenUsage": {
+                "in": 2192,
+                "out": 9152
+              },
+              "provider": "gemini31",
+              "requestedRoute": "v2_rawstage2_gemini31",
+              "expectedProvider": "gemini31",
+              "expectedModel": "gemini-3.1-pro-preview",
+              "actualProvider": "gemini31",
+              "actualModel": "gemini-3.1-pro-preview"
+            }
+          ],
+          "stageTiming": {
+            "stage1_novelosAgentic": 84702,
+            "stage2_agenticFactGuard": 4
+          },
+          "modelBudget": {
+            "soft": 6,
+            "hard": 10,
+            "used": 1,
+            "capped": false
+          },
+          "chapterIntent": {
+            "summary": {
+              "chapterFunction": "setting",
+              "concreteDelivery": [
+                "推进本章功能：setting",
+                "落地章节主题：第开端阶段",
+                "释放目标情绪：好奇、温馨"
+              ],
+              "focusCharacters": [],
+              "selectedPromisesCount": 0,
+              "irreversibleChangeCount": 0
+            },
+            "fieldSourceRefs": {
+              "concreteDelivery": [
+                "chapter-seed:intent",
+                "chapter-seed:intent.chapterTheme",
+                "chapter-seed:intent.targetEmotions"
+              ],
+              "factAndCharacterKnowledgeForbiddenZones": [
+                "chapter-seed:immutableFacts"
+              ],
+              "chapterFunction": [
+                "chapter-seed:intent"
+              ]
+            },
+            "consumedFields": [
+              "identityContract",
+              "overallPlotDirection",
+              "chapterFunction",
+              "readerExperience",
+              "relevantCharacters",
+              "relevantCharacterStates",
+              "inviolableFacts"
+            ]
+          },
+          "chapterContract": {
+            "workIdentity": [],
+            "readerPromises": [],
+            "genrePromises": [],
+            "protagonistCoreConflict": [],
+            "thematicQuestions": [],
+            "forbiddenDrift": [],
+            "overallPlotDirection": [
+              "[主线] 叶尘从废物少年崛起，获得碎星剑，与林婉儿、苏影结盟，最终解除上古封印。"
+            ],
+            "chapterFunction": [
+              "setting"
+            ],
+            "readerExperience": [
+              "目标情绪：好奇、温馨"
+            ],
+            "currentPressure": [],
+            "previousState": [],
+            "relevantCharacters": [
+              "叶尘",
+              "苏影",
+              "林婉儿"
+            ],
+            "relevantCharacterStates": [
+              "叶尘｜身份：主角",
+              "林婉儿｜身份：主角团成员",
+              "苏影｜身份：主角"
+            ],
+            "historicalContinuity": [],
+            "historicalCharacterState": [],
+            "recentPatternMemory": [],
+            "characterMotivations": [],
+            "focusCharacterGoals": [],
+            "resistance": [],
+            "choicesAndCosts": [],
+            "expectedIrreversibleChange": [],
+            "selectedPromisesToAdvance": [],
+            "selectedExpectationsToAdvance": [],
+            "causalEndPressure": [],
+            "eventSummaries": [],
+            "mustInclude": [],
+            "stateChanges": [],
+            "foreshadowing": [],
+            "causalRelations": [],
+            "endingTarget": [],
+            "inviolableFacts": [
+              "这个世界的背景是仙侠世界。",
+              "叶尘是主角团成员。",
+              "林婉儿是主角团成员。",
+              "苏影是主角团成员。",
+              "宗门与门派是仙侠世界的主要势力组织。",
+              "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+              "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+              "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+              "苏影来自海外修仙界。"
+            ],
+            "stateConstraints": [],
+            "wordCountTarget": {
+              "min": 2000,
+              "max": 3000
+            },
+            "forbidReferenceLeakage": true,
+            "preserveEstablishedState": true
+          },
+          "promptAdapter": {
+            "profile": "gemini_writer_v2",
+            "runtimePolicy": {
+              "samplingSource": "model-routing",
+              "structuredOutput": false,
+              "outputProtocol": "chapter_prose_only",
+              "allowMultipleCandidates": false,
+              "editScope": "chapter",
+              "retryStrategy": "empty_output_only"
+            },
+            "route": "v2_rawstage2"
+          },
+          "rawPromptConstraintAudit": {
+            "type": "editorial",
+            "tokensIn": 304,
+            "containsDialogueRatio": false,
+            "containsParagraphLengthConstraint": false,
+            "containsControlChecklist": false,
+            "containsMechanicalMetric": false,
+            "contractIds": []
+          },
+          "methodologyPolicy": {
+            "policyVersion": "1.0",
+            "rules": [
+              {
+                "id": "author_story_contract",
+                "source": "author chapter outline and story direction",
+                "authority": "author",
+                "role": "intent",
+                "enforcement": "generation_context",
+                "runtimeFields": [
+                  "overallPlotDirection",
+                  "chapterFunction",
+                  "previousState",
+                  "relevantCharacters",
+                  "characterMotivations",
+                  "authorEventSummaries",
+                  "authorMustInclude",
+                  "authorStateChanges",
+                  "foreshadowing",
+                  "causalRelations",
+                  "endingTarget"
+                ],
+                "matchedFields": [
+                  "overallPlotDirection",
+                  "chapterFunction",
+                  "relevantCharacters"
+                ],
+                "consumedByRawPrompt": true
+              },
+              {
+                "id": "established_story_state",
+                "source": "accepted text and validated narrative state",
+                "authority": "accepted_text",
+                "role": "fact",
+                "enforcement": "hard_boundary",
+                "runtimeFields": [
+                  "inviolableFacts",
+                  "factAndCharacterKnowledgeForbiddenZones",
+                  "identityContract",
+                  "ontologyContract",
+                  "historicalContinuity",
+                  "historicalCharacterState",
+                  "recentPatternMemory",
+                  "knowledgeConsumption"
+                ],
+                "matchedFields": [
+                  "inviolableFacts",
+                  "identityContract"
+                ],
+                "consumedByRawPrompt": true
+              },
+              {
+                "id": "creative_constitution",
+                "source": "author creative constitution",
+                "authority": "author",
+                "role": "intent",
+                "enforcement": "generation_context",
+                "runtimeFields": [
+                  "constitution.workIdentity",
+                  "constitution.readerPromise",
+                  "constitution.genrePromises",
+                  "constitution.protagonistCoreConflict",
+                  "constitution.thematicQuestions",
+                  "constitution.forbiddenDrift"
+                ],
+                "matchedFields": [],
+                "consumedByRawPrompt": false
+              },
+              {
+                "id": "scene_solution_strategy",
+                "source": "methodology scene-solution hypothesis",
+                "authority": "methodology",
+                "role": "strategy",
+                "enforcement": "candidate_only",
+                "runtimeFields": [
+                  "sceneSolution"
+                ],
+                "matchedFields": [],
+                "consumedByRawPrompt": false
+              },
+              {
+                "id": "craft_strategy_hypotheses",
+                "source": "validated or experimental craft strategies",
+                "authority": "methodology",
+                "role": "strategy",
+                "enforcement": "candidate_only",
+                "runtimeFields": [
+                  "craftGenes",
+                  "promptPatterns",
+                  "candidateStrategyId"
+                ],
+                "matchedFields": [],
+                "consumedByRawPrompt": false
+              },
+              {
+                "id": "craft_diagnostics",
+                "source": "methodology review and evidence scanners",
+                "authority": "methodology",
+                "role": "diagnostic",
+                "enforcement": "review_only",
+                "runtimeFields": [
+                  "promiseContext",
+                  "expectationContext",
+                  "genreContract",
+                  "dialogueCraft",
+                  "emotionRhythm",
+                  "supportingFunction",
+                  "characterVoiceContext",
+                  "worldPresentationContext",
+                  "ensembleLayeringContext",
+                  "craftPhenomenonReport"
+                ],
+                "matchedFields": [],
+                "consumedByRawPrompt": false
+              },
+              {
+                "id": "prose_execution_heuristics",
+                "source": "sensory, sentence, dialogue, paragraph, and style heuristics",
+                "authority": "heuristic",
+                "role": "strategy",
+                "enforcement": "excluded_from_raw",
+                "runtimeFields": [
+                  "candidateAnchors",
+                  "aestheticDirection",
+                  "voiceFingerprint",
+                  "styleFingerprint",
+                  "proseTemplate"
+                ],
+                "matchedFields": [],
+                "consumedByRawPrompt": false
+              }
+            ],
+            "violations": []
+          },
+          "constitutionConsumption": {
+            "raw": [],
+            "editorial": [],
+            "judge": []
+          },
+          "promiseContext": {
+            "entries": [],
+            "sourceRefs": [],
+            "consumedByRawPrompt": false,
+            "emptyReason": "无 selectedPromisesToAdvance 且无 longTermState.promise，本章无可用承诺状态"
+          },
+          "expectationContext": {
+            "entries": [],
+            "sourceRefs": [],
+            "consumedByRawPrompt": false,
+            "emptyReason": "无 selectedExpectationsToAdvance 且无 longTermState.expectation，本章无可用读者期待状态"
+          },
+          "genreContract": {
+            "declaredGenre": "仙侠 / 东方玄幻",
+            "declaredGenreSourceRef": "context.worldRules:world:genre",
+            "driftGenre": null,
+            "driftGenreSourceRef": null,
+            "genreDriftDetected": false,
+            "entries": [],
+            "sourceRefs": [
+              "context.worldRules:world:genre"
+            ],
+            "consumedByRawPrompt": false,
+            "emptyReason": "declaredGenre=\"仙侠 / 东方玄幻\" 不在本地清洗后 dataset 中，且无 constitution.genrePromises；不伪造类型模板承诺"
+          },
+          "dialogueCraft": {
+            "speakingCharacters": [
+              {
+                "characterId": "叶尘",
+                "name": "叶尘",
+                "hasFingerprint": false,
+                "fingerprintSourceRef": null,
+                "recoveryMode": "character_voice_weak_proxy",
+                "weakProxyHints": [],
+                "sourceRef": "characterStates:叶尘",
+                "confidence": 0.3
+              },
+              {
+                "characterId": "苏影",
+                "name": "苏影",
+                "hasFingerprint": false,
+                "fingerprintSourceRef": null,
+                "recoveryMode": "character_voice_weak_proxy",
+                "weakProxyHints": [],
+                "sourceRef": "characterStates:苏影",
+                "confidence": 0.3
+              },
+              {
+                "characterId": "林婉儿",
+                "name": "林婉儿",
+                "hasFingerprint": false,
+                "fingerprintSourceRef": null,
+                "recoveryMode": "character_voice_weak_proxy",
+                "weakProxyHints": [],
+                "sourceRef": "characterStates:林婉儿",
+                "confidence": 0.3
+              }
+            ],
+            "blindTestEligible": false,
+            "dialogueCraftAdvisory": [],
+            "sourceRefs": [
+              "characterStates:叶尘",
+              "characterStates:叶尘:role",
+              "characterStates:苏影",
+              "characterStates:苏影:role",
+              "characterStates:林婉儿",
+              "characterStates:林婉儿:role"
+            ],
+            "consumedByRawPrompt": false,
+            "advisoryOnly": true,
+            "canTriggerEditorialOpportunity": false,
+            "proxyNote": "本 compact block 中 recoveryMode=character_voice_weak_proxy 的角色仅用 CharacterStateFact 的 mentality/pendingTension 作为弱代理；完整 voice fingerprint（句式/词汇/称呼习惯）需从接受稿/样章抽取，本编译器不调用模型抽取"
+          },
+          "emotionRhythm": {
+            "targetEmotions": [
+              "目标情绪：好奇、温馨"
+            ],
+            "previousEmotionState": null,
+            "emotionTransitions": [],
+            "chapterEndEmotion": null,
+            "sourceRefs": [
+              "intent:readerExperience"
+            ],
+            "consumedByRawPrompt": false,
+            "advisoryOnly": true,
+            "canTriggerEditorialOpportunity": false,
+            "humanReviewFocus": "raw 生成前无正文可扫描；待 raw 生成后再次调用以检测事件驱动转折"
+          },
+          "supportingFunction": {
+            "assignments": [
+              {
+                "characterId": "叶尘",
+                "name": "叶尘",
+                "primaryFunction": null,
+                "functionEvidenceSpan": null,
+                "goal": null,
+                "verified": false,
+                "confidence": 0.3,
+                "sourceRef": "intent:relevantCharacters:叶尘"
+              },
+              {
+                "characterId": "苏影",
+                "name": "苏影",
+                "primaryFunction": null,
+                "functionEvidenceSpan": null,
+                "goal": null,
+                "verified": false,
+                "confidence": 0.3,
+                "sourceRef": "intent:relevantCharacters:苏影"
+              },
+              {
+                "characterId": "林婉儿",
+                "name": "林婉儿",
+                "primaryFunction": null,
+                "functionEvidenceSpan": null,
+                "goal": null,
+                "verified": false,
+                "confidence": 0.3,
+                "sourceRef": "intent:relevantCharacters:林婉儿"
+              }
+            ],
+            "sourceRefs": [
+              "intent:relevantCharacters:叶尘",
+              "intent:relevantCharacters:苏影",
+              "intent:relevantCharacters:林婉儿"
+            ],
+            "consumedByRawPrompt": false,
+            "advisoryOnly": true,
+            "canTriggerEditorialOpportunity": false,
+            "humanReviewFocus": "raw 生成前无正文可扫描；待 raw 生成后再次调用以检测功能行为证据",
+            "proxyNote": "本最小切片只为激活配角编译本章叙事功能 hypothesis（foil/witness/obstacle/helper/cost-bearer）；功能必须由正文行为 span 支持才 verified=true；不恢复固定轮转、人数配额、群像硬门；不更新永久角色身份（角色 identity 由 IdentityContract 管理）；advisory 非硬门"
+          },
+          "knowledgeConsumption": {
+            "entries": [],
+            "totalTokenCost": 0,
+            "totalChars": 0,
+            "channel": "empty",
+            "sourceRefs": [],
+            "manifestApproved": false,
+            "consumedByRawPrompt": false,
+            "advisoryOnly": true,
+            "emptyReason": "manifest 未批准（approved=false），不得静默加载示例",
+            "lossReport": {
+              "truncations": [],
+              "duplicateDrops": [],
+              "budgetDrops": [],
+              "provenanceDrops": [],
+              "totalTokenBudget": 390
+            },
+            "proxyNote": "本切片只编译 FewshotSelector 已检索的示例为审计条目（provenance/score/reason/tokenCost）；示例是 advisory 参考非强制模仿模板；不全量加载场景/技法库；无 manifest 准入数据不得静默加载；收益验证由 EDITORIAL-BENEFIT-2 或独立授权完成"
+          },
+          "characterVoiceContext": {
+            "entries": [
+              {
+                "characterId": "叶尘",
+                "name": "叶尘",
+                "role": "主角",
+                "voiceHints": [],
+                "sourceRef": "characterStates:叶尘",
+                "confidence": 0.6
+              },
+              {
+                "characterId": "苏影",
+                "name": "苏影",
+                "role": "主角",
+                "voiceHints": [],
+                "sourceRef": "characterStates:苏影",
+                "confidence": 0.6
+              },
+              {
+                "characterId": "林婉儿",
+                "name": "林婉儿",
+                "role": "主角团成员",
+                "voiceHints": [],
+                "sourceRef": "characterStates:林婉儿",
+                "confidence": 0.6
+              }
+            ],
+            "sourceRefs": [
+              "characterStates:叶尘",
+              "characterStates:苏影",
+              "characterStates:林婉儿"
+            ],
+            "consumedByRawPrompt": false,
+            "proxyNote": "本最小切片只用 CompiledContext.characterStates 的 mentality/pendingTension 作为弱代理；完整 voice fingerprint（句式/词汇/称呼习惯）属于未来增强（D 资产：角色档案 .md 解析）"
+          },
+          "worldPresentationContext": {
+            "entries": [
+              {
+                "ruleId": "world:genre",
+                "description": "仙侠 / 东方玄幻",
+                "type": "genre",
+                "chapterActivated": false,
+                "sourceRef": "context.worldRules:world:genre",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:power_system",
+                "description": "# 修炼体系\n\n仙侠修炼体系：练气、筑基等境界，宗门门派林立，修士修炼功法、心法、秘法、秘术、禁术、上古功法、上古心法、神功，以法宝（神器、仙器、至宝、圣物、天器）对敌，以封印、禁制、阵法御敌。\n",
+                "type": "power_system",
+                "chapterActivated": false,
+                "sourceRef": "context.worldRules:world:power_system",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:0",
+                "description": "这个世界的背景是仙侠世界。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:0",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:1",
+                "description": "叶尘是主角团成员。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:1",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:2",
+                "description": "林婉儿是主角团成员。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:2",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:3",
+                "description": "苏影是主角团成员。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:3",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:4",
+                "description": "宗门与门派是仙侠世界的主要势力组织。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:4",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:5",
+                "description": "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:5",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:6",
+                "description": "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:6",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:7",
+                "description": "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:7",
+                "confidence": 0.7
+              },
+              {
+                "ruleId": "world:immutable:8",
+                "description": "苏影来自海外修仙界。",
+                "type": "immutable_fact",
+                "chapterActivated": true,
+                "sourceRef": "context.worldRules:world:immutable:8",
+                "confidence": 0.7
+              }
+            ],
+            "genrePromises": [],
+            "sourceRefs": [
+              "context.worldRules:world:genre",
+              "context.worldRules:world:power_system",
+              "context.worldRules:world:immutable:0",
+              "context.worldRules:world:immutable:1",
+              "context.worldRules:world:immutable:2",
+              "context.worldRules:world:immutable:3",
+              "context.worldRules:world:immutable:4",
+              "context.worldRules:world:immutable:5",
+              "context.worldRules:world:immutable:6",
+              "context.worldRules:world:immutable:7",
+              "context.worldRules:world:immutable:8"
+            ],
+            "consumedByRawPrompt": false
+          },
+          "ensembleLayeringContext": {
+            "entries": [
+              {
+                "characterId": "叶尘",
+                "name": "叶尘",
+                "isFocus": false,
+                "layeringTag": "在场",
+                "sourceRef": "intent:relevantCharacters:叶尘",
+                "confidence": 0.7
+              },
+              {
+                "characterId": "苏影",
+                "name": "苏影",
+                "isFocus": false,
+                "layeringTag": "在场",
+                "sourceRef": "intent:relevantCharacters:苏影",
+                "confidence": 0.7
+              },
+              {
+                "characterId": "林婉儿",
+                "name": "林婉儿",
+                "isFocus": false,
+                "layeringTag": "在场",
+                "sourceRef": "intent:relevantCharacters:林婉儿",
+                "confidence": 0.7
+              }
+            ],
+            "sourceRefs": [
+              "intent:relevantCharacters:叶尘",
+              "intent:relevantCharacters:苏影",
+              "intent:relevantCharacters:林婉儿"
+            ],
+            "consumedByRawPrompt": false,
+            "proxyNote": "本最小切片只做焦点/在场分层（是否在 focusCharacterGoals 中）；完整群像功能（foil/witness/obstacle/角色交互/轮转调度）属于未来增强（D 资产：legacy EnsembleDirector/EnsembleDetector 为 LLM-based C/D，replay-only）；不恢复固定轮转、人数配额、群像硬门（E 退役）"
+          },
+          "identityContract": {
+            "schema": "pinovel.identity-contract",
+            "version": "1.0",
+            "contractId": "identity-040a1e6b7a807115",
+            "contractHash": "040a1e6b7a807115",
+            "entries": [
+              {
+                "characterId": "叶尘",
+                "name": "叶尘",
+                "aliases": [],
+                "role": "主角",
+                "stableIdentity": "叶尘（主角）",
+                "sourceRefs": [
+                  "config.json"
+                ]
+              },
+              {
+                "characterId": "林婉儿",
+                "name": "林婉儿",
+                "aliases": [],
+                "role": "主角团成员",
+                "stableIdentity": "林婉儿（主角团成员）",
+                "sourceRefs": [
+                  "config.json"
+                ]
+              },
+              {
+                "characterId": "苏影",
+                "name": "苏影",
+                "aliases": [],
+                "role": "主角",
+                "stableIdentity": "苏影（主角）",
+                "sourceRefs": [
+                  "config.json"
+                ]
+              }
+            ]
+          },
+          "ontologyContract": {
+            "schema": "pinovel.ontology-contract",
+            "version": "1.0",
+            "contractId": "ontology-e3b0c44298fc1c14",
+            "contractHash": "e3b0c44298fc1c14",
+            "available": false,
+            "emptyReason": "未提供或不可解析的 closed-world levels；本体门禁保持 unavailable",
+            "entries": []
+          },
+          "productionFlow": {
+            "mode": "agentic_style_full_pipeline",
+            "literaryAuthority": "user_feedback",
+            "oneShotRawCalled": false,
+            "machineJudgeCalled": false
+          },
+          "positiveGainCandidates": {
+            "status": "retired_from_production",
+            "failureReason": "global_scene_candidate_admission_retired"
+          },
+          "judgeArbitration": {
+            "skipped": true,
+            "reason": "机器文学裁判已退出生产；最终章节由用户评价反馈"
+          },
+          "novelos": {
+            "shadowEnabled": false,
+            "required": true,
+            "sessionId": "novelos-ch3-f70b2f91",
+            "trajectoryPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\novelos-sessions\\novelos-ch3-f70b2f91\\trajectory.jsonl",
+            "candidateId": "candidate:agentic_raw:ch3",
+            "candidateLength": 3988,
+            "stopReason": "verifier_cleared",
+            "failureReason": null,
+            "failureKind": null,
+            "budgetSnapshot": {
+              "turns": 1,
+              "toolCalls": 0,
+              "latencyMs": 0,
+              "tokensIn": 0,
+              "tokensOut": 0,
+              "modelCalls": 1,
+              "exhausted": false
+            },
+            "sourceRefs": [],
+            "toolCalls": 0,
+            "verifierCleared": true,
+            "repairRounds": 0,
+            "hardFindingCount": 0,
+            "unresolvedFindings": [],
+            "decisionMode": "agentic_inline",
+            "firstAction": "draft",
+            "actualRetrievalCalls": 0,
+            "mustVerifyCount": 8,
+            "mustVerifyCoveredCount": 8,
+            "coverageResult": {
+              "passed": true,
+              "unverifiedHighRisk": [],
+              "confirmedItems": [
+                {
+                  "item": "这个世界的背景是仙侠世界。",
+                  "matchedEvidence": "context:这个世界的背景是仙侠世界。"
+                },
+                {
+                  "item": "叶尘是主角团成员。",
+                  "matchedEvidence": "context:叶尘是主角团成员。"
+                },
+                {
+                  "item": "林婉儿是主角团成员。",
+                  "matchedEvidence": "context:林婉儿是主角团成员。"
+                },
+                {
+                  "item": "苏影是主角团成员。",
+                  "matchedEvidence": "context:苏影是主角团成员。"
+                },
+                {
+                  "item": "宗门与门派是仙侠世界的主要势力组织。",
+                  "matchedEvidence": "context:宗门与门派是仙侠世界的主要势力组织。"
+                },
+                {
+                  "item": "法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。",
+                  "matchedEvidence": "context:法宝（含神器、仙器、至宝、圣物、天器）是修士的重要对敌道具。"
+                },
+                {
+                  "item": "心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。",
+                  "matchedEvidence": "context:心法、功法、秘法、秘术、禁术、上古功法、上古心法、神功是修士的修炼传承。"
+                },
+                {
+                  "item": "封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。",
+                  "matchedEvidence": "context:封印、禁制、阵法是仙侠世界中常见的封禁与防御手段。"
+                }
+              ],
+              "skippedReason": "context_covered"
+            },
+            "modelCallsByKind": {
+              "draft": 1,
+              "patch": 0,
+              "verify": 1
+            }
+          },
+          "agenticCompleteness": {
+            "status": "pass",
+            "passed": true,
+            "findings": []
+          },
+          "agenticFactGuard": {
+            "ok": false,
+            "errors": [
+              "diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权"
+            ],
+            "report": {
+              "hardBlocks": [
+                {
+                  "id": "diag:unauthorized_high_impact_setting:0",
+                  "source": "unauthorized_high_impact_setting",
+                  "severity": "hard",
+                  "domain": "continuity",
+                  "span": {
+                    "start": 3726,
+                    "end": 3728,
+                    "excerpt": "。既然目标明确了，那接下来，我们可得好好计划一下了。据我所知，距离这里向东三百里的一"
+                  },
+                  "evidence": "未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权"
+                }
+              ],
+              "allDiagnostics": [
+                {
+                  "id": "diag:unauthorized_high_impact_setting:0",
+                  "source": "unauthorized_high_impact_setting",
+                  "severity": "hard",
+                  "domain": "continuity",
+                  "span": {
+                    "start": 3726,
+                    "end": 3728,
+                    "excerpt": "。既然目标明确了，那接下来，我们可得好好计划一下了。据我所知，距离这里向东三百里的一"
+                  },
+                  "evidence": "未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权"
+                }
+              ],
+              "hasHardBlock": true,
+              "constraintManifestHash": "e1408286dd6223409990bd9be1a3ad0c731ec7989432f4f774428aa6824fbf30",
+              "ontologyContractId": "ontology-e3b0c44298fc1c14",
+              "ontologyContractHash": "e3b0c44298fc1c14",
+              "quoteExemptions": []
+            },
+            "constraintManifestHash": "e1408286dd6223409990bd9be1a3ad0c731ec7989432f4f774428aa6824fbf30"
+          },
+          "failureEnvelope": {
+            "stage": "agentic_fact_guard",
+            "severity": "hard",
+            "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权",
+            "recoverable": false,
+            "degradedTo": "hard_block"
+          },
+          "chapterQualityEvidence": {
+            "structuralEvidence": [],
+            "structuralEvidenceMeta": {
+              "skipped": true,
+              "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+              "scannedCandidateId": "",
+              "scannedTextLength": 0,
+              "scannedAt": 1786507163627
+            }
+          },
+          "informationReleaseEvidence": {
+            "evidence": [
+              {
+                "dimensionId": "infodump_block",
+                "status": "skipped",
+                "findingId": "infoRelease:infodump_block:0",
+                "sourceSpans": [],
+                "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "readerImpact": "扫描跳过，无信息释放证据可提供",
+                "suggestedOwner": "human_review",
+                "confidence": 0
+              },
+              {
+                "dimensionId": "action_bearing_release",
+                "status": "skipped",
+                "findingId": "infoRelease:action_bearing_release:1",
+                "sourceSpans": [],
+                "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "readerImpact": "扫描跳过，无行动承载证据可提供",
+                "suggestedOwner": "human_review",
+                "confidence": 0
+              }
+            ],
+            "meta": {
+              "skipped": true,
+              "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+              "scannedCandidateId": "",
+              "scannedTextLength": 0,
+              "scannedAt": 1786507163627
+            }
+          },
+          "endingCraftEvidence": {
+            "evidence": [
+              {
+                "dimensionId": "tail_pressure",
+                "status": "skipped",
+                "findingId": "endingCraft:tail_pressure:0",
+                "sourceSpans": [],
+                "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "readerImpact": "扫描跳过，无尾段压力证据可提供",
+                "suggestedOwner": "human_review",
+                "confidence": 0
+              },
+              {
+                "dimensionId": "flat_summary_ending",
+                "status": "skipped",
+                "findingId": "endingCraft:flat_summary_ending:1",
+                "sourceSpans": [],
+                "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "readerImpact": "扫描跳过，无总结式结尾证据可提供",
+                "suggestedOwner": "human_review",
+                "confidence": 0
+              },
+              {
+                "dimensionId": "hook_or_question",
+                "status": "skipped",
+                "findingId": "endingCraft:hook_or_question:2",
+                "sourceSpans": [],
+                "evidence": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "readerImpact": "扫描跳过，无钩子证据可提供",
+                "suggestedOwner": "human_review",
+                "confidence": 0
+              }
+            ],
+            "meta": {
+              "skipped": true,
+              "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+              "scannedCandidateId": "",
+              "scannedTextLength": 0,
+              "scannedAt": 1786507163627
+            }
+          },
+          "craftEvidenceEnvelope": {
+            "sourceReports": [
+              {
+                "source": "chapterQuality",
+                "present": true,
+                "skipped": true,
+                "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "evidenceCount": 0,
+                "scannedCandidateId": "",
+                "scannedTextLength": 0,
+                "scannedAt": 1786507163627
+              },
+              {
+                "source": "informationRelease",
+                "present": true,
+                "skipped": true,
+                "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "evidenceCount": 0,
+                "scannedCandidateId": "",
+                "scannedTextLength": 0,
+                "scannedAt": 1786507163627
+              },
+              {
+                "source": "endingCraft",
+                "present": true,
+                "skipped": true,
+                "skippedReason": "hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+                "evidenceCount": 0,
+                "scannedCandidateId": "",
+                "scannedTextLength": 0,
+                "scannedAt": 1786507163627
+              }
+            ],
+            "findings": [],
+            "riskCounts": {
+              "bySource": {
+                "chapterQuality": 0,
+                "informationRelease": 0,
+                "endingCraft": 0
+              },
+              "total": 0
+            },
+            "humanReviewCount": {
+              "bySource": {
+                "chapterQuality": 0,
+                "informationRelease": 0,
+                "endingCraft": 0
+              },
+              "total": 0
+            },
+            "partialCount": {
+              "bySource": {
+                "chapterQuality": 0,
+                "informationRelease": 0,
+                "endingCraft": 0
+              },
+              "total": 0
+            },
+            "topFindings": [],
+            "meta": {
+              "finalTextLength": 0,
+              "finalCandidateId": "",
+              "generatedAt": 1786507163627,
+              "skipped": true,
+              "skippedReason": "skipped: hardBlock at stage=agentic_fact_guard：NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"计划\"（category=organization_plan）：正文出现未授权的高影响新设定\"计划\"（category=organization_plan），源材料中无对应术语授权（无 finalText 可扫描）",
+              "missingSources": []
+            }
+          },
+          "qualityEvidenceRunReport": {
+            "runSummary": {
+              "selectedSource": "blocked",
+              "selectedCandidateId": "",
+              "finalTextLength": 0,
+              "hasEditorialCandidate": false,
+              "judgeAttachmentPresent": false
+            },
+            "rawEvidenceSummary": {
+              "riskCount": 0,
+              "humanReviewCount": 0,
+              "partialCount": 0,
+              "topRawFindings": [],
+              "envelopeSkipped": true
+            },
+            "candidateResponseSummary": {
+              "candidateCount": 0,
+              "addressedCount": 0,
+              "partialCount": 0,
+              "unchangedCount": 0,
+              "unverifiedCount": 0,
+              "riskAdvisoryLevels": [],
+              "tracesSkipped": true
+            },
+            "judgeAuditSummary": {
+              "attachmentCount": 0,
+              "editorialAttachmentCount": 0,
+              "rawAttachmentCount": 0,
+              "unresolvedFindingRefs": [],
+              "attachmentSkipped": true
+            },
+            "humanReviewFocus": [],
+            "proxyNote": "质量证据运行报告，非改写命令，非质量评分，非 winner 选择依据，非 hard gate",
+            "meta": {
+              "compiledAt": 1786507163627,
+              "source": "quality_evidence_run_report"
+            }
+          },
+          "qualityEvidenceReportPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\traces\\ch3-quality-evidence-report.json",
+          "qualityEvidenceReportExport": {
+            "exported": true,
+            "filePath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\traces\\ch3-quality-evidence-report.json",
+            "bytes": 927
+          },
+          "blockedCandidateEvidence": {
+            "saved": true,
+            "artifactPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-replay\\traces\\ch3-blocked-candidate-evidence.json",
+            "schemaId": "pinovel.blocked-candidate-evidence/v1",
+            "rawSha256": "216ad4b5cd09945be03c09f61db19b843f18353c2955ba6930a8eb54b0de914d",
+            "rawLength": 3988,
+            "diagnosticSpanCount": 1,
+            "redactionLog": [],
+            "candidateId": "candidate:agentic_raw:ch3",
+            "selectedSource": "raw",
+            "finalTextSha256": "216ad4b5cd09945be03c09f61db19b843f18353c2955ba6930a8eb54b0de914d",
+            "finalTextLength": 3988
+          }
+        }
+      },
+      "recoverable": false,
+      "recordedAt": "2026-08-12T03:59:23.631Z"
+    }
+  ],
+  "v2Summary": {
+    "v2Mode": "full_chain",
+    "candidateCount": 0,
+    "contextHash": "f2-l0-c3-w11-s1",
+    "stages": [
+      {
+        "stage": "agentic_fact_guard",
+        "timestamp": "2026-08-12T03:59:23.630Z"
+      }
+    ]
+  }
+}

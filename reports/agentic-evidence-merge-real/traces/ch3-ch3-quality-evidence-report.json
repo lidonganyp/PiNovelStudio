@@ -1,0 +1,38 @@
+{
+  "runSummary": {
+    "selectedSource": "blocked",
+    "selectedCandidateId": "",
+    "finalTextLength": 0,
+    "hasEditorialCandidate": false,
+    "judgeAttachmentPresent": false
+  },
+  "rawEvidenceSummary": {
+    "riskCount": 0,
+    "humanReviewCount": 0,
+    "partialCount": 0,
+    "topRawFindings": [],
+    "envelopeSkipped": true
+  },
+  "candidateResponseSummary": {
+    "candidateCount": 0,
+    "addressedCount": 0,
+    "partialCount": 0,
+    "unchangedCount": 0,
+    "unverifiedCount": 0,
+    "riskAdvisoryLevels": [],
+    "tracesSkipped": true
+  },
+  "judgeAuditSummary": {
+    "attachmentCount": 0,
+    "editorialAttachmentCount": 0,
+    "rawAttachmentCount": 0,
+    "unresolvedFindingRefs": [],
+    "attachmentSkipped": true
+  },
+  "humanReviewFocus": [],
+  "proxyNote": "质量证据运行报告，非改写命令，非质量评分，非 winner 选择依据，非 hard gate",
+  "meta": {
+    "compiledAt": 1786507163627,
+    "source": "quality_evidence_run_report"
+  }
+}

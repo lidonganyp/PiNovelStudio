@@ -114,6 +114,20 @@ export interface AgentLoopLineage {
   /** 硬失败数量（最终） */
   hardFindingCount: number;
   /**
+   * AGENTIC-EVIDENCE-MERGE-1 修复：底层错误消息（catch 块捕获的原始异常 message）。
+   *
+   * 之前 loop 在 catch 中统一调用 makeFallback(stopReason="model_error")，但
+   * 底层错误消息（可能含 "timed out" 等超时模式）只写入 trajectory.recordFailure，
+   * 不进入 lineage。agentic-raw-candidate-source.ts 只读 lineage.stopReason 构造
+   * fallbackReason="agent loop fallback: model_error"，导致 classifyFailureKind
+   * 无法识别超时 → failureKind 永远是 "model_error" → 编排器 candidate=null 分支
+   * 无法触发 gate=model_timeout / severity=recoverable → 工具层 chapter_level_retry
+   * 重试条件不可达。
+   *
+   * 现在通过此字段把底层错误消息传递到 source，让 classifyFailureKind 能识别超时。
+   */
+  failureReason?: string;
+  /**
    * AGENTIC-EVIDENCE-MERGE-1 可观测性：Agentic 首回合实际采取的动作。
    * - "tool_call"：首条 assistant 消息含工具调用指令（先检索）
    * - "draft"：首条 assistant 消息直接输出正文
@@ -174,6 +188,15 @@ export interface AgentTurnsResult {
   actualRetrievalCalls: number;
   /** AGENTIC-EVIDENCE-MERGE-1：ReAct 首轮阶段模型调用数 */
   draftModelCalls: number;
+  /**
+   * AGENTIC-EVIDENCE-MERGE-1 修复：模型调用错误消息（如超时）。
+   *
+   * streamFn 把 modelGenerate 异常转为 stream error 事件，pi-agent-core
+   * 把 error.errorMessage 存入 assistant 消息。runAgentTurns 从消息中提取
+   * 此字段，供 makeFallback 传入 lineage.failureReason，让
+   * classifyFailureKind 能识别 "timed out" 等超时模式。
+   */
+  modelErrorMessage?: string;
 }
 
 export interface VerifyPatchResult {

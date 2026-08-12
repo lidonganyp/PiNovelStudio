@@ -4,7 +4,7 @@
 **版本**：v1.0  
 **日期**：2026-08-11  
 **决策**：采用方案 A，将独立 `EvidenceDecision` 模型回合合并到 NovelOS Agentic 首轮  
-**状态**：实现完成；基线对照已完成，检索路径与 coverage 负例待补齐（2026-08-12；build / typecheck / test / test:eval 全部通过；改造前后基线对照已验证：ch1 模型调用 4→2（−50%），输入 token 9,000→5,738（−36.2%），延迟 199.5s→179.2s（−10.2%），EvidenceDecision 调用 2→0）
+**状态**：实现完成；9 章独立快照对照已完成，检索路径、coverage 负例及 envelope 级恢复样本 trace 待补齐（2026-08-12；build / typecheck / test / test:eval 全部通过；9 章独立快照真实 replay：8/9 成功、1 阻断（story_preservation hard block）、零 preflight 级联、EvidenceDecision 调用 0、trace 留存 9/9、未分类失败 0、mustVerify 覆盖 64/64（100%）、事实硬错误 0；成功章节模型调用 2-3 次；运行时出现 2 次底层 HTTP 重试（524/520）均自动恢复成功。已确认 ch1 正收益：模型调用 4→2（−50%）、输入 token 9,000→5,738（−36.2%）、延迟 199.5s→179.2s（−10.2%）。注意：独立快照为改造后运行形态，改造前基线为串行形态，严格同形态对照需在改造前代码跑独立快照）
 **适用范围**：统一生产主链路 `novel_generate_chapter → NovelOS Agentic`  
 
 ## 1. 背景与问题

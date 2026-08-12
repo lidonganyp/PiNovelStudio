@@ -632,8 +632,17 @@ export function createAgenticRawCandidateSource(
         // - stopReason="budget_exhausted" → budget_exhausted
         // - stopReason="stagnant"/"verifier_cleared" 但文本空 → empty_draft
         // - 其他 → unknown
+        //
+        // AGENTIC-EVIDENCE-MERGE-1 修复：loop catch 块现在通过 lineage.failureReason
+        // 传递底层错误消息。若存在，附加到 fallbackReason，让 classifyFailureKind
+        // 能识别 "timed out" / "超时" 等超时模式 → failureKind=model_timeout。
+        // 之前 fallbackReason 只是 "agent loop fallback: model_error"，
+        // 不含超时关键词，导致所有模型异常都被归为 model_error。
+        const loopFailureReason = loopResult.lineage.failureReason;
         const fallbackReason = loopResult.fallback
-          ? `agent loop fallback: ${loopResult.lineage.stopReason}`
+          ? (loopFailureReason
+              ? `agent loop fallback: ${loopResult.lineage.stopReason}（${loopFailureReason}）`
+              : `agent loop fallback: ${loopResult.lineage.stopReason}`)
           : "agent loop 返回空文本";
         const fallbackKind = classifyFailureKind(
           fallbackReason,
@@ -649,6 +658,17 @@ export function createAgenticRawCandidateSource(
           loopResult.lineage.stopReason,
           fallbackReason,
           fallbackKind,
+          {
+            firstAction: loopResult.lineage.firstAction,
+            actualRetrievalCalls: loopResult.lineage.actualRetrievalCalls,
+            mustVerifyCount: loopResult.lineage.evidencePlan.mustVerify.length,
+            mustVerifyCoveredCount:
+              loopResult.lineage.coverageGate?.confirmedItems.length ?? 0,
+            coverageResult: loopResult.lineage.coverageGate,
+            modelCallsByKind: loopResult.lineage.modelCallsByKind,
+            sourceRefs: loopResult.lineage.sourceRefs,
+            toolCalls: loopResult.lineage.toolCalls,
+          },
         );
       }
 
@@ -778,6 +798,11 @@ export function classifyFailureKind(
  *
  * P1-3：新增 failureKind 参数，由调用方通过 classifyFailureKind 推断。
  * 编排器据此在 candidate=null 分支区分可恢复（model_timeout）与硬失败。
+ *
+ * AGENTIC-EVIDENCE-MERGE-1：若 loop 已产生 lineage（coverage 负例 / 空 draft 等），
+ * 必须保留 firstAction / actualRetrievalCalls / mustVerify* / coverageResult，
+ * 禁止把已发生的检索与覆盖门结果清零为 not_run/0。
+ * 仅 runtime_init / loop 异常等“未进入 turns”路径才使用 not_run 默认值。
  */
 function makeFallbackResult(
   sessionId: string,
@@ -793,6 +818,16 @@ function makeFallbackResult(
     | "empty_draft"
     | "must_verify_coverage_failed"
     | "unknown",
+  observed?: {
+    firstAction?: "draft" | "tool_call" | "not_run";
+    actualRetrievalCalls?: number;
+    mustVerifyCount?: number;
+    mustVerifyCoveredCount?: number;
+    coverageResult?: CoverageGateResult;
+    modelCallsByKind?: { draft: number; patch: number; verify: number };
+    sourceRefs?: string[];
+    toolCalls?: number;
+  },
 ): AgenticRawSourceResult {
   return {
     candidate: null,
@@ -802,15 +837,15 @@ function makeFallbackResult(
     stopReason,
     failureReason,
     failureKind,
-    sourceRefs: [],
-    toolCalls: 0,
-    // AGENTIC-EVIDENCE-MERGE-1 可观测性：fallback 未产出 draft，动作未知 → not_run
+    sourceRefs: observed?.sourceRefs ?? [],
+    toolCalls: observed?.toolCalls ?? 0,
     decisionMode: "agentic_inline",
-    firstAction: "not_run",
-    actualRetrievalCalls: 0,
-    mustVerifyCount: 0,
-    mustVerifyCoveredCount: 0,
-    modelCallsByKind: { draft: 0, patch: 0, verify: 0 },
+    firstAction: observed?.firstAction ?? "not_run",
+    actualRetrievalCalls: observed?.actualRetrievalCalls ?? 0,
+    mustVerifyCount: observed?.mustVerifyCount ?? 0,
+    mustVerifyCoveredCount: observed?.mustVerifyCoveredCount ?? 0,
+    ...(observed?.coverageResult ? { coverageResult: observed.coverageResult } : {}),
+    modelCallsByKind: observed?.modelCallsByKind ?? { draft: 0, patch: 0, verify: 0 },
     verifierCleared: false,
     repairRounds: 0,
     hardFindingCount: 0,

@@ -1,0 +1,21 @@
+{
+  "case": "retrieval",
+  "source": "eval-harness b2（createAgenticRawCandidateSource 生产代码 + stub 模型）",
+  "fixtureId": "F1-historical-fact",
+  "timestamp": "2026-08-12T06:03:12.828Z",
+  "decisionMode": "agentic_inline",
+  "firstAction": "tool_call",
+  "actualRetrievalCalls": 2,
+  "mustVerifyCount": 1,
+  "mustVerifyCoveredCount": 0,
+  "coverageResult": null,
+  "modelCallsByKind": {
+    "draft": 2,
+    "patch": 0,
+    "verify": 0
+  },
+  "candidateTextLength": 51,
+  "verifierCleared": false,
+  "trajectoryPath": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\novelos-eval-F1-historical-fact-GQN26M\\workspaces\\eval-f1\\novelos-sessions\\novelos-ch3-af956a52\\trajectory.jsonl",
+  "archivedFiles": 1
+}

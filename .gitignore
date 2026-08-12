@@ -192,6 +192,9 @@ reports/*
 # PHASE8-STAGE-P：Prompt-only A/B 对比报告（dry-run + real），需纳入版本控制（与 Phase 5/6/7 报告 artifact 一致）
 !reports/phase8-prompt-native/
 !reports/phase8-prompt-native/**
+# AGENTIC-EVIDENCE-MERGE-1：真实 9 章 replay 报告 + 三条 auditable trace 归档（retrieval/coverage/recovery），需纳入版本控制
+!reports/agentic-evidence-merge-real/
+!reports/agentic-evidence-merge-real/**
 
 # =============================================================================
 # IDE 配置 (仅保留最小必要)
