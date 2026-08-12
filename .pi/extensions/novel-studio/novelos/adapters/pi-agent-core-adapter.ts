@@ -10,6 +10,14 @@
  *
  * 核心契约（spike 发现）：streamFn 收到 options.signal，必须在 abort 时 push done 事件 +
  * end stream，否则 agent loop 的 for-await 会挂死。createProjectStreamFn 已实现此契约。
+ *
+ * PROTOCOL-LAYER-1（2026-08-12）：本桥接已收敛到统一 Adapter/ModelTurn 路径。
+ * - 不再直接调用 parseToolCallDirectives / formatToolResultsForPrompt
+ * - 通过 defaultAdapterRegistry.getAdapter(route) 获取协议适配器
+ * - 适配器 parseResponse 返回统一 ModelTurn，桥接据此构建 AssistantMessage
+ * - 适配器 serializeToolResults 返回 ProviderContinuation，桥接据此回灌证据到 userPrompt
+ * - 生产路径默认获取 ReactTextAdapter（行为等价，仅经过统一协议层）
+ * - 编排器不再依赖 ReAct 文本协议细节，未来可切换 Native FC 而无需改本文件
  */
 
 import { Agent } from "@earendil-works/pi-agent-core";
@@ -32,13 +40,16 @@ import type {
   Usage,
 } from "@earendil-works/pi-ai";
 import type { ModelGenerateFn, ModelGenerateInput, ModelGenerateOutput } from "../../v2/adapters/legacy-model-route-adapter.js";
-import {
-  parseToolCallDirectives,
-  formatToolResultsForPrompt,
-  type ToolResultView,
-} from "./react-tool-call-parser.js";
 import { injectToolSchemas } from "./tool-schema-injector.js";
 import { localizeLlmText } from "../../utils/llm-language-guard.js";
+// 统一协议层：Adapter Registry + ModelTurn + Adapter 接口
+import { defaultAdapterRegistry } from "../protocol/adapter-registry.js";
+import type { ModelProtocolAdapter } from "../protocol/protocol-adapter.js";
+import type {
+  ModelTurn,
+  ToolCallEvent,
+  ToolResultEvent,
+} from "../protocol/model-turn.js";
 
 // ============================================================================
 // Re-exports：NovelOS 模块统一从本 adapter 导入 pi-agent-core / pi-ai 类型
@@ -96,13 +107,15 @@ export function createPlaceholderModel(route: string): Model<string> {
 /**
  * 把项目 ModelGenerateFn 包装成 pi-agent-core StreamFn。
  *
- * ReAct 桥接（Task A.3）：
+ * PROTOCOL-LAYER-1（2026-08-12）：桥接已收敛到统一 Adapter/ModelTurn 路径。
  * - userPrompt 构建：取最后一条 `role:"user"` 消息为 basePrompt；收集该 user 消息之后的
- *   所有 `role:"toolResult"` 消息（同一 turn 内工具结果），用 `formatToolResultsForPrompt`
- *   序列化为「已检索到的证据」块追加到 basePrompt。text-only 模型只能通过这种方式看到证据。
- * - 模型输出解析：`parseToolCallDirectives(out.text)`；有 toolCall 指令 → content 含 toolCall
- *   块 + stopReason="toolUse"（Agent 原生派发工具、追加 toolResult、再调 streamFn）；
- *   无指令 → 现状（text + stop），模型输出最终正文。
+ *   所有 `role:"toolResult"` 消息（同一 turn 内工具结果），构建临时 ModelTurn，
+ *   调用 adapter.serializeToolResults 得到 ProviderContinuation，将 textAppend 追加到 basePrompt。
+ *   text-only ReAct 模型只能通过这种方式看到证据；Native FC 模型由 adapter 决定是否追加文本。
+ * - 模型输出解析：通过 adapter.parseResponse({ body: out, status: 200 }) 得到 ModelTurn；
+ *   turn.toolCalls 非空 → content 含 text 块（若有）+ toolCall 块 + stopReason="toolUse"
+ *   （Agent 原生派发工具、追加 toolResult、再调 streamFn）；
+ *   turn.toolCalls 空 → 现状（text + stop），模型输出最终正文。
  * - 契约：尊重 options.signal —— abort 时 push aborted done + end stream，丢弃过期结果。
  *
  * @param modelGenerate 项目模型调用函数（来自 legacy-model-route-adapter 或 stub）
@@ -119,9 +132,11 @@ export function createProjectStreamFn(
   kind = "novelos_agentic",
   defaultTimeoutMs?: number,
 ): (model: Model<string>, context: Context, options?: { signal?: AbortSignal; timeoutMs?: number }) => AssistantMessageEventStream {
+  // 通过 Adapter Registry 获取协议适配器（生产路径默认返回 ReactTextAdapter）
+  const adapter: ModelProtocolAdapter = defaultAdapterRegistry.getAdapter(route);
   return (_model: Model<string>, context: Context, options?: { signal?: AbortSignal; timeoutMs?: number }) => {
     const systemPrompt = localizeLlmText(context.systemPrompt ?? "");
-    const userPrompt = localizeLlmText(buildUserPromptWithContext(context));
+    const userPrompt = localizeLlmText(buildUserPromptWithContext(context, adapter));
 
     const stream = createAssistantMessageEventStream();
     const signal = options?.signal;
@@ -153,34 +168,18 @@ export function createProjectStreamFn(
         });
         if (aborted) return; // 已 abort，丢弃过期结果
 
-        // 解析 ReAct `<tool_call>` 指令
-        const parsed = parseToolCallDirectives(out.text);
+        // 通过统一协议适配器解析响应为 ModelTurn
+        const turn: ModelTurn = adapter.parseResponse({
+          body: out,
+          status: 200,
+        });
 
-        let message: AssistantMessage;
-        if (parsed.hasToolCall) {
-          // 有工具调用指令 → emit toolCall 内容块 + stopReason="toolUse"
-          // Agent 原生派发工具、追加 toolResult 消息、再调 streamFn（下一 turn 回灌证据）
-          const content: AssistantMessage["content"] = [
-            ...parsed.textBlocks,
-            ...parsed.toolCalls,
-          ];
-          // 若 textBlocks 为空（模型只发指令），至少保留一个空 text 块避免 content 全空
-          if (content.length === 0) {
-            content.push({ type: "text", text: "" });
-          }
-          message = makeAssistantMessage(content, "toolUse", out.model);
-          stream.push({ type: "start", partial: message });
-          stream.push({ type: "done", reason: "toolUse", message });
-        } else {
-          // 无指令 → 最终正文，模型停止
-          message = makeAssistantMessage(
-            [{ type: "text", text: out.text }],
-            "stop",
-            out.model,
-          );
-          stream.push({ type: "start", partial: message });
-          stream.push({ type: "done", reason: "stop", message });
-        }
+        // 根据 ModelTurn 构建 pi-agent-core AssistantMessage
+        const message = buildAssistantMessageFromTurn(turn, out.model);
+        const doneReason: "toolUse" | "stop" =
+          turn.toolCalls.length > 0 ? "toolUse" : "stop";
+        stream.push({ type: "start", partial: message });
+        stream.push({ type: "done", reason: doneReason, message });
         stream.end(message);
       } catch (err) {
         if (aborted) return; // 已 abort，丢弃过期错误
@@ -197,18 +196,26 @@ export function createProjectStreamFn(
 }
 
 // ============================================================================
-// 内部：构建 userPrompt（basePrompt + toolResult 回灌）
+// 内部：构建 userPrompt（basePrompt + toolResult 回灌，通过统一协议适配器）
 // ============================================================================
 
 /**
  * 从 context.messages 构建 userPrompt：
  * - 取最后一条 `role:"user"` 消息为 basePrompt（string 或序列化 content）；
  * - 收集该 user 消息之后的所有 `role:"toolResult"` 消息（同一 turn 内工具结果），
- *   用 `formatToolResultsForPrompt` 序列化为「已检索到的证据」块追加。
+ *   构建 ModelTurn（只填 toolResults），调用 adapter.serializeToolResults 得到 continuation，
+ *   将 continuation.textAppend 追加到 basePrompt。
  *
- * text-only 模型看不到结构化 toolResult 消息，必须回灌到 userPrompt 才能基于证据继续生成。
+ * PROTOCOL-LAYER-1：通过统一协议适配器序列化 toolResult，使 ReAct/Native 走同一套接口。
+ * - ReAct 适配器生成「已检索到的证据」文本块，追加到 userPrompt
+ * - Native 适配器生成 provider 原生 tool result 消息（textAppend 为 undefined，不追加文本）
+ *
+ * text-only ReAct 模型看不到结构化 toolResult 消息，必须回灌到 userPrompt 才能基于证据继续生成。
  */
-function buildUserPromptWithContext(context: Context): string {
+function buildUserPromptWithContext(
+  context: Context,
+  adapter: ModelProtocolAdapter,
+): string {
   const messages = context.messages;
   // 找最后一条 user 消息的索引
   let lastUserIdx = -1;
@@ -225,16 +232,18 @@ function buildUserPromptWithContext(context: Context): string {
       ? (lastUser as { content: string }).content
       : JSON.stringify((lastUser as { content?: unknown } | undefined)?.content ?? "");
 
-  // 收集 user 消息之后的 toolResult 消息
-  const toolResults: ToolResultView[] = [];
+  // 收集 user 消息之后的 toolResult 消息，构建为 ToolResultEvent[]
+  const toolResults: ToolResultEvent[] = [];
   if (lastUserIdx >= 0) {
     for (let i = lastUserIdx + 1; i < messages.length; i++) {
       const m = messages[i] as { role?: string };
       if (m && m.role === "toolResult") {
         const tr = messages[i] as unknown as {
+          toolCallId?: string;
           toolName?: string;
           content?: Array<{ type: string; text?: string }>;
-          details?: ToolResultView["details"];
+          details?: ToolResultEvent["details"];
+          isError?: boolean;
         };
         const textContent = Array.isArray(tr.content)
           ? tr.content
@@ -242,18 +251,78 @@ function buildUserPromptWithContext(context: Context): string {
               .map((c) => ({ type: "text" as const, text: c.text as string }))
           : [];
         toolResults.push({
+          toolCallId: tr.toolCallId ?? "",
           toolName: tr.toolName ?? "unknown",
           content: textContent,
           details: tr.details,
+          isError: tr.isError ?? false,
         });
       }
     }
   }
 
-  const evidenceBlock = formatToolResultsForPrompt(toolResults);
-  return evidenceBlock.length > 0
-    ? `${basePrompt}\n\n${evidenceBlock}`
+  // 构建临时 ModelTurn（只填 toolResults，其他字段占位），调用 adapter 序列化
+  const tempTurn: ModelTurn = {
+    text: undefined,
+    toolCalls: [],
+    toolResults,
+    finishReason: "stop",
+    parseStatus: "ok",
+    protocol: adapter.protocol,
+    adapterVersion: adapter.version,
+  };
+  const continuation = adapter.serializeToolResults(tempTurn);
+  const textAppend = continuation.textAppend;
+  return textAppend && textAppend.length > 0
+    ? `${basePrompt}\n\n${textAppend}`
     : basePrompt;
+}
+
+// ============================================================================
+// 内部：从 ModelTurn 构建 pi-agent-core AssistantMessage
+// ============================================================================
+
+/**
+ * 把统一 ModelTurn 转换为 pi-agent-core 的 AssistantMessage。
+ *
+ * - turn.toolCalls 非空 → content 含 text 块（若有 text）+ toolCall 块，stopReason="toolUse"
+ * - turn.toolCalls 空 → content 含 text 块（若有 text，否则空 text 块），stopReason="stop"
+ * - parseStatus="empty_response" → content 含空 text 块，stopReason="stop"
+ *
+ * 注意：pi-agent-core 期望 toolCall 内容块的 type 为 "toolCall"，
+ * 与 react-tool-call-parser 产出的 ParsedToolCallBlock 结构兼容。
+ * ModelTurn 的 ToolCallEvent 用 { id, name, arguments }，此处转换为 { type: "toolCall", id, name, arguments }。
+ */
+function buildAssistantMessageFromTurn(
+  turn: ModelTurn,
+  modelId?: string,
+): AssistantMessage {
+  const content: AssistantMessage["content"] = [];
+
+  // 1. 若有 text，先添加 text 块
+  if (turn.text && turn.text.length > 0) {
+    content.push({ type: "text", text: turn.text });
+  }
+
+  // 2. 若有 toolCalls，添加 toolCall 块（pi-agent-core 期望 { type: "toolCall", id, name, arguments }）
+  for (const tc of turn.toolCalls) {
+    content.push({
+      type: "toolCall",
+      id: tc.id,
+      name: tc.name,
+      arguments: tc.arguments,
+    } as AssistantMessage["content"][number]);
+  }
+
+  // 3. 若 content 为空（模型只返回空文本且无工具调用），至少保留一个空 text 块
+  if (content.length === 0) {
+    content.push({ type: "text", text: "" });
+  }
+
+  const stopReason: StopReason =
+    turn.toolCalls.length > 0 ? "toolUse" : "stop";
+
+  return makeAssistantMessage(content, stopReason, modelId);
 }
 
 // ============================================================================
