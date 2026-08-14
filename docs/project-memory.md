@@ -1,8 +1,112 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-11（Phase 9 生产运营期 active_prod 状态更新）
+**快照日期**：2026-08-15（发布治理核验收口：旧基线重新激活路径禁用；rel-prod-109 元数据收敛；回放证据与可复现性未决）
 **代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
+
+## GOVERNANCE-CLOSEOUT：发布治理核验收口（2026-08-15）
+
+**状态：治理代码/测试层收口；生产元数据已收敛至 rel-prod-109；「生产交付完成」不成立——真实回放证据与可复现性两项 P1 未决。**
+
+外部核验（2026-08-15）判定开发侧「生产交付完成」声明不成立，5 项 P0/P1 全部属实；本轮修复其中两项确定性代码项，其余如实保留为未决。
+
+已修复：
+
+- **P0 typecheck**：`v2/core/budget-types.ts` 缺失导致 `v2/core/budget-ledger.ts` 4 个 TS 错误；已按 budget-ledger.ts 实际用法定义 `BudgetStage / BudgetType / HardBudget / SoftBudget / MandatoryReserve / RecoveryReserve / BudgetReservation / BudgetUsage / BudgetCostSnapshot / BudgetDecision / BudgetLedger`（BG-01 类型契约）。注意：当前工作树另有并行开发中的 `batch-generation-lock.ts`（M）/`fs-atomic.ts`（??）WIP 类型错误，属进行中工作，不在本轮范围。
+- **P1 旧 rollback 重新激活路径禁用（旧 release 仅审计读取）**：`v2/governance/evolution-release-schema.ts` 的 `TRANSITIONS.held` 收敛为 `["active_dev", "rejected", "retired"]`（移除 held→active_prod；保留 held→active_dev 仅限 auto-hold 状态事件失败的事务回滚）；`scripts/evolution-cli.mjs` 移除 production rollback 的 held 目标豁免与 held→active_prod 重新晋级块。双重回滚（rel-prod-109→rel-prod-108→rel-prod-106）不再可能重新激活缺行为身份的 rel-prod-106；恢复生产唯一路径 = 新建 releaseId 重新走完整审批链（forward-fix，版本收敛原则）。治理测试 611/611 通过（g5 production 回滚阻断测试重写为新不变量；phase4-c6-red auto-hold 原子性回滚回归通过）。
+
+未决（不得宣称生产交付完成）：
+
+- **rel-prod-109 真实 workspace 回放证据缺失**：workspaces 全量搜索 `rel-prod-109` / bundleId 无命中（NO_REL109_WORKSPACE_EVIDENCE）；现有回放证据均属旧运行。需在 release 基线上做真实章节生成，依赖 Gemini 配额恢复；且严格 prod gate 会因 environment fingerprint mismatch 阻断（见下条），真实回放需先在干净基线重新 capture，或明示使用 `PINOVEL_DEV_MODE=1`（非 prod 路径证据）。
+- **rel-prod-109 可复现性（2026-08-15 已验证：不可复现）**：干净 worktree checkout `7c531cb` + 回填 `config/model-routing.json`（aggregate hash `242dd2ca…` 与 manifest 完全一致）+ `build:prod` 重建 dist 后，以 `PINOVEL_PROJECT_ROOT` 指向干净树运行 `evolution:verify` → `current fpHash e2e2046f… ≠ recorded 53ff62dd…`，`reproducible: ✗ NO`（干净树 worktreeDirty=false）。结合主树 verify 时 `worktreeDirty=true`（指纹 dirty 判定只看已跟踪文件修改），判定：rel-prod-109 freeze（2026-08-14T07:16）发生在含未提交修改的脏主树上，其 environmentFingerprint 不对应任何已提交状态，**该 release 从未严格可复现**。forward-fix 唯一路径：干净树上重新 capture 新 releaseId（如 rel-prod-110）→ 重新审批 → 重新晋级；验证用 worktree 保留在 `D:\CODE\pns-verify109`（junction node_modules + 未跟踪 model-routing.json，可随时 `git worktree remove` 清理）。
+
+当前生产元数据（以运行时文件为准，2026-08-15 核验）：
+
+- 唯一 `active_prod` = **rel-prod-109**（2026-08-14T07:19:58 晋级；完整行为身份：bundleId + 8 组件 hash + evalProtocolVersion；审批 artifact 双向绑定完整）
+- 旧基线：rel-000 / rel-prod-100 / 101 / 102 → retired；rel-phase5b / rel-prod-103 / 104 / 106 / 108 → held（仅审计读取）；rel-prod-107 → draft
+- 回滚链 rel-prod-109→rel-prod-108→rel-prod-106 已被状态机 + CLI 双层阻断
+
+## RUN-LIFECYCLE P7：历史数据迁移与发布收口（2026-08-14）
+
+**状态：迁移工具 + 测试 + 真实 --apply 迁移执行完成，幂等复跑验证通过。**
+
+三方分离（审计流 / 内容库 / legacy 投影缓存）发布后，Stage C-1/C-3 切换写路径前已落盘的历史明细仍留在旧文件里承载完整 evidence。新增 `scripts/migrate-trace-content-stores.mjs` 把历史明细非破坏性回填进内容库：
+
+- **quality-trace**：`traces/{chapterId}-quality-trace.json` 的 `gates[]` 完整 evidence → `traces/{chapterId}-content.jsonl`（复用 `TraceContentStore.writeGate` 追加写）。
+- **trajectory**：`novelos-sessions/{sessionId}/trajectory.jsonl` 每行 `{type,timestamp,data}` → `trajectory-content.jsonl`（复用 `TrajectoryContentStore.writeAll` 原子写）。
+- **非破坏**：旧文件（quality-trace.json / trajectory.jsonl）绝不删除；**幂等**：目标内容库已存在且非空 → 跳过（不重复追加）；**dry-run 默认**：不带 `--apply` 只出报告不落盘；畸形 trajectory 行跳过并计数，不阻断有效行。
+
+真实 --apply 结果（62 workspaces，已落盘）：quality-trace 60 章迁移 / 4 跳过（dg3-integ-ws + g6-integration-* 已有 content.jsonl）/ 0 错误；trajectory 297 session 迁移 / 1 跳过 / 0 畸形行 / 0 错误。产出 60 个 `{chapterId}-content.jsonl` + 297 个 `trajectory-content.jsonl`，full evidence round-trip 校验通过。**幂等复跑**：migrated=0 / skipped=64+298 / 0 错误，无重复追加。内容库现为全量权威明细源，旧文件可安全视作可重建投影缓存。
+
+测试：`tests/trace-content-store-migration.test.mjs`（5 例：quality-trace 回填 / trajectory 回填 / 幂等跳过 / dry-run 不落盘 / 畸形行计数）。
+
+## DATA-VERSION-RELEASE-GOVERNANCE：数据版本/发布治理（2026-08-13）
+
+**状态：代码与测试层完成；生产治理为「有条件完成」。** 计划文档 `docs/data-version-release-governance-development-plan-20260813.md`。统一行为身份、单一生产基线、发布生命周期权限收敛。
+
+已落地（代码 + 测试）：
+- **DG-1 统一 Behavior Bundle 与 Manifest**：`bundleId / modelVersion / promptBundleHash / modelRoutingHash / toolSchemaHash / contextCompilerHash / qualityPolicyHash / recoveryPolicyHash / knowledgeSnapshotHash / runtimeFingerprint / strategyEvidencePartition[] / evalProtocolVersion` 行为身份；`computeManifestHash` / `computeReleasePayloadHash`（排序键规范化 + SHA-256）。
+- **DG-2 运行环境与数据快照捕获**：capture/verify，同一环境重复 capture fingerprint/bundle hash 一致。
+- **DG-3 生产入口 fail-closed**：`production-release-gate.ts` 仅读 active_prod pointer + manifest；行为身份分量 hash 校验；candidate 生产拒绝读取。
+- **DG-4 策略证据按完整行为环境隔离**：`strategy-evidence-partition.ts` 的 `classifyPartitionMatch`，隔离键 = modelVersion::bundleId::strategyId::evalProtocolVersion；旧模型 evidence 用于新 Bundle 拒绝。
+- **DG-5 发布生命周期与权限收敛**：`release-lifecycle-permissions.ts` 纯函数（可写字段矩阵 / R2-R3 需完整 Eval+Replay+人工批准 / active_prod 单例 / 代理仅能 recommend）。
+- **DG-6 单一生产基线迁移**：`evolution-release-registry.ts` 的 `transitionStatus` 接入 `assertActiveProdSingleton`（注入 `resolveAllManifests`，未注入向后兼容）；**已接入真实 `evolution:promote` 路径**——`scripts/evolution-cli.mjs` 的 `cmdPromote` 注入 `resolveAllManifests: () => registry.listManifests()`，CLI 层双 active 晋级直接失败（fail-closed）；`evolution:rollback` 对 held 旧基线一律阻断（2026-08-15 GOVERNANCE-CLOSEOUT 修订：旧 release 仅审计读取，恢复生产需新建 releaseId 重新审批，原「held→active_prod 重新晋级」设计已废弃）；双 active 阻断、前向修复演练、CLI 级负向测试均有覆盖。
+- **DG-7 验收矩阵/回放/演练**：`tests/data-version-release-governance-dg7-acceptance-matrix.test.mjs` 完整生命周期演练 + 收敛后前向修复演练 + 表驱动治理不变量；`evolution-release-governance-g5-*.test.mjs` 增加 CLI 级双-active 晋级阻断负向测试。
+
+**代码闭包变化**：DG-6 使 `release-lifecycle-permissions` 进入生产闭包（经 registry），`dist/` JS 311→312；`dependency-boundary.test.mjs` 阈值相应上调到 `< 313`。
+
+**生产操作项（2026-08-15 GOVERNANCE-CLOSEOUT 更新，原「未完成」清单部分已收敛）**：
+- ~~P0-2：真实生产 manifest rel-prod-106 行为身份字段为空~~ → 已被 rel-prod-109 取代：rel-prod-109 携带完整行为身份并 active_prod；rel-prod-106 保持 held 仅审计读取，其身份缺失不再可经回滚重新激活（rollback 路径已阻断）。
+- ~~真实数据存在多个 active_prod（rel-000 / rel-prod-100 / 101 / 102 / 106）~~ → 已收敛：旧 active 全部 retired/held，唯一 active_prod = rel-prod-109。
+- 仍待办：rel-prod-109 真实 workspace 回放证据；干净基线复现验证（或重新 capture）。详见本文档顶部 GOVERNANCE-CLOSEOUT 节。
+
+**验收表述修正**：DG-7 原「旧可执行分支被移除」仅为状态机退役（`retired` 终态），不删除真实可执行文件；物理删除属生产操作。已在测试注释与本文档中将「代码完成」与「生产操作完成」明确分开，不再把状态机退役表述为「可执行分支被移除」。
+
+测试：`npm run build`（prod+eval+test）、`typecheck`、治理测试（DG-1..DG-7 + evolution-release-governance）全绿。
+
+## USER-FEEDBACK-EVIDENCE-PIPELINE-1：用户反馈证据管道（2026-08-12）
+
+**状态：集成收口进行中（非完整 Done）。** 计划文档 `docs/user-feedback-evidence-pipeline-development-plan.md`。用户反馈不得直接充当奖励函数，必须进入可归因、可撤销、可审计、分层晋级的证据管道。
+
+已落地：
+- **契约层** `v2/learning/feedback-evidence-contracts.ts`：七级反馈、修改分类、StrategyExposure、血缘完整性、禁止 mutation 列表、bundle id。
+- **归因语义** `user-feedback-ingestor.ts` + `user-modification-delta.ts`：无法归因 → neutral；raw 修改不计策略；事实/设定/剧情不惩罚文学策略；`decisionCount` 与 `weightedEvidence` 分离。
+- **Bundle 优先** `strategy-outcome-recorder.ts` + selector `exposureSnapshot`：多策略默认写 bundle 信誉，禁止未授权单策略拆分。
+- **账本生产接入** `feedback-evidence-ledger-store.ts`：代理反馈摄入追加 `feedback-evidence-ledger.json` observation；`strategy-policy.json` 仍为运行时物化缓存。
+- **账本重算** `strategy-reputation-recompute.ts` + `StrategyPolicyStore.revertOutcomeByEvidenceId`：evidenceId 定点撤销；增量与重算对齐；`sampleCount` 按 decisionCount。
+- **StrategyExposure 落盘**：`author-style-strategy-registry` 透传 exposureSnapshot；`unified-orchestrator` 写入完整血缘字段；`unified-entry` final_selected.strategyContext 持久化 run/candidate/bundle/exposure/prompt。
+- **安全边界**：文学负反馈不得自动 `retired`（仅 dormant / 人工审批）；单次反馈不得切换生产基线。
+- **晋级治理** `strategy-promotion-governance.ts`：candidate→active 需 eval+replay+human 审批；revoked/quarantined 晋级率 0。
+- **代理反馈**：缺失或不完整 lineage → `incomplete_lineage` 跳过，不得按 proxy_confirmed 强更新。
+- **测试**：新增 16 项场景套件 + g7 回归（decisionCount 语义）+ `feedback-ledger-production-path` 通过。
+
+已继续收口（同日）：
+- 公共 `handleStrategyFeedback` 强制完整 canonical lineage；缺失则 `recorded=false` 且不污染文学信誉
+- 公共入口写入 `feedback-evidence-ledger.json`（`handlers/strategy-feedback-lineage.ts`）
+- 历史迁移/隔离脚本：`scripts/migrate-strategy-evidence-lineage.mjs`（默认 dry-run，不静默补全血缘）
+- E2E 探针：`tests/public-strategy-feedback-ledger-e2e.test.mjs`（trace → public feedback → ledger → recompute）
+
+覆盖率与真实审计（同日补充，可复核）：
+- 全量普通测试：`npm test` → **3080 / 3074 pass / 0 fail / 6 skip**（已修 story_preservation 重试通过后未记 collab completedStages 的回归）
+- 关键反馈模块 focused coverage 固定命令见 runbook；报告：`reports/feedback-lineage-audit/focused-coverage-report.txt`
+  - all files line **89.97%** / branch **80.89%** / funcs **96.47%**
+  - contracts 100%、ledger 92.50%、policy-store 94.87%、ingestor 90.93%、lineage helper 94.57%
+- 真实 workspace quality-trace 审计：`scripts/audit-strategy-exposure-lineage.mjs`
+  - 历史扫描：多数旧 trace incomplete
+  - **xinmo ch22 新生成后 complete lineage = true**（1 条 complete）
+- **真实闭环已跑通（xinmo ch22）**：
+  1. `PINOVEL_DEV_MODE=1 node scripts/phase9-production-acceptance.mjs xinmo 22` → status=ok，254.8s，章节 22.md 保存，state ch21→ch22
+  2. trace `workspaces/xinmo/traces/22-quality-trace.json` 含完整 StrategyExposure 字段
+  3. `node scripts/real-feedback-pipeline-e2e.mjs xinmo 22` → `novel_strategy_feedback` recorded=true / win / ledgerAppended=1
+  4. ledger：`workspaces/xinmo/strategy-evidence/feedback-evidence-ledger.json`
+  5. policy：`workspaces/xinmo/strategy-policy.json`（voice_emphasis alpha=4 sampleCount=1）
+  6. 汇总报告：`reports/feedback-lineage-audit/USER-FEEDBACK-EVIDENCE-PIPELINE-1-real-audit.json`
+- 历史迁移 dry-run（修 project root 后）：全库 `evidence.json` 记录数仍为 0（无旧 artifact 可迁）；新 ledger 由真实反馈路径创建
+
+残余约束 / 未宣称严格生产 Done：
+- 严格 prod gate 因 environment fingerprint mismatch 阻断；本次真实生成使用 `PINOVEL_DEV_MODE=1` 绕过 pointer 指纹，非 recapture/promote 后的 active_prod 路径
+- 本 run `selectedStrategyIds=[]` / `bundle:empty`（无已准入 active 策略被采样）
+- `npm run test:eval` 长时套件仍需按需执行
 
 ## AGENTIC-EVIDENCE-MERGE-1：证据决策合并进 Agentic 首轮（2026-08-12）
 
@@ -47,7 +151,12 @@
 
 ## Phase 9 生产运营期 active_prod（2026-08-11）
 
-**当前状态：生产运营期，稳定生产基线运行中。** 项目已从"开发/验收阶段"转入"生产运营与按需迭代"。active production pointer 已切换到 `rel-prod-103`（`active-production.json → rel-prod-103`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。
+> **【真相源修正 2026-08-13 / DG-0】** 本节开头"active production pointer 已切换到 rel-prod-103"是**过时记录**。实际唯一生产基线已前向切换，见 `config/evolution-release/rollback-history-production.jsonl`：
+> `rel-prod-102 → rel-prod-103 → rel-prod-104 → rel-prod-106`（跳过 rel-prod-105）。
+> **当前唯一生产指针**：`active-production.json → rel-prod-106`（codeCommit=eeb0ed3，审批 `approval-rel-prod-106-1786453322293-39a4f675`，reviewTransport=network，changeClass=R1）。开发指针 `active-development.json` 亦指向 rel-prod-106（actor=system，版本收敛同步）。
+> 另有 `rel-prod-107`（draft，codeCommit=750ea4d，supersedesRef=rel-prod-106）已建立但**未激活**。唯一真相源见 `docs/data-version-release-governance-wave0-baseline-20260813.md`。以下 rel-prod-103 叙述保留为历史验收记录，非当前基线声明。
+
+**当前状态：生产运营期，稳定生产基线运行中。** 项目已从"开发/验收阶段"转入"生产运营与按需迭代"。active production pointer 已切换到 `rel-prod-106`（`active-production.json → rel-prod-106`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。本节的 rel-prod-103 细节为 2026-08-10/11 的历史基线验收记录，其结论已被 rel-prod-106（memory 层版本收敛）继承遗传。
 
 - **`rel-prod-103` 是当前正式生产审批**：`reviewTransport=network`、真实 `releaseManifestHash`、目标环境 `environmentFingerprint=57abb60c…`，审批 artifact 绑定 `approval-rel-prod-103-1786379908606-42cfb37a`（reviewerModel=gpt5.6-sol，finalVerdict=APPROVE_DEV）。rel-prod-103 解除 rel-prod-102 因 `evolution-cli` .env 加载修复提交（c9ef8ef）导致的 codeCommit 指纹漂移，重新捕获并与当前生产运行时指纹一致。
 - **真实生产基线（xinmo ch19，2026-08-10）**：关闭 `PINOVEL_DEV_MODE` 后 `novel_generate_chapter` 完整主链路 150.5s，4 次模型调用（Gemini 3.1 Pro Preview），release gate 通过，trace 完整，narrative-state 推进到 ch19（hash 217 处引用），原子保存成功，无 silent degrade。此基线在 rel-prod-101 下验证，已由 rel-prod-103 继承遗传。

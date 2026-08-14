@@ -81,8 +81,9 @@ const VALID_CHANGE_CLASSES: ReadonlySet<ChangeClass> = new Set<ChangeClass>([
  *   active_dev -> candidate_prod | held | revoked | retired
  *   candidate_prod -> active_prod | held | rejected
  *   active_prod -> held | revoked | retired
- *   held -> active_dev | active_prod（恢复 active 必须重新审批；由审批 artifact 守护，
- *     状态机层允许迁移，但 approved_dev → active_dev 才是正常路径，held → active 需新审批）
+ *   held -> active_dev | rejected | retired（旧 release 仅审计读取：不可重新激活为
+ *     active_prod；active_dev 仅限 auto-hold 原子性回滚的事务撤销，恢复生产必须
+ *     新建 releaseId 重新走完整审批链）
  */
 const TRANSITIONS: Record<ReleaseStatus, ReleaseStatus[]> = {
   draft: ["candidate"],
@@ -94,7 +95,9 @@ const TRANSITIONS: Record<ReleaseStatus, ReleaseStatus[]> = {
   candidate_prod: ["active_prod", "held", "rejected"],
   active_prod: ["held", "revoked", "retired"],
   // 终态：不可直接迁回 active；需新 releaseId 重新审批
-  held: ["active_dev", "active_prod", "rejected", "retired"],
+  // held 为软终态：不可重新激活为 active_prod（旧生产基线仅审计读取，版本收敛原则）；
+  // active_dev 仅用于 executeAutoHold 状态事件写入失败时的事务回滚（原子性）
+  held: ["active_dev", "rejected", "retired"],
   rejected: [],
   quarantined: [],
   revoked: [],
@@ -399,7 +402,7 @@ export function isStatusTransitionValid(
     // 初始创建只允许 draft
     return to === "draft";
   }
-  // 终态不可迁移（held 除外，held 允许重新进入 active 经审批）
+  // 终态不可迁移；held 为软终态（仅 rejected/retired，旧 release 仅审计读取）
   if (TERMINAL_STATUSES.has(from)) {
     return false;
   }

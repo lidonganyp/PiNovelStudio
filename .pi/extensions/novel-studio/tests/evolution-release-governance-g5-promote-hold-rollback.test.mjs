@@ -874,7 +874,7 @@ test("rollback: 当前无 active pointer 退出码 4", () => {
   }
 });
 
-test("rollback: production 成功回滚（单一生产基线——hold 旧基线 → promote 新基线 → rollback 重新晋级）", () => {
+test("rollback: production 回滚到 held 旧基线被阻断（旧 release 仅审计读取）", () => {
   const root = makeTempRoot();
   try {
     const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
@@ -896,22 +896,24 @@ test("rollback: production 成功回滚（单一生产基线——hold 旧基线
       { PINOVEL_EVOLUTION_ROOT: root },
     );
 
-    // rollback production → 应回到 rel-001，并把 rel-001 重新晋级 active_prod（单基线恢复）
+    // 旧 release 仅审计读取：rollback 到 held 旧基线必须被阻断（exit 5，fail-closed）
     const result = runCli(
       ["rollback", "--kind", "production"],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
-    assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+    assert.equal(result.code, 5, `期望阻断 exit 5，实际 ${result.code}：${result.stderr}`);
+    assert.match(result.stderr, /held/);
 
+    // fail-closed：pointer 未变，rel-002 仍是唯一 active_prod，rel-001 保持 held（仅审计读取）
     const store = makeStore(root);
     const prodPointer = store.readActive("production");
-    assert.equal(prodPointer?.releaseId, "rel-001");
+    assert.equal(prodPointer?.releaseId, "rel-002");
 
     const registry = makeRegistry(root);
-    // rel-002 标记 held
-    assert.equal(registry.loadManifest("rel-002").status, "held");
-    // rel-001 重新晋级 active_prod（唯一生产基线不变量恢复）
-    assert.equal(registry.loadManifest("rel-001").status, "active_prod");
+    assert.equal(registry.loadManifest("rel-002").status, "active_prod");
+    assert.equal(registry.loadManifest("rel-001").status, "held");
+    const active = registry.listManifests().filter((x) => x.status === "active_prod");
+    assert.deepEqual(active.map((x) => x.releaseId), ["rel-002"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

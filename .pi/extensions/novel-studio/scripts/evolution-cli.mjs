@@ -1399,16 +1399,11 @@ function cmdRollback(args) {
   const ACCEPTABLE_TARGET_STATUS = new Set([
     "active_dev", "candidate_prod", "active_prod", "approved_dev", "frozen", "evaluated",
   ]);
-  // DG-6 单一生产基线：仅 production rollback 允许 held 目标（回滚后重新晋级 active_prod 恢复单基线）；
-  // development rollback 保持 P1-3 守护——held 不可作为回滚目标。
-  if (kind === "production") {
-    ACCEPTABLE_TARGET_STATUS.add("held");
-  }
+  // 旧 release 仅审计读取：held 不可作为任何 rollback 目标（版本收敛原则）。
+  // 恢复生产必须新建 releaseId 重新走完整审批链（forward-fix），不得重新激活旧基线。
   if (!ACCEPTABLE_TARGET_STATUS.has(targetManifest.status)) {
     const notRollbackable =
-      kind === "production"
-        ? "draft/rejected/quarantined 不可回滚到（production 允许 held 以恢复单基线）"
-        : "draft/held/rejected/quarantined 不可回滚到";
+      "draft/held/rejected/quarantined 不可回滚到（旧 release 仅审计读取；恢复需新建 releaseId 重新审批）";
     console.error(
       `[evolution:rollback] 错误：目标 ${targetReleaseId} 状态 ${targetManifest.status} 不可作为回滚目标` +
         `（${notRollbackable}）`,
@@ -1460,32 +1455,8 @@ function cmdRollback(args) {
     }
   }
 
-  // DG-6 单一生产基线：production rollback 需把 held 的目标重新晋级 active_prod，
-  // 保持「同一时刻只有一个 active_prod」不变量（held → active_prod 需重新审批；
-  // approvalRef 已在上方 validateApprovalArtifactForRelease 校验过真实性）。
-  if (kind === "production" && targetManifest.status === "held") {
-    try {
-      registry.transitionStatus(targetReleaseId, "active_prod", {
-        actor,
-        approvalRef: targetManifest.approvalRef,
-        resolveAllManifests: () => registry.listManifests(),
-      });
-      registry.recordStateEvent({
-        eventId: `evt-${targetReleaseId}-rollback-reactivate-${Date.now()}`,
-        releaseId: targetReleaseId,
-        fromStatus: "held",
-        toStatus: "active_prod",
-        reason: `rollback ${kind} pointer: re-activate target — ${reason}`,
-        actor,
-        timestamp: new Date().toISOString(),
-      });
-      console.log(`[evolution:rollback] 目标 ${targetReleaseId} 已重新晋级 active_prod（单一生产基线恢复）`);
-    } catch (e) {
-      console.warn(
-        `[evolution:rollback] ⚠ 目标 ${targetReleaseId} 重新晋级 active_prod 失败（指针已回滚到 held 基线，需人工重新审批晋级）：${e.message}`,
-      );
-    }
-  }
+  // 旧 release 仅审计读取（版本收敛原则）：rollback 不再把 held 目标重新晋级
+  // active_prod；恢复生产必须新建 releaseId 重新走完整审批链（forward-fix）。
 
   const rbHistory = store.loadRollbackHistory(kind);
 

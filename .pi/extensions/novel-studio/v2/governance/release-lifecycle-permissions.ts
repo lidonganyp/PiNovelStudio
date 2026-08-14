@@ -82,7 +82,8 @@ export const BEHAVIOR_FIELDS: readonly string[] = [
  * - draft / candidate：所有字段可写（freeze 前草拟与冻结）。
  * - frozen / evaluated / approved_dev / active_dev / candidate_prod：
  *   仅生命周期字段可写（状态推进 / 审批引用 / 激活时间）。
- * - active_prod / held：仅生命周期字段可写（held → active 需重新审批）。
+ * - active_prod / held：仅生命周期字段可写（held 仅可迁往 rejected/retired，
+ *   旧 release 仅审计读取，恢复需新 releaseId 重新审批）。
  * - rejected / quarantined / revoked / retired（终态）：不可原地写任何字段，需新 releaseId。
  */
 export function getWritableFields(status: ReleaseStatus): string[] {
