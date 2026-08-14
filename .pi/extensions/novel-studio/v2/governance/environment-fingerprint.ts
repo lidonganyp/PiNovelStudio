@@ -30,8 +30,8 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve, relative, sep, isAbsolute } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { resolve, relative, sep, isAbsolute, join } from "node:path";
 
 // ============================================================================
 // Schema 常量
@@ -136,6 +136,8 @@ export interface CollectEnvironmentFingerprintInput {
   runtimeFilePaths?: string[];
   /** 构建产物相对路径列表 */
   buildArtifactPaths?: string[];
+  /** 构建产物目录：递归收集目录下所有 .js 纳入 buildArtifactHash（覆盖 dist 全树） */
+  buildArtifactDirs?: string[];
   /** active 策略 ID 列表 */
   activeStrategyIds: string[];
   /** CreativeConstitution hash（由调用方预先计算） */
@@ -236,6 +238,33 @@ function hashFileList(projectRoot: string, relPaths: string[]): { hash: string; 
   return { hash: aggregateHash(list), list };
 }
 
+/**
+ * 递归收集目录下所有 .js 文件并 hash（按路径排序，确定性）。
+ * 目录不存在 → 返回空清单（不抛异常，与显式文件缺失一致）。
+ * 只收集 .js（运行时代码），排除 .d.ts / .map（类型声明与 sourcemap 非运行时行为）。
+ */
+function hashDirectoryJs(projectRoot: string, dirRelPath: string): RuntimeFileHash[] {
+  const absDir = resolve(projectRoot, dirRelPath);
+  if (!existsSync(absDir)) {
+    return [];
+  }
+  const entries: RuntimeFileHash[] = [];
+  const walk = (dir: string): void => {
+    for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, dirent.name);
+      if (dirent.isDirectory()) {
+        walk(full);
+      } else if (dirent.isFile() && dirent.name.endsWith(".js")) {
+        const { hash, exists, size } = hashFile(full);
+        entries.push({ path: normalizePath(projectRoot, full), hash, exists, size });
+      }
+    }
+  };
+  walk(absDir);
+  entries.sort((a, b) => a.path.localeCompare(b.path));
+  return entries;
+}
+
 // ============================================================================
 // collectEnvironmentFingerprint
 // ============================================================================
@@ -274,7 +303,18 @@ export function collectEnvironmentFingerprint(
 
   // ── 构建产物 hash ──────────────────────────────────────────────────────
   const buildArtifactPaths = input.buildArtifactPaths ?? [];
-  const { hash: buildArtifactHash } = hashFileList(projectRoot, buildArtifactPaths);
+  const { list: buildArtifactPathFiles } = hashFileList(projectRoot, buildArtifactPaths);
+  const buildArtifactDirFiles = (input.buildArtifactDirs ?? []).flatMap((dir) =>
+    hashDirectoryJs(projectRoot, dir),
+  );
+  // 去重：目录遍历会重复包含显式路径（如 dist/index.js），按路径去重避免聚合重复计数
+  const seenBuildPaths = new Set<string>();
+  const allBuildArtifacts = [...buildArtifactPathFiles, ...buildArtifactDirFiles].filter((f) => {
+    if (seenBuildPaths.has(f.path)) return false;
+    seenBuildPaths.add(f.path);
+    return true;
+  });
+  const buildArtifactHash = aggregateHash(allBuildArtifacts);
 
   // ── 单文件 hash ────────────────────────────────────────────────────────
   const modelRoutingHash = hashSingleFile(projectRoot, modelRoutingPath);

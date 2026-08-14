@@ -874,7 +874,7 @@ test("rollback: 当前无 active pointer 退出码 4", () => {
   }
 });
 
-test("rollback: production 成功回滚", () => {
+test("rollback: production 成功回滚（单一生产基线——hold 旧基线 → promote 新基线 → rollback 重新晋级）", () => {
   const root = makeTempRoot();
   try {
     const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
@@ -882,18 +882,21 @@ test("rollback: production 成功回滚", () => {
     setupReleases(root, [m1, m2]);
     writeStubApproval(root, "rel-001", "apr-001", m1);
     writeStubApproval(root, "rel-002", "apr-002", m2);
-    // promote rel-001 → active_prod（首次 prod switch）
+    // promote rel-001 → active_prod（首次 prod switch，建立唯一生产基线）
     runCli(
       ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
+    // DG-6 单一生产基线：晋级 rel-002 前必须先降级旧基线 rel-001（active_prod → held），
+    // 否则 active_prod 单例约束会阻断第二次晋级。
+    runCli(["hold", "--release-id", "rel-001"], { PINOVEL_EVOLUTION_ROOT: root });
     // promote rel-002 → active_prod（第二次 prod switch，fromReleaseId=rel-001）
     runCli(
       ["promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod"],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
 
-    // rollback production → 应回到 rel-001
+    // rollback production → 应回到 rel-001，并把 rel-001 重新晋级 active_prod（单基线恢复）
     const result = runCli(
       ["rollback", "--kind", "production"],
       { PINOVEL_EVOLUTION_ROOT: root },
@@ -904,10 +907,47 @@ test("rollback: production 成功回滚", () => {
     const prodPointer = store.readActive("production");
     assert.equal(prodPointer?.releaseId, "rel-001");
 
-    // rel-002 标记 held
     const registry = makeRegistry(root);
-    const rel002 = registry.loadManifest("rel-002");
-    assert.equal(rel002.status, "held");
+    // rel-002 标记 held
+    assert.equal(registry.loadManifest("rel-002").status, "held");
+    // rel-001 重新晋级 active_prod（唯一生产基线不变量恢复）
+    assert.equal(registry.loadManifest("rel-001").status, "active_prod");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("promote: 双 active_prod 晋级被单例约束阻断（真实 production promote 路径）", () => {
+  const root = makeTempRoot();
+  try {
+    const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
+    const m2 = makeManifest("rel-002", "candidate_prod", { approvalRef: "apr-002" });
+    setupReleases(root, [m1, m2]);
+    writeStubApproval(root, "rel-001", "apr-001", m1);
+    writeStubApproval(root, "rel-002", "apr-002", m2);
+
+    // 首次晋级 rel-001 → active_prod（成功，建立唯一生产基线）
+    const first = runCli(
+      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    assert.equal(first.code, 0, `first promote stderr: ${first.stderr}`);
+
+    // 第二次晋级 rel-002 → active_prod 而不降级 rel-001：必须被 active_prod 单例约束阻断
+    const second = runCli(
+      ["promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod"],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    assert.equal(second.code, 5, `期望单例阻断 exit 5，实际 ${second.code}：${second.stderr}`);
+    assert.match(second.stderr, /单例|active_prod/);
+
+    // fail-closed：rel-001 仍是唯一 active_prod，rel-002 仍是 candidate_prod，pointer 未变
+    const registry = makeRegistry(root);
+    assert.equal(registry.loadManifest("rel-001").status, "active_prod");
+    assert.equal(registry.loadManifest("rel-002").status, "candidate_prod");
+    const active = registry.listManifests().filter((x) => x.status === "active_prod");
+    assert.deepEqual(active.map((x) => x.releaseId), ["rel-001"]);
+    assert.equal(makeStore(root).readActive("production")?.releaseId, "rel-001");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

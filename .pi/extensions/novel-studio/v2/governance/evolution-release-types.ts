@@ -86,6 +86,24 @@ export const ACTIVE_STATUSES: ReadonlySet<ReleaseStatus> = new Set<ReleaseStatus
 export type ChangeClass = "R0" | "R1" | "R2" | "R3";
 
 // ============================================================================
+// 行为身份（DG-1：数据版本与发布治理 §4）
+// ============================================================================
+
+/**
+ * 策略证据分区键（计划 §4）。
+ *
+ * 一个 release 声明它贡献哪些策略证据分区。策略信誉按
+ *   modelVersion + bundleId + strategyId + evalProtocolVersion
+ * 隔离，避免旧 Bundle 或旧评测协议污染新 Bundle 的信誉（DG-4）。
+ */
+export interface StrategyEvidencePartition {
+  modelVersion: string;
+  bundleId: string;
+  strategyId: string;
+  evalProtocolVersion: string;
+}
+
+// ============================================================================
 // Manifest
 // ============================================================================
 
@@ -116,6 +134,38 @@ export interface EvolutionReleaseManifest {
   createdAt: string;
   /** 进入 active 状态的时间；非 active 状态为 null */
   activatedAt: string | null;
+  // ==========================================================================
+  // 行为身份字段（DG-1，计划 §4）。
+  //
+  // 这些字段在 schema v1 为可选：旧 manifest（如 rel-prod-106）尚未捕获完整行为身份，
+  // 仍可加载与审计。DG-3 起生产入口对"新冻结 release"强制要求这些字段完整
+  // （见 behavior-bundle.ts:assertBehaviorIdentityComplete）；DG-6 完成单一基线迁移后，
+  // 旧 manifest 仅作审计对象，不得作为默认生产输入。
+  // ==========================================================================
+  /** 完整行为集合的确定性 bundle 标识（由全部行为组成项派生，见 behavior-bundle.ts） */
+  bundleId?: string;
+  /** 模型版本（生产写作模型身份，如 "gemini-3.1-pro-preview"） */
+  modelVersion?: string;
+  /** Prompt Bundle 规范化 hash */
+  promptBundleHash?: string;
+  /** Model Routing 规范化 hash */
+  modelRoutingHash?: string;
+  /** Tool Contract / 工具 schema 规范化 hash */
+  toolSchemaHash?: string;
+  /** ContextCompiler 规范化 hash */
+  contextCompilerHash?: string;
+  /** 质量策略规范化 hash */
+  qualityPolicyHash?: string;
+  /** 恢复策略规范化 hash */
+  recoveryPolicyHash?: string;
+  /** 知识数据快照规范化 hash */
+  knowledgeSnapshotHash?: string;
+  /** 运行环境指纹（区别于 environmentFingerprint：此处为纯运行时组件 hash） */
+  runtimeFingerprint?: string;
+  /** 本 release 声明的策略证据分区（DG-4 隔离键） */
+  strategyEvidencePartition?: StrategyEvidencePartition[];
+  /** 评测协议版本（Eval 协议变化产生新版本） */
+  evalProtocolVersion?: string;
 }
 
 // ============================================================================

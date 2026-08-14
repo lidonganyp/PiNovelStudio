@@ -41,6 +41,7 @@ import {
   computeReleasePayloadHash,
 } from "./evolution-release-schema.js";
 import { verifyManifestBinding } from "./release-proxy-approval-schema.js";
+import { assertActiveProdSingleton } from "./release-lifecycle-permissions.js";
 import type {
   EvolutionReleaseManifest,
   ReleaseStateEvent,
@@ -110,6 +111,13 @@ export interface EvolutionReleaseRegistry {
         releaseId: string,
         manifestHash: string,
       ) => ReleaseProxyApprovalArtifact | null;
+      /**
+       * active_prod 单例校验 resolver（可选，DG-6 单一生产基线）。
+       * 注入后，transitionStatus(..., "active_prod") 会校验无其他 manifest 处于
+       * active_prod（「双 active 直接失败」）。未注入时跳过（开发期/既有测试兼容；
+       * 生产 G6 门禁与 CLI promote 必须注入）。
+       */
+      resolveAllManifests?: () => EvolutionReleaseManifest[];
     },
   ): EvolutionReleaseManifest;
 }
@@ -327,6 +335,7 @@ export function createEvolutionReleaseRegistry(
         releaseId: string,
         manifestHash: string,
       ) => ReleaseProxyApprovalArtifact | null;
+      resolveAllManifests?: () => EvolutionReleaseManifest[];
     },
   ): EvolutionReleaseManifest {
     // P1-2 路径穿越守护
@@ -383,6 +392,22 @@ export function createEvolutionReleaseRegistry(
           `实际 actor=${JSON.stringify(options.actor)}` +
           `（生产晋级必须由用户明确授权，system / gpt5.6-sol-proxy / evaluation 不得直接晋级生产）`,
       );
+    }
+
+    // DG-6 active_prod 单例约束（单一生产基线）：
+    // 当调用方注入 resolveAllManifests 时，晋级 active_prod 前校验无其他 manifest 处于 active_prod
+    // （「双 active 直接失败」）。未注入时跳过（开发期/既有测试兼容；生产 G6 门禁与 CLI promote 必须注入）。
+    // 同一 releaseId 的 reaffirm（已 active_prod 再次确认）不视为冲突。
+    if (newStatus === "active_prod" && options.resolveAllManifests !== undefined) {
+      const allManifests = options.resolveAllManifests();
+      const singleton = assertActiveProdSingleton(allManifests, releaseId);
+      if (!singleton.ok) {
+        throw new Error(
+          `active_prod 单例约束违反：release "${releaseId}" 晋级 active_prod 时，` +
+            `已有其他 active_prod：${singleton.conflictingReleaseIds.join(", ")}` +
+            `（同一时刻只能有一个可执行生产基线；需先退役/held 旧基线再晋级，或走单一基线迁移收敛）`,
+        );
+      }
     }
 
     // P0 审批 artifact 真实性守护（第二层，计划 §6.4 / §11）：

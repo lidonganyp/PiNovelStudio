@@ -45,6 +45,11 @@ import {
   collectEnvironmentFingerprint,
   computeFingerprintHash,
 } from "./environment-fingerprint.js";
+import {
+  validateBundleIdConsistency,
+  compareManifestComponentHashes,
+} from "./behavior-bundle.js";
+import { captureDefaultBehaviorSnapshot } from "./behavior-snapshot.js";
 import type { EvolutionReleaseManifest } from "./evolution-release-types.js";
 
 // ============================================================================
@@ -86,6 +91,29 @@ export interface ReleaseGateOkResult {
   manifest: EvolutionReleaseManifest | null;
   /** R2/R3 完成态 canary run；R0/R1/dev mode 为 null。 */
   canaryEvidenceRunId: string | null;
+  /**
+   * DG-3 行为身份（bundleId + modelVersion + 8 组件 hash + evalProtocolVersion）。
+   * 用于生产 trace 写入 release 行为身份。dev mode / 旧 manifest（未捕获）时为全 null。
+   */
+  behaviorIdentity: BehaviorIdentityTrace;
+}
+
+/**
+ * DG-3 行为身份 trace（bundleId + modelVersion + 8 组件 hash + evalProtocolVersion）。
+ * 与 behavior-bundle.ts 的组件 hash 字段一一对应；字段为 null 表示 manifest 未捕获该身份。
+ */
+export interface BehaviorIdentityTrace {
+  bundleId: string | null;
+  modelVersion: string | null;
+  promptBundleHash: string | null;
+  modelRoutingHash: string | null;
+  toolSchemaHash: string | null;
+  contextCompilerHash: string | null;
+  qualityPolicyHash: string | null;
+  recoveryPolicyHash: string | null;
+  knowledgeSnapshotHash: string | null;
+  runtimeFingerprint: string | null;
+  evalProtocolVersion: string | null;
 }
 
 export interface ReleaseGateFailureEnvelope {
@@ -127,6 +155,16 @@ const DEFAULT_BUILD_ARTIFACT_PATHS = [
   ".pi/extensions/novel-studio/dist/index.js",
 ];
 
+/**
+ * 构建产物目录：递归收集 dist/ 下所有 .js 纳入 buildArtifactHash。
+ * 保证任一生产源码变化（如 v2/core/final-state-commit.ts → final-state-commit.js）
+ * 都改变 environment fingerprint（与 behavior-snapshot.ts 的 runtimeFingerprint 覆盖一致）。
+ * 必须与 scripts/evolution-cli.mjs captureFingerprint() 的 buildArtifactDirs 保持一致。
+ */
+const DEFAULT_BUILD_ARTIFACT_DIRS = [
+  ".pi/extensions/novel-studio/dist",
+];
+
 const DEFAULT_ENV_SWITCH_NAMES = [
   "V2_FORCE_STUB",
   "NOVEL_TEST_TOOLS",
@@ -149,6 +187,12 @@ const DEFAULT_SECRET_ENV_NAMES = [
 const DEFAULT_GENERATION_MODEL = "gemini-3.1-pro-preview";
 const DEFAULT_JUDGE_MODEL = "gpt5.6-sol";
 const DEFAULT_PROXY_APPROVAL_MODEL = "gpt5.6-sol";
+
+/**
+ * 默认评测协议版本（与 scripts/evolution-cli.mjs 的 DEFAULT_EVAL_PROTOCOL_VERSION 一致）。
+ * 仅当 manifest 未捕获 evalProtocolVersion 时兜底使用；manifest 已捕获时以 manifest 为准。
+ */
+const DEFAULT_EVAL_PROTOCOL_VERSION = "2026-08-01";
 
 /**
  * 计算 CreativeConstitution hash（CORE-WRITING-PRINCIPLES.md + WORLDBUILDING-CANON.md）。
@@ -186,6 +230,7 @@ export function captureDefaultEnvironmentFingerprint(projectRoot: string): strin
     toolSchemaPaths: [],
     runtimeFilePaths: DEFAULT_RUNTIME_FILE_PATHS,
     buildArtifactPaths: DEFAULT_BUILD_ARTIFACT_PATHS,
+    buildArtifactDirs: DEFAULT_BUILD_ARTIFACT_DIRS,
     activeStrategyIds: [],
     constitutionHash: computeConstitutionHash(projectRoot),
     datasetHash: "",
@@ -229,6 +274,49 @@ function resolveEvolutionRoot(input: ReleaseGateInput): string {
 }
 
 // ============================================================================
+// 行为身份 trace 提取（DG-3）
+// ============================================================================
+
+const BEHAVIOR_IDENTITY_TRACE_FIELDS = [
+  "bundleId",
+  "modelVersion",
+  "promptBundleHash",
+  "modelRoutingHash",
+  "toolSchemaHash",
+  "contextCompilerHash",
+  "qualityPolicyHash",
+  "recoveryPolicyHash",
+  "knowledgeSnapshotHash",
+  "runtimeFingerprint",
+  "evalProtocolVersion",
+] as const;
+
+/**
+ * 从 manifest 提取行为身份 trace。字段缺失/为空 → null（旧 v1 manifest 未捕获）。
+ * 不校验一致性（校验在 evaluateProductionReleaseGate 内进行）。
+ */
+function extractBehaviorIdentityTrace(
+  manifest: EvolutionReleaseManifest,
+): BehaviorIdentityTrace {
+  const obj = manifest as unknown as Record<string, unknown>;
+  const trace: Record<string, string | null> = {};
+  for (const field of BEHAVIOR_IDENTITY_TRACE_FIELDS) {
+    const value = obj[field];
+    trace[field] = typeof value === "string" && value.length > 0 ? value : null;
+  }
+  return trace as unknown as BehaviorIdentityTrace;
+}
+
+/** dev mode / 无 manifest 时的空行为身份 trace。 */
+function nullBehaviorIdentityTrace(): BehaviorIdentityTrace {
+  const trace: Record<string, string | null> = {};
+  for (const field of BEHAVIOR_IDENTITY_TRACE_FIELDS) {
+    trace[field] = null;
+  }
+  return trace as unknown as BehaviorIdentityTrace;
+}
+
+// ============================================================================
 // evaluateProductionReleaseGate
 // ============================================================================
 
@@ -262,6 +350,7 @@ export function evaluateProductionReleaseGate(
       approvalRef: null,
       manifest: null,
       canaryEvidenceRunId: null,
+      behaviorIdentity: nullBehaviorIdentityTrace(),
     };
   }
 
@@ -460,6 +549,34 @@ export function evaluateProductionReleaseGate(
     };
   }
 
+  // 6b. DG-3 行为身份组件 hash 校验（计划 §5 DG-3 fail-closed）。
+  // 对已捕获完整行为身份（bundleId 非空）的 manifest：
+  //   (a) 校验 bundleId 与组件 hash 内部一致（hash 漂移 → hard block）
+  //   (b) 校验组件 hash 与当前运行环境快照一致（行为资产变化未重新 capture → hard block）
+  // 旧 manifest（无 bundleId）跳过组件校验；DG-6 迁移后强制完整身份。
+  const behaviorIdentity = extractBehaviorIdentityTrace(manifest);
+  if (behaviorIdentity.bundleId !== null) {
+    const consistency = validateBundleIdConsistency(manifest);
+    if (!consistency.ok) {
+      return releaseGateBlocked(
+        `behavior bundleId 不一致（hash 漂移）：recorded=${(consistency.recorded ?? "").slice(0, 16)}…, recomputed=${(consistency.recomputed ?? "N/A").slice(0, 16)}…` +
+          `（manifest 的 bundleId 不是由当前组件 hash 派生；需重新 capture 并完成审批晋级）`,
+      );
+    }
+    const snapshot = captureDefaultBehaviorSnapshot(
+      input.projectRoot,
+      behaviorIdentity.modelVersion ?? DEFAULT_GENERATION_MODEL,
+      behaviorIdentity.evalProtocolVersion ?? DEFAULT_EVAL_PROTOCOL_VERSION,
+    );
+    const comparison = compareManifestComponentHashes(manifest, snapshot);
+    if (!comparison.ok) {
+      return releaseGateBlocked(
+        `behavior component hash drift：${comparison.mismatchedFields.join(", ")}` +
+          `（行为资产变化但 manifest 未重新 capture；需重新 capture release 并完成审批晋级）`,
+      );
+    }
+  }
+
   let canaryEvidenceRunId: string | null = null;
   if (manifest.changeClass === "R2" || manifest.changeClass === "R3") {
     let events;
@@ -555,6 +672,7 @@ export function evaluateProductionReleaseGate(
     approvalRef: manifest.approvalRef,
     manifest,
     canaryEvidenceRunId,
+    behaviorIdentity,
   };
 }
 

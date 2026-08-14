@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
 import { collectEnvironmentFingerprint, computeFingerprintHash, verifyEnvironmentFingerprint } from "../dist-test/v2/governance/environment-fingerprint.js";
+import { captureDefaultBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
 import { createEvolutionReleaseRegistry } from "../dist-test/v2/governance/evolution-release-registry.js";
 import { createReleasePointerStore } from "../dist-test/v2/governance/release-pointer-store.js";
 import { EVOLUTION_RELEASE_SCHEMA_ID, EVOLUTION_RELEASE_SCHEMA_VERSION, validateManifest, computeReleasePayloadHash } from "../dist-test/v2/governance/evolution-release-schema.js";
@@ -68,6 +69,15 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = resolve(__dirname, ".."); // .pi/extensions/novel-studio
 const REPO_ROOT = resolve(EXT_ROOT, "..", "..", ".."); // d:\CODE\PiNovelStudio
+
+// 可复现 capture/verify：允许用 PINOVEL_PROJECT_ROOT 覆盖被哈希/指纹的项目根目录。
+// 用于对"干净基线 worktree"做生产前向修复 capture，而不改动主工作树的脏状态。
+// .env 加载与治理数据写入（evolutionRoot）仍固定于 REPO_ROOT（主仓）。
+function projectRoot() {
+  return process.env.PINOVEL_PROJECT_ROOT
+    ? resolve(process.env.PINOVEL_PROJECT_ROOT)
+    : REPO_ROOT;
+}
 
 // PI 不会自动加载 .env，手动解析注入 process.env。
 // 环境指纹的 secretEnvStates 依赖密钥变量是否已设置，CLI 必须与生产运行时（index.ts）一致，
@@ -109,9 +119,10 @@ function configDir() {
 
 /** 计算 CreativeConstitution hash（CORE-WRITING-PRINCIPLES.md + WORLDBUILDING-CANON.md）。 */
 function constitutionHash() {
+  const projectExt = join(projectRoot(), ".pi", "extensions", "novel-studio");
   const candidates = [
-    join(EXT_ROOT, "CORE-WRITING-PRINCIPLES.md"),
-    join(EXT_ROOT, "WORLDBUILDING-CANON.md"),
+    join(projectExt, "CORE-WRITING-PRINCIPLES.md"),
+    join(projectExt, "WORLDBUILDING-CANON.md"),
   ];
   const hashes = [];
   for (const p of candidates) {
@@ -125,7 +136,7 @@ function constitutionHash() {
 /** 采集当前环境指纹（1A 默认配置）。 */
 function captureFingerprint() {
   return collectEnvironmentFingerprint({
-    projectRoot: REPO_ROOT,
+    projectRoot: projectRoot(),
     modelRoutingPath: "config/model-routing.json",
     promptBundlePaths: [],
     toolSchemaPaths: [],
@@ -137,6 +148,9 @@ function captureFingerprint() {
     ],
     buildArtifactPaths: [
       ".pi/extensions/novel-studio/dist/index.js",
+    ],
+    buildArtifactDirs: [
+      ".pi/extensions/novel-studio/dist",
     ],
     activeStrategyIds: [],
     constitutionHash: constitutionHash(),
@@ -172,6 +186,11 @@ function cmdCapture(args) {
   const fp = captureFingerprint();
   const fingerprintHash = computeFingerprintHash(fp);
 
+  // DG-2：采集生产级行为快照（8 个组件 hash + bundleId），写入 manifest 行为身份字段。
+  const modelVersion = args["model-version"] || resolveModelVersion();
+  const evalProtocolVersion = args["eval-protocol-version"] || DEFAULT_EVAL_PROTOCOL_VERSION;
+  const snapshot = captureDefaultBehaviorSnapshot(projectRoot(), modelVersion, evalProtocolVersion);
+
   const manifest = {
     schemaId: EVOLUTION_RELEASE_SCHEMA_ID,
     schemaVersion: EVOLUTION_RELEASE_SCHEMA_VERSION,
@@ -187,6 +206,18 @@ function cmdCapture(args) {
     approvalRef: null,
     createdAt: new Date().toISOString(),
     activatedAt: null,
+    // DG-1 行为身份字段（计划 §4）：由行为快照确定性派生
+    bundleId: snapshot.bundleId,
+    modelVersion: snapshot.modelVersion,
+    promptBundleHash: snapshot.promptBundleHash,
+    modelRoutingHash: snapshot.modelRoutingHash,
+    toolSchemaHash: snapshot.toolSchemaHash,
+    contextCompilerHash: snapshot.contextCompilerHash,
+    qualityPolicyHash: snapshot.qualityPolicyHash,
+    recoveryPolicyHash: snapshot.recoveryPolicyHash,
+    knowledgeSnapshotHash: snapshot.knowledgeSnapshotHash,
+    runtimeFingerprint: snapshot.runtimeFingerprint,
+    evalProtocolVersion: snapshot.evalProtocolVersion,
   };
 
   const validation = validateManifest(manifest);
@@ -210,12 +241,30 @@ function cmdCapture(args) {
   console.log(`[evolution:capture] ✓ 已创建 draft manifest`);
   console.log(`  releaseId          : ${releaseId}`);
   console.log(`  fingerprintHash    : ${fingerprintHash}`);
+  console.log(`  bundleId           : ${snapshot.bundleId}`);
+  console.log(`  modelVersion       : ${snapshot.modelVersion}`);
+  console.log(`  evalProtocolVersion: ${snapshot.evalProtocolVersion}`);
   console.log(`  codeCommit         : ${fp.codeCommit}`);
   console.log(`  worktreeDirty      : ${fp.worktreeDirty}`);
   console.log(`  rollbackReleaseId  : ${rollbackReleaseId}`);
   console.log(`  parentReleaseId    : ${parentReleaseId ?? "(none)"}`);
   console.log(`  registry path      : ${join(releasesDir(), releaseId, "manifest.json")}`);
 }
+
+/** 从 model-routing.json 解析生产写作模型版本；缺失时回退到门禁默认。 */
+function resolveModelVersion() {
+  const routingPath = join(projectRoot(), "config", "model-routing.json");
+  try {
+    const routing = JSON.parse(readFileSync(routingPath, "utf-8"));
+    const v = routing?.model_strategy?.writer_admission?.default_writer;
+    if (typeof v === "string" && v.length > 0) return v;
+  } catch {
+    // 配置缺失或损坏时回退，不阻断 capture
+  }
+  return "gemini-3.1-pro-preview";
+}
+
+const DEFAULT_EVAL_PROTOCOL_VERSION = "2026-08-01";
 
 // ============================================================================
 // 子命令：status
@@ -1166,6 +1215,10 @@ function cmdPromote(args) {
       actor,
       approvalRef: manifest.approvalRef,
       resolveApprovalArtifact,
+      // DG-6 单一生产基线：active_prod 单例约束（真实 production promote 路径必须注入，
+      // 否则 CLI 层可绕过 active_prod 单例，产生「双 active」）。pointer 已在上方先行切换，
+      // 此处单例校验失败会被下方 catch 回滚 pointer，保证 fail-closed。
+      resolveAllManifests: () => registry.listManifests(),
     });
   } catch (e) {
     // P0-2 修复：manifest 写入失败时回滚 pointer（多一条 switch 历史作 audit 痕迹，可安全重试）
@@ -1346,10 +1399,19 @@ function cmdRollback(args) {
   const ACCEPTABLE_TARGET_STATUS = new Set([
     "active_dev", "candidate_prod", "active_prod", "approved_dev", "frozen", "evaluated",
   ]);
+  // DG-6 单一生产基线：仅 production rollback 允许 held 目标（回滚后重新晋级 active_prod 恢复单基线）；
+  // development rollback 保持 P1-3 守护——held 不可作为回滚目标。
+  if (kind === "production") {
+    ACCEPTABLE_TARGET_STATUS.add("held");
+  }
   if (!ACCEPTABLE_TARGET_STATUS.has(targetManifest.status)) {
+    const notRollbackable =
+      kind === "production"
+        ? "draft/rejected/quarantined 不可回滚到（production 允许 held 以恢复单基线）"
+        : "draft/held/rejected/quarantined 不可回滚到";
     console.error(
       `[evolution:rollback] 错误：目标 ${targetReleaseId} 状态 ${targetManifest.status} 不可作为回滚目标` +
-        `（draft/held/rejected/quarantined 不可回滚到）`,
+        `（${notRollbackable}）`,
     );
     process.exit(5);
   }
@@ -1394,6 +1456,33 @@ function cmdRollback(args) {
     } catch (e) {
       console.warn(
         `[evolution:rollback] ⚠ 标记 ${currentPointer.releaseId} 为 held 失败（指针已回滚）：${e.message}`,
+      );
+    }
+  }
+
+  // DG-6 单一生产基线：production rollback 需把 held 的目标重新晋级 active_prod，
+  // 保持「同一时刻只有一个 active_prod」不变量（held → active_prod 需重新审批；
+  // approvalRef 已在上方 validateApprovalArtifactForRelease 校验过真实性）。
+  if (kind === "production" && targetManifest.status === "held") {
+    try {
+      registry.transitionStatus(targetReleaseId, "active_prod", {
+        actor,
+        approvalRef: targetManifest.approvalRef,
+        resolveAllManifests: () => registry.listManifests(),
+      });
+      registry.recordStateEvent({
+        eventId: `evt-${targetReleaseId}-rollback-reactivate-${Date.now()}`,
+        releaseId: targetReleaseId,
+        fromStatus: "held",
+        toStatus: "active_prod",
+        reason: `rollback ${kind} pointer: re-activate target — ${reason}`,
+        actor,
+        timestamp: new Date().toISOString(),
+      });
+      console.log(`[evolution:rollback] 目标 ${targetReleaseId} 已重新晋级 active_prod（单一生产基线恢复）`);
+    } catch (e) {
+      console.warn(
+        `[evolution:rollback] ⚠ 目标 ${targetReleaseId} 重新晋级 active_prod 失败（指针已回滚到 held 基线，需人工重新审批晋级）：${e.message}`,
       );
     }
   }

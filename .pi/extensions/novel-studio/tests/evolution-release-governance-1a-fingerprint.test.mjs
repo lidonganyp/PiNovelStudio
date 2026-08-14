@@ -416,3 +416,55 @@ test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: 模块自包含，不 import 
     "environment-fingerprint 不得 import novelbench/ 或 eval/ 模块（生产代码不得依赖 eval）",
   );
 });
+
+// ============================================================================
+// 7. 构建产物目录覆盖（buildArtifactDirs，DG-1 缺口修复）
+// ============================================================================
+
+test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: 构建产物目录内文件变化 → buildArtifactHash + fingerprintHash 变化", () => {
+  const dir = makeTempDir();
+  try {
+    mkdirSync(join(dir, "dist", "v2", "core"), { recursive: true });
+    writeFileSync(join(dir, "dist", "index.js"), "INDEX-V1", "utf-8");
+    writeFileSync(join(dir, "dist", "v2", "core", "final-state-commit.js"), "FSC-V1", "utf-8");
+    const input = makeFingerprintInput(dir, {
+      buildArtifactPaths: ["dist/index.js"],
+      buildArtifactDirs: ["dist"],
+    });
+    const before = collectEnvironmentFingerprint(input);
+    writeFileSync(join(dir, "dist", "v2", "core", "final-state-commit.js"), "FSC-V2", "utf-8");
+    const after = collectEnvironmentFingerprint(input);
+    assert.notEqual(after.buildArtifactHash, before.buildArtifactHash, "目录内 .js 变化必须改变 buildArtifactHash");
+    assert.notEqual(after.fingerprintHash, before.fingerprintHash, "目录内 .js 变化必须改变 fingerprintHash");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: 构建产物目录不存在 → 空清单确定性", () => {
+  const dir = makeTempDir();
+  try {
+    const input = makeFingerprintInput(dir, { buildArtifactDirs: ["dist-does-not-exist"] });
+    const a = collectEnvironmentFingerprint(input);
+    const b = collectEnvironmentFingerprint(input);
+    assert.equal(a.buildArtifactHash, b.buildArtifactHash);
+    assert.equal(a.fingerprintHash, b.fingerprintHash);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: 构建产物目录确定性（重复 capture 一致）", () => {
+  const dir = makeTempDir();
+  try {
+    mkdirSync(join(dir, "dist", "v2", "core"), { recursive: true });
+    writeFileSync(join(dir, "dist", "v2", "core", "final-state-commit.js"), "FSC", "utf-8");
+    const input = makeFingerprintInput(dir, { buildArtifactDirs: ["dist"] });
+    const a = collectEnvironmentFingerprint(input);
+    const b = collectEnvironmentFingerprint(input);
+    assert.equal(a.buildArtifactHash, b.buildArtifactHash);
+    assert.equal(a.fingerprintHash, b.fingerprintHash);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

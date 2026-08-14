@@ -304,6 +304,81 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     };
   }
 
+  // ==========================================================================
+  // 行为身份可选字段（DG-1，计划 §4）：存在则类型校验。
+  // 这些字段在 schema v1 为可选（旧 manifest 未捕获完整行为身份仍可加载），
+  // 但一旦出现必须是合法类型，防止损坏 artifact 静默通过。
+  // ==========================================================================
+  const optionalStringFields: Array<keyof EvolutionReleaseManifest> = [
+    "bundleId",
+    "modelVersion",
+    "promptBundleHash",
+    "modelRoutingHash",
+    "toolSchemaHash",
+    "contextCompilerHash",
+    "qualityPolicyHash",
+    "recoveryPolicyHash",
+    "knowledgeSnapshotHash",
+    "runtimeFingerprint",
+    "evalProtocolVersion",
+  ];
+  for (const field of optionalStringFields) {
+    const v = obj[field as string];
+    if (v === undefined) {
+      continue;
+    }
+    if (typeof v !== "string" || v.length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_field_value",
+          path: `$.${field}`,
+          message: `字段 ${field} 若存在必须为非空字符串`,
+        },
+      };
+    }
+  }
+
+  // strategyEvidencePartition：存在则必须为数组，且每项含四个非空字符串键
+  if (obj.strategyEvidencePartition !== undefined) {
+    if (!Array.isArray(obj.strategyEvidencePartition)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_field_value",
+          path: "$.strategyEvidencePartition",
+          message: "strategyEvidencePartition 若存在必须为数组",
+        },
+      };
+    }
+    for (let i = 0; i < (obj.strategyEvidencePartition as unknown[]).length; i++) {
+      const p = (obj.strategyEvidencePartition as unknown[])[i] as Record<string, unknown>;
+      if (p === null || typeof p !== "object" || Array.isArray(p)) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_field_value",
+            path: `$.strategyEvidencePartition[${i}]`,
+            message: "strategyEvidencePartition 项必须为对象",
+          },
+        };
+      }
+      for (const key of ["modelVersion", "bundleId", "strategyId", "evalProtocolVersion"]) {
+        const pv = p[key];
+        if (typeof pv !== "string" || pv.length === 0) {
+          return {
+            ok: false,
+            error: {
+              code: "invalid_field_value",
+              path: `$.strategyEvidencePartition[${i}].${key}`,
+              message: `strategyEvidencePartition[${i}].${key} 必须为非空字符串`,
+            },
+          };
+        }
+      }
+    }
+  }
+
   return { ok: true, manifest: obj as unknown as EvolutionReleaseManifest };
 }
 
@@ -382,6 +457,18 @@ export function assertFrozenImmutable(
     "approvalRef",
     "createdAt",
     "activatedAt",
+    "bundleId",
+    "modelVersion",
+    "promptBundleHash",
+    "modelRoutingHash",
+    "toolSchemaHash",
+    "contextCompilerHash",
+    "qualityPolicyHash",
+    "recoveryPolicyHash",
+    "knowledgeSnapshotHash",
+    "runtimeFingerprint",
+    "strategyEvidencePartition",
+    "evalProtocolVersion",
   ];
   const changedFields: string[] = [];
   for (const field of fieldsToCheck) {
@@ -548,7 +635,7 @@ export function computeReleasePayloadHash(manifest: EvolutionReleaseManifest): s
 }
 
 /** 递归规范化对象：按 key 排序。 */
-function canonicalize(value: unknown): string {
+export function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
