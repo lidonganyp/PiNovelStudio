@@ -1,34 +1,81 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-15（发布治理核验收口完成：rel-prod-110 唯一 active_prod、干净树可复现、真实回放证据落地）
+**快照日期**：2026-08-15（第二轮核验整改完成：FP-GIT-1 根因修复、rel-prod-111 可复现基线重建并晋级唯一 active_prod、trace 污染根因查明、干净 workspace 真实回放证据落地）
 **代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
 
-## GOVERNANCE-CLOSEOUT：发布治理核验收口（2026-08-15）
+## CONTEXT-EVIDENCE-GOVERNANCE-1（2026-08-15，v1.1）
 
-**状态：五项核验全部关闭——P0/P1 代码项已修复提交（19473a7）；可复现性 forward-fix 已完成（rel-prod-110 唯一 active_prod，干净树 verify YES）；真实生产回放证据已落地（xinmo ch23 严格 prod 路径）。**
+**状态：Wave 0 收口；Wave 1–2 快照/资格/内容 hash 已接线；Wave 3A ContextPackage 已成为生产 Agentic 唯一静态输入；Wave 4 硬覆盖已收成 confirmed+sourceRef+同 snapshot。CEG-5.3 预算耗尽 / 5.4 检索错误闭环、Wave 3B 动态工具信任、Wave 3C hash/trace 单一化未完成。Wave 5 分层未准入（1/3 样本，生产保持平铺）；Wave 6 真实 dual-workspace replay 与旧路径删除未完成。`production_like` 正确 fail-closed，不能宣称生产验收通过。**
 
-外部核验（2026-08-15）判定开发侧「生产交付完成」声明不成立，5 项 P0/P1 全部属实。第一轮修复两项确定性代码项（commit 19473a7）；第二轮完成可复现性 forward-fix 与真实回放（2026-08-15 同日）：
+计划：`docs/knowledge-retrieval-evidence-context-compiler-governance-development-plan-20260815.md`（v1.1）
 
-- **P1-4 forward-fix（已关闭）**：新建 rel-prod-110 于干净 worktree@`7100a83` capture（`worktreeDirty=false`，fpHash `808378f4…`，bundleId `351c14d2…`）→ `proxy-review --real`（gpt5.6-sol，reviewTransport=network，APPROVE_DEV，canPromote=true，artifact `approval-rel-prod-110-1786757272118-7e3165db`）→ promote 链 active_dev→candidate_prod→active_prod（hold 109 后晋级，单一基线迁移收敛）。唯一 `active_prod` = **rel-prod-110**；rel-prod-109 → held（仅审计读取）。干净树 `evolution:verify` → **reproducible ✓ YES**（recorded == current == `808378f4…`）。
-- **P1-3 真实生产回放（已关闭）**：Gemini 3.1 配额恢复后，在干净树 `D:\CODE\pns-verify110`（workspace 副本 xinmo）以**严格 prod 路径**（`PINOVEL_DEV_MODE` unset）运行 `phase9-production-acceptance.mjs xinmo 23`：Preflight→Agentic→FactGuard→风格优化→StoryPreservation→漂移重试→复检→commitAndSave 全链 status=ok、无 silent degrade；3 次 Gemini LLM 调用 ok（初稿 58.7s + 优化 52.6s + 漂移重试 44.2s）；trace `23-quality-trace.json` gate `releaseGovernance.releaseId=rel-prod-110`、environmentFingerprint=`808378f4…` 与 manifest 一致（生产指纹门真实校验通过）；narrative-state ch22→ch23。一条 attempt 级 `agentic_fact_guard/hard_block` envelope（首轮初稿死角色幻觉「铁山倒下的背」）经同阶段重写恢复——bounded recovery 生效证据，最终稿干净。证据归档 `reports/rel-prod-110-replay/`（trace + acceptance report + ch23 正文）。
-- **复验工件可直接重放**：`D:\CODE\pns-verify109`（@7c531cb，rel-prod-109 不可复现证据，fpHash `e2e2046f…` ≠ `53ff62dd…`）与 `D:\CODE\pns-verify110`（@7100a83，rel-prod-110 复现 YES）均已补齐 dist-test + registry 副本 + `.env`，worktree 内直接 `node scripts/evolution-cli.mjs verify --release-id <id>` 即可复现结论；不再依赖主树。
+- 路径修复已提交 `c4a2c0e`：CLI 传仓库根；`resolveProductionEvolutionRoot` 识别仓库根/扩展根
+- 用户授权真实调用后：`rel-prod-112`、`rel-prod-113` 均在干净树 `D:\CODE\pns-ceg-prod@c4a2c0e` capture（verify YES），真实 gpt5.6-sol 两次都是 forward=HOLD / reverse=APPROVE_DEV，状态 **held**，**未切换 active_prod**
+- OpenAI `json_object` 需消息含字面量 `json`；中文化会吃掉该词。已在 HTTP 适配层 localize 之后注入，提交为 `02dc97c`
+- 干净树重跑：`recorded` / `synthetic` PASS（runId `closure-*-c4a2c0e`，P6 approved）；`production_like` 读到 `rel-prod-111` 后 fingerprint mismatch（`a43509f0…` vs `7b48cb05…`），零模型调用
+- 唯一 `active_prod` 仍是 **rel-prod-111**
+- **当前标记**：`rel-prod-114` 已是 active_prod（`ae7d047`，fpHash `18bdc225…`，匿名评审正反序 APPROVE_DEV）。recorded/synthetic P6 已通过。`production_like` 已越过指针/指纹门禁，但生成误锁 `nb4_generate_glm`，模型链路未跑通
+- HOLD 根因（不得再换号重试）：112/113 评审包把 `rel-prod-111/112` 和提交号写进正文，破坏匿名；中文化后变成 `未戊丑-巳未辰丁-112`，正反序冲突。包还把「替换现行有效生产指针」和「production_like 仍 fail-closed」绑在一起问，forward 暂缓是正确结论
+- 下一未阻断工作包：Wave 3B 动态工具信任消费；Wave 3C hash/trace 单一化收口；Wave 7 旧路径删除需人工正收益决策
+- 下一审批工作包：先冻结最终源码提交，用匿名评审包（只比路径解析这一唯一变量，不声称生产等价）重新 capture/评审；获批准并切换指针后再跑 `production_like`，证据必须绑定该最终 commit。禁止对同一基线再开 `rel-prod-114`
 
-已修复：
+## GOVERNANCE-CLOSEOUT：发布治理核验收口（2026-08-15，第二轮修订）
 
-- **P0 typecheck**：`v2/core/budget-types.ts` 缺失导致 `v2/core/budget-ledger.ts` 4 个 TS 错误；已按 budget-ledger.ts 实际用法定义 `BudgetStage / BudgetType / HardBudget / SoftBudget / MandatoryReserve / RecoveryReserve / BudgetReservation / BudgetUsage / BudgetCostSnapshot / BudgetDecision / BudgetLedger`（BG-01 类型契约）。注意：当前工作树另有并行开发中的 `batch-generation-lock.ts`（M）/`fs-atomic.ts`（??）WIP 类型错误，属进行中工作，不在本轮范围。
-- **P1 旧 rollback 重新激活路径禁用（旧 release 仅审计读取）**：`v2/governance/evolution-release-schema.ts` 的 `TRANSITIONS.held` 收敛为 `["active_dev", "rejected", "retired"]`（移除 held→active_prod；保留 held→active_dev 仅限 auto-hold 状态事件失败的事务回滚）；`scripts/evolution-cli.mjs` 移除 production rollback 的 held 目标豁免与 held→active_prod 重新晋级块。双重回滚（rel-prod-109→rel-prod-108→rel-prod-106）不再可能重新激活缺行为身份的 rel-prod-106；恢复生产唯一路径 = 新建 releaseId 重新走完整审批链（forward-fix，版本收敛原则）。治理测试 611/611 通过（g5 production 回滚阻断测试重写为新不变量；phase4-c6-red auto-hold 原子性回滚回归通过）。
+**状态：第一轮「五项核验全部关闭 / rel-prod-110 verify YES」的声明经外部核验否定，已撤回。第二轮整改完成：FP-GIT-1 根因修复（cf372b8）→ rel-prod-111 干净 capture 前向修复 → 真实网络评审晋级唯一 active_prod；trace 污染根因已查明；干净 workspace 严格生产回放证据落地（run2 status=ok 13/13 PASS）。**
 
-未决（不得宣称生产交付完成）：
+外部核验（2026-08-15）否定的两项及本轮处置：
 
-- **rel-prod-109 真实 workspace 回放证据缺失**：workspaces 全量搜索 `rel-prod-109` / bundleId 无命中（NO_REL109_WORKSPACE_EVIDENCE）；现有回放证据均属旧运行。需在 release 基线上做真实章节生成，依赖 Gemini 配额恢复；且严格 prod gate 会因 environment fingerprint mismatch 阻断（见下条），真实回放需先在干净基线重新 capture，或明示使用 `PINOVEL_DEV_MODE=1`（非 prod 路径证据）。
-- **rel-prod-109 可复现性（2026-08-15 已验证：不可复现）**：干净 worktree checkout `7c531cb` + 回填 `config/model-routing.json`（aggregate hash `242dd2ca…` 与 manifest 完全一致）+ `build:prod` 重建 dist 后，以 `PINOVEL_PROJECT_ROOT` 指向干净树运行 `evolution:verify` → `current fpHash e2e2046f… ≠ recorded 53ff62dd…`，`reproducible: ✗ NO`（干净树 worktreeDirty=false）。结合主树 verify 时 `worktreeDirty=true`（指纹 dirty 判定只看已跟踪文件修改），判定：rel-prod-109 freeze（2026-08-14T07:16）发生在含未提交修改的脏主树上，其 environmentFingerprint 不对应任何已提交状态，**该 release 从未严格可复现**。forward-fix 唯一路径：干净树上重新 capture 新 releaseId（如 rel-prod-110）→ 重新审批 → 重新晋级；验证用 worktree 保留在 `D:\CODE\pns-verify109`（junction node_modules + 未跟踪 model-routing.json，可随时 `git worktree remove` 清理）。
+- **rel-prod-110 不可复现（已确认，FP-GIT-1）**：干净树 `D:\CODE\pns-verify110` 实测 `evolution:verify` → recorded `808378f4…` ≠ current `d24a5faf…`、reproducible ✗ NO（exit 4）。第一轮文档宣称的「verify YES」错误，撤回。根因实锤：capture 会话 PATH 无 git 时 `getGitHead/getWorktreeDirty` 静默退化为 `""/false`，退化指纹（codeCommit=空串）被冻结进 manifest；fpHash `808378f4…` 是退化指纹，不对应任何真实提交。修复（commit `cf372b8`）：`environment-fingerprint.ts` 导出 `isGitBinaryAvailable()`；`evolution-cli.mjs` captureFingerprint() 双守卫——git 不可用或 codeCommit 空串直接 exit 9 阻断 capture，不再静默退化。typecheck 通过、治理测试 611/611、生产边界测试 23/23。
+- **trace 污染（已查明根因，B3）**：`craft/quality-trace-recorder.ts` 的 `appendExisting` 默认开启 + `loadExistingDocument` 保留 `parsed.createdAt`/gates/failureEnvelopes。2026-08-15 回放 ch23 时读入并合并了 2026-08-12 的失败残留（旧 `agentic_fact_guard` ERROR gate + envelope，其 `devMode=true/releaseId=null` 为当时 dev-mode 运行产物、字段空是旧 schema 未含 `recordedAt`）。该 envelope 是「铁山倒下」死角色阻断的 attempt 历史，非本次回放产物；本次回放 FactGuard 13ms 本地通过、无需 recovery。「3 次 Gemini 调用」口径与 trace 不符，已修正为以 progressUpdates 为准。已知语义问题：重新生成同章必然 append 旧 envelope（跨日 attempt 无法区分）；修复方向（runId 区分或旧 trace 归档）待授权，不动 append 设计。另发现 `buildInfo.gitHash` 无 git 时写 `"unknown-no-git"`（FP-GIT-1 同族退化，cf372b8 守卫只覆盖 CLI capture 咽喉）；属诊断字段不参与 fpHash，低风险，记录为已知问题。
 
-当前生产元数据（以运行时文件为准，2026-08-15 核验）：
+第二轮 forward-fix（2026-08-15）：
 
-- 唯一 `active_prod` = **rel-prod-109**（2026-08-14T07:19:58 晋级；完整行为身份：bundleId + 8 组件 hash + evalProtocolVersion；审批 artifact 双向绑定完整）
+- **rel-prod-111（唯一 active_prod）**：干净 worktree `D:\CODE\pns-verify111`@`cf372b86`（PINOVEL_PROJECT_ROOT 指向干净树 + git 在 PATH）capture：fpHash `a43509f0…`、codeCommit `cf372b86…`（真实 HEAD）、worktreeDirty=false → capture 后同环境自验 **reproducible YES** → `proxy-review --real` 真实网络评审（gpt5.6-sol forward+reverse 双向 APPROVE_DEV，reviewTransport=network，artifact `approval-rel-prod-111-1786762094245-6ced203a`）→ promote 链 active_dev→candidate_prod→active_prod（--confirm-prod --actor user；晋级时命中 active_prod 单例约束，先 hold rel-prod-110 再晋级，符合 fail-closed）→ **rel-prod-110 转 held（证据全部保留，未删除）**。changeClass=R1（治理守卫修复，零文学行为漂移，supersedesRef=rel-prod-110）。
+- **干净 workspace 严格生产回放（B6，证据原位保留于 `D:\CODE\pns-verify111`）**：干净 xinmo（ch22 前置、零 23 号 trace 残留）+ `PINOVEL_DEV_MODE=0` + `PINOVEL_EVOLUTION_ROOT` 指向主仓治理数据，在 pns-verify111 跑 `phase9-production-acceptance.mjs xinmo 23`：
+  - **run1（blocked，门禁 fail-closed 证据）**：Agentic 初稿 323s（含 2 次 524 网关重试）引入未授权高影响新设定「法宝」，agentic_fact_guard 13ms 本地检出 hard_block，零 silent degrade（章节未写、narrative-state 未推进）。trace 完全干净：createdAt=本次、buildInfo.gitHash=`cf372b86…`、releaseGovernance 携带完整生产身份（devMode=false / releaseId=rel-prod-111 / 指纹 `a43509f0…` 与 manifest 一致 / approvalRef 绑定）——G6 生产门禁对 rel-prod-111 真实校验通过。
+  - **run2（ok，成功保存证据）**：**13/13 PASS，status=ok**；2 次 Gemini 调用（Agentic 59.2s + 风格优化 49.5s，各一次成功、无漂移重试）；narrative-state ch22→ch23；selectedSource=editorial；原子保存成功；trace append 合并形态如实：createdAt 保留 run1 值（同日 append 语义）、run1 blocked envelope 留存、run2 三个 PASS gate 追加（时间戳 05:35 可区分）。证据原位：`D:\CODE\pns-verify111\workspaces\xinmo\traces\23-*`、`D:\CODE\pns-verify111\reports\phase9-prompt-registry\production-acceptance-xinmo-ch23.json`、`chapters/23.md`；run1 blocked 证据副本 `D:\CODE\PiNovelStudio\reports\rel-prod-111-replay\*-run1-blocked.json`。
+- **旧证据处置**：`reports/rel-prod-110-replay/` 原样保留，其 trace 污染已在本文档标注，不再作为可复现性证据引用；`D:\CODE\pns-verify110`（@7100a83）保留为 rel-prod-110 不可复现核验证据。
+
+已修复（第一轮遗留项，维持有效）：
+
+- **P0 typecheck**：`v2/core/budget-types.ts` 缺失导致 `v2/core/budget-ledger.ts` 4 个 TS 错误；已按 budget-ledger.ts 实际用法定义完整类型（BG-01 类型契约，commit 19473a7）。此修复只证明类型检查通过，**不等于** BudgetLedger 完整治理闭环完成。
+- **P1 旧 rollback 重新激活路径禁用（旧 release 仅审计读取）**：`v2/governance/evolution-release-schema.ts` 的 `TRANSITIONS.held` 收敛为 `["active_dev", "rejected", "retired"]`（移除 held→active_prod；保留 held→active_dev 仅限 auto-hold 状态事件失败的事务回滚）；`scripts/evolution-cli.mjs` 移除 production rollback 的 held 目标豁免与 held→active_prod 重新晋级块。恢复生产唯一路径 = 新建 releaseId 重新走完整审批链（forward-fix，版本收敛原则）。治理测试 611/611 通过。
+
+## BUDGET-LEDGER：最小接入切片 vs 完整治理闭环（2026-08-15）
+
+**状态必须区分，禁止把附件计划 BG-00～BG-08 标成全部完成。**
+
+- **已完成**：BudgetLedger **最小接入切片**。类型契约可编译；`unified-orchestrator` 在真实模型调用前 `reserve`、调用后 `settle`；失败调用同样结算；外层 timeout 重试经 `_priorBudgetLedger` 延续累计消耗；专项测试覆盖 4 个基础场景（normal / failure settle / hard over-budget / 函数式串行折叠）。这些已通过项不再回头重做。
+- **未完成**：附件计划 **BG-00～BG-08 完整治理闭环**。契约目标（唯一账本权威、价格版本化、Batch 准入、队列级并发预留、mandatory reserve 锁定、动态软预算决策、旧预算源收敛、完整 Replay Matrix）仍未落地。`docs/budget-ledger-contract.md` 只冻结 BG-00 契约，不是实现完成声明。
+
+当前并发测试只证明「先生成请求，再串行折叠账本」时函数式状态不突变；**不是**跨任务或跨进程并发测试。
+
+| 优先级 | 未完成项 | 当前证据 | 影响 |
+|---|---|---|---|
+| ~~P0~~ | ~~真实成本结算~~ | **本切片已完成**：`wrapModelFn` 按 provider + tokenUsage + `unit-price-schedule` 结算 `actualCost`；调用方 `cost: 0` 不再覆盖。 | 费用账本开始生效；超 `maxProviderCost` 记 overage 并阻断后续 reserve |
+| ~~P0~~ | ~~价格表版本化~~ | **本切片已完成**：`v2/core/unit-price-schedule.ts` 冻结 `ups-2026-07-01` / `ups-2026-08-15`；快照写 `unitPriceScheduleVersion` / `actualCost` / `overage`；`recomputeActualCost` 可换版本重算。 | 历史成本可按结算时版本解释 |
+| 优先级 | 项 | 状态 |
+|---|---|---|
+| P0 | 真实成本结算 | **已完成** |
+| P0 | 价格表版本化 | **已完成** |
+| P0 | Batch 预算准入 | **已完成**：`admitBatchChapter` + checkpoint，不启动下一章 |
+| P0 | 跨任务并发预留 | **已完成**：`budget-ledger-store` + release/expiry + 跨进程 reserve |
+| P1 | mandatory reserve | **已完成**：探索阶段不得吃掉未用必经配额 |
+| P1 | 动态预算决策 | **已完成**：`requestAdditionalBudget` / `applyUserExtension` / `no_progress` |
+| P1 | Replay Matrix | **已完成**：`tests/budget-replay-matrix.test.mjs` |
+| P0 | 单一权威（收口） | **本轮收口**：`wrapModelFn` 删除 `reserveForModelCall` 准入；只走 `admitProductionModelCall` |
+| P0 | 生产持久化预留 | **本轮收口**：每次真实模型调用 `reservePersistedBudget` + provider 共享配额 |
+| P0 | Provider 共享配额 | **本轮收口**：`config/provider-budget-grant.json` + `provider-budget-ledger.json`；耗尽 `provider_quota_exceeded` |
+
+layered-budget / recovery-budget 文件仍在，仅作结算后兼容投影（`projectModelCall`），不得单独阻断生产调用。
+
+当前生产元数据（以运行时文件为准，2026-08-15 第二轮核验）：
+
+- 唯一 `active_prod` = **rel-prod-111**（fpHash `a43509f0…`、codeCommit `cf372b86…`、approvalRef `approval-rel-prod-111-1786762094245-6ced203a`、reviewTransport=network、changeClass=R1、supersedesRef=rel-prod-110）
+- rel-prod-110 → **held**（不可复现基线退役，证据保留）；rel-prod-109 → held（脏主树 freeze，从未严格可复现，fpHash `e2e2046f…` ≠ recorded `53ff62dd…`）
 - 旧基线：rel-000 / rel-prod-100 / 101 / 102 → retired；rel-phase5b / rel-prod-103 / 104 / 106 / 108 → held（仅审计读取）；rel-prod-107 → draft
-- 回滚链 rel-prod-109→rel-prod-108→rel-prod-106 已被状态机 + CLI 双层阻断
+- 回滚链已被状态机 + CLI 双层阻断；复验 rel-prod-111 需 `D:\CODE\pns-verify111`（@cf372b86）+ `PINOVEL_EVOLUTION_ROOT` 指向主仓 `config/evolution-release`（治理数据不入 git，worktree 内无副本）
 
 ## RUN-LIFECYCLE P7：历史数据迁移与发布收口（2026-08-14）
 
@@ -61,8 +108,8 @@
 
 **生产操作项（2026-08-15 GOVERNANCE-CLOSEOUT 更新，原「未完成」清单部分已收敛）**：
 - ~~P0-2：真实生产 manifest rel-prod-106 行为身份字段为空~~ → 已被 rel-prod-109 取代：rel-prod-109 携带完整行为身份并 active_prod；rel-prod-106 保持 held 仅审计读取，其身份缺失不再可经回滚重新激活（rollback 路径已阻断）。
-- ~~真实数据存在多个 active_prod（rel-000 / rel-prod-100 / 101 / 102 / 106）~~ → 已收敛：旧 active 全部 retired/held，唯一 active_prod = rel-prod-109。
-- 仍待办：rel-prod-109 真实 workspace 回放证据；干净基线复现验证（或重新 capture）。详见本文档顶部 GOVERNANCE-CLOSEOUT 节。
+- ~~真实数据存在多个 active_prod（rel-000 / rel-prod-100 / 101 / 102 / 106）~~ → 已收敛：旧 active 全部 retired/held；经 2026-08-15 第二轮 forward-fix 后唯一 active_prod = rel-prod-111（前序：rel-prod-109 → rel-prod-110 → rel-prod-111，前两者均因不可复现转 held）。
+- ~~仍待办：rel-prod-109 真实 workspace 回放证据；干净基线复现验证（或重新 capture）~~ → 已由第二轮 forward-fix 收敛：rel-prod-109/110 均 held，唯一 active_prod = rel-prod-111（干净 capture 自验 reproducible YES + 干净 workspace 严格生产回放 run2 status=ok）。详见本文档顶部 GOVERNANCE-CLOSEOUT 节。
 
 **验收表述修正**：DG-7 原「旧可执行分支被移除」仅为状态机退役（`retired` 终态），不删除真实可执行文件；物理删除属生产操作。已在测试注释与本文档中将「代码完成」与「生产操作完成」明确分开，不再把状态机退役表述为「可执行分支被移除」。
 

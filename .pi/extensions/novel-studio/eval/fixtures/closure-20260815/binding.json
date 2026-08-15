@@ -1,6 +1,8 @@
 {
-  "releaseId": "rel-prod-111",
-  "bundleId": "0d5f0c70b7ffc96b174f58f2c5cc0c0467d5b4230f495cf84415cb41a6dbafd9",
-  "codeCommit": "0d623fc0d4c082336b5391ec2399f2d253f3a1c7",
-  "generatedAt": "2026-08-15T09:30:23.751Z"
+  "releaseId": "rel-prod-114",
+  "bundleId": "a76eda83d0a231ba95b2e3e65e400e82259b980c6d7d9f38c5c75be22d2cdfc7",
+  "codeCommit": "ae7d0471a4aea15c6b8790348b7a91f3f67d780a",
+  "environmentFingerprint": "18bdc22505c346d0343b0228dc5252c9f00f0c0b48c2d6318c9d2638e0bad745",
+  "generatedAt": "2026-08-15T12:18:00.000Z",
+  "note": "代码提交 ae7d047。干净树 D:\\\\CODE\\\\pns-holdfix-ae7d047 capture/verify YES。匿名评审包正反序均为 APPROVE_DEV（reviewTransport=network），active_prod 已切换为 rel-prod-114。recorded/synthetic P6 APPROVED。production_like 已通过生产门禁与隔离（fingerprint 18bdc225 一致、isolation=0、traceRetentionRate=1），但生成调用锁到 nb4_generate_glm 并被 thinking.disabled 拒绝，CLI 因未分类失败未过。不得把本 binding 写成 production_like 模型链路已跑通。"
 }

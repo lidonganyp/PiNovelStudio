@@ -1,84 +1,25 @@
 {
-  "runId": "closure-production-like-0d623fc",
-  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-production-like-0d623fc",
-  "isolationViolationCount": 1,
+  "runId": "closure-production-like-ae7d047c",
+  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives\\closure-production-like-ae7d047c",
+  "isolationViolationCount": 0,
   "attributionSummary": {
     "total": 1,
-    "classified": 1,
-    "unclassified": 0,
-    "counts": {
-      "prompt": 0,
-      "model": 0,
-      "provider_network": 0,
-      "context": 0,
-      "retrieval": 0,
-      "tool_protocol": 0,
-      "budget": 0,
-      "timeout": 0,
-      "concurrency": 0,
-      "release_drift": 0,
-      "state_commit": 0,
-      "human_approval": 0,
-      "replay_environment": 1,
-      "grader_instability": 0,
-      "unclassified": 0
-    }
+    "classified": 0,
+    "unclassified": 1,
+    "counts": {}
   },
   "manifest": {
-    "schemaId": "pinovel.eval-replay-run-manifest",
-    "schemaVersion": 1,
-    "runId": "closure-production-like-0d623fc",
-    "evalProtocolVersion": "pinovel.eval-protocol/1",
+    "runId": "closure-production-like-ae7d047c",
     "replayMode": "production_like",
-    "releaseId": "rel-prod-111",
-    "bundleId": "0d5f0c70b7ffc96b174f58f2c5cc0c0467d5b4230f495cf84415cb41a6dbafd9",
-    "runRoot": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-production-like-0d623fc",
-    "startedAt": "2026-08-15T09:30:49.517Z",
-    "finishedAt": "2026-08-15T09:30:49.593Z",
-    "samples": [
-      {
-        "fixtureId": "fixture.closure-production-like-001",
-        "fixtureHash": "834c5ffe715be68dc892a8c7cb889b79b4e72483393f90783a5568242123b846",
-        "replayMode": "production_like",
-        "scratchWorkspaceId": "(not-created)",
-        "status": "skipped_isolation_violation",
-        "failureAttribution": "replay_environment",
-        "failureEnvelopes": [
-          {
-            "stage": "replay-isolation",
-            "gate": "production_release_gate",
-            "severity": "preflight",
-            "reason": "主仓 production release gate 阻断：no active production release set；生产运行需先由 user 角色切换 active production pointer 到 status=active_prod 的 release，或设置 PINOVEL_DEV_MODE=1 进入非生产开发模式"
-          }
-        ],
-        "traceArchived": false,
-        "traceArchivePath": null,
-        "isolationViolations": [
-          {
-            "kind": "production_release_gate_mismatch",
-            "detail": "主仓 production release gate 阻断：no active production release set；生产运行需先由 user 角色切换 active production pointer 到 status=active_prod 的 release，或设置 PINOVEL_DEV_MODE=1 进入非生产开发模式"
-          }
-        ],
-        "modelCalls": 0,
-        "durationMs": 0
-      }
-    ],
+    "releaseId": "rel-prod-114",
+    "bundleId": "a76eda83d0a231ba95b2e3e65e400e82259b980c6d7d9f38c5c75be22d2cdfc7",
     "summary": {
       "totalSamples": 1,
-      "countedSamples": 0,
-      "completed": 0,
-      "failed": 0,
-      "skipped": 1,
-      "traceRetentionRate": 0,
-      "isolationViolationCount": 1
+      "completed": 1,
+      "skipped": 0,
+      "traceRetentionRate": 1,
+      "isolationViolationCount": 0
     }
   },
-  "sampleStatuses": [
-    {
-      "fixtureId": "fixture.closure-production-like-001",
-      "mode": "production_like",
-      "status": "skipped_isolation_violation",
-      "attribution": "replay_environment"
-    }
-  ]
+  "blockReason": "NovelOS Agentic empty_draft: locked to nb4_generate_glm; GLM rejected thinking.type=disabled"
 }

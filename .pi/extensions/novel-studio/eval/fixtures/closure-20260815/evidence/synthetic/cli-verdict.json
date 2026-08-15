@@ -10,8 +10,8 @@
     "code": "EVAL_EVIDENCE_APPROVED",
     "reason": "确定性 Grader 通过（R0/R1 deterministic-only 证据完整，可进入人工审批）"
   },
-  "releaseId": "rel-prod-111",
-  "bundleId": "0d5f0c70b7ffc96b174f58f2c5cc0c0467d5b4230f495cf84415cb41a6dbafd9",
+  "releaseId": "rel-prod-114",
+  "bundleId": "a76eda83d0a231ba95b2e3e65e400e82259b980c6d7d9f38c5c75be22d2cdfc7",
   "changeClass": "R1",
-  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-synthetic-0d623fc"
+  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives\\closure-synthetic-ae7d047"
 }

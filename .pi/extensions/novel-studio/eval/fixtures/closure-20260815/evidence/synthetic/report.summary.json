@@ -1,6 +1,6 @@
 {
-  "runId": "closure-synthetic-0d623fc",
-  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-synthetic-0d623fc",
+  "runId": "closure-synthetic-db19d67",
+  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-synthetic-db19d67",
   "isolationViolationCount": 0,
   "attributionSummary": {
     "total": 0,
@@ -27,28 +27,28 @@
   "manifest": {
     "schemaId": "pinovel.eval-replay-run-manifest",
     "schemaVersion": 1,
-    "runId": "closure-synthetic-0d623fc",
+    "runId": "closure-synthetic-db19d67",
     "evalProtocolVersion": "pinovel.eval-protocol/1",
     "replayMode": "synthetic",
     "releaseId": "rel-prod-111",
     "bundleId": "0d5f0c70b7ffc96b174f58f2c5cc0c0467d5b4230f495cf84415cb41a6dbafd9",
-    "runRoot": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-synthetic-0d623fc",
-    "startedAt": "2026-08-15T09:30:32.819Z",
-    "finishedAt": "2026-08-15T09:30:34.174Z",
+    "runRoot": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-synthetic-db19d67",
+    "startedAt": "2026-08-15T10:12:27.374Z",
+    "finishedAt": "2026-08-15T10:12:31.073Z",
     "samples": [
       {
         "fixtureId": "fixture.closure-synthetic-001",
         "fixtureHash": "f14da3acdf68216c210e92fe01e367a59038ed7bd13dfe2a24a7f98ee699ce5d",
         "replayMode": "synthetic",
-        "scratchWorkspaceId": "eval-synthetic-fixture-closure-synthetic-001-run-0Weo9O",
+        "scratchWorkspaceId": "eval-synthetic-fixture-closure-synthetic-001-run-fRaFLO",
         "status": "completed",
         "failureAttribution": null,
         "failureEnvelopes": [],
         "traceArchived": true,
-        "traceArchivePath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-synthetic-0d623fc\\samples\\fixture.closure-synthetic-001\\traces",
+        "traceArchivePath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-synthetic-db19d67\\samples\\fixture.closure-synthetic-001\\traces",
         "isolationViolations": [],
         "modelCalls": 0,
-        "durationMs": 1244
+        "durationMs": 1354
       }
     ],
     "summary": {
