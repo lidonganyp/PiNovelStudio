@@ -9,7 +9,7 @@
  *   node scripts/concurrency-wave6-live-replay.mjs
  *   node scripts/concurrency-wave6-live-replay.mjs --chapter=23
  */
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -196,6 +196,10 @@ const report = {
   version: "1.0",
   recordedAt: new Date().toISOString(),
   productionAdmission: false,
+  gitHash: (() => {
+    try { return execSync("git rev-parse HEAD", { cwd: PROJECT_ROOT, encoding: "utf8" }).trim(); }
+    catch { return null; }
+  })(),
   isolatedCopies: true,
   sourceWorkspace: SOURCE_WS,
   destWorkspaces: [WS_A, WS_B],
@@ -216,6 +220,7 @@ writeFileSync(join(REPORT_DIR, "verification-report.md"), [
   "# CONCURRENCY-WAVE6 live 双 workspace 并发回放",
   "",
   `- 记录时间：${report.recordedAt}`,
+  `- gitHash：${report.gitHash ?? "(unset)"}`,
   `- 生产准入：否`,
   `- DEV_MODE：${report.pinovelDevMode}`,
   `- 源 workspace：${SOURCE_WS}（只读复制）`,

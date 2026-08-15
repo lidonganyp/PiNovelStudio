@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "workspaceId": "concurrency-live-b",
   "chapterId": "23",
-  "createdAt": "2026-08-15T07:15:08.488Z",
+  "createdAt": "2026-08-15T07:41:46.595Z",
   "events": [],
   "patches": [],
   "gates": [
@@ -34,7 +34,7 @@
       "passed": true,
       "blocked": false,
       "score": 1,
-      "reason": "selected=candidate:author_style:candidate:agentic_raw:23:retry source=v2_amplified gain=positive",
+      "reason": "selected=candidate:author_style:candidate:agentic_raw:23 source=v2_amplified gain=positive",
       "issueTypes": [],
       "revisionHints": [],
       "evidence": {
@@ -44,8 +44,8 @@
           "sourceChapter": "ch23",
           "opportunityType": "author_style",
           "strategyBundleId": "bundle:empty",
-          "orchestratorRunId": "run:concurrency-live-b:ch23:1786778003180",
-          "exposureId": "exp:run:concurrency-live-b:ch23:1786778003180:author_style",
+          "orchestratorRunId": "run:concurrency-live-b:ch23:1786779659174",
+          "exposureId": "exp:run:concurrency-live-b:ch23:1786779659174:author_style",
           "promptBundleId": "prompt:author_style:default",
           "candidateId": "candidate:agentic_raw:23",
           "deliveredSource": "editorial",
@@ -60,12 +60,12 @@
             "route": "v2_rawstage2",
             "kind": "agentic_raw",
             "model": "gemini-3.1-pro-preview",
-            "durationMs": 15835,
-            "ts": 1786777915806,
+            "durationMs": 139231,
+            "ts": 1786779448650,
             "finishReason": "stop",
             "tokenUsage": {
               "in": 18424,
-              "out": 1164
+              "out": 842
             },
             "provider": "gemini31",
             "requestedRoute": "v2_rawstage2_gemini31",
@@ -73,7 +73,7 @@
             "expectedModel": "gemini-3.1-pro-preview",
             "actualProvider": "gemini31",
             "actualModel": "gemini-3.1-pro-preview",
-            "runId": "run_msu1fr8t_3a5b6f6d",
+            "runId": "run_msu2clz6_6ff57e08",
             "stage": "agentic_raw",
             "modelVersion": "gemini-3.1-pro-preview",
             "promptBundleHash": "bundle:unset",
@@ -86,12 +86,12 @@
             "route": "v2_rawstage2",
             "kind": "agentic_raw",
             "model": "gemini-3.1-pro-preview",
-            "durationMs": 71378,
-            "ts": 1786777931722,
+            "durationMs": 71097,
+            "ts": 1786779587971,
             "finishReason": "stop",
             "tokenUsage": {
-              "in": 2490,
-              "out": 7413
+              "in": 19493,
+              "out": 7091
             },
             "provider": "gemini31",
             "requestedRoute": "v2_rawstage2_gemini31",
@@ -99,7 +99,7 @@
             "expectedModel": "gemini-3.1-pro-preview",
             "actualProvider": "gemini31",
             "actualModel": "gemini-3.1-pro-preview",
-            "runId": "run_msu1fr8t_3a5b6f6d",
+            "runId": "run_msu2clz6_6ff57e08",
             "stage": "agentic_raw",
             "modelVersion": "gemini-3.1-pro-preview",
             "promptBundleHash": "bundle:unset",
@@ -112,12 +112,12 @@
             "route": "v2_amplified_gemini31",
             "kind": "author_style_optimization",
             "model": "gemini-3.1-pro-preview",
-            "durationMs": 56948,
-            "ts": 1786778003182,
+            "durationMs": 47054,
+            "ts": 1786779659175,
             "finishReason": "stop",
             "tokenUsage": {
-              "in": 4775,
-              "out": 7097
+              "in": 4603,
+              "out": 7237
             },
             "provider": "gemini31",
             "requestedRoute": "v2_amplified_gemini31",
@@ -126,34 +126,7 @@
             "actualProvider": "gemini31",
             "actualModel": "gemini-3.1-pro-preview",
             "promptProfile": "gemini_writer_v2",
-            "runId": "run_msu1fr8t_3a5b6f6d",
-            "stage": "author_style_optimization",
-            "modelVersion": "gemini-3.1-pro-preview",
-            "promptBundleHash": "bundle:unset",
-            "contextHash": "context:unset",
-            "temperature": 0.72,
-            "timeout": 600000,
-            "budgetType": "normal"
-          },
-          {
-            "route": "v2_amplified_gemini31",
-            "kind": "author_style_optimization",
-            "model": "gemini-3.1-pro-preview",
-            "durationMs": 47874,
-            "ts": 1786778060178,
-            "finishReason": "stop",
-            "tokenUsage": {
-              "in": 4808,
-              "out": 6484
-            },
-            "provider": "gemini31",
-            "requestedRoute": "v2_amplified_gemini31",
-            "expectedProvider": "gemini31",
-            "expectedModel": "gemini-3.1-pro-preview",
-            "actualProvider": "gemini31",
-            "actualModel": "gemini-3.1-pro-preview",
-            "promptProfile": "gemini_writer_v2",
-            "runId": "run_msu1fr8t_3a5b6f6d",
+            "runId": "run_msu2clz6_6ff57e08",
             "stage": "author_style_optimization",
             "modelVersion": "gemini-3.1-pro-preview",
             "promptBundleHash": "bundle:unset",
@@ -187,32 +160,32 @@
     }
   ],
   "buildInfo": {
-    "buildTimestamp": "2026-08-15T07:03:52.062Z",
-    "gitHash": "ce577f24e402795f5d80a99a0b2c5ccdc124e928",
+    "buildTimestamp": "2026-08-15T07:37:08.188Z",
+    "gitHash": "0f6cef8fcc8f10e0afe21a8a09aadf7d21f0c6ec",
     "nodeVersion": "v25.2.1"
   },
   "v2Summary": {
     "v2Mode": "full_chain",
     "candidateCount": 2,
-    "finalSelectedId": "candidate:author_style:candidate:agentic_raw:23:retry",
+    "finalSelectedId": "candidate:author_style:candidate:agentic_raw:23",
     "finalSelectedSource": "v2_amplified",
     "projectGain": "positive",
     "amplifiedVariantIds": [
-      "candidate:author_style:candidate:agentic_raw:23:retry"
+      "candidate:author_style:candidate:agentic_raw:23"
     ],
     "contextHash": "f3-l72-c21-w1-s1",
     "stages": [
       {
         "stage": "novelos_agentic",
-        "timestamp": "2026-08-15T07:15:08.487Z"
+        "timestamp": "2026-08-15T07:41:46.594Z"
       },
       {
         "stage": "candidate_generated",
-        "timestamp": "2026-08-15T07:15:08.487Z"
+        "timestamp": "2026-08-15T07:41:46.594Z"
       },
       {
         "stage": "final_selected",
-        "timestamp": "2026-08-15T07:15:08.487Z"
+        "timestamp": "2026-08-15T07:41:46.594Z"
       }
     ]
   },

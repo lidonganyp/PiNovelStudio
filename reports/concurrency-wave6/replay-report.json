@@ -1,8 +1,8 @@
 {
   "schema": "pinovel.concurrency-wave6-replay",
   "version": "1.0",
-  "recordedAt": "2026-08-15T07:21:47.139Z",
-  "gitHash": "3a748a0bd3b8fabbb442eeb4731768ec07bb3a3a",
+  "recordedAt": "2026-08-15T07:42:12.922Z",
+  "gitHash": "4b3aa9755c51966df9c4c3ff4bc4f383bf5603ed",
   "productionAdmission": false,
   "note": "Wave 6 归档 mock 生成 + 真实跨进程互斥证据；不是 live model 生产准入。",
   "metrics": {
@@ -25,7 +25,7 @@
     {
       "name": "two_workspaces_two_jobs_parallel",
       "ok": true,
-      "elapsedMs": 83,
+      "elapsedMs": 71,
       "details": {
         "a": {
           "status": "completed",
@@ -43,7 +43,7 @@
     {
       "name": "same_workspace_two_jobs_lock",
       "ok": true,
-      "elapsedMs": 1061,
+      "elapsedMs": 1010,
       "details": {
         "a": {
           "status": "completed",
@@ -54,7 +54,7 @@
         "b": {
           "status": "error",
           "jobId": "batch-wave6-same-b",
-          "reason": "workspace concurrency-wave6-same-ws 已有运行中的批量任务 batch-wave6-same-a（pid=15272, host=CH-202406301000, expiresAt=2026-08-15T07:51:41.737Z）",
+          "reason": "workspace concurrency-wave6-same-ws 已有运行中的批量任务 batch-wave6-same-a（pid=35788, host=CH-202406301000, expiresAt=2026-08-15T08:12:07.694Z）",
           "concurrencyError": null
         },
         "successCount": 1,
@@ -64,20 +64,20 @@
     {
       "name": "dual_candidate_single_commit_slot",
       "ok": true,
-      "elapsedMs": 880,
+      "elapsedMs": 881,
       "details": {
         "a": {
           "ok": true,
           "owner": "cand-a",
-          "elapsedMs": 715,
+          "elapsedMs": 722,
           "slotOk": true
         },
         "b": {
           "ok": false,
           "busy": true,
           "owner": "cand-b",
-          "error": "workspace concurrency-wave6-dual-cand 章节提交槽等待 180ms 超时（当前持有者未释放、未过期）。fail-closed：不静默并行提交。",
-          "elapsedMs": 182
+          "error": "workspace concurrency-wave6-dual-cand 章节提交槽等待 178ms 超时（当前持有者未释放、未过期）。fail-closed：不静默并行提交。",
+          "elapsedMs": 180
         },
         "officialCommitters": 1
       }
@@ -92,7 +92,7 @@
         "fail": 0,
         "skip": 1
       },
-      "tapExcerpt": "      ---\n      duration_ms: 275.6617\n      type: 'test'\n      ...\n    1..6\nok 3 - CONCURRENCY 跨进程互斥：Wave1 原子租约锁 / Wave2 状态 CAS / Wave3 提交槽串行\n  ---\n  duration_ms: 3360.5722\n  type: 'suite'\n  ...\n1..3\n# tests 22\n# suites 3\n# pass 22\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 3575.0065\n"
+      "tapExcerpt": "      ---\n      duration_ms: 269.588\n      type: 'test'\n      ...\n    1..6\nok 3 - CONCURRENCY 跨进程互斥：Wave1 原子租约锁 / Wave2 状态 CAS / Wave3 提交槽串行\n  ---\n  duration_ms: 3181.5696\n  type: 'suite'\n  ...\n1..3\n# tests 25\n# suites 3\n# pass 25\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 3398.1641\n"
     }
   ]
 }

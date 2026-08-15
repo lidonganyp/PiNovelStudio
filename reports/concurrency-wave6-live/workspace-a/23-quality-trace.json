@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "workspaceId": "concurrency-live-a",
   "chapterId": "23",
-  "createdAt": "2026-08-15T07:13:54.751Z",
+  "createdAt": "2026-08-15T07:39:49.947Z",
   "events": [],
   "patches": [],
   "gates": [
@@ -44,8 +44,8 @@
           "sourceChapter": "ch23",
           "opportunityType": "author_style",
           "strategyBundleId": "bundle:empty",
-          "orchestratorRunId": "run:concurrency-live-a:ch23:1786777985026",
-          "exposureId": "exp:run:concurrency-live-a:ch23:1786777985026:author_style",
+          "orchestratorRunId": "run:concurrency-live-a:ch23:1786779529318",
+          "exposureId": "exp:run:concurrency-live-a:ch23:1786779529318:author_style",
           "promptBundleId": "prompt:author_style:default",
           "candidateId": "candidate:agentic_raw:23",
           "deliveredSource": "editorial",
@@ -60,12 +60,12 @@
             "route": "v2_rawstage2",
             "kind": "agentic_raw",
             "model": "gemini-3.1-pro-preview",
-            "durationMs": 11482,
-            "ts": 1786777915784,
+            "durationMs": 80557,
+            "ts": 1786779448650,
             "finishReason": "stop",
             "tokenUsage": {
               "in": 18424,
-              "out": 750
+              "out": 8219
             },
             "provider": "gemini31",
             "requestedRoute": "v2_rawstage2_gemini31",
@@ -73,33 +73,7 @@
             "expectedModel": "gemini-3.1-pro-preview",
             "actualProvider": "gemini31",
             "actualModel": "gemini-3.1-pro-preview",
-            "runId": "run_msu1fr88_a36ed268",
-            "stage": "agentic_raw",
-            "modelVersion": "gemini-3.1-pro-preview",
-            "promptBundleHash": "bundle:unset",
-            "contextHash": "context:unset",
-            "temperature": 0.72,
-            "timeout": 300000,
-            "budgetType": "normal"
-          },
-          {
-            "route": "v2_rawstage2",
-            "kind": "agentic_raw",
-            "model": "gemini-3.1-pro-preview",
-            "durationMs": 57634,
-            "ts": 1786777927318,
-            "finishReason": "stop",
-            "tokenUsage": {
-              "in": 2130,
-              "out": 6216
-            },
-            "provider": "gemini31",
-            "requestedRoute": "v2_rawstage2_gemini31",
-            "expectedProvider": "gemini31",
-            "expectedModel": "gemini-3.1-pro-preview",
-            "actualProvider": "gemini31",
-            "actualModel": "gemini-3.1-pro-preview",
-            "runId": "run_msu1fr88_a36ed268",
+            "runId": "run_msu2clzb_9b48adb1",
             "stage": "agentic_raw",
             "modelVersion": "gemini-3.1-pro-preview",
             "promptBundleHash": "bundle:unset",
@@ -112,12 +86,12 @@
             "route": "v2_amplified_gemini31",
             "kind": "author_style_optimization",
             "model": "gemini-3.1-pro-preview",
-            "durationMs": 49249,
-            "ts": 1786777985028,
+            "durationMs": 60252,
+            "ts": 1786779529320,
             "finishReason": "stop",
             "tokenUsage": {
-              "in": 4505,
-              "out": 10138
+              "in": 5488,
+              "out": 9601
             },
             "provider": "gemini31",
             "requestedRoute": "v2_amplified_gemini31",
@@ -126,7 +100,7 @@
             "actualProvider": "gemini31",
             "actualModel": "gemini-3.1-pro-preview",
             "promptProfile": "gemini_writer_v2",
-            "runId": "run_msu1fr88_a36ed268",
+            "runId": "run_msu2clzb_9b48adb1",
             "stage": "author_style_optimization",
             "modelVersion": "gemini-3.1-pro-preview",
             "promptBundleHash": "bundle:unset",
@@ -160,8 +134,8 @@
     }
   ],
   "buildInfo": {
-    "buildTimestamp": "2026-08-15T07:03:52.062Z",
-    "gitHash": "ce577f24e402795f5d80a99a0b2c5ccdc124e928",
+    "buildTimestamp": "2026-08-15T07:37:08.188Z",
+    "gitHash": "0f6cef8fcc8f10e0afe21a8a09aadf7d21f0c6ec",
     "nodeVersion": "v25.2.1"
   },
   "v2Summary": {
@@ -177,15 +151,15 @@
     "stages": [
       {
         "stage": "novelos_agentic",
-        "timestamp": "2026-08-15T07:13:54.749Z"
+        "timestamp": "2026-08-15T07:39:49.947Z"
       },
       {
         "stage": "candidate_generated",
-        "timestamp": "2026-08-15T07:13:54.749Z"
+        "timestamp": "2026-08-15T07:39:49.947Z"
       },
       {
         "stage": "final_selected",
-        "timestamp": "2026-08-15T07:13:54.749Z"
+        "timestamp": "2026-08-15T07:39:49.947Z"
       }
     ]
   },
