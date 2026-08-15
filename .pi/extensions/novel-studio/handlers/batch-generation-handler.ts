@@ -128,6 +128,15 @@ export async function handleBatchGeneration(
       return errorResult(input, projectRoot, e?.message ?? "invalid jobId", input.jobId);
     }
   }
+  if ((input.action === "resume" || input.action === "cancel") && !input.commandId) {
+    return casErrorResult(
+      input,
+      projectRoot,
+      "missing_command_id",
+      "missing_command_id：resume/cancel 必须携带 commandId",
+      input.jobId,
+    );
+  }
   if (input.commandId) {
     try {
       validateCommandId(input.commandId);
@@ -377,7 +386,19 @@ async function handleResume(
 
   try {
     const reconciliation = reconcileBatchJobAfterCrash(state, projectRoot);
-    writeRecoveryTrace(workspaceId, jobId, projectRoot, reconciliation);
+    if (!writeRecoveryTrace(workspaceId, jobId, projectRoot, reconciliation)) {
+      return persistCommand(
+        input,
+        casErrorResult(
+          input,
+          projectRoot,
+          "recovery_trace_failed",
+          "recovery_trace_failed：崩溃恢复分类已算出，但 recovery trace 未能落盘，禁止继续 resume",
+          jobId,
+        ),
+        jobId,
+      );
+    }
     if (reconciliation.decision === "blocked") {
       return persistCommand(
         input,
@@ -561,20 +582,25 @@ function persistCommand(
     failureEnvelope: result.failureEnvelope,
     summary: result.summary,
   };
-  try {
-    recordBatchCommandReceipt(
-      input.workspaceId,
-      {
-        commandId: input.commandId,
-        action: input.action,
-        jobId: result.jobId || jobId,
-        recordedAt: new Date().toISOString(),
-        result: snapshot,
-      },
+  const recorded = recordBatchCommandReceipt(
+    input.workspaceId,
+    {
+      commandId: input.commandId,
+      action: input.action,
+      jobId: result.jobId || jobId,
+      recordedAt: new Date().toISOString(),
+      result: snapshot,
+    },
+    input._projectRoot || getProjectRoot(),
+  );
+  if (!recorded.ok) {
+    return casErrorResult(
+      input,
       input._projectRoot || getProjectRoot(),
+      "idempotency_receipt_failed",
+      `idempotency_receipt_failed：业务副作用可能已发生，但 commandId 收据未能落盘（${recorded.reason}）。禁止当作成功重试。`,
+      result.jobId || jobId,
     );
-  } catch {
-    // 收据写入失败不覆盖业务结果；重复命令将无法幂等命中
   }
   return result;
 }
@@ -597,7 +623,7 @@ function writeRecoveryTrace(
   jobId: string,
   projectRoot: string,
   reconciliation: ReturnType<typeof reconcileBatchJobAfterCrash>,
-): void {
+): boolean {
   try {
     const path = join(
       projectRoot,
@@ -612,8 +638,9 @@ function writeRecoveryTrace(
       recordedAt: new Date().toISOString(),
       ...reconciliation,
     }, null, 2));
+    return true;
   } catch {
-    // recovery trace 失败不得 silent degrade 业务决策；决策已返回给调用方
+    return false;
   }
 }
 

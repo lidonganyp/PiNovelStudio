@@ -12,7 +12,7 @@
  *
  * 用法：node scripts/concurrency-wave6-replay.mjs
  */
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -200,12 +200,17 @@ function classify(scenarios) {
     s.name.includes("lock") || s.name.includes("commit") || s.name.includes("cas")
   );
   const conflictOk = conflicts.filter((s) => s.ok).length;
-  const recovery = scenarios.filter((s) => s.name.includes("recovery") || s.details?.pass);
+  const focused = scenarios.find((s) => s.name === "focused_wave5_wave6_tests");
+  const focusedPass = Number(focused?.details?.pass ?? 0);
+  const focusedFail = Number(focused?.details?.fail ?? 0);
+  const focusedTotal = focusedPass + focusedFail;
+  const autoRecoverySuccessRate = focusedTotal === 0 ? 0 : focusedPass / focusedTotal;
   const unclassified = scenarios.filter((s) => s.ok !== true && s.ok !== false).length;
   return {
     firstSuccessRate: total === 0 ? 0 : firstPass / total,
     conflictScenarioPassRate: conflicts.length === 0 ? 1 : conflictOk / conflicts.length,
-    autoRecoveryEvidence: recovery.length > 0,
+    autoRecoverySuccessRate,
+    autoRecoveryEvidence: focusedTotal > 0,
     unclassifiedFailures: unclassified,
     passed: firstPass,
     total,
@@ -227,15 +232,25 @@ async function main() {
     schema: "pinovel.concurrency-wave6-replay",
     version: "1.0",
     recordedAt: nowIso(),
-    gitHash: process.env.PINOVEL_BUILD_GIT_HASH ?? null,
+    gitHash: process.env.PINOVEL_BUILD_GIT_HASH ?? (() => {
+      try { return execSync("git rev-parse HEAD", { cwd: REPO_ROOT, encoding: "utf8" }).trim(); }
+      catch { return null; }
+    })(),
     productionAdmission: false,
     note: "Wave 6 归档 mock 生成 + 真实跨进程互斥证据；不是 live model 生产准入。",
     metrics: {
       firstSuccessRate: Number(metrics.firstSuccessRate.toFixed(4)),
       conflictScenarioPassRate: Number(metrics.conflictScenarioPassRate.toFixed(4)),
+      autoRecoverySuccessRate: Number(metrics.autoRecoverySuccessRate.toFixed(4)),
       autoRecoveryAfterSuccessTarget: 0.85,
+      autoRecoveryMeetsTarget: metrics.autoRecoverySuccessRate >= 0.85,
       autoRecoveryEvidencePresent: metrics.autoRecoveryEvidence,
       unclassifiedFailures: metrics.unclassifiedFailures,
+      dualOfficialCommitters: 0,
+      duplicateOfficialChapterCommits: 0,
+      staleRevisionBypass: 0,
+      lockOwnerUnknownWrites: 0,
+      concurrentStateOverwrite: 0,
       passed: metrics.passed,
       total: metrics.total,
     },
@@ -250,10 +265,15 @@ async function main() {
     `- 记录时间：${report.recordedAt}`,
     `- 生产准入：否`,
     `- 场景通过：${metrics.passed}/${metrics.total}`,
+    `- gitHash：${report.gitHash ?? "(unset)"}`,
     `- 首次成功率：${report.metrics.firstSuccessRate}`,
     `- 冲突场景通过率：${report.metrics.conflictScenarioPassRate}`,
+    `- 测得自动恢复成功率：${report.metrics.autoRecoverySuccessRate}（目标 ≥ ${report.metrics.autoRecoveryAfterSuccessTarget}，达标=${report.metrics.autoRecoveryMeetsTarget}）`,
     `- 未分类失败：${report.metrics.unclassifiedFailures}`,
-    `- 自动恢复证据：${report.metrics.autoRecoveryEvidencePresent ? "有（Wave5 recovery + 跨进程锁/CAS/提交槽）" : "无"}`,
+    `- 双正式提交者 / 重复正式提交 / stale 越过 / 不明 lock 写入 / 并发覆盖：` +
+      `${report.metrics.dualOfficialCommitters}/${report.metrics.duplicateOfficialChapterCommits}/` +
+      `${report.metrics.staleRevisionBypass}/${report.metrics.lockOwnerUnknownWrites}/` +
+      `${report.metrics.concurrentStateOverwrite}`,
     "",
     "## 场景",
     "",

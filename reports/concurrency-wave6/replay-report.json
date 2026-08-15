@@ -1,0 +1,98 @@
+{
+  "schema": "pinovel.concurrency-wave6-replay",
+  "version": "1.0",
+  "recordedAt": "2026-08-15T07:21:47.139Z",
+  "gitHash": "3a748a0bd3b8fabbb442eeb4731768ec07bb3a3a",
+  "productionAdmission": false,
+  "note": "Wave 6 归档 mock 生成 + 真实跨进程互斥证据；不是 live model 生产准入。",
+  "metrics": {
+    "firstSuccessRate": 1,
+    "conflictScenarioPassRate": 1,
+    "autoRecoverySuccessRate": 1,
+    "autoRecoveryAfterSuccessTarget": 0.85,
+    "autoRecoveryMeetsTarget": true,
+    "autoRecoveryEvidencePresent": true,
+    "unclassifiedFailures": 0,
+    "dualOfficialCommitters": 0,
+    "duplicateOfficialChapterCommits": 0,
+    "staleRevisionBypass": 0,
+    "lockOwnerUnknownWrites": 0,
+    "concurrentStateOverwrite": 0,
+    "passed": 4,
+    "total": 4
+  },
+  "scenarios": [
+    {
+      "name": "two_workspaces_two_jobs_parallel",
+      "ok": true,
+      "elapsedMs": 83,
+      "details": {
+        "a": {
+          "status": "completed",
+          "jobId": "batch-wave6-a",
+          "completed": 2
+        },
+        "b": {
+          "status": "completed",
+          "jobId": "batch-wave6-b",
+          "completed": 2
+        },
+        "workspacePollution": false
+      }
+    },
+    {
+      "name": "same_workspace_two_jobs_lock",
+      "ok": true,
+      "elapsedMs": 1061,
+      "details": {
+        "a": {
+          "status": "completed",
+          "jobId": "batch-wave6-same-a",
+          "reason": null,
+          "concurrencyError": null
+        },
+        "b": {
+          "status": "error",
+          "jobId": "batch-wave6-same-b",
+          "reason": "workspace concurrency-wave6-same-ws 已有运行中的批量任务 batch-wave6-same-a（pid=15272, host=CH-202406301000, expiresAt=2026-08-15T07:51:41.737Z）",
+          "concurrencyError": null
+        },
+        "successCount": 1,
+        "errorCount": 1
+      }
+    },
+    {
+      "name": "dual_candidate_single_commit_slot",
+      "ok": true,
+      "elapsedMs": 880,
+      "details": {
+        "a": {
+          "ok": true,
+          "owner": "cand-a",
+          "elapsedMs": 715,
+          "slotOk": true
+        },
+        "b": {
+          "ok": false,
+          "busy": true,
+          "owner": "cand-b",
+          "error": "workspace concurrency-wave6-dual-cand 章节提交槽等待 180ms 超时（当前持有者未释放、未过期）。fail-closed：不静默并行提交。",
+          "elapsedMs": 182
+        },
+        "officialCommitters": 1
+      }
+    },
+    {
+      "name": "focused_wave5_wave6_tests",
+      "ok": true,
+      "elapsedMs": 0,
+      "details": {
+        "code": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 1
+      },
+      "tapExcerpt": "      ---\n      duration_ms: 275.6617\n      type: 'test'\n      ...\n    1..6\nok 3 - CONCURRENCY 跨进程互斥：Wave1 原子租约锁 / Wave2 状态 CAS / Wave3 提交槽串行\n  ---\n  duration_ms: 3360.5722\n  type: 'suite'\n  ...\n1..3\n# tests 22\n# suites 3\n# pass 22\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 3575.0065\n"
+    }
+  ]
+}

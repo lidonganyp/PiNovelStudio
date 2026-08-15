@@ -1,0 +1,42 @@
+{
+  "workspaceId": "concurrency-live-a",
+  "chapterNumber": 23,
+  "elapsedMs": 120274,
+  "pid": 46848,
+  "devMode": "1",
+  "ok": true,
+  "status": "ok",
+  "isError": false,
+  "jobId": null,
+  "failureEnvelope": null,
+  "selectedSource": "editorial",
+  "progressUpdates": [
+    "{\"stage\":\"pipeline\",\"status\":\"start\",\"message\":\"统一主链路编排开始（Preflight → Agentic → 风格优化 → 复检 → 保存）\",\"timestamp\":\"2026-08-15T07:11:55.724Z\"}",
+    "{\"stage\":\"stage1_novelosAgentic\",\"status\":\"start\",\"message\":\"NovelOS Agentic 生成初稿中（最耗时，约 5-15 分钟）\",\"timestamp\":\"2026-08-15T07:11:55.766Z\"}",
+    "{\"stage\":\"stage1_novelosAgentic\",\"status\":\"done\",\"message\":\"NovelOS Agentic 生成初稿中（最耗时，约 5-15 分钟）\",\"durationMs\":69240,\"timestamp\":\"2026-08-15T07:13:05.006Z\"}",
+    "{\"stage\":\"stage2_agenticFactGuard\",\"status\":\"start\",\"message\":\"Agentic 事实守门检查中\",\"timestamp\":\"2026-08-15T07:13:05.008Z\"}",
+    "{\"stage\":\"stage2_agenticFactGuard\",\"status\":\"done\",\"message\":\"Agentic 事实守门检查中\",\"durationMs\":16,\"timestamp\":\"2026-08-15T07:13:05.024Z\"}",
+    "{\"stage\":\"stage3_authorStyleOptimization\",\"status\":\"start\",\"message\":\"作者风格整章优化中（约 5-15 分钟）\",\"timestamp\":\"2026-08-15T07:13:05.026Z\"}",
+    "{\"stage\":\"stage3_authorStyleOptimization\",\"status\":\"done\",\"message\":\"作者风格整章优化中（约 5-15 分钟）\",\"durationMs\":49260,\"timestamp\":\"2026-08-15T07:13:54.286Z\"}",
+    "{\"stage\":\"stage4_storyPreservation\",\"status\":\"start\",\"message\":\"故事保持性检查中\",\"timestamp\":\"2026-08-15T07:13:54.288Z\"}",
+    "{\"stage\":\"stage4_storyPreservation\",\"status\":\"done\",\"message\":\"故事保持性检查中\",\"durationMs\":48,\"timestamp\":\"2026-08-15T07:13:54.336Z\"}",
+    "{\"stage\":\"stage5_finalFactRecheck\",\"status\":\"start\",\"message\":\"最终事实复检中\",\"timestamp\":\"2026-08-15T07:13:54.338Z\"}",
+    "{\"stage\":\"stage5_finalFactRecheck\",\"status\":\"done\",\"message\":\"最终事实复检中\",\"durationMs\":19,\"timestamp\":\"2026-08-15T07:13:54.357Z\"}",
+    "{\"stage\":\"stage6_commitAndSave\",\"status\":\"start\",\"message\":\"提交并原子保存章节中\",\"timestamp\":\"2026-08-15T07:13:54.387Z\"}",
+    "{\"stage\":\"stage6_commitAndSave\",\"status\":\"done\",\"message\":\"提交并原子保存章节中\",\"durationMs\":351,\"timestamp\":\"2026-08-15T07:13:54.738Z\"}"
+  ],
+  "detailsKeys": [
+    "status",
+    "workspaceId",
+    "chapterId",
+    "chapterNumber",
+    "text",
+    "candidates",
+    "diagnostics",
+    "stageResults",
+    "isPreviewRun",
+    "selectedSource",
+    "selectedCandidateId",
+    "isUnderSpecified"
+  ]
+}

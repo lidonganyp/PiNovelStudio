@@ -201,6 +201,78 @@ describe("CONCURRENCY-WAVE5：公共 handler commandId / CAS", () => {
     assert.equal(generateCalls.length, 0, "CAS 失败不得进入生成");
   });
 
+  it("resume / cancel 缺少 commandId 时 fail-closed", async () => {
+    const ws = "batch-wave5-cmd-required";
+    const workspacePath = freshWorkspace(ws);
+    const mock = createMockGenerateChapter({
+      workspacePath,
+      failOnChapters: [1],
+    });
+    const jobId = "batch-wave5-cmd-required";
+    const start = await handleBatchGeneration(baseStart(ws, {
+      jobId,
+      commandId: "cmd-required-setup",
+      endChapter: 2,
+      _mockGenerateChapter: mock,
+    }));
+    assert.equal(start.status, "paused");
+
+    const resume = await handleBatchGeneration({
+      mode: "batch",
+      action: "resume",
+      workspaceId: ws,
+      jobId,
+      _projectRoot: PROJECT_ROOT,
+      _mockGenerateChapter: mock,
+    });
+    assert.equal(resume.status, "error");
+    assert.equal(resume.concurrencyError, "missing_command_id");
+
+    const cancel = await handleBatchGeneration({
+      mode: "batch",
+      action: "cancel",
+      workspaceId: ws,
+      jobId,
+      _projectRoot: PROJECT_ROOT,
+    });
+    assert.equal(cancel.status, "error");
+    assert.equal(cancel.concurrencyError, "missing_command_id");
+  });
+
+  it("收据写入失败时不得返回业务成功", async () => {
+    const ws = "batch-wave5-receipt-fail";
+    const workspacePath = freshWorkspace(ws);
+    const mock = createMockGenerateChapter({
+      workspacePath,
+      failOnChapters: [1],
+    });
+    const jobId = "batch-wave5-receipt-fail";
+    const start = await handleBatchGeneration(baseStart(ws, {
+      jobId,
+      commandId: "cmd-receipt-setup",
+      endChapter: 2,
+      _mockGenerateChapter: mock,
+    }));
+    assert.equal(start.status, "paused");
+
+    const ledgerPath = join(workspacePath, "batch-jobs", "command-receipts.json");
+    const { rmSync, mkdirSync } = await import("node:fs");
+    try { rmSync(ledgerPath, { force: true }); } catch { /* ignore */ }
+    mkdirSync(ledgerPath, { recursive: true });
+
+    const cancel = await handleBatchGeneration({
+      mode: "batch",
+      action: "cancel",
+      workspaceId: ws,
+      jobId,
+      commandId: "cmd-receipt-fail-1",
+      _projectRoot: PROJECT_ROOT,
+    });
+    assert.equal(cancel.status, "error");
+    assert.equal(cancel.concurrencyError, "idempotency_receipt_failed");
+    assert.match(String(cancel.failureEnvelope?.reason ?? ""), /idempotency_receipt_failed|收据/);
+  });
+
   it("resume 相同 commandId 不重复推进 frontier", async () => {
     const ws = "batch-wave5-resume-once";
     const workspacePath = freshWorkspace(ws);

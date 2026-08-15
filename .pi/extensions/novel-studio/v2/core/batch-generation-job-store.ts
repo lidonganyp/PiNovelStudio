@@ -24,7 +24,7 @@
  */
 
 import { readFileSync, existsSync, mkdirSync } from "fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "path";
 import { atomicSave } from "./orchestrator-commit-save.js";
 import { withExclusiveGuard } from "./fs-atomic.js";
@@ -510,7 +510,10 @@ export type BatchConcurrencyError =
   | "concurrent_state_update"
   | "state_file_corrupt"
   | "already_consumed"
-  | "stale_revision";
+  | "stale_revision"
+  | "missing_command_id"
+  | "idempotency_receipt_failed"
+  | "recovery_trace_failed";
 
 export interface BatchCommandResultSnapshot {
   status: BatchJobState["status"] | "error";
@@ -579,12 +582,13 @@ export function lookupBatchCommandReceipt(
 
 /**
  * 原子记录 commandId 首次结果。相同 commandId 已存在时不覆盖，返回已有收据。
+ * 写入失败返回 ok=false，不得假装已记录。
  */
 export function recordBatchCommandReceipt(
   workspaceId: string,
   receipt: BatchCommandReceipt,
   projectRoot: string,
-): { ok: true; receipt: BatchCommandReceipt; created: boolean } {
+): { ok: true; receipt: BatchCommandReceipt; created: boolean } | { ok: false; reason: string } {
   validateWorkspaceId(workspaceId);
   validateCommandId(receipt.commandId);
   const stateDir = join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR);
@@ -593,22 +597,26 @@ export function recordBatchCommandReceipt(
   }
   const path = commandLedgerPath(workspaceId, projectRoot);
   const guardPath = join(stateDir, "command-receipts.cas-lock");
-  return withExclusiveGuard(guardPath, () => {
-    const ledger = readCommandLedger(workspaceId, projectRoot);
-    const existing = ledger.receipts[receipt.commandId];
-    if (existing) {
-      return { ok: true as const, receipt: existing, created: false };
-    }
-    const next: BatchCommandLedger = {
-      schemaVersion: 1,
-      receipts: {
-        ...ledger.receipts,
-        [receipt.commandId]: receipt,
-      },
-    };
-    atomicSave(path, JSON.stringify(next, null, 2));
-    return { ok: true as const, receipt, created: true };
-  });
+  try {
+    return withExclusiveGuard(guardPath, () => {
+      const ledger = readCommandLedger(workspaceId, projectRoot);
+      const existing = ledger.receipts[receipt.commandId];
+      if (existing) {
+        return { ok: true as const, receipt: existing, created: false };
+      }
+      const next: BatchCommandLedger = {
+        schemaVersion: 1,
+        receipts: {
+          ...ledger.receipts,
+          [receipt.commandId]: receipt,
+        },
+      };
+      atomicSave(path, JSON.stringify(next, null, 2));
+      return { ok: true as const, receipt, created: true };
+    });
+  } catch (e: unknown) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 export type BatchRecoveryDecision =
@@ -617,16 +625,124 @@ export type BatchRecoveryDecision =
   | "checkpoint"
   | "blocked";
 
+export interface ChapterCommitFacts {
+  chapterNumber: number;
+  lastEventId: string | null;
+  chapterFilePresent: boolean;
+  chapterFileHash: string | null;
+  narrativeStateAnchored: boolean;
+  narrativeStateRevision: string | null;
+  commitIntentId: string | null;
+  commitIntentCompleted: boolean;
+  commitIntentHash: string | null;
+  hashMatchesIntent: boolean;
+  commitReceiptPresent: boolean;
+}
+
 export interface BatchCrashReconciliation {
   decision: BatchRecoveryDecision;
   reason: string;
   recoveredChapters: number[];
   incompleteChapter: number | null;
+  facts: ChapterCommitFacts[];
+}
+
+function hashChapterText(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex").slice(0, 12);
+}
+
+function resolveChapterFile(workspacePath: string, chapterNumber: number): string | null {
+  const candidates = [
+    join(workspacePath, "chapters", `${chapterNumber}.md`),
+    join(workspacePath, "chapters", `chapter-${chapterNumber}.md`),
+  ];
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+function loadCompletedCommitIntent(
+  workspacePath: string,
+  chapterNumber: number,
+): { commitIntentId: string; artifactHash: string } | null {
+  const ids = [String(chapterNumber), `ch${chapterNumber}`];
+  for (const chapterId of ids) {
+    const path = join(workspacePath, "chapter-approvals", `${chapterId}.commit-intents.json`);
+    if (!existsSync(path)) continue;
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf-8")) as {
+        entries?: Record<string, { commitIntentId?: string; artifactHash?: string; status?: string }>;
+      };
+      const entries = raw?.entries ?? {};
+      for (const entry of Object.values(entries)) {
+        if (entry?.status === "completed" && entry.artifactHash && entry.commitIntentId) {
+          return { commitIntentId: entry.commitIntentId, artifactHash: entry.artifactHash };
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 /**
- * 崩溃恢复分类：按章节文件 + NarrativeState 双校验决定 completed / retry / checkpoint / blocked。
- * 锁存在不代表提交成功；文件存在但无 finalText 锚点不得当作已完成。
+ * 读取单章恢复事实源：事件 ID、commit intent、正文 hash、NarrativeState、commit receipt。
+ */
+export function inspectChapterCommitFacts(
+  workspaceId: string,
+  chapterNumber: number,
+  projectRoot: string,
+  lastEventId: string | null = null,
+): ChapterCommitFacts {
+  validateWorkspaceId(workspaceId);
+  const workspacePath = join(projectRoot, "workspaces", workspaceId);
+  const chapterFile = resolveChapterFile(workspacePath, chapterNumber);
+  let chapterFileHash: string | null = null;
+  if (chapterFile) {
+    try { chapterFileHash = hashChapterText(readFileSync(chapterFile, "utf-8")); } catch { chapterFileHash = null; }
+  }
+  const anchored = isChapterAlreadyCompleted(workspaceId, chapterNumber, projectRoot);
+  let narrativeStateRevision: string | null = null;
+  const nsPath = join(workspacePath, "narrative-state-store.json");
+  if (existsSync(nsPath)) {
+    try {
+      const ns = JSON.parse(readFileSync(nsPath, "utf-8")) as { lastCommittedChapter?: string };
+      narrativeStateRevision = ns.lastCommittedChapter ?? null;
+    } catch { /* ignore */ }
+  }
+  const intent = loadCompletedCommitIntent(workspacePath, chapterNumber);
+  const hashMatchesIntent = Boolean(
+    chapterFileHash && intent?.artifactHash && chapterFileHash === intent.artifactHash,
+  );
+  return {
+    chapterNumber,
+    lastEventId,
+    chapterFilePresent: Boolean(chapterFile),
+    chapterFileHash,
+    narrativeStateAnchored: anchored,
+    narrativeStateRevision,
+    commitIntentId: intent?.commitIntentId ?? null,
+    commitIntentCompleted: Boolean(intent),
+    commitIntentHash: intent?.artifactHash ?? null,
+    hashMatchesIntent,
+    commitReceiptPresent: Boolean(intent && hashMatchesIntent),
+  };
+}
+
+function chapterFactsComplete(facts: ChapterCommitFacts): boolean {
+  return (
+    facts.chapterFilePresent &&
+    facts.narrativeStateAnchored &&
+    facts.commitIntentCompleted &&
+    facts.hashMatchesIntent &&
+    facts.commitReceiptPresent &&
+    Boolean(facts.lastEventId)
+  );
+}
+
+/**
+ * 崩溃恢复分类：按事件、commit intent、正文 hash、NarrativeState、receipt
+ * 决定 completed / retry / checkpoint / blocked。
+ * 锁存在不代表提交成功；缺任一事实源不得标 completed。
  */
 export function reconcileBatchJobAfterCrash(
   state: BatchJobState,
@@ -634,8 +750,16 @@ export function reconcileBatchJobAfterCrash(
 ): BatchCrashReconciliation {
   const recoveredChapters: number[] = [];
   let incompleteChapter: number | null = null;
+  const facts: ChapterCommitFacts[] = [];
   for (let n = state.startChapter; n <= state.endChapter; n++) {
-    if (isChapterAlreadyCompleted(state.workspaceId, n, projectRoot)) {
+    const chapterFacts = inspectChapterCommitFacts(
+      state.workspaceId,
+      n,
+      projectRoot,
+      state.lastEventId ?? null,
+    );
+    facts.push(chapterFacts);
+    if (chapterFactsComplete(chapterFacts)) {
       recoveredChapters.push(n);
       continue;
     }
@@ -647,14 +771,16 @@ export function reconcileBatchJobAfterCrash(
       reason: `checkpoint_pending：第 ${state.checkpointChapter} 章待确认，frontier 不得越过`,
       recoveredChapters,
       incompleteChapter: state.checkpointChapter,
+      facts,
     };
   }
   if (incompleteChapter === null) {
     return {
       decision: "completed",
-      reason: "所有章节均有正文 + NarrativeState 提交证据",
+      reason: "所有章节均具备事件、commit intent、正文 hash、NarrativeState 与 receipt",
       recoveredChapters,
       incompleteChapter: null,
+      facts,
     };
   }
   if (state.status === "cancelled" || state.status === "error") {
@@ -663,12 +789,14 @@ export function reconcileBatchJobAfterCrash(
       reason: `任务状态为 ${state.status}，崩溃恢复不得自动继续`,
       recoveredChapters,
       incompleteChapter,
+      facts,
     };
   }
   return {
     decision: "retry",
-    reason: `第 ${incompleteChapter} 章缺少完整提交证据，应从该章重试`,
+    reason: `第 ${incompleteChapter} 章缺少完整提交事实源，应从该章重试`,
     recoveredChapters,
     incompleteChapter,
+    facts,
   };
 }

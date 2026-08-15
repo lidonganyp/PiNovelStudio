@@ -168,6 +168,10 @@ docs/evals/
 # 评测报告历史归档（本地保留，不纳入版本控制；仅 reports/current/ tracked）
 reports/*
 !reports/current/
+!reports/concurrency-wave6/
+!reports/concurrency-wave6/**
+!reports/concurrency-wave6-live/
+!reports/concurrency-wave6-live/**
 !reports/current/**
 # HUMAN-PROXY-PROVENANCE-1：gpt5.6-sol verdict 落盘的生产 evidence artifact，需纳入版本控制
 !reports/human-proxy-provenance/

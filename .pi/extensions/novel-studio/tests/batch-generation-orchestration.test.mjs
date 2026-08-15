@@ -232,6 +232,7 @@ describe("BATCH 编排：串行 / 失败暂停 / 100 章 / 幂等", () => {
         chapterId: "1",
         chapterNumber: 1,
         jobId,
+        commandId: "cmd-orch-resume",
         _projectRoot: PROJECT_ROOT,
         _mockGenerateChapter: mock,
       },

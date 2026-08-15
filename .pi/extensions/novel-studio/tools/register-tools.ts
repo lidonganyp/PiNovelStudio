@@ -360,7 +360,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           },
           commandId: {
             type: "string",
-            description: "用户命令幂等键（CONCURRENCY-WAVE5）。resume/cancel 建议必填；start 携带时重复提交返回首次结果，不重复保存或生成。",
+            description: "用户命令幂等键（CONCURRENCY-WAVE5）。resume/cancel 必填；start 携带时重复提交返回首次结果，不重复保存或生成。缺省 resume/cancel 会 fail-closed。",
           },
         },
         required: ["workspaceId", "chapterId", "chapterNumber"],

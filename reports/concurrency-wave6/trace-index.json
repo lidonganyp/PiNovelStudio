@@ -1,0 +1,10 @@
+{
+  "reportJson": "D:\\CODE\\PiNovelStudio\\reports\\concurrency-wave6\\replay-report.json",
+  "reportMarkdown": "D:\\CODE\\PiNovelStudio\\reports\\concurrency-wave6\\verification-report.md",
+  "scenarios": [
+    "two_workspaces_two_jobs_parallel",
+    "same_workspace_two_jobs_lock",
+    "dual_candidate_single_commit_slot",
+    "focused_wave5_wave6_tests"
+  ]
+}
