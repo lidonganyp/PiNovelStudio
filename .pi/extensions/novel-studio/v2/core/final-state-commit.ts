@@ -35,6 +35,12 @@ import {
   MemoryHardConflictError,
   type MemoryConflictEnvelope,
 } from "./memory/memory-lifecycle.js";
+import { emitTrustAuditEvent } from "./trust/trust-audit.js";
+import {
+  canWriteToLongTermState,
+  createFactPromotionCandidate,
+  promoteFactCandidate,
+} from "./trust/fact-promotion.js";
 
 // ============================================================================
 // 四类长期叙事状态
@@ -217,6 +223,36 @@ export interface StagedStateUpdate {
   invalidations: string[];
   sourceChapter: string;
   finalCandidateId?: string;
+  /**
+   * CONCURRENCY-WAVE4：候选生成时基于的 narrative-state-store 磁盘内容 revision
+   * （computeNarrativeStateRevision 产物）。commit() 落盘前与磁盘当前 revision 做
+   * CAS 比对：生成期间状态被其他章节提交改写 -> 抛 StaleStateRevisionError 阻断
+   * （防止基于旧状态的丢失更新覆盖）。可选字段：未携带时跳过该项比对（向后兼容）。
+   */
+  baseStateRevision?: string;
+}
+
+/**
+ * CONCURRENCY-WAVE4：提交边界状态 revision CAS 失败。
+ * 候选生成时的基础状态 revision 与提交时磁盘现状不一致（生成期间其他提交已改写
+ * 状态文件），候选基于旧状态上下文，拒绝提交。调用方（orchestrator-commit-save）
+ * 捕获后回滚正文并阻断交付。
+ */
+export class StaleStateRevisionError extends Error {
+  readonly code = "stale_state_revision";
+  readonly baseStateRevision: string;
+  readonly currentStateRevision: string;
+
+  constructor(baseStateRevision: string, currentStateRevision: string) {
+    super(
+      `生成期间长期状态已被其他提交更新（baseStateRevision ${baseStateRevision} -> ` +
+        `磁盘当前 ${currentStateRevision}）；候选基于旧状态上下文，拒绝提交` +
+        `（stale_state_revision）。请基于当前状态重新生成。`,
+    );
+    this.name = "StaleStateRevisionError";
+    this.baseStateRevision = baseStateRevision;
+    this.currentStateRevision = currentStateRevision;
+  }
 }
 
 // ============================================================================
@@ -1122,6 +1158,20 @@ export function saveStateStore(
   renameSync(tmpPath, path);
 }
 
+/**
+ * CONCURRENCY-WAVE4：计算 narrative-state-store 磁盘原始内容的 revision
+ * （SHA-256 前 16 位十六进制）。作为 baseStateRevision CAS 比对的事实源：
+ * - 必须对磁盘原始文件内容 hash，不能对 loadStateStore 返回对象 hash
+ *   （normalizeStore/saveStateStore 会重写 updatedAt，对象 hash 无法标识磁盘版本）
+ * - 文件不存在 -> hash("")，与 emptyStore 语义对应（首章/新 workspace）
+ * - 每次 saveStateStore 后内容必然变化（updatedAt 前进），revision 随之前进
+ */
+export function computeNarrativeStateRevision(workspaceId: string, projectRoot: string): string {
+  const path = stateStorePath(workspaceId, projectRoot);
+  const raw = existsSync(path) ? readFileSync(path, "utf-8") : "";
+  return createHash("sha256").update(raw, "utf8").digest("hex").slice(0, 16);
+}
+
 function emptyStore(workspaceId: string): NarrativeStateStore {
   return {
     schemaVersion: STATE_STORE_SCHEMA_VERSION,
@@ -1217,6 +1267,8 @@ export class FinalStateCommit {
       invalidations: [...update.invalidations],
       sourceChapter: update.sourceChapter,
       finalCandidateId: update.finalCandidateId,
+      // CONCURRENCY-WAVE4：透传基础状态 revision（候选生成时的磁盘快照标识）
+      baseStateRevision: update.baseStateRevision,
     };
     this.stagedForCandidateId = update.finalCandidateId ?? null;
   }
@@ -1263,14 +1315,54 @@ export class FinalStateCommit {
 
     if (!this.staged) {
       // 无暂存：直接返回原 store（仍记录 finalText hash 供审计）
-      return { store, committed: 0, rejected: [], finalTextHash: computeFinalTextHash(finalText), plannedPersisted: 0, receipt: null };
+      const emptyHash = computeFinalTextHash(finalText);
+      emitTrustAuditEvent({
+        decisionType: "state_commit",
+        allowed: true,
+        reason: "无 staged 状态，跳过长期状态写入",
+        workspaceId,
+        hashes: { finalTextHash: emptyHash },
+        evidence: { finalCandidateId, committed: 0 },
+      });
+      return { store, committed: 0, rejected: [], finalTextHash: emptyHash, plannedPersisted: 0, receipt: null };
     }
 
     // finalCandidateId 必须与暂存时一致（防止候选切换后误提交旧候选的状态）
     if (this.stagedForCandidateId && this.stagedForCandidateId !== finalCandidateId) {
+      emitTrustAuditEvent({
+        decisionType: "state_commit_rejection",
+        allowed: false,
+        reason: `finalCandidateId 与 staged 不一致：${finalCandidateId} vs ${this.stagedForCandidateId}`,
+        workspaceId,
+        evidence: { finalCandidateId, stagedFor: this.stagedForCandidateId },
+      });
       throw new Error(
         `commit 的 finalCandidateId=${finalCandidateId} 与暂存的 ${this.stagedForCandidateId} 不一致，拒绝提交（候选切换未 discard）`
       );
+    }
+
+    // CONCURRENCY-WAVE4：提交边界 CAS -- staged 绑定的基础状态 revision 与磁盘当前
+    // revision 比对。生成期间（编排器运行模型的长窗口内）其他章节提交改写了状态文件
+    // -> 抛 StaleStateRevisionError（调用方回滚正文并阻断），防止丢失更新覆盖。
+    // 未携带 baseStateRevision（旧调用方/直调测试）-> 跳过该项比对（向后兼容）。
+    if (typeof this.staged.baseStateRevision === "string") {
+      const currentStateRevision = computeNarrativeStateRevision(workspaceId, projectRoot);
+      if (this.staged.baseStateRevision !== currentStateRevision) {
+        const err = new StaleStateRevisionError(this.staged.baseStateRevision, currentStateRevision);
+        emitTrustAuditEvent({
+          decisionType: "state_commit_rejection",
+          allowed: false,
+          reason: err.message,
+          workspaceId,
+          evidence: {
+            finalCandidateId,
+            baseStateRevision: err.baseStateRevision,
+            currentStateRevision: err.currentStateRevision,
+            code: err.code,
+          },
+        });
+        throw err;
+      }
     }
 
     // A2：用 finalText 校验每条 entry 的 sourceRef span
@@ -1300,6 +1392,26 @@ export class FinalStateCommit {
         rejected.push({ entry, errors: [...v.errors, ...spanErrors] });
         continue;
       }
+
+      // PROMPT-INJECTION-TRUST：事实晋级闸门 — 未达 state_commit_candidate 等价条件不得入长期状态
+      const promotionGate = evaluateEntryPromotionGate(entry, finalTextHash);
+      if (!promotionGate.allowed) {
+        emitTrustAuditEvent({
+          decisionType: "state_commit_rejection",
+          allowed: false,
+          reason: promotionGate.reason,
+          workspaceId,
+          hashes: { finalTextHash },
+          evidence: {
+            entryId: entry.id,
+            sourceRef: entry.sourceRef,
+            kind: entry.kind,
+          },
+        });
+        rejected.push({ entry, errors: [promotionGate.reason] });
+        continue;
+      }
+
       accepted.push(entry);
     }
 
@@ -1718,6 +1830,101 @@ function verifyExpectationFinalTextEvidence(
  *
  * 返回 errors 数组（空表示通过）。
  */
+/**
+ * 将 staged entry 映射到事实晋级状态机并检查是否可写长期状态。
+ * 生产闭包：FinalStateCommit 必须经过 canWriteToLongTermState 等价闸门。
+ *
+ * 已通过 reanchor（#finalText:）+ span 校验的 entry 视为：
+ * retrieved → verified（sourceRef 绑定 finalText）→ state_commit_candidate（commit 调用即用户/编排器确认路径）。
+ */
+function evaluateEntryPromotionGate(
+  entry: NarrativeStateEntry,
+  finalTextHash: string,
+): { allowed: boolean; reason: string } {
+  // seed / 未重锚定：已在 verifySourceRefSpan 拒绝；此处双保险
+  if (!entry.sourceRef?.includes("#finalText:")) {
+    return {
+      allowed: false,
+      reason: `未重锚定到最终正文，不得写入长期状态：${entry.sourceRef}`,
+    };
+  }
+  if (
+    entry.sourceRef.endsWith(":not-found") ||
+    entry.sourceRef.endsWith(":semantic-conflict")
+  ) {
+    return {
+      allowed: false,
+      reason: `来源失效或冲突，不得写入长期状态：${entry.sourceRef}`,
+    };
+  }
+
+  const factText =
+    "fact" in entry && typeof (entry as { fact?: string }).fact === "string"
+      ? (entry as { fact: string }).fact
+      : "description" in entry &&
+          typeof (entry as { description?: string }).description === "string"
+        ? (entry as { description: string }).description
+        : "value" in entry && typeof (entry as { value?: string }).value === "string"
+          ? (entry as { value: string }).value
+          : entry.id;
+
+  try {
+    let candidate = createFactPromotionCandidate({
+      factText: factText || entry.id,
+      sourceRefs: [
+        {
+          kind: "committed_state",
+          id: entry.id,
+          locator: entry.sourceRef,
+          contentHash: finalTextHash,
+        },
+      ],
+      trustClass: "retrieved_reference",
+      stage: "retrieved_fragment",
+      boundTextHash: finalTextHash,
+      promotionReason: "final_state_commit_gate",
+    });
+
+    const verified = promoteFactCandidate({
+      candidate,
+      targetStage: "verified_fact",
+      verification: {
+        verifier: "final-state-commit-reanchor",
+        passed: true,
+        reason: "sourceRef bound to finalText via reanchor + span check",
+      },
+      finalTextHash,
+    });
+    if (verified.decision !== "allowed") {
+      return { allowed: false, reason: verified.reason };
+    }
+    candidate = verified.candidate;
+
+    const staged = promoteFactCandidate({
+      candidate,
+      targetStage: "state_commit_candidate",
+      verification: candidate.verification,
+      userConfirmed: true,
+      finalTextHash,
+      promotionReason: "orchestrator_final_commit",
+    });
+    if (staged.decision !== "allowed") {
+      return { allowed: false, reason: staged.reason };
+    }
+    candidate = staged.candidate;
+
+    return canWriteToLongTermState(candidate, {
+      userConfirmed: true,
+      finalTextHash,
+    });
+  } catch (err) {
+    return {
+      allowed: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 function verifySourceRefSpan(sourceRef: string, finalText: string): string[] {
   const errors: string[] = [];
   if (sourceRef.endsWith(":not-found")) {

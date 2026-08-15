@@ -31,6 +31,7 @@ import type {
   CompiledContext,
   ConstitutionSnapshot,
 } from "./types.js";
+import { captureGenerationBaseline } from "./commit-stale-guard.js";
 import type { ChapterIntent } from "./chapter-intent-builder.js";
 import type { ModelGenerateFn, ModelGenerateInput } from "../adapters/legacy-model-route-adapter.js";
 import { createEditorialOpportunityJudge } from "./editorial-opportunity-judge.js";
@@ -230,6 +231,71 @@ import {
   type ModelLock,
   type TrustedControlPlane,
 } from "./control-plane.js";
+import { assertModelCallMatchesLock } from "./run-routing-context.js";
+import {
+  assertOrchestratorCommitActor,
+} from "./autonomy-policy.js";
+import {
+  buildProductionFailureEnvelope,
+  toUnifiedFailureEnvelope,
+  budgetSnapshotForTrace,
+} from "./failure-envelope.js";
+import { mapLegacyFailureClass } from "./failure-types.js";
+import { createRecoveryStateMachine } from "./recovery-state-machine.js";
+import { saveRecoveryCheckpoint } from "./recovery-checkpoint.js";
+import { matchRecoveryPolicy } from "./recovery-policy.js";
+import {
+  createRecoveryBudget,
+  reserveBudget,
+  snapshotBudget,
+} from "./recovery-budget.js";
+import type { RecoveryBudget } from "./recovery-types.js";
+// BG-01：统一预算账本（真实模型调用前 reserve / 调用后 settle）。
+// 与 layered budget / RecoveryBudget 并存接线；别名避免与 recovery-budget 的 reserveBudget 冲突。
+import {
+  createBudgetLedger,
+  reserveBudget as reserveLedgerBudget,
+  settleBudget as settleLedgerBudget,
+  getBudgetLedger,
+  type BudgetLedger,
+  type BudgetStage as LedgerBudgetStage,
+} from "./budget-ledger.js";
+import {
+  createRoutingGovernanceState,
+  reserveForModelCall,
+  settleModelCall,
+  recordFailureStrategy,
+  buildGovernanceReports,
+  attachGovernanceReports,
+  getGovernanceState,
+  setGovernanceState,
+  type RoutingGovernanceState,
+} from "./routing-governance-runtime.js";
+// MA：多代理工作包 / 结果契约 / 编排器裁决（写入 stageResults.agentCollaboration）
+import {
+  attachCollaborationToStageResults,
+  buildRoleWorkPackage,
+  createCollaborationTraceState,
+  guardCommitStages,
+  recordAgentResult,
+  recordSystemDecision,
+  recordWorkPackage,
+  requireWorkPackageInput,
+  type CollaborationTraceState,
+} from "./agent-collaboration-runtime.js";
+import {
+  adaptCommitResult,
+  adaptDraftFromAgenticSource,
+  adaptEditorialResult,
+  adaptFactGuardResult,
+  adaptStoryPreservationResult,
+} from "./agent-result-adapters.js";
+import {
+  classifyCollaborationContractError,
+  collaborationFailureGuidance,
+  formatCollaborationFailureReason,
+} from "./agent-collaboration-fail-closed.js";
+import { buildAgentLineageIndex } from "./agent-lineage-index.js";
 
 // ============================================================================
 // 类型与常量（行为保持重构 Step 1：已抽出到 orchestrator-types.ts）
@@ -327,6 +393,20 @@ export class UnifiedOrchestrator {
 
     const warnings: string[] = [];
     const stageResults: Record<string, unknown> = {};
+    // CONCURRENCY-WAVE4：生成开始时捕获环境基线（active releaseId + constitutionHash
+    // + narrative-state-store 磁盘 revision）。commitAndSave 提交边界与基线比对，
+    // 漂移 -> stale_release / constitution_changed / stale_state_revision 阻断；
+    // 状态提交另有 FinalStateCommit.commit 内 baseStateRevision CAS 第二道防线。
+    // 捕获失败（pointer 损坏）→ 记录结构化错误并保留 null 基线：提交边界检测时
+    // readActiveProductionReleaseId 会再次抛错并 fail-closed，不会静默跳过。
+    try {
+      stageResults.generationBaseline = captureGenerationBaseline(projectRoot, workspaceId);
+    } catch (e) {
+      stageResults.generationBaselineCaptureError = {
+        reason: (e as Error).message,
+        at: new Date().toISOString(),
+      };
+    }
     const automaticQualityWinnerSelectionEnabled = input.allowAutomaticLiterarySelection !== false;
     stageResults.qualitySelectionPolicy = {
       mode: automaticQualityWinnerSelectionEnabled ? "quality_winner" : "advisory_only",
@@ -380,8 +460,136 @@ export class UnifiedOrchestrator {
         generation: this.modelLockEvidence(controlPlane.packet.modelLocks.generation, controlPlane.executionLocks.generation),
         judge: this.modelLockEvidence(controlPlane.packet.modelLocks.judge, controlPlane.executionLocks.judge),
       },
+      ...(input.runRouting
+        ? {
+            runRouting: {
+              orchestratorRunId: input.runRouting.orchestratorRunId,
+              generationRoute: input.runRouting.generationRoute,
+              editorialRoute: input.runRouting.editorialRoute,
+              provider: input.runRouting.provider,
+              model: input.runRouting.model,
+              modelVersion: input.runRouting.modelVersion,
+              routeClass: input.runRouting.routeClass,
+              fallbackPolicy: input.runRouting.fallbackPolicy,
+              budgetProfile: input.runRouting.budgetProfile,
+              explicitWriterSelection: input.runRouting.explicitWriterSelection,
+              writerModel: input.runRouting.writerModel,
+              temperature: input.runRouting.temperature,
+              maxTokens: input.runRouting.maxTokens,
+              timeout: input.runRouting.timeout,
+              promptBundleHash: input.runRouting.promptBundleHash,
+              contextHash: input.runRouting.contextHash,
+            },
+          }
+        : {}),
     };
     stageResults.controlPlane = controlTrace;
+
+    // MA：多代理协作 trace 状态（工作包 / 结果契约 / 裁决记录）
+    const collabState: CollaborationTraceState = createCollaborationTraceState({
+      orchestratorRunId:
+        typeof (stageResults as { orchestratorRunId?: string }).orchestratorRunId === "string"
+          ? String((stageResults as { orchestratorRunId?: string }).orchestratorRunId)
+          : `run:${workspaceId ?? "default"}:${chapterId}:${Date.now()}`,
+      workspaceId: workspaceId ?? "default",
+      chapterId: chapterId ?? String(chapterNumber),
+      taskId: controlPlane.packet.taskId,
+      contextHash:
+        typeof (input.context as { contextHash?: unknown } | undefined)?.contextHash === "string"
+          ? String((input.context as { contextHash?: string }).contextHash)
+          : `ctx:${workspaceId}:${chapterId}`,
+      constraintManifestHash: input.contextSafety?.manifest
+        ? String(
+            (input.contextSafety.manifest as { hash?: string }).hash ??
+              "manifest-present",
+          )
+        : undefined,
+      modelLock: controlPlane.executionLocks?.generation,
+    });
+    stageResults.orchestratorRunId = collabState.orchestratorRunId;
+    // 挂到 stageResults，供 hardBlock 出口统一 attach（hardBlock 不接收 collabState 参数）
+    (stageResults as Record<string, unknown>)._agentCollabState = collabState;
+    const finishWithCollab = <T extends UnifiedOrchestratorOutput>(out: T): T => {
+      attachCollaborationToStageResults(stageResults, collabState);
+      stageResults.agentLineageIndex = buildAgentLineageIndex({
+        stageResults,
+        orchestratorRunId: collabState.orchestratorRunId,
+        workspaceId: collabState.workspaceId,
+        chapterId: collabState.chapterId,
+      });
+      // WP-03..07：成功/阻断出口统一挂载治理报告（可从 quality-trace 验收）
+      // 状态只从 stageResults 读取，避免与下方 recoveryBudget 初始化顺序耦合。
+      const govState =
+        getGovernanceState(stageResults) ??
+        createRoutingGovernanceState({
+          runRouting: input.runRouting,
+          recoveryBudget: stageResults.recoveryBudget as RecoveryBudget | undefined,
+        });
+      const reports = buildGovernanceReports(govState, {
+        modelCalls: (stageResults.modelCalls as ModelCallEntry[] | undefined) ?? [],
+        delivered: out.status === "ok",
+        factGuardPassed:
+          typeof stageResults.agenticFactGuard === "object" && stageResults.agenticFactGuard
+            ? (stageResults.agenticFactGuard as { passed?: boolean }).passed !== false
+            : out.status === "ok",
+        storyPreservationPassed:
+          typeof stageResults.storyPreservation === "object" && stageResults.storyPreservation
+            ? (stageResults.storyPreservation as { passed?: boolean }).passed !== false
+            : out.status === "ok",
+        recoveryAssisted: govState.layeredBudget.recovery.usedModelCalls > 0,
+        lastFailureDecision: (stageResults._lastFailureStrategyDecision as
+          | ReturnType<typeof recordFailureStrategy>["decision"]
+          | undefined),
+        lastFailureType: stageResults._lastFailureType as
+          | import("./failure-strategy-matrix.js").FailureType
+          | undefined,
+      });
+      attachGovernanceReports(stageResults, reports);
+      // 同步 layered → legacy recovery 快照（外层重试可读）
+      stageResults.recoveryBudget = govState.layeredBudget.legacyRecovery;
+      stageResults.recoveryBudgetSnapshot = budgetSnapshotForTrace(
+        govState.layeredBudget.legacyRecovery,
+      );
+      // BG-01：落盘最终统一预算账本快照（trace 验收 + 外层重试读取 budgetLedger 延续）
+      stageResults.budgetLedger = getBudgetLedger(budgetLedgerState);
+      delete (stageResults as Record<string, unknown>)._budgetLedgerState;
+      delete (stageResults as Record<string, unknown>)._agentCollabState;
+      delete (stageResults as Record<string, unknown>)._routingGovernanceState;
+      delete (stageResults as Record<string, unknown>)._lastFailureStrategyDecision;
+      delete (stageResults as Record<string, unknown>)._lastFailureType;
+      return out;
+    };
+
+    // RECOVERY-P2：章节级全局恢复预算（贯穿本 orchestrate 调用）
+    // 总预算不因阶段切换重置；外层重试通过 _priorRecoveryBudget 延续累计消耗。
+    const recoveryBudget: RecoveryBudget = input._priorRecoveryBudget
+      ? { ...input._priorRecoveryBudget }
+      : createRecoveryBudget(
+          input.recoveryBudgetOverrides as Partial<RecoveryBudget> | undefined,
+        );
+    const recoveryMachine = createRecoveryStateMachine("running");
+    // 挂到 stageResults，供 hardBlock / deliverRaw 守卫读写（同一次 orchestrate 共享）
+    stageResults.recoveryBudget = recoveryBudget;
+    stageResults.recoveryBudgetSnapshot = budgetSnapshotForTrace(recoveryBudget);
+    stageResults.recoveryLifecycle = { state: recoveryMachine.state };
+    stageResults._recoveryMachine = recoveryMachine;
+
+    // BG-01：统一预算账本（真实模型调用前 reserve / 调用后 settle）。
+    // 外层 model_timeout 重试通过 _priorBudgetLedger 延续累计消耗，禁止每轮重置。
+    let budgetLedgerState: BudgetLedger = input._priorBudgetLedger
+      ? { ...input._priorBudgetLedger }
+      : createBudgetLedger();
+    stageResults._budgetLedgerState = budgetLedgerState;
+    stageResults.budgetLedger = getBudgetLedger(budgetLedgerState);
+
+    // WP-03..07：分层预算 / 失败策略 / 观测 / 质量-成本 生产运行时状态
+    // 与 RecoveryBudget 并存；layered budget 为权威分层账本，写入 stageResults 供 trace 验收。
+    let routingGovernance: RoutingGovernanceState = createRoutingGovernanceState({
+      runRouting: input.runRouting,
+      recoveryBudget,
+    });
+    setGovernanceState(stageResults, routingGovernance);
+
     if (input.contextSafety) {
       stageResults.contextBudgetReport = input.contextSafety.report;
       if (!input.contextSafety.ok) {
@@ -503,19 +711,182 @@ export class UnifiedOrchestrator {
         const expectedLock = capability === "model.generate"
           ? controlPlane.packet.modelLocks.generation
           : controlPlane.packet.modelLocks.judge;
+        // WP-01：任务级运行锁 — 每次模型调用前校验身份/参数，不匹配则不发起调用。
+        if (input.runRouting && controlPlane.enforceModelLocks) {
+          const role =
+            capability === "model.judge"
+              ? "judge"
+              : genInput.route?.includes("amplified") || genInput.kind?.includes("style")
+                ? "editorial"
+                : "generation";
+          // 生产主链路（agentic_style）禁止文学裁判调用
+          const lockCheck = assertModelCallMatchesLock({
+            routing: input.runRouting,
+            stage: genInput.kind ?? fnKind,
+            route: genInput.requestedRoute ?? genInput.route,
+            provider: expectedLock.provider,
+            model: expectedLock.model,
+            modelVersion: input.runRouting.modelVersion,
+            temperature: genInput.temperature,
+            maxTokens: genInput.maxTokens,
+            timeout: genInput.timeoutMs,
+            role: input.productionFlow === "agentic_style" && role === "judge" ? "judge" : role,
+          });
+          // judge 在 agentic_style 生产流：直接阻断
+          if (
+            input.productionFlow === "agentic_style" &&
+            input.runRouting.routeClass === "production" &&
+            capability === "model.judge"
+          ) {
+            throw new Error(
+              `model lock conflict: production literary judge calls are forbidden (${genInput.route})`,
+            );
+          }
+          // provider/model 漂移：若 output 侧将来回填，前置用 expectedLock 与 runRouting 比对
+          if (
+            expectedLock.provider !== input.runRouting.provider &&
+            capability === "model.generate"
+          ) {
+            throw new Error(
+              `model lock conflict: provider expected=${input.runRouting.provider} actual=${expectedLock.provider}`,
+            );
+          }
+          if (
+            expectedLock.model !== input.runRouting.model &&
+            capability === "model.generate"
+          ) {
+            throw new Error(
+              `model lock conflict: model expected=${input.runRouting.model} actual=${expectedLock.model}`,
+            );
+          }
+          if (!lockCheck.ok && capability === "model.generate") {
+            // 仅当错误包含跨 class / provider / model 时硬阻断；纯 route 别名告警由 assert 内部消化
+            const hard = lockCheck.errors.some(
+              (e) =>
+                e.includes("provider") ||
+                e.includes("model ") ||
+                e.includes("cannot call") ||
+                e.includes("forbidden") ||
+                e.includes("mismatch"),
+            );
+            if (hard) {
+              throw new Error(`model lock conflict: ${lockCheck.errors.join("; ")}`);
+            }
+          }
+        }
         // Step 1d 修复：硬上限每次调用前检查。所有 LLM 调用都经 wrapModelFn，
         // 此处是唯一能拦截 arbitrate 内部多轮（首轮+反向+仲裁）穿透 HARD 的位置。
         if (modelCallLog.length >= HARD) {
           modelBudget.capped = true;
           throw new Error(`模型调用达硬上限（${modelCallLog.length}/${HARD}），拒绝本次调用`);
         }
+        // WP-03：分层预算预扣（正常/恢复分离）；不足则阻断，不发起模型调用。
+        const govBefore = getGovernanceState(stageResults);
+        let govReserve:
+          | ReturnType<typeof reserveForModelCall>
+          | undefined;
+        // 恢复分类（WP-03 与 BG-01 账本共用）：
+        // 1) 外层 model_timeout 重试（_modelTimeoutRetryAttempt > 0）
+        // 2) 本 run 内已有 failed modelCall（同阶段自动重试）
+        // 3) kind/route 含 retry|recover|timeout
+        const outerRetry =
+          typeof input._modelTimeoutRetryAttempt === "number"
+            ? input._modelTimeoutRetryAttempt
+            : 0;
+        const priorFailedCalls = modelCallLog.filter((c) => c.failed).length;
+        const kindBlob = `${genInput.kind ?? fnKind} ${genInput.route ?? ""}`;
+        const kindLooksRecovery =
+          /retry|recover|timeout|model_timeout/i.test(kindBlob);
+        const isRecoveryCall =
+          outerRetry > 0 || priorFailedCalls > 0 || kindLooksRecovery;
+        const retryIndex = isRecoveryCall
+          ? Math.max(outerRetry, priorFailedCalls, 1)
+          : 0;
+        if (govBefore) {
+          govReserve = reserveForModelCall(govBefore, {
+            kind: genInput.kind ?? fnKind,
+            route: genInput.requestedRoute ?? genInput.route,
+            retryIndex,
+            forceBudgetType: isRecoveryCall ? "recovery" : "normal",
+          });
+          if (!govReserve.ok) {
+            throw new Error(
+              `layered budget exhausted: ${govReserve.reason ?? "unknown"}`,
+            );
+          }
+          setGovernanceState(stageResults, govReserve.state);
+          // 同步 legacy recovery 账本，供 hardBlock / 外层重试读取
+          stageResults.recoveryBudget = govReserve.state.layeredBudget.legacyRecovery;
+        }
+        // BG-01：统一预算账本预扣——真实模型调用前 reserve；不足则阻断，不发起调用。
+        const ledgerStage: LedgerBudgetStage = (() => {
+          const s = govReserve?.stage;
+          if (s === "authorStyleOptimization") return "styleOptimization";
+          if (s === "storyPreservation") return "storyPreservation";
+          if (s === "finalFactRecheck") return "finalFactRecheck";
+          if (s === "agenticVerification") return "agenticVerification";
+          if (s === "agenticGeneration" || s === "agenticRetrieval") return "agenticDraft";
+          return "other";
+        })();
+        const ledgerReserve = reserveLedgerBudget(budgetLedgerState, {
+          stage: ledgerStage,
+          budgetType: isRecoveryCall ? "recovery" : "normal",
+          modelCalls: 1,
+        });
+        if (!ledgerReserve.ok || !ledgerReserve.reservationId) {
+          throw new Error(
+            `budget ledger exhausted: ${ledgerReserve.reason ?? "unknown"}`,
+          );
+        }
+        budgetLedgerState = ledgerReserve.ledger;
+        stageResults._budgetLedgerState = budgetLedgerState;
+        // AUDIT-1：模型回合 started（细事件；失败不抛）
+        const modelTurnStartedId = input.auditSink?.recordModelTurn({
+          phase: "started",
+          kind: genInput.kind ?? fnKind,
+          requestedRoute: genInput.requestedRoute ?? genInput.route,
+        }) ?? null;
         try {
           const output = await fn(genInput);
+          const durationMs = output.durationMs ?? Date.now() - start;
+          // WP-03：调用后结算实际 token/耗时
+          if (govReserve) {
+            const settled = settleModelCall(govReserve.state, {
+              stage: govReserve.stage,
+              budgetType: govReserve.budgetType,
+              durationMs,
+              tokenUsage: output.tokenUsage ?? "unknown",
+              failed: false,
+              route: output.route ?? genInput.route,
+              provider: output.provider,
+              model: output.model,
+            });
+            setGovernanceState(stageResults, settled);
+            stageResults.recoveryBudget = settled.layeredBudget.legacyRecovery;
+          }
+          // BG-01：统一预算账本结算——调用成功后 settle 实际 token/耗时（预扣转实际）
+          const ledgerTokens =
+            output.tokenUsage && output.tokenUsage !== "unknown"
+              ? output.tokenUsage
+              : { in: 0, out: 0 };
+          budgetLedgerState = settleLedgerBudget(
+            budgetLedgerState,
+            ledgerReserve.reservationId,
+            {
+              modelCalls: 1,
+              inputTokens: ledgerTokens.in,
+              outputTokens: ledgerTokens.out,
+              latencyMs: durationMs,
+              cost: 0,
+              failed: false,
+            },
+          );
+          stageResults._budgetLedgerState = budgetLedgerState;
           modelCallLog.push({
             route: output.route ?? genInput.route,
             kind: genInput.kind ?? fnKind,
             model: output.model ?? "unknown",
-            durationMs: output.durationMs ?? Date.now() - start,
+            durationMs,
             ts: start,
             ...(output.finishReason !== undefined ? { finishReason: output.finishReason } : {}),
             ...(output.maxTokens !== undefined ? { maxTokens: output.maxTokens } : {}),
@@ -535,6 +906,24 @@ export class UnifiedOrchestrator {
             actualProvider: output.provider,
             actualModel: output.model,
             ...(genInput.promptProfile ? { promptProfile: genInput.promptProfile as ModelCallEntry["promptProfile"] } : {}),
+            // WP-05：可观测字段
+            runId: input.runRouting?.orchestratorRunId,
+            stage: genInput.kind ?? fnKind,
+            modelVersion: output.model ?? input.runRouting?.modelVersion,
+            promptBundleHash: input.runRouting?.promptBundleHash,
+            contextHash: input.runRouting?.contextHash,
+            temperature: genInput.temperature ?? input.runRouting?.temperature,
+            timeout: genInput.timeoutMs ?? input.runRouting?.timeout,
+            budgetType: govReserve?.budgetType ?? "normal",
+          });
+          input.auditSink?.recordModelTurn({
+            phase: "completed",
+            kind: genInput.kind ?? fnKind,
+            requestedRoute: output.requestedRoute ?? genInput.requestedRoute ?? genInput.route,
+            actualProvider: output.provider,
+            actualModel: output.model,
+            durationMs,
+            startedEventId: modelTurnStartedId ?? undefined,
           });
           if (previewBudget) previewBudget.elapsedMs = Date.now() - previewStartedAt;
           return output;
@@ -548,10 +937,40 @@ export class UnifiedOrchestrator {
           // 未锁定时 genInput.requestedRoute 省略，回退用 genInput.route（语义 route），
           // deriveProviderFromRoute 返回 "stub"（向后兼容，不锁定即无 provider 证据）。
           const failRequestedRoute = genInput.requestedRoute ?? genInput.route;
+          const failDurationMs = Date.now() - start;
+          // WP-03：失败调用也结算成本
+          if (govReserve) {
+            const settled = settleModelCall(govReserve.state, {
+              stage: govReserve.stage,
+              budgetType: govReserve.budgetType,
+              durationMs: failDurationMs,
+              tokenUsage: "unknown",
+              failed: true,
+              route: genInput.route,
+              provider: expectedLock.provider,
+              model: expectedLock.model,
+            });
+            setGovernanceState(stageResults, settled);
+            stageResults.recoveryBudget = settled.layeredBudget.legacyRecovery;
+          }
+          // BG-01：统一预算账本结算——失败调用同样 settle（failedCalls 计数，预扣转实际）
+          budgetLedgerState = settleLedgerBudget(
+            budgetLedgerState,
+            ledgerReserve.reservationId,
+            {
+              modelCalls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              latencyMs: failDurationMs,
+              cost: 0,
+              failed: true,
+            },
+          );
+          stageResults._budgetLedgerState = budgetLedgerState;
           modelCallLog.push({
             route: genInput.route ?? "unknown",
             kind: genInput.kind ?? fnKind,
-            durationMs: Date.now() - start,
+            durationMs: failDurationMs,
             ts: start,
             tokenUsage: "unknown",
             failed: true,
@@ -561,6 +980,23 @@ export class UnifiedOrchestrator {
             failurePhase: capability,
             errorClass: e instanceof Error ? e.constructor.name : typeof e,
             ...(genInput.promptProfile ? { promptProfile: genInput.promptProfile as ModelCallEntry["promptProfile"] } : {}),
+            runId: input.runRouting?.orchestratorRunId,
+            stage: genInput.kind ?? fnKind,
+            modelVersion: input.runRouting?.modelVersion,
+            promptBundleHash: input.runRouting?.promptBundleHash,
+            contextHash: input.runRouting?.contextHash,
+            temperature: genInput.temperature ?? input.runRouting?.temperature,
+            timeout: genInput.timeoutMs ?? input.runRouting?.timeout,
+            budgetType: govReserve?.budgetType ?? "normal",
+            failureType: "network_timeout",
+          });
+          input.auditSink?.recordModelTurn({
+            phase: "failed",
+            kind: genInput.kind ?? fnKind,
+            requestedRoute: failRequestedRoute,
+            durationMs: failDurationMs,
+            errorClass: e instanceof Error ? e.constructor.name : typeof e,
+            startedEventId: modelTurnStartedId ?? undefined,
           });
           if (previewBudget) previewBudget.elapsedMs = Date.now() - previewStartedAt;
           throw e;
@@ -822,6 +1258,14 @@ export class UnifiedOrchestrator {
             // Phase 5 受控接入：透传 toolMode（facade 时 registry 注册统一入口、
             // allowedTools 收窄、runtime 白名单/检索预算扩展；undefined = 默认 standard）
             toolMode: input.toolMode,
+            // AUDIT-1：透传细事件 sink（工具授权/结果）
+            auditSink: input.auditSink,
+            // MA：run 身份透传给 Agentic 工作包 / 工具门闩
+            orchestratorRunId: collabState.orchestratorRunId,
+            taskId: collabState.taskId,
+            contextHash: collabState.contextHash,
+            promptBundleHash: collabState.promptBundleHash,
+            constraintManifestHash: collabState.constraintManifestHash,
           }),
         );
       } catch (error: unknown) {
@@ -851,6 +1295,63 @@ export class UnifiedOrchestrator {
                 ],
               }
             : undefined,
+        );
+      }
+
+      // MA-1：Agentic 工作包 + Draft 结果契约（fail-closed）
+      try {
+        const agenticPkg = buildRoleWorkPackage(collabState, "novelos_agentic", {
+          stage: "stage1_novelosAgentic",
+          sessionId: agenticResult.sessionId || `agentic-${chapterId}`,
+          objective: "NovelOS Agentic 初稿生成（不直接交付）",
+        });
+        // MA-3.2：代理结果侧最小输入白名单（编排器侧 fail-closed）
+        requireWorkPackageInput(agenticPkg, {
+          workspaceId,
+          chapterId,
+          chapterNumber,
+          chapterIntent: intent,
+          seedContext: context,
+          context,
+          knownCharacterNames: characterNames,
+          inviolableFacts: intent.inviolableFacts,
+          targetWordCount: input.targetWordCount,
+          toolMode: input.toolMode,
+          evalPrefix: input.evalPrefix,
+          retrievalPromptOverride: input.retrievalPromptOverride,
+        });
+        recordWorkPackage(collabState, agenticPkg);
+        if (agenticResult.workPackageSummary) {
+          stageResults.agenticWorkPackage = agenticResult.workPackageSummary;
+        }
+        const draftContract = adaptDraftFromAgenticSource(agenticResult, {
+          workPackage: agenticPkg,
+          candidateId: agenticResult.candidate?.id,
+        });
+        recordAgentResult(collabState, draftContract, "fact_guard", agenticPkg.packageId);
+      } catch (collabErr: unknown) {
+        const failure = classifyCollaborationContractError(
+          "novelos_agentic_contract",
+          "novelos_agentic",
+          collabErr,
+        );
+        stageResults.agentCollaborationError = failure;
+        return this.hardBlock(
+          input,
+          failure.stage,
+          formatCollaborationFailureReason(failure),
+          stageResults,
+          agenticResult.candidate
+            ? {
+                rawText: agenticResult.candidate.text,
+                rawFinishReason: agenticResult.candidate.finishReason ?? null,
+                rawMaxTokens: agenticResult.candidate.maxTokens ?? null,
+                rawModel: agenticResult.candidate.model,
+                modelVersion: detectModelVersion(agenticResult.candidate.model),
+                candidateId: agenticResult.candidate.id,
+              }
+            : undefined,
+          collaborationFailureGuidance(failure),
         );
       }
 
@@ -998,6 +1499,54 @@ export class UnifiedOrchestrator {
         checkCandidateFactGuard(agenticCandidate.text, input),
       );
       stageResults.agenticFactGuard = agenticFactGuard;
+      // MA-1：FactGuard 结果契约
+      try {
+        const fgPkg = buildRoleWorkPackage(collabState, "fact_guard", {
+          stage: "stage2_agenticFactGuard",
+          sessionId: `fact-guard-${agenticCandidate.id}`,
+          objective: "Agentic 初稿事实核验",
+          parentCandidateId: agenticCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+        });
+        requireWorkPackageInput(fgPkg, {
+          workspaceId,
+          chapterId,
+          candidateId: agenticCandidate.id,
+          text: agenticCandidate.text,
+          context,
+          knownCharacterNames: characterNames,
+          constraintManifest: input.contextSafety?.manifest,
+        });
+        recordWorkPackage(collabState, fgPkg);
+        const fgContract = adaptFactGuardResult(agenticFactGuard, {
+          workPackage: fgPkg,
+          candidateId: agenticCandidate.id,
+          role: "fact_guard",
+        });
+        recordAgentResult(collabState, fgContract, "author_style", fgPkg.packageId);
+      } catch (collabErr: unknown) {
+        const failure = classifyCollaborationContractError(
+          "fact_guard_contract",
+          "fact_guard",
+          collabErr,
+        );
+        stageResults.agentCollaborationError = failure;
+        return this.hardBlock(
+          input,
+          failure.stage,
+          formatCollaborationFailureReason(failure),
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: agenticCandidate.id,
+          },
+          collaborationFailureGuidance(failure),
+        );
+      }
       if (!agenticFactGuard.ok) {
         return this.hardBlock(
           input,
@@ -1035,13 +1584,34 @@ export class UnifiedOrchestrator {
           seed: input.strategySeed,
         });
         authorStyleStrategyParams = mergeStrategyParams(authorStyleStrategySelection.selected);
-        // 记录策略上下文到 stageResults（供后续 outcome 记录使用）
+        // 记录策略上下文到 stageResults（供后续 outcome / 反馈血缘使用）
+        const selectedStrategyIds = authorStyleStrategySelection.selected.map(
+          (s) => s.strategyId,
+        );
+        const exposureSnapshot = authorStyleStrategySelection.exposureSnapshot;
+        // 生产路径尚无独立 runId 字段；用 workspace+chapter+时间戳派生可追溯 run 键
+        const orchestratorRunId = `run:${workspaceId ?? "default"}:ch${chapterNumber}:${Date.now()}`;
+        const exposureId = `exp:${orchestratorRunId}:author_style`;
+        const strategyBundleId = exposureSnapshot.strategyBundleId;
+        const promptBundleId = "prompt:author_style:default";
         stageResults.authorStyleStrategySelection = {
-          selectedStrategyIds: authorStyleStrategySelection.selected.map((s) => s.strategyId),
-          staticFallbackIds: authorStyleStrategySelection.staticFallback.map((s) => s.strategyId),
+          selectedStrategyIds,
+          staticFallbackIds: authorStyleStrategySelection.staticFallback.map(
+            (s) => s.strategyId,
+          ),
           samples: authorStyleStrategySelection.samples,
           notes: authorStyleStrategySelection.notes,
           modelVersion: modelVersionKey,
+          // USER-FEEDBACK-EVIDENCE-PIPELINE-1：完整 StrategyExposure 字段
+          exposureSnapshot,
+          strategyBundleId,
+          orchestratorRunId,
+          exposureId,
+          promptBundleId,
+          candidateId: agenticCandidate.id,
+          deliveredSource: "editorial" as const,
+          sourceChapter: `ch${chapterNumber}`,
+          opportunityType: "author_style" as const,
         };
       } catch (strategyError) {
         // 策略选择失败不阻断生成；降级为无策略参数（默认行为）
@@ -1051,6 +1621,19 @@ export class UnifiedOrchestrator {
           samples: [],
           notes: [`策略选择失败，降级为无策略：${strategyError instanceof Error ? strategyError.message : String(strategyError)}`],
           modelVersion: detectModelVersion(agenticCandidate.model),
+          exposureSnapshot: {
+            strategyIds: [],
+            strategyBundleId: "bundle:empty",
+            selectedCount: 0,
+          },
+          strategyBundleId: "bundle:empty",
+          orchestratorRunId: `run:${workspaceId ?? "default"}:ch${chapterNumber}:fallback`,
+          exposureId: `exp:fallback:ch${chapterNumber}`,
+          promptBundleId: "prompt:author_style:default",
+          candidateId: agenticCandidate.id,
+          deliveredSource: "editorial" as const,
+          sourceChapter: `ch${chapterNumber}`,
+          opportunityType: "author_style" as const,
         };
       }
 
@@ -1078,6 +1661,75 @@ export class UnifiedOrchestrator {
         failureReason: styleResult.failureReason,
         retryWithReducedGuidance: styleResult.retryWithReducedGuidance,
       };
+      // MA-1：AuthorStyle 结果契约（首次优化；重试后在下方再记一次）
+      try {
+        const stylePkg = buildRoleWorkPackage(collabState, "author_style", {
+          stage: "stage3_authorStyleOptimization",
+          sessionId: `style-${agenticCandidate.id}`,
+          objective: "作者风格整章优化",
+          parentCandidateId: agenticCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+          strategyBundleId:
+            typeof stageResults.authorStyleStrategySelection === "object" &&
+            stageResults.authorStyleStrategySelection &&
+            "strategyBundleId" in (stageResults.authorStyleStrategySelection as object)
+              ? String(
+                  (stageResults.authorStyleStrategySelection as { strategyBundleId?: string })
+                    .strategyBundleId ?? "",
+                ) || undefined
+              : undefined,
+        });
+        requireWorkPackageInput(stylePkg, {
+          workspaceId,
+          chapterId,
+          chapterNumber,
+          sourceCandidate: agenticCandidate,
+          intent,
+          context,
+          constitution,
+          strategyParams: authorStyleStrategyParams,
+          targetWordCount: input.targetWordCount,
+          writerPromptProfile: input.rawPromptProfile,
+        });
+        recordWorkPackage(collabState, stylePkg);
+        const styleContract = adaptEditorialResult(styleResult, {
+          workPackage: stylePkg,
+          sourceCandidateId: agenticCandidate.id,
+          candidateId: styleResult.candidate?.id,
+        });
+        // 暂存 packageId；若后续 in-stage retry 成功会再 record
+        (stageResults as Record<string, unknown>)._authorStyleWorkPackageId = stylePkg.packageId;
+        if (styleResult.candidate) {
+          recordAgentResult(collabState, styleContract, "story_preservation", stylePkg.packageId);
+        } else if (
+          styleResult.failureKind !== "empty_result" &&
+          styleResult.failureKind !== "model_timeout"
+        ) {
+          recordAgentResult(collabState, styleContract, "story_preservation", stylePkg.packageId);
+        }
+      } catch (collabErr: unknown) {
+        const failure = classifyCollaborationContractError(
+          "author_style_contract",
+          "author_style",
+          collabErr,
+        );
+        stageResults.agentCollaborationError = failure;
+        return this.hardBlock(
+          input,
+          failure.stage,
+          formatCollaborationFailureReason(failure),
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: agenticCandidate.id,
+          },
+          collaborationFailureGuidance(failure),
+        );
+      }
       const transientStyleFailure = !styleResult.candidate
         && (styleResult.failureKind === "empty_result" || styleResult.failureKind === "model_timeout");
       if (transientStyleFailure) {
@@ -1140,6 +1792,56 @@ export class UnifiedOrchestrator {
           },
         );
       }
+      // MA：若首次未记（transient 失败后重试成功），此处补记 author_style ok
+      if (
+        transientStyleFailure &&
+        styledCandidate &&
+        !collabState.completedStages.includes("author_style")
+      ) {
+        try {
+          const styleRetryPkg = buildRoleWorkPackage(collabState, "author_style", {
+            stage: "stage3_authorStyleOptimizationRetry",
+            sessionId: `style-retry-${agenticCandidate.id}`,
+            objective: "作者风格整章优化（阶段内重试成功）",
+            parentCandidateId: agenticCandidate.id,
+            sourceCandidateId: agenticCandidate.id,
+          });
+          recordWorkPackage(collabState, styleRetryPkg);
+          const styleRetryContract = adaptEditorialResult(styleResult, {
+            workPackage: styleRetryPkg,
+            sourceCandidateId: agenticCandidate.id,
+            candidateId: styledCandidate.id,
+          });
+          recordAgentResult(
+            collabState,
+            styleRetryContract,
+            "story_preservation",
+            styleRetryPkg.packageId,
+          );
+        } catch (collabErr: unknown) {
+          const failure = classifyCollaborationContractError(
+            "author_style_retry_contract",
+            "author_style",
+            collabErr,
+          );
+          stageResults.agentCollaborationError = failure;
+          return this.hardBlock(
+            input,
+            failure.stage,
+            formatCollaborationFailureReason(failure),
+            stageResults,
+            {
+              rawText: agenticCandidate.text,
+              rawFinishReason: agenticCandidate.finishReason ?? null,
+              rawMaxTokens: agenticCandidate.maxTokens ?? null,
+              rawModel: agenticCandidate.model,
+              modelVersion: detectModelVersion(agenticCandidate.model),
+              candidateId: agenticCandidate.id,
+            },
+            collaborationFailureGuidance(failure),
+          );
+        }
+      }
       candidates.push(styledCandidate);
 
       // P0-2 修复（Phase 1 整改）：Story Preservation 使用完整实体表。
@@ -1159,6 +1861,56 @@ export class UnifiedOrchestrator {
         }),
       );
       stageResults.storyPreservation = preservation;
+      // MA-1：StoryPreservation 结果契约
+      try {
+        const spPkg = buildRoleWorkPackage(collabState, "story_preservation", {
+          stage: "stage4_storyPreservation",
+          sessionId: `sp-${styledCandidate!.id}`,
+          objective: "故事保持核验",
+          parentCandidateId: agenticCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+        });
+        requireWorkPackageInput(spPkg, {
+          workspaceId,
+          chapterId,
+          rawText: agenticCandidate.text,
+          editorialText: styledCandidate!.text,
+          knownEntities: input.knownEntities ?? characterNames,
+          entityCoverage: input.knownEntities ? "full_entities" : "characters_only",
+          aliasToCanonical: input.aliasToCanonical,
+          sourceCandidateId: agenticCandidate.id,
+          optimizedCandidateId: styledCandidate!.id,
+        });
+        recordWorkPackage(collabState, spPkg);
+        const spContract = adaptStoryPreservationResult(preservation, {
+          workPackage: spPkg,
+          sourceCandidateId: agenticCandidate.id,
+          optimizedCandidateId: styledCandidate!.id,
+        });
+        recordAgentResult(collabState, spContract, "final_fact_recheck", spPkg.packageId);
+      } catch (collabErr: unknown) {
+        const failure = classifyCollaborationContractError(
+          "story_preservation_contract",
+          "story_preservation",
+          collabErr,
+        );
+        stageResults.agentCollaborationError = failure;
+        return this.hardBlock(
+          input,
+          failure.stage,
+          formatCollaborationFailureReason(failure),
+          stageResults,
+          {
+            rawText: styledCandidate!.text,
+            rawFinishReason: styledCandidate!.finishReason ?? null,
+            rawMaxTokens: styledCandidate!.maxTokens ?? null,
+            rawModel: styledCandidate!.model,
+            modelVersion: detectModelVersion(styledCandidate!.model),
+            candidateId: styledCandidate!.id,
+          },
+          collaborationFailureGuidance(failure),
+        );
+      }
 
       // P0-1 修复（Phase 1 整改）：Story Preservation 失败一律 hard block，不再回退 raw。
       // 分类恢复：
@@ -1230,6 +1982,43 @@ export class UnifiedOrchestrator {
             if (staleCandidateIndex >= 0) candidates.splice(staleCandidateIndex, 1);
             styledCandidate = retryCandidate;
             candidates.push(styledCandidate);
+            // MA：重试通过后补记 story_preservation ok（首次可能为 blocked/recoverable）
+            try {
+              const spRetryPkg = buildRoleWorkPackage(collabState, "story_preservation", {
+                stage: "stage4b_retryStoryPreservation",
+                sessionId: `sp-retry-${styledCandidate.id}`,
+                objective: "故事保持核验（缩减指导重试后）",
+                parentCandidateId: agenticCandidate.id,
+                sourceCandidateId: agenticCandidate.id,
+              });
+              recordWorkPackage(collabState, spRetryPkg);
+              const spRetryContract = adaptStoryPreservationResult(retryPreservation, {
+                workPackage: spRetryPkg,
+                sourceCandidateId: agenticCandidate.id,
+                optimizedCandidateId: styledCandidate.id,
+              });
+              recordAgentResult(
+                collabState,
+                spRetryContract,
+                "final_fact_recheck",
+                spRetryPkg.packageId,
+              );
+            } catch (collabErr: unknown) {
+              const failure = classifyCollaborationContractError(
+                "story_preservation_retry_contract",
+                "story_preservation",
+                collabErr,
+              );
+              stageResults.agentCollaborationError = failure;
+              return this.hardBlock(
+                input,
+                failure.stage,
+                formatCollaborationFailureReason(failure),
+                stageResults,
+                blockedEvidenceForPreservation,
+                collaborationFailureGuidance(failure),
+              );
+            }
           } else if (!retryPreservation.preserved && !retryPreservation.unverifiable) {
             // 重试出现明确漂移 → hard block（不再回退 raw）
             stageResults.styleOptimizationBlocked = {
@@ -1333,6 +2122,44 @@ export class UnifiedOrchestrator {
             if (staleCandidateIndex >= 0) candidates.splice(staleCandidateIndex, 1);
             styledCandidate = driftRetryCandidate;
             candidates.push(styledCandidate);
+            // MA：重试通过后补记 story_preservation ok（首次为 blocked，未进入 completedStages）
+            try {
+              const spDriftRetryPkg = buildRoleWorkPackage(collabState, "story_preservation", {
+                stage: "stage4b_retryStoryPreservationDrift",
+                sessionId: `sp-drift-retry-${styledCandidate.id}`,
+                objective: "故事保持核验（漂移缩减指导重试后）",
+                parentCandidateId: agenticCandidate.id,
+                sourceCandidateId: agenticCandidate.id,
+              });
+              recordWorkPackage(collabState, spDriftRetryPkg);
+              const spDriftRetryContract = adaptStoryPreservationResult(driftRetryPreservation, {
+                workPackage: spDriftRetryPkg,
+                sourceCandidateId: agenticCandidate.id,
+                optimizedCandidateId: styledCandidate.id,
+              });
+              recordAgentResult(
+                collabState,
+                spDriftRetryContract,
+                "final_fact_recheck",
+                spDriftRetryPkg.packageId,
+              );
+            } catch (collabErr: unknown) {
+              // fail-closed：契约记录失败不得伪装 completedStages 后继续提交
+              const failure = classifyCollaborationContractError(
+                "story_preservation_drift_retry_contract",
+                "story_preservation",
+                collabErr,
+              );
+              stageResults.agentCollaborationError = failure;
+              return this.hardBlock(
+                input,
+                failure.stage,
+                formatCollaborationFailureReason(failure),
+                stageResults,
+                blockedEvidenceForPreservation,
+                collaborationFailureGuidance(failure),
+              );
+            }
           } else {
             // 重试仍漂移 → hard block（不再回退 raw）
             stageResults.styleOptimizationBlocked = {
@@ -1379,6 +2206,55 @@ export class UnifiedOrchestrator {
         checkCandidateFactGuard(styledCandidate.text, input, agenticCandidate.text),
       );
       stageResults.finalFactRecheck = finalFactRecheck;
+      // MA-1：FinalFactRecheck 结果契约
+      try {
+        const rePkg = buildRoleWorkPackage(collabState, "final_fact_recheck", {
+          stage: "stage5_finalFactRecheck",
+          sessionId: `recheck-${styledCandidate.id}`,
+          objective: "最终事实复核",
+          parentCandidateId: styledCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+        });
+        requireWorkPackageInput(rePkg, {
+          workspaceId,
+          chapterId,
+          candidateId: styledCandidate.id,
+          finalText: styledCandidate.text,
+          context,
+          knownCharacterNames: characterNames,
+          inviolableFacts: intent.inviolableFacts,
+          constraintManifest: input.contextSafety?.manifest,
+        });
+        recordWorkPackage(collabState, rePkg);
+        const reContract = adaptFactGuardResult(finalFactRecheck, {
+          workPackage: rePkg,
+          candidateId: styledCandidate.id,
+          role: "final_fact_recheck",
+        });
+        recordAgentResult(collabState, reContract, "final_state_commit", rePkg.packageId);
+      } catch (collabErr: unknown) {
+        const failure = classifyCollaborationContractError(
+          "final_fact_recheck_contract",
+          "final_fact_recheck",
+          collabErr,
+        );
+        stageResults.agentCollaborationError = failure;
+        return this.hardBlock(
+          input,
+          failure.stage,
+          formatCollaborationFailureReason(failure),
+          stageResults,
+          {
+            rawText: styledCandidate.text,
+            rawFinishReason: styledCandidate.finishReason ?? null,
+            rawMaxTokens: styledCandidate.maxTokens ?? null,
+            rawModel: styledCandidate.model,
+            modelVersion: detectModelVersion(styledCandidate.model),
+            candidateId: styledCandidate.id,
+          },
+          collaborationFailureGuidance(failure),
+        );
+      }
       // P1 修复：回填人工审阅包的事实复检结果
       if (stageResults.authorStyleHumanReviewPackage) {
         (stageResults.authorStyleHumanReviewPackage as AuthorStyleHumanReviewPackage).factRecheckResult = {
@@ -1470,6 +2346,30 @@ export class UnifiedOrchestrator {
         selectedStrategyIds: authorStyleStrategySelection?.selected.map((s) => s.strategyId) ?? [],
       };
 
+      // MA-4.3：提交前阶段守卫（Agentic→风格→故事保持→终检）
+      // 注意：不得用“业务门通过 + 手动 push completedStages”伪装契约成功。
+      // completedStages 只能由 recordAgentResult(status=ok) 写入；契约失败必须 hardBlock。
+      const preCommit = guardCommitStages(collabState);
+      stageResults.preCommitStageGuard = preCommit;
+      if (!preCommit.ok && !input.fullPipelinePreview) {
+        return this.hardBlock(
+          input,
+          "orchestrator_stage_guard",
+          `提交前缺少必经阶段：${preCommit.missing.join(", ")}`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: styledCandidate.id,
+            selectedSource: "editorial",
+            finalText: styledCandidate.text,
+          },
+        );
+      }
+
       let commitOutcome: { ok: boolean; error?: string; stateCommit: { committed: number; rejected: number } | null };
       if (input.fullPipelinePreview) {
         commitOutcome = { ok: true, stateCommit: null };
@@ -1488,7 +2388,80 @@ export class UnifiedOrchestrator {
         return this.hardBlock(input, "atomic_save", `正文原子保存失败：${commitOutcome.error}`, stageResults);
       }
 
-      return {
+      // MA-1：Commit 结果契约
+      try {
+        const commitPkg = buildRoleWorkPackage(collabState, "final_state_commit", {
+          stage: "stage6_commitAndSave",
+          sessionId: `commit-${styledCandidate.id}`,
+          objective: "状态提交与原子保存",
+          parentCandidateId: styledCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+        });
+        requireWorkPackageInput(commitPkg, {
+          workspaceId,
+          chapterId,
+          finalText: styledCandidate.text,
+          selectedCandidateId: styledCandidate.id,
+          stagedStateUpdate: input.stagedStateUpdate,
+        });
+        recordWorkPackage(collabState, commitPkg);
+        const commitContract = adaptCommitResult(
+          {
+            committed: commitOutcome.ok && !input.fullPipelinePreview,
+            chapterFilePath: input.fullPipelinePreview
+              ? null
+              : chapterFilePath(input),
+            stateCommitted: commitOutcome.stateCommit?.committed ?? 0,
+            stateRejected: commitOutcome.stateCommit?.rejected ?? 0,
+            reason: input.fullPipelinePreview ? "preview_skip" : undefined,
+          },
+          {
+            workPackage: commitPkg,
+            candidateId: styledCandidate.id,
+          },
+        );
+        // preview 路径：committed=false 但 status 可能 blocked；标记为系统 skip
+        if (input.fullPipelinePreview) {
+          recordSystemDecision(collabState, {
+            fromStage: "final_state_commit",
+            toStage: null,
+            transition: "continue",
+            allowed: true,
+            reason: "fullPipelinePreview 跳过正式提交",
+            priority: "state_transaction",
+            candidateId: styledCandidate.id,
+          });
+          if (!collabState.completedStages.includes("final_state_commit")) {
+            collabState.completedStages.push("final_state_commit");
+          }
+        } else {
+          recordAgentResult(collabState, commitContract, "done", commitPkg.packageId);
+        }
+      } catch (collabErr: unknown) {
+        const failure = classifyCollaborationContractError(
+          "final_state_commit_contract",
+          "final_state_commit",
+          collabErr,
+        );
+        stageResults.agentCollaborationError = failure;
+        return this.hardBlock(
+          input,
+          failure.stage,
+          formatCollaborationFailureReason(failure),
+          stageResults,
+          {
+            rawText: styledCandidate.text,
+            rawFinishReason: styledCandidate.finishReason ?? null,
+            rawMaxTokens: styledCandidate.maxTokens ?? null,
+            rawModel: styledCandidate.model,
+            modelVersion: detectModelVersion(styledCandidate.model),
+            candidateId: styledCandidate.id,
+          },
+          collaborationFailureGuidance(failure),
+        );
+      }
+
+      return finishWithCollab({
         status: "ok",
         workspaceId,
         chapterId,
@@ -1507,7 +2480,7 @@ export class UnifiedOrchestrator {
         chapterFilePath: input.fullPipelinePreview ? null : chapterFilePath(input),
         isPreviewRun: Boolean(input.fullPipelinePreview),
         isUnderSpecified: Boolean(intent.underSpecifiedFields?.length),
-      };
+      });
     }
 
     // ── INTENT-COMPLETENESS-1：质量评测模式（B3/B4）+ under-specified 关键字段 → 阻断 ──
@@ -1680,6 +2653,7 @@ export class UnifiedOrchestrator {
             retrievalPromptOverride: input.retrievalPromptOverride,
             // Phase 5 受控接入：透传 toolMode（受控接入同样适用于 evalMode 对照实验）
             toolMode: input.toolMode,
+            auditSink: input.auditSink,
           })
         );
         agenticCandidate = agenticResult.candidate;
@@ -1800,6 +2774,12 @@ export class UnifiedOrchestrator {
         // 返回 path=null/exported=false/reason 含 B3。不改 prompt/winner/finalText/
         // candidate/judge，不阻断生成。
         exportQualityEvidenceReport(this, input, stageResults, warnings);
+        // WP-03..07：B3 成功出口挂载治理报告
+        this.attachRoutingGovernanceOnExit(input, stageResults, {
+          delivered: true,
+          factGuardPassed: true,
+          storyPreservationPassed: true,
+        });
         return {
           status: "ok",
           workspaceId,
@@ -1855,6 +2835,7 @@ export class UnifiedOrchestrator {
             writerPromptProfile: input.rawPromptProfile,
             // Phase 5 受控接入：透传 toolMode（shadow 路径同样受控）
             toolMode: input.toolMode,
+            auditSink: input.auditSink,
           })
         );
         stageResults.novelos = {
@@ -2828,6 +3809,13 @@ export class UnifiedOrchestrator {
       stageResults.strategyOutcomes = { skipped: true, reason: "fullPipelinePreview=true（预览模式不记录策略学习 outcome）" };
     }
 
+    // WP-03..07：主路径成功出口（非 agentic_style finishWithCollab）挂载治理报告
+    this.attachRoutingGovernanceOnExit(input, stageResults, {
+      delivered: true,
+      factGuardPassed: true,
+      storyPreservationPassed: true,
+    });
+
     return {
       status: "ok",
       workspaceId,
@@ -3194,6 +4182,42 @@ export class UnifiedOrchestrator {
     hypotheses: import("./editorial-hypothesis.js").EditorialHypothesis[],
     candidates: Candidate[]
   ): Promise<UnifiedOrchestratorOutput> {
+    // RECOVERY-P4：生产 agentic_style 路径禁止静默 raw 降级交付。
+    // evalMode / qualityExperiment 允许 deliverRaw（消融与只读实验）。
+    // 正式生产：Agentic 初稿必须经作者风格优化；失败只能 retry/checkpoint/blocked。
+    if (
+      input.productionFlow === "agentic_style" &&
+      !input.evalMode &&
+      !input.qualityExperiment
+    ) {
+      return this.hardBlock(
+        input,
+        "production_raw_degrade_forbidden",
+        "生产路径禁止静默交付 raw（Agentic 初稿不可直接交付；仅允许 retry_stage / checkpoint / blocked）",
+        stageResults,
+        {
+          rawText: rawCandidate.text,
+          rawFinishReason: rawCandidate.finishReason ?? null,
+          rawMaxTokens: rawCandidate.maxTokens ?? null,
+          rawModel: (stageResults.rawGeneration as { model?: string } | undefined)?.model ?? "unknown",
+          modelVersion: (stageResults.modelVersion as string | null) ?? null,
+          candidateId: rawCandidate.id,
+          selectedSource: "raw",
+          finalText: rawCandidate.text,
+        },
+        {
+          gate: "recovery_policy",
+          severityOverride: "hard",
+          recoverable: false,
+          candidateDisposition: "blocked_evidence_only",
+          prohibitedActions: [
+            "accept_or_deliver_blocked_candidate",
+            "save_blocked_candidate_as_chapter",
+          ],
+        },
+      );
+    }
+
     // A4：early-return 路径也接入 LanguageRiskAnalyzer，确保交付 raw 的章节
     // 同样有语言风险证据入 trace。guard 避免与主路径 Stage 5a.5 重复扫描
     // （line-418 全裁判异常 → deliverRaw 时 stageResults.languageRisk 已设）。
@@ -3348,6 +4372,13 @@ export class UnifiedOrchestrator {
       );
     }
 
+    // WP-03..07：deliverRaw 成功出口挂载治理报告（eval B0/B1/B2 / raw-only 路径）
+    this.attachRoutingGovernanceOnExit(input, stageResults, {
+      delivered: true,
+      factGuardPassed: true,
+      storyPreservationPassed: true,
+    });
+
     return {
       status: "ok",
       workspaceId: input.workspaceId,
@@ -3419,30 +4450,342 @@ export class UnifiedOrchestrator {
     // hardBlock 不接收调用方 warnings（阻断路径独立维护局部 warnings，
     // 仅供 QUALITY-16 导出失败等局部 warning 使用，不与主链路 warnings 合并）。
     const warnings: string[] = [];
-    const severity = guidance?.severityOverride
-      ?? (stage === "raw_generation" ? "fatal" : "hard");
-    const envelope: UnifiedFailureEnvelope = {
+    // RECOVERY-P0/P2/P5：统一 failureClass + recoveryAction；预算贯穿；checkpoint 落盘
+    const attemptRaw = (input as unknown as { _modelTimeoutRetryAttempt?: number })
+      ._modelTimeoutRetryAttempt;
+    const attempt = typeof attemptRaw === "number" ? attemptRaw : 0;
+
+    // 章节级恢复预算：优先本轮 stageResults → 外层重试传入的 prior → 新建
+    // 外层 register-tools 重试必须透传 prior，否则每次 orchestrate 重置预算
+    const priorBudget = (
+      input as unknown as { _priorRecoveryBudget?: RecoveryBudget }
+    )._priorRecoveryBudget;
+    let recoveryBudget =
+      (stageResults.recoveryBudget as RecoveryBudget | undefined) ??
+      (priorBudget ? { ...priorBudget } : undefined) ??
+      createRecoveryBudget(input.recoveryBudgetOverrides as Partial<RecoveryBudget> | undefined);
+    const recoveryMachine =
+      (stageResults._recoveryMachine as ReturnType<typeof createRecoveryStateMachine> | undefined) ??
+      createRecoveryStateMachine("running");
+
+    // 可恢复失败：预扣预算；不足则强制 checkpoint（不得再发起模型/工具调用）
+    let budgetForceCheckpoint = false;
+    const isRecoverableHint =
+      guidance?.severityOverride === "recoverable" ||
+      guidance?.recoverable === true ||
+      guidance?.gate === "model_timeout";
+    if (isRecoverableHint) {
+      const reserved = reserveBudget(recoveryBudget, {
+        stageAttempts: 1,
+        totalAttempts: 1,
+        recoveryModelCalls: 1,
+        modelCalls: 1,
+      });
+      if (!reserved.ok) {
+        budgetForceCheckpoint = true;
+        stageResults.recoveryBudgetExhausted = {
+          reason: reserved.reason,
+          snapshot: reserved.snapshot,
+        };
+      } else {
+        recoveryBudget = reserved.budget;
+        stageResults.recoveryBudget = recoveryBudget;
+      }
+    }
+
+    const policyHit = matchRecoveryPolicy({
+      failureClass:
+        guidance?.severityOverride === "recoverable"
+          ? "recoverable"
+          : guidance?.severityOverride === "preflight"
+            ? "preflight"
+            : undefined,
+      gate: guidance?.gate,
       stage,
-      severity,
+    });
+
+    const guidanceMaxAttempts =
+      guidance?.retryPlan?.maxAttempts ?? policyHit?.maxAttempts ?? 1;
+    // attempt 已达/超过 maxAttempts：禁止再 retry，强制 checkpoint（跨外层重试闭环）
+    const attemptExhausted =
+      isRecoverableHint && attempt >= guidanceMaxAttempts && !budgetForceCheckpoint;
+
+    // WP-04：失败策略矩阵 — 记录 attemptHistory / prohibited / failureType
+    // 与 buildProductionFailureEnvelope 并存；矩阵提供可审计策略证据，不替换主 envelope。
+    const govStateForFailure =
+      getGovernanceState(stageResults) ??
+      createRoutingGovernanceState({
+        runRouting: input.runRouting,
+        recoveryBudget,
+      });
+    const failureRecord = recordFailureStrategy(govStateForFailure, {
+      stage,
+      gate: guidance?.gate ?? policyHit?.match.gateIncludes?.[0],
       reason,
-      recoverable: guidance?.recoverable ?? severity === "recoverable",
-      degradedTo: "hard_block",
-      ...(guidance?.gate ? { gate: guidance.gate } : {}),
-      ...(guidance?.candidateDisposition
-        ? { candidateDisposition: guidance.candidateDisposition }
-        : {}),
-      ...(guidance?.userActionRequired
-        ? { userActionRequired: guidance.userActionRequired }
-        : {}),
-      ...(guidance?.prohibitedActions
-        ? { prohibitedActions: guidance.prohibitedActions }
-        : {}),
-      ...(guidance?.retryPlan ? { retryPlan: guidance.retryPlan } : {}),
-      ...(guidance?.blockCategory
-        ? { blockCategory: guidance.blockCategory }
-        : {}),
+      attempt,
+      failureClassHint:
+        guidance?.severityOverride === "recoverable"
+          ? "recoverable"
+          : guidance?.severityOverride === "preflight"
+            ? "preflight"
+            : undefined,
+    });
+    setGovernanceState(stageResults, failureRecord.state);
+    stageResults._lastFailureStrategyDecision = failureRecord.decision;
+    stageResults._lastFailureType = failureRecord.failureType;
+    stageResults.failureStrategyDecision = {
+      failureType: failureRecord.failureType,
+      recoveryAction: failureRecord.decision.decision.recoveryAction,
+      failureClass: failureRecord.decision.decision.failureClass,
+      attemptHistory: failureRecord.decision.attemptHistory,
+      prohibited: failureRecord.decision.rule.prohibited,
+      silentDegradeForbidden: failureRecord.decision.silentDegradeForbidden,
+      preserveIntermediateEvidence: failureRecord.decision.preserveIntermediateEvidence,
+      ruleDescription: failureRecord.decision.rule.description,
     };
+
+    const built = buildProductionFailureEnvelope({
+      stage,
+      reason: budgetForceCheckpoint
+        ? `${reason}（恢复预算耗尽：${(stageResults.recoveryBudgetExhausted as { reason?: string } | undefined)?.reason ?? "budget"}）`
+        : attemptExhausted
+          ? `${reason}（重试次数耗尽 attempt=${attempt} max=${guidanceMaxAttempts}）`
+          : reason,
+      gate: guidance?.gate ?? policyHit?.match.gateIncludes?.[0],
+      severity:
+        budgetForceCheckpoint || attemptExhausted
+          ? "hard"
+          : (guidance?.severityOverride ??
+            (stage === "raw_generation" ? "fatal" : "hard")),
+      recoverable:
+        budgetForceCheckpoint || attemptExhausted ? false : guidance?.recoverable,
+      attempt,
+      maxAttempts: guidanceMaxAttempts,
+      budget: recoveryBudget,
+      userActionRequired: guidance?.userActionRequired,
+      candidateDisposition: guidance?.candidateDisposition,
+      // 失败策略矩阵的 prohibited 写入 stageResults.failureStrategyDecision；
+      // envelope.prohibitedActions 仍使用 guidance 的类型化集合，避免跨 schema 强转。
+      prohibitedActions: guidance?.prohibitedActions,
+      blockCategory: guidance?.blockCategory,
+      // 预算耗尽 / attempt 耗尽：强制 checkpoint，禁止 guidance.retryPlan 覆盖为 retry
+      forceRecoveryAction:
+        budgetForceCheckpoint || attemptExhausted
+          ? "checkpoint"
+          : guidance?.retryPlan
+            ? guidance.retryPlan.strategy === "retry_gate"
+              ? "retry_gate"
+              : guidance.retryPlan.strategy === "chapter_level_retry"
+                ? "retry_stage"
+                : guidance.retryPlan.strategy === "revise_inputs_and_retry_same_chapter"
+                  ? "user_fix"
+                  : undefined
+            : policyHit?.action,
+      recoveryHints: {
+        schemaOrParseError: guidance?.gate === "schema" || guidance?.gate === "parse",
+        coverageInsufficient:
+          guidance?.gate === "must_verify_coverage" ||
+          guidance?.gate === "coverage",
+        confirmedFactConflict:
+          guidance?.gate === "fact_guard" && guidance?.recoverable === false,
+        chapterSaveFailed: stage === "atomic_save",
+        stateCommitFailed: stage.includes("state_commit"),
+        staleRevision: guidance?.gate === "stale_revision",
+      },
+    });
+    // 仅当仍可 retry 时保留调用方 retryPlan；attempt/budget 耗尽后不得覆盖为 retry
+    if (guidance?.retryPlan && !budgetForceCheckpoint && !attemptExhausted) {
+      const strategy = guidance.retryPlan.strategy;
+      built.retryPlan = {
+        strategy:
+          strategy === "retry_gate" ||
+          strategy === "chapter_level_retry" ||
+          strategy === "revise_inputs_and_retry_same_chapter"
+            ? strategy
+            : "chapter_level_retry",
+        maxAttempts: guidance.retryPlan.maxAttempts,
+      };
+      built.recoverable = guidance.recoverable ?? built.recoverable;
+      if (guidance.severityOverride === "recoverable") {
+        built.failureClass = "recoverable";
+        built.severity = "recoverable";
+      }
+    } else if (budgetForceCheckpoint || attemptExhausted) {
+      // 耗尽后：不可自动恢复，清除 retryPlan，供工具层停止外层重试
+      built.recoverable = false;
+      built.retryPlan = undefined;
+      if (built.failureClass === "recoverable") {
+        // 保留 failureClass 语义为 recoverable 的历史原因，但 action=checkpoint
+        // severity 用 hard 让工具层不再重试
+        built.severity = "hard";
+      }
+    }
+    const envelope = toUnifiedFailureEnvelope(built) as UnifiedFailureEnvelope;
+    // 确保 failureClass 始终存在（生产真相源）
+    if (!envelope.failureClass) {
+      envelope.failureClass = mapLegacyFailureClass(envelope.severity);
+    }
+    // 外层重试可读取累计预算
+    stageResults.recoveryBudget = recoveryBudget;
+    // BG-01：阻断路径同样落盘统一预算账本（外层重试读取 budgetLedger 延续消耗）
+    const priorLedgerState = (
+      stageResults as Record<string, unknown>
+    )._budgetLedgerState as BudgetLedger | undefined;
+    if (priorLedgerState) {
+      stageResults.budgetLedger = getBudgetLedger(priorLedgerState);
+      delete (stageResults as Record<string, unknown>)._budgetLedgerState;
+    }
     stageResults.failureEnvelope = envelope;
+    stageResults.recoveryDecision = {
+      recoveryAction: built.recoveryAction,
+      failureClass: built.failureClass,
+      attempt: built.attempt,
+      maxAttempts: built.maxAttempts,
+      nextStep: built.nextStep,
+      traceId: built.traceId,
+      policyRuleId: policyHit?.id ?? null,
+      budgetSnapshot: snapshotBudget(recoveryBudget),
+      attemptExhausted,
+      budgetForceCheckpoint,
+    };
+    stageResults.recoveryBudgetSnapshot = budgetSnapshotForTrace(recoveryBudget);
+
+    // 状态机推进：必须走合法路径
+    // running → retryable_failure → checkpoint（不得 running 直跳 checkpoint）
+    // running → interrupted → checkpoint
+    // running → blocked
+    const wantsCheckpoint =
+      built.recoveryAction === "checkpoint" ||
+      budgetForceCheckpoint ||
+      attemptExhausted;
+    const wantsInterrupted = built.failureClass === "interrupted";
+    const wantsRetryable =
+      !wantsCheckpoint &&
+      !wantsInterrupted &&
+      built.failureClass === "recoverable" &&
+      built.recoverable;
+
+    if (wantsInterrupted) {
+      if (recoveryMachine.state === "running") {
+        recoveryMachine.transition("interrupted", built.reason);
+      }
+      if (recoveryMachine.state === "interrupted") {
+        recoveryMachine.transition("checkpoint", "persist_after_interrupt");
+      }
+    } else if (wantsCheckpoint) {
+      if (recoveryMachine.state === "running") {
+        recoveryMachine.transition("retryable_failure", built.reason);
+      }
+      if (
+        recoveryMachine.state === "retryable_failure" ||
+        recoveryMachine.state === "retrying"
+      ) {
+        recoveryMachine.transition(
+          "checkpoint",
+          budgetForceCheckpoint
+            ? "budget_exhausted"
+            : attemptExhausted
+              ? "attempt_exhausted"
+              : "policy_checkpoint",
+        );
+      }
+    } else if (wantsRetryable) {
+      if (recoveryMachine.state === "running") {
+        recoveryMachine.transition("retryable_failure", built.reason);
+      }
+    } else {
+      // blocked / fatal / preflight
+      if (recoveryMachine.state === "running") {
+        recoveryMachine.transition("blocked", built.reason);
+      } else if (
+        recoveryMachine.state === "retryable_failure" ||
+        recoveryMachine.state === "retrying"
+      ) {
+        recoveryMachine.transition("blocked", built.reason);
+      }
+    }
+    stageResults.recoveryLifecycle = {
+      state: recoveryMachine.state,
+      history: recoveryMachine.transitionHistory,
+    };
+
+    // RECOVERY-P5：checkpoint / interrupted / 预算耗尽 → 落盘 recovery checkpoint
+    // 不执行 chapter.save / state.commit；resume 必须显式触发。
+    if (
+      built.recoveryAction === "checkpoint" ||
+      built.failureClass === "interrupted" ||
+      budgetForceCheckpoint
+    ) {
+      try {
+        const workspacePath = join(
+          input.projectRoot,
+          "workspaces",
+          input.workspaceId,
+        );
+        const cp = saveRecoveryCheckpoint({
+          workspacePath,
+          workspaceId: input.workspaceId,
+          chapterId: input.chapterId,
+          taskId: input.controlPlane?.packet.taskId ?? `chapter:${input.chapterId}`,
+          stage,
+          candidateId: blockedEvidenceInput?.candidateId ?? undefined,
+          recoveryBudget,
+          interruptReason: budgetForceCheckpoint
+            ? "budget_exhausted"
+            : built.failureClass === "interrupted"
+              ? "user_abort"
+              : undefined,
+          completedWork: Array.isArray(stageResults.pipelineProgress)
+            ? []
+            : [
+                String(
+                  (stageResults.pipelineProgress as { lastCompletedStage?: string } | undefined)
+                    ?.lastCompletedStage ?? "unknown",
+                ),
+              ],
+          remainingWork: ["resume_required"],
+          failureClass: built.failureClass,
+          recoveryAction: built.recoveryAction,
+          artifactHash: blockedEvidenceInput?.finalText
+            ? undefined
+            : undefined,
+        });
+        // RUN-LIFECYCLE-P3：checkpoint 落盘后追加审计事件（先事件后聚合由 AuditRunSession fold）
+        // 禁止把 checkpoint 写成 committed；resume 必须显式触发。
+        input.auditSink?.recordLifecycleEvent?.({
+          eventType: "checkpoint_saved",
+          decisionReason: budgetForceCheckpoint
+            ? "budget_exhausted"
+            : built.reason,
+          candidateId: blockedEvidenceInput?.candidateId ?? undefined,
+          payload: {
+            checkpointId: cp.checkpointId,
+            stage,
+            failureClass: built.failureClass,
+            recoveryAction: built.recoveryAction,
+            recoveryBudget: { ...recoveryBudget },
+            interruptReason: budgetForceCheckpoint
+              ? "budget_exhausted"
+              : built.failureClass === "interrupted"
+                ? "user_abort"
+                : null,
+            autoResume: false,
+          },
+        });
+        stageResults.recoveryCheckpoint = {
+          saved: true,
+          checkpointId: cp.checkpointId,
+          status: cp.status,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        stageResults.recoveryCheckpoint = {
+          saved: false,
+          error: msg,
+        };
+        warnings.push(`recovery checkpoint 落盘失败：${msg}`);
+      }
+    }
     // ── QUALITY-3：hardBlock 路径跳过结构证据扫描，但写清 skipped reason ──
     // 任务规格 §6："hardBlock/raw 生成失败路径可跳过，但要写清 skipped reason"。
     // 无 finalText 可扫描，只记录 skipped reason 供 trace 审计。
@@ -3506,6 +4849,56 @@ export class UnifiedOrchestrator {
     this.saveBlockedCandidateEvidenceArtifact(
       input, stageResults, warnings, stage, reason, envelope, blockedEvidenceInput
     );
+
+    // MA：若主链路已挂载协作状态，阻断出口也写入 agentCollaboration 摘要
+    const collab = (stageResults as Record<string, unknown>)._agentCollabState as
+      | CollaborationTraceState
+      | undefined;
+    if (collab) {
+      recordSystemDecision(collab, {
+        fromStage: stage,
+        toStage: null,
+        transition: "block",
+        allowed: false,
+        reason,
+        priority: "permission_security",
+        candidateId: blockedEvidenceInput?.candidateId ?? undefined,
+      });
+      attachCollaborationToStageResults(stageResults, collab);
+      stageResults.agentLineageIndex = buildAgentLineageIndex({
+        stageResults,
+        orchestratorRunId: collab.orchestratorRunId,
+        workspaceId: collab.workspaceId,
+        chapterId: collab.chapterId,
+      });
+      delete (stageResults as Record<string, unknown>)._agentCollabState;
+    }
+
+    // WP-03..07：blocked 出口也挂载分层预算 / 失败策略 / 观测 / 质量-成本报告
+    // （hardBlock 不经 finishWithCollab，必须在此显式 attach）
+    const govStateBlocked =
+      getGovernanceState(stageResults) ??
+      createRoutingGovernanceState({
+        runRouting: input.runRouting,
+        recoveryBudget,
+      });
+    const blockedReports = buildGovernanceReports(govStateBlocked, {
+      modelCalls: (stageResults.modelCalls as ModelCallEntry[] | undefined) ?? [],
+      delivered: false,
+      factGuardPassed: false,
+      storyPreservationPassed: false,
+      recoveryAssisted: govStateBlocked.layeredBudget.recovery.usedModelCalls > 0,
+      lastFailureDecision: failureRecord.decision,
+      lastFailureType: failureRecord.failureType,
+    });
+    attachGovernanceReports(stageResults, blockedReports);
+    stageResults.recoveryBudget = govStateBlocked.layeredBudget.legacyRecovery;
+    stageResults.recoveryBudgetSnapshot = budgetSnapshotForTrace(
+      govStateBlocked.layeredBudget.legacyRecovery,
+    );
+    delete (stageResults as Record<string, unknown>)._routingGovernanceState;
+    delete (stageResults as Record<string, unknown>)._lastFailureStrategyDecision;
+    delete (stageResults as Record<string, unknown>)._lastFailureType;
 
     return {
       status: "blocked",
@@ -3697,16 +5090,91 @@ export class UnifiedOrchestrator {
     };
   }
 
+  /**
+   * WP-03..07：在成功出口挂载分层预算 / 观测 / 质量-成本报告。
+   * hardBlock 与 finishWithCollab 各自调用对应路径；本 helper 供 deliverRaw / 主路径复用。
+   */
+  private attachRoutingGovernanceOnExit(
+    input: UnifiedOrchestratorInput,
+    stageResults: Record<string, unknown>,
+    flags: {
+      delivered: boolean;
+      factGuardPassed?: boolean;
+      storyPreservationPassed?: boolean;
+    },
+  ): void {
+    if (stageResults.routingGovernance) return; // 已挂载则幂等
+    const govState =
+      getGovernanceState(stageResults) ??
+      createRoutingGovernanceState({
+        runRouting: input.runRouting,
+        recoveryBudget: stageResults.recoveryBudget as RecoveryBudget | undefined,
+      });
+    const reports = buildGovernanceReports(govState, {
+      modelCalls: (stageResults.modelCalls as ModelCallEntry[] | undefined) ?? [],
+      delivered: flags.delivered,
+      factGuardPassed: flags.factGuardPassed,
+      storyPreservationPassed: flags.storyPreservationPassed,
+      recoveryAssisted: govState.layeredBudget.recovery.usedModelCalls > 0,
+      lastFailureDecision: stageResults._lastFailureStrategyDecision as
+        | ReturnType<typeof recordFailureStrategy>["decision"]
+        | undefined,
+      lastFailureType: stageResults._lastFailureType as
+        | import("./failure-strategy-matrix.js").FailureType
+        | undefined,
+    });
+    attachGovernanceReports(stageResults, reports);
+    stageResults.recoveryBudget = govState.layeredBudget.legacyRecovery;
+    stageResults.recoveryBudgetSnapshot = budgetSnapshotForTrace(
+      govState.layeredBudget.legacyRecovery,
+    );
+    // BG-01：交付/主路径出口落盘统一预算账本（wrapModelFn reserve/settle 的最终状态）
+    const ledgerState = (stageResults as Record<string, unknown>)._budgetLedgerState as
+      | BudgetLedger
+      | undefined;
+    if (ledgerState) {
+      stageResults.budgetLedger = getBudgetLedger(ledgerState);
+      delete (stageResults as Record<string, unknown>)._budgetLedgerState;
+    }
+    delete (stageResults as Record<string, unknown>)._routingGovernanceState;
+    delete (stageResults as Record<string, unknown>)._lastFailureStrategyDecision;
+    delete (stageResults as Record<string, unknown>)._lastFailureType;
+  }
+
   authorizeCapability(
     controlPlane: TrustedControlPlane,
     trace: ControlPlaneTrace,
     capability: CapabilityName,
     reason: string,
   ): { allowed: boolean; consumed: boolean } {
-    const result = controlPlane.policy.authorize(capability, reason);
+    // AUTONOMY-P1：state.commit / chapter.save 的第二道模型身份守护。
+    // 执行侧默认 actor=orchestrator；CapabilityPolicy 对 actor=model 永久 deny。
+    if (capability === "state.commit" || capability === "chapter.save") {
+      assertOrchestratorCommitActor({
+        actor: "orchestrator",
+        action: capability,
+        taskId: controlPlane.packet.taskId,
+        workspaceId: controlPlane.packet.taskId,
+      });
+    }
+    const result = controlPlane.policy.authorize(capability, reason, {
+      actor: "orchestrator",
+      requestedLevel: capability === "state.commit" || capability === "chapter.save"
+        ? "commit"
+        : undefined,
+      action: capability,
+    });
     if (!result.allowed) {
       trace.denials.push(result.trace);
     }
+    // 将控制决策挂到 controlTrace（P6 可观测）
+    const decisions = (trace as ControlPlaneTrace & {
+      controlDecisions?: unknown[];
+    });
+    if (!Array.isArray(decisions.controlDecisions)) {
+      decisions.controlDecisions = [];
+    }
+    decisions.controlDecisions.push(result.trace);
     return { allowed: result.allowed, consumed: result.consumed };
   }
 

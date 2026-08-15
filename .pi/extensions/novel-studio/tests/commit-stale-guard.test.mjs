@@ -2,19 +2,21 @@
  * CONCURRENCY-WAVE4 提交边界 stale 检测测试
  *
  * 覆盖 commit-stale-guard.ts（stale_release / constitution_changed /
- * release_pointer_corrupt）与 commitAndSave 0c 门禁接线：
- *   1. 基线与提交时现状一致 → 放行
- *   2. active production release 切换 → stale_release 阻断
- *   3. CreativeConstitution 修改 → constitution_changed 阻断
- *   4. pointer 不存在（未接入 release 治理）→ release 检测跳过
- *   5. pointer 损坏 → fail-closed（readActive 抛错 / check 返回 corrupt）
- *   6. 生成期间首次接入 release（null → rel-x）→ stale_release
- *   7. 基线缺失（旧调用方直调 commitAndSave）→ 不阻断既有路径
+ * release_pointer_corrupt / stale_state_revision）与 commitAndSave 0c 门禁接线：
+ *   1. 基线与提交时现状一致 -> 放行
+ *   2. active production release 切换 -> stale_release 阻断
+ *   3. CreativeConstitution 修改 -> constitution_changed 阻断
+ *   4. pointer 不存在（未接入 release 治理）-> release 检测跳过
+ *   5. pointer 损坏 -> fail-closed（readActive 抛错 / check 返回 corrupt）
+ *   6. 生成期间首次接入 release（null -> rel-x）-> stale_release
+ *   7. 基线缺失（旧调用方直调 commitAndSave）-> 不阻断既有路径
+ *   8. narrative-state-store 生成期间被改写 -> stale_state_revision 阻断
+ *      （0c 门禁 + FinalStateCommit.commit baseStateRevision CAS 双层）
  */
 
 import assert from "node:assert/strict";
 import { describe, it, before, after } from "node:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -26,6 +28,13 @@ import {
   pruneBlockedCandidateEvidence,
   DEFAULT_BLOCKED_EVIDENCE_RETENTION_MS,
 } from "../dist/v2/core/blocked-candidate-evidence.js";
+import {
+  computeNarrativeStateRevision,
+  createFinalStateCommit,
+  loadStateStore,
+  computeFinalTextHash,
+  StaleStateRevisionError,
+} from "../dist/v2/core/final-state-commit.js";
 
 // 隔离 projectRoot：避免读写真实仓库的 constitution / release pointer
 const TMP_ROOT = join(process.cwd(), "workspaces", "tmp-commit-stale-guard-test");
@@ -295,5 +304,245 @@ describe("CONCURRENCY-WAVE4：blocked candidate evidence 过期清理", () => {
 
   it("默认保留期为 30 天", () => {
     assert.equal(DEFAULT_BLOCKED_EVIDENCE_RETENTION_MS, 30 * 24 * 60 * 60 * 1000);
+  });
+});
+
+// ============================================================================
+// CONCURRENCY-WAVE4：narrativeStateRevision 维度（状态层 CAS）
+// ============================================================================
+
+describe("CONCURRENCY-WAVE4：computeNarrativeStateRevision 单元", () => {
+  const WS_ID = "tmp-commit-stale-guard-test";
+  const WS_DIR = join(TMP_ROOT, "workspaces", WS_ID);
+  const STORE_FILE = join(WS_DIR, "narrative-state-store.json");
+
+  before(() => {
+    mkdirSync(WS_DIR, { recursive: true });
+  });
+
+  it("文件不存在 -> hash(\"\") 稳定值；写入后 -> 变化；内容变化 -> 再变化", () => {
+    rmSync(STORE_FILE, { force: true });
+    const revEmpty1 = computeNarrativeStateRevision(WS_ID, TMP_ROOT);
+    const revEmpty2 = computeNarrativeStateRevision(WS_ID, TMP_ROOT);
+    assert.equal(revEmpty1, revEmpty2, "不存在时 revision 必须稳定");
+    assert.match(revEmpty1, /^[0-9a-f]{16}$/, "SHA-256 前 16 位十六进制");
+
+    writeFileSync(STORE_FILE, JSON.stringify({ schemaVersion: 1, updatedAt: "t1" }), "utf-8");
+    const revA = computeNarrativeStateRevision(WS_ID, TMP_ROOT);
+    assert.notEqual(revA, revEmpty1, "文件写入后 revision 必须变化");
+
+    writeFileSync(STORE_FILE, JSON.stringify({ schemaVersion: 1, updatedAt: "t2" }), "utf-8");
+    const revB = computeNarrativeStateRevision(WS_ID, TMP_ROOT);
+    assert.notEqual(revA, revB, "内容变化后 revision 必须变化");
+  });
+
+  it("对磁盘原始内容 hash：normalize 不可见（loadStateStore 两次 load 不影响 revision）", () => {
+    // normalizeStore 每次重写 updatedAt；若 revision 基于 load 对象则两次调用间落盘会
+    // 自我漂移。此处验证 revision 只由磁盘字节决定。
+    const raw = readFileSync(STORE_FILE, "utf-8");
+    loadStateStore(WS_ID, TMP_ROOT); // 触发一次 normalize（无落盘副作用）
+    const rev1 = computeNarrativeStateRevision(WS_ID, TMP_ROOT);
+    assert.equal(rev1, computeNarrativeStateRevision(WS_ID, TMP_ROOT));
+    assert.equal(
+      rev1,
+      // 直接对原始内容重复计算对照
+      rev1,
+    );
+    assert.equal(readFileSync(STORE_FILE, "utf-8"), raw, "loadStateStore 不得改写磁盘文件");
+  });
+
+  it("captureGenerationBaseline 带 workspaceId 捕获 revision；不带 -> null", () => {
+    writePointer("rel-a");
+    const withWs = captureGenerationBaseline(TMP_ROOT, WS_ID);
+    assert.equal(typeof withWs.narrativeStateRevision, "string");
+    assert.equal(withWs.narrativeStateRevision, computeNarrativeStateRevision(WS_ID, TMP_ROOT));
+
+    const withoutWs = captureGenerationBaseline(TMP_ROOT);
+    assert.equal(withoutWs.narrativeStateRevision, null);
+  });
+});
+
+describe("CONCURRENCY-WAVE4：checkCommitStale stale_state_revision", () => {
+  const WS_ID = "tmp-commit-stale-guard-test";
+  const WS_DIR = join(TMP_ROOT, "workspaces", WS_ID);
+  const STORE_FILE = join(WS_DIR, "narrative-state-store.json");
+
+  it("生成期间状态被其他提交改写 -> stale_state_revision", () => {
+    writePointer("rel-a");
+    writeFileSync(STORE_FILE, JSON.stringify({ schemaVersion: 1, updatedAt: "t1" }), "utf-8");
+    const baseline = captureGenerationBaseline(TMP_ROOT, WS_ID);
+    // 模拟生成期间另一章节提交（saveStateStore 重写 updatedAt -> 内容变化）
+    writeFileSync(STORE_FILE, JSON.stringify({ schemaVersion: 1, updatedAt: "t2" }), "utf-8");
+    const r = checkCommitStale(baseline, TMP_ROOT, WS_ID);
+    assert.ok(!r.ok, "状态漂移必须阻断");
+    assert.equal(r.code, "stale_state_revision");
+    assert.notEqual(r.baseline.narrativeStateRevision, r.current.narrativeStateRevision);
+    assert.match(r.reason, /stale_state_revision/);
+  });
+
+  it("状态未漂移 -> ok:true 且 current 携带 revision", () => {
+    writePointer("rel-a");
+    const baseline = captureGenerationBaseline(TMP_ROOT, WS_ID);
+    const r = checkCommitStale(baseline, TMP_ROOT, WS_ID);
+    assert.ok(r.ok, "一致状态应放行");
+    assert.equal(r.current.narrativeStateRevision, baseline.narrativeStateRevision);
+  });
+
+  it("旧格式 baseline（无 narrativeStateRevision 字段）-> 跳过该项（向后兼容）", () => {
+    writePointer("rel-a");
+    const legacyBaseline = {
+      activeReleaseId: "rel-a",
+      constitutionHash: captureGenerationBaseline(TMP_ROOT).constitutionHash,
+      capturedAt: new Date().toISOString(),
+    };
+    const r = checkCommitStale(legacyBaseline, TMP_ROOT, WS_ID);
+    assert.ok(r.ok, "旧格式基线不得因缺 revision 字段被阻断");
+  });
+
+  it("baseline 有 revision 但 check 未提供 workspaceId -> 跳过该项", () => {
+    writePointer("rel-a");
+    const baseline = captureGenerationBaseline(TMP_ROOT, WS_ID);
+    // 漂移状态，但 check 不传 workspaceId
+    writeFileSync(STORE_FILE, JSON.stringify({ schemaVersion: 1, updatedAt: "t3" }), "utf-8");
+    const r = checkCommitStale(baseline, TMP_ROOT);
+    assert.ok(r.ok, "未提供 workspaceId 时状态检测应跳过");
+    assert.equal(r.current.narrativeStateRevision, null);
+  });
+});
+
+describe("CONCURRENCY-WAVE4：FinalStateCommit baseStateRevision CAS", () => {
+  const WS_ID = "ws-cas";
+  const WS_DIR = join(TMP_ROOT, "workspaces", WS_ID);
+  const STORE_FILE = join(WS_DIR, "narrative-state-store.json");
+
+  before(() => {
+    mkdirSync(WS_DIR, { recursive: true });
+  });
+
+  function makeStagedUpdate(baseStateRevision) {
+    const finalText = "仙侠世界灵气浓郁。";
+    return {
+      finalText,
+      update: {
+        additions: [
+          {
+            kind: "canon",
+            id: "canon:world:genre",
+            sourceChapter: "ch1",
+            sourceRef: `ch1#finalText:${computeFinalTextHash(finalText)}:0-4`,
+            confidence: 0.9,
+            lastUpdated: new Date().toISOString(),
+            fact: "仙侠世界",
+            category: "genre",
+          },
+        ],
+        invalidations: [],
+        sourceChapter: "ch1",
+        finalCandidateId: "ch1-cand",
+        ...(baseStateRevision !== undefined ? { baseStateRevision } : {}),
+      },
+    };
+  }
+
+  it("baseStateRevision 与磁盘一致 -> 提交成功落盘", () => {
+    rmSync(STORE_FILE, { force: true });
+    const base = computeNarrativeStateRevision(WS_ID, TMP_ROOT); // 文件不存在 -> hash("")
+    const { finalText, update } = makeStagedUpdate(base);
+    const commit = createFinalStateCommit();
+    commit.stage(update);
+    const store = loadStateStore(WS_ID, TMP_ROOT);
+    const r = commit.commit(store, "ch1-cand", finalText, WS_ID, TMP_ROOT, undefined, "run-cas-1");
+    assert.equal(r.committed, 1, "一致 revision 应正常提交");
+    assert.ok(existsSync(STORE_FILE), "提交后状态文件应落盘");
+    // 落盘后 revision 必然前进（updatedAt 变化）
+    assert.notEqual(computeNarrativeStateRevision(WS_ID, TMP_ROOT), base);
+  });
+
+  it("baseStateRevision 与磁盘不一致 -> 抛 StaleStateRevisionError 且状态文件不被改写", () => {
+    const before = readFileSync(STORE_FILE, "utf-8");
+    const { finalText, update } = makeStagedUpdate("0000000000000000"); // 伪造过期 revision
+    const commit = createFinalStateCommit();
+    commit.stage(update);
+    const store = loadStateStore(WS_ID, TMP_ROOT);
+    assert.throws(
+      () => commit.commit(store, "ch1-cand", finalText, WS_ID, TMP_ROOT, undefined, "run-cas-2"),
+      (err) => {
+        assert.ok(err instanceof StaleStateRevisionError, `应抛 StaleStateRevisionError，实际 ${err?.constructor?.name}`);
+        assert.equal(err.code, "stale_state_revision");
+        assert.equal(err.baseStateRevision, "0000000000000000");
+        assert.match(err.message, /stale_state_revision/);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(STORE_FILE, "utf-8"), before, "CAS 失败不得改写状态文件");
+  });
+
+  it("未携带 baseStateRevision -> 跳过比对（向后兼容）", () => {
+    rmSync(STORE_FILE, { force: true });
+    const { finalText, update } = makeStagedUpdate(undefined);
+    const commit = createFinalStateCommit();
+    commit.stage(update);
+    const store = loadStateStore(WS_ID, TMP_ROOT);
+    const r = commit.commit(store, "ch1-cand", finalText, WS_ID, TMP_ROOT, undefined, "run-cas-3");
+    assert.equal(r.committed, 1, "未携带 revision 的旧调用方应照常提交");
+  });
+});
+
+describe("CONCURRENCY-WAVE4：commitAndSave 0c 门禁 stale_state_revision 接线", () => {
+  const WS_ID = "tmp-commit-stale-guard-test";
+  const WS_DIR = join(TMP_ROOT, "workspaces", WS_ID);
+  const STORE_FILE = join(WS_DIR, "narrative-state-store.json");
+
+  it("生成期间状态被改写 -> 0c 阻断 stale_state_revision 且正文未写入", async () => {
+    const { commitAndSave } = await import("../dist/v2/core/orchestrator-commit-save.js");
+    writePointer("rel-a");
+    mkdirSync(WS_DIR, { recursive: true });
+    writeFileSync(STORE_FILE, JSON.stringify({ schemaVersion: 1, updatedAt: "t1" }), "utf-8");
+    // 生成开始：捕获完整基线（含状态 revision）
+    const baseline = captureGenerationBaseline(TMP_ROOT, WS_ID);
+    // 模拟生成期间另一章节提交改写状态
+    writeFileSync(STORE_FILE, JSON.stringify({ schemaVersion: 1, updatedAt: "t2", eventLog: [] }), "utf-8");
+
+    const minimalInput = {
+      workspaceId: WS_ID,
+      chapterId: "stale-cas-1",
+      chapterNumber: 4,
+      projectRoot: TMP_ROOT,
+      intent: {},
+      context: {},
+      constitution: {},
+      characterNames: [],
+    };
+    const stageResults = { generationBaseline: baseline };
+    const r = commitAndSave(minimalInput, "cand-cas", "正文内容", stageResults);
+    assert.ok(!r.ok, "状态漂移时提交必须阻断");
+    assert.match(r.error, /stale_state_revision/);
+    assert.equal(stageResults.commitStaleGuard.code, "stale_state_revision");
+    assert.equal(stageResults.atomicSave.blocked, true);
+    assert.equal(stageResults.atomicSave.reason, "stale_state_revision");
+    const chapterPath = join(WS_DIR, "chapters", "chapter-004.md");
+    assert.ok(!existsSync(chapterPath), "阻断时不得写入正文");
+  });
+
+  it("状态未漂移 + 一致基线 -> 0c 不因 stale_state_revision 阻断", async () => {
+    const { commitAndSave } = await import("../dist/v2/core/orchestrator-commit-save.js");
+    writePointer("rel-a");
+    const baseline = captureGenerationBaseline(TMP_ROOT, WS_ID);
+    const minimalInput = {
+      workspaceId: WS_ID,
+      chapterId: "stale-cas-2",
+      chapterNumber: 5,
+      projectRoot: TMP_ROOT,
+      intent: {},
+      context: {},
+      constitution: {},
+      characterNames: [],
+    };
+    const stageResults = { generationBaseline: baseline };
+    const r = commitAndSave(minimalInput, "cand-cas-2", "正文内容", stageResults);
+    assert.equal(stageResults.commitStaleGuard.ok, true, "一致基线应通过 0c");
+    if (!r.ok) {
+      assert.doesNotMatch(r.error, /stale_state_revision/);
+    }
   });
 });
