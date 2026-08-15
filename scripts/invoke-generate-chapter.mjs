@@ -10,8 +10,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, "..");
 
-// Set project root before import
-process.env.PROJECT_ROOT = projectRoot;
+// EVAL-REPLAY-ISOLATION-1：支持 --project-root=<path> 把数据根与代码根解耦。
+//  - 默认（无 flag）：数据根 = 仓库根，行为与历史版本完全一致；
+//  - 带 flag：数据根指向 scratch 隔离根（离线回放），扩展代码仍从仓库根加载。
+// 该 flag 仅供 eval 回放基础设施使用，生产调用不携带。
+const argvPre = process.argv.slice(2);
+const projectRootFlag = argvPre.find((a) => a.startsWith("--project-root="));
+const dataProjectRoot = projectRootFlag
+  ? resolve(projectRootFlag.slice("--project-root=".length))
+  : projectRoot;
+
+// Set project root before import（数据根：workspace / trace / 状态文件解析基准）
+process.env.PROJECT_ROOT = dataProjectRoot;
 
 // Load the compiled extension — need file:// protocol on Windows
 import { pathToFileURL } from "url";
@@ -40,8 +50,8 @@ if (!generateChapterTool) {
 }
 
 // Parse arguments
-//   node invoke-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber> [mock] [--model-test-route=claude|claude48|fable5|grok45|doubao|glm|gpt|gpt56|deepseek] [--require-claude-stage2]
-const argv = process.argv.slice(2);
+//   node invoke-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber> [mock] [--model-test-route=claude|claude48|fable5|grok45|doubao|glm|gpt|gpt56|deepseek] [--require-claude-stage2] [--project-root=<scratchRoot>]
+const argv = argvPre;
 const workspaceId = argv[0];
 const chapterId = argv[1];
 const chapterNumber = parseInt(argv[2], 10);
@@ -130,8 +140,8 @@ if (result.details) {
   console.log(JSON.stringify(result, null, 2));
 }
 
-// Save result to file
-const resultPath = join(projectRoot, "workspaces", workspaceId, "chapters", `chapter-${chapterId}`, "generate-result.json");
+// Save result to file（写入数据根，支持 scratch 隔离根）
+const resultPath = join(dataProjectRoot, "workspaces", workspaceId, "chapters", `chapter-${chapterId}`, "generate-result.json");
 const dir = dirname(resultPath);
 if (!existsSync(dir)) {
   // mkdir -p equivalent
