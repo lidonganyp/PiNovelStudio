@@ -21,7 +21,7 @@
 
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
-import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { redactSecrets } from "./review-surface-cli.js";
 
 // ============================================================================
@@ -143,6 +143,9 @@ export interface BlockedEvidenceStore {
   existsSync(path: string): boolean;
   mkdirSync(path: string, opts?: { recursive: boolean }): void;
   readdirSync?(path: string): string[];
+  /** CONCURRENCY-WAVE4：过期清理用（可选，未实现时 prune 跳过过期检查） */
+  statSync?(path: string): { mtimeMs: number };
+  unlinkSync?(path: string): void;
 }
 
 /** 默认 node 同步 fs store。 */
@@ -152,6 +155,8 @@ export const nodeBlockedEvidenceStore: BlockedEvidenceStore = {
   existsSync,
   mkdirSync,
   readdirSync,
+  statSync,
+  unlinkSync,
 };
 
 // ============================================================================
@@ -646,6 +651,94 @@ export function saveBlockedCandidateEvidenceToRecoveryPath(
     const msg = e instanceof Error ? e.message : String(e);
     return { saved: false, error: msg, reason: "blocked_evidence_unavailable" };
   }
+}
+
+// ============================================================================
+// 过期清理（CONCURRENCY-WAVE4，计划 Wave 4 任务 6）
+// ============================================================================
+
+/** blocked evidence 默认保留期：30 天（审计复盘窗口） */
+export const DEFAULT_BLOCKED_EVIDENCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** pruneBlockedCandidateEvidence 结果。pruned/kept/skippedFrozen 为 tracesDir 相对文件名。 */
+export interface PruneBlockedEvidenceResult {
+  /** 已删除（超过保留期且非冻结保护） */
+  pruned: string[];
+  /** 保留（未过期） */
+  kept: string[];
+  /** 保留（HOLD 冻结保护，即使过期也不删） */
+  skippedFrozen: string[];
+  /** 跳过（store 未实现 statSync/unlinkSync 或读取失败） */
+  skipped: string[];
+}
+
+/**
+ * 清理过期的 blocked candidate evidence artifact（含 recovery-N 副本）。
+ *
+ * 策略（计划 Wave 4 任务 6：candidate 过期、撤销、清理与审计保留周期）：
+ * - 匹配 `{chapterId}-blocked-candidate-evidence.json` 与 `.recovery-{N}.json`；
+ * - 文件 mtime 超过保留期（默认 30 天）→ 删除；
+ * - HOLD 清单冻结保护的原始 evidence（isFrozenEvidenceProtected）→ 即使过期也不删；
+ * - recovery 副本不查冻结保护（冻结语义只绑定原始 evidence hash）；
+ * - store 未实现 statSync/unlinkSync → 全部 skipped（向后兼容，不抛错）。
+ *
+ * 审计：结果结构化返回（pruned/kept/skippedFrozen/skipped），调用方负责写 trace。
+ */
+export function pruneBlockedCandidateEvidence(
+  tracesDir: string,
+  options?: { retentionMs?: number; now?: number },
+  store: BlockedEvidenceStore = nodeBlockedEvidenceStore,
+): PruneBlockedEvidenceResult {
+  const retentionMs = options?.retentionMs ?? DEFAULT_BLOCKED_EVIDENCE_RETENTION_MS;
+  const now = options?.now ?? Date.now();
+  const result: PruneBlockedEvidenceResult = { pruned: [], kept: [], skippedFrozen: [], skipped: [] };
+
+  if (typeof store.readdirSync !== "function") return result;
+  let entries: string[];
+  try {
+    entries = store.readdirSync(tracesDir);
+  } catch {
+    return result;
+  }
+
+  const frozenChapters = new Set<string>();
+  for (const name of entries) {
+    const m = /^(\S+)-blocked-candidate-evidence\.json$/.exec(name);
+    if (!m) continue;
+    const chapterId = m[1];
+    if (isFrozenEvidenceProtected(tracesDir, chapterId, store).protected) {
+      frozenChapters.add(chapterId);
+    }
+  }
+
+  for (const name of entries) {
+    const m = /^(\S+)-blocked-candidate-evidence(\.recovery-\d+)?\.json$/.exec(name);
+    if (!m) continue;
+    const chapterId = m[1];
+    const isRecovery = m[2] !== undefined;
+    const path = join(tracesDir, name);
+
+    if (!isRecovery && frozenChapters.has(chapterId)) {
+      result.skippedFrozen.push(name);
+      continue;
+    }
+    if (typeof store.statSync !== "function" || typeof store.unlinkSync !== "function") {
+      result.skipped.push(name);
+      continue;
+    }
+    try {
+      const mtimeMs = store.statSync(path).mtimeMs;
+      if (now - mtimeMs > retentionMs) {
+        store.unlinkSync(path);
+        result.pruned.push(name);
+      } else {
+        result.kept.push(name);
+      }
+    } catch {
+      result.skipped.push(name);
+    }
+  }
+  return result;
 }
 
 // ============================================================================

@@ -278,10 +278,14 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     // rename 接管/短期 guard）+ v2/core/submission-queue（workspace 章节提交队列，chapter_commit
     // 资源跨进程串行）接入生产闭包（batch-generation-lock / batch-generation-job-store /
     // orchestrator-commit-save 消费），合法新增 2 个生产模块。闭包 319 → 321。阈值上调到 322。
+    // 2026-08-15 CONCURRENCY-WAVE4：v2/core/commit-stale-guard（提交边界 stale 环境检测：
+    // 生成期 baseline 与提交时 activeReleaseId/constitutionHash 比对）经
+    // orchestrator-commit-save（0c 门禁）+ unified-orchestrator（baseline 捕获）接入生产闭包，
+    // 合法新增 1 个生产模块。闭包 321 → 322。阈值上调到 323。
     // 守卫仍是绊线：真正「退化」信号是旧通配 include 的全量树（~460）或旧 237，远高于此。
     assert.ok(
-      distCount < 322,
-      `dist/ JS 文件数（${distCount}）应 < 322（生产闭包约 321，含 MEMORY/Protocol/自主性/恢复控制面/反馈证据管道/模型路由治理/策略证据分区/发布生命周期权限/trace 投影/trace 投影读入口/trace 写模式开关/明细内容库/trajectory 写模式开关/轨迹明细内容库/SIGKILL 故障注入钩子/跨进程原子原语/章节提交队列；旧通配 include 接近全量）；超过说明 tsconfig.prod.json 退化为全量编译`,
+      distCount < 323,
+      `dist/ JS 文件数（${distCount}）应 < 323（生产闭包约 322，含 MEMORY/Protocol/自主性/恢复控制面/反馈证据管道/模型路由治理/策略证据分区/发布生命周期权限/trace 投影/trace 投影读入口/trace 写模式开关/明细内容库/trajectory 写模式开关/轨迹明细内容库/SIGKILL 故障注入钩子/跨进程原子原语/章节提交队列/提交边界 stale 检测；旧通配 include 接近全量）；超过说明 tsconfig.prod.json 退化为全量编译`,
     );
   });
 });
