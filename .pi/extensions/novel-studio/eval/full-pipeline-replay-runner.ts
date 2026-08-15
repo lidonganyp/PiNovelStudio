@@ -119,24 +119,26 @@ export function resolveReplayRepoRoot(startDir: string): string {
 }
 
 export function resolveInvokeGenerateChapterScript(projectRoot: string): string {
+  // 仓库根 scripts/invoke-generate-chapter.mjs 默认 modelTestRoute=glm，只给开发调用。
+  // production_like 必须用扩展脚本，否则会把生产等价回放锁进 GLM 评测路由。
   const candidates = [
-    join(projectRoot, "scripts", "invoke-generate-chapter.mjs"),
     join(projectRoot, ".pi", "extensions", "novel-studio", "scripts", "invoke-generate-chapter.mjs"),
+    join(projectRoot, "scripts", "invoke-generate-chapter.mjs"),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
   let dir = resolve(projectRoot);
   for (let i = 0; i < 6; i += 1) {
-    const repoScript = join(dir, "scripts", "invoke-generate-chapter.mjs");
-    if (existsSync(repoScript)) return repoScript;
     const extScript = join(dir, ".pi", "extensions", "novel-studio", "scripts", "invoke-generate-chapter.mjs");
     if (existsSync(extScript)) return extScript;
+    const repoScript = join(dir, "scripts", "invoke-generate-chapter.mjs");
+    if (existsSync(repoScript)) return repoScript;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return join(projectRoot, "scripts", "invoke-generate-chapter.mjs");
+  return join(projectRoot, ".pi", "extensions", "novel-studio", "scripts", "invoke-generate-chapter.mjs");
 }
 
 export interface RunFullPipelineReplayOptions {

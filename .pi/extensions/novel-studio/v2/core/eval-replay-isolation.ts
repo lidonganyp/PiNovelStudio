@@ -534,14 +534,21 @@ export function materializeScratchProjectSkeleton(
   }
 
   if (source.copyModelRouting) {
+    const configDir = join(scratchRoot, "config");
+    mkdirSync(configDir, { recursive: true });
     const routingSource = locateProjectAsset(
       source.projectRoot,
       join("config", "model-routing.json"),
     );
     if (routingSource) {
-      const configDir = join(scratchRoot, "config");
-      mkdirSync(configDir, { recursive: true });
       copyFileSync(routingSource, join(configDir, "model-routing.json"));
+    }
+    const qualityGatesSource = locateProjectAsset(
+      source.projectRoot,
+      join("config", "quality-gates.json"),
+    );
+    if (qualityGatesSource) {
+      copyFileSync(qualityGatesSource, join(configDir, "quality-gates.json"));
     }
   }
   if (source.copyDotEnv) {

@@ -420,6 +420,21 @@ describe("P1 eval-replay-isolation：scratch workspace 与生产面", () => {
     assert.equal(existsSync(lease.scratchRoot), false, "cleanup 后 scratch 根应删除");
   });
 
+  it("materializeScratchProjectSkeleton：真实模型回放同时复制 quality-gates.json", () => {
+    const routingDir = join(fakeProjectRoot, "config");
+    mkdirSync(routingDir, { recursive: true });
+    writeFileSync(join(routingDir, "model-routing.json"), "{\"ok\":true}\n");
+    writeFileSync(join(routingDir, "quality-gates.json"), "{\"gates\":[]}\n");
+    const scratchRoot = join(tmpRoot, "scratch-quality-gates");
+    rmSync(scratchRoot, { recursive: true, force: true });
+    isolation.materializeScratchProjectSkeleton(scratchRoot, {
+      projectRoot: fakeProjectRoot,
+      copyModelRouting: true,
+    });
+    assert.equal(existsSync(join(scratchRoot, "config", "model-routing.json")), true);
+    assert.equal(existsSync(join(scratchRoot, "config", "quality-gates.json")), true);
+  });
+
   it("cleanup 拒绝无 marker 的目录（防误删正式目录）", () => {
     const evil = join(tmpRoot, "not-a-scratch");
     mkdirSync(evil, { recursive: true });
@@ -482,6 +497,46 @@ describe("P1 eval-replay-isolation：scratch workspace 与生产面", () => {
     assert.ok(
       violations.some((v) => v.kind === "formal_chapter_save"),
       JSON.stringify(violations),
+    );
+  });
+});
+
+describe("production_like 必须走扩展 invoke 脚本，不得默认锁 GLM", () => {
+  it("resolveInvokeGenerateChapterScript 优先选择扩展脚本", () => {
+    const tmpRoot = join(__dirname, ".tmp-invoke-script-resolution");
+    rmSync(tmpRoot, { recursive: true, force: true });
+    const repoScript = join(tmpRoot, "scripts", "invoke-generate-chapter.mjs");
+    const extScript = join(
+      tmpRoot,
+      ".pi",
+      "extensions",
+      "novel-studio",
+      "scripts",
+      "invoke-generate-chapter.mjs",
+    );
+    mkdirSync(dirname(repoScript), { recursive: true });
+    mkdirSync(dirname(extScript), { recursive: true });
+    writeFileSync(repoScript, "export const kind = 'repo-dev-lock';\n");
+    writeFileSync(extScript, "export const kind = 'extension-prod';\n");
+    try {
+      const resolved = replayRunner.resolveInvokeGenerateChapterScript(tmpRoot);
+      assert.equal(resolved, extScript);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("Gemini 生产路由的 invoke 参数不得带 model-test-route", () => {
+    const fixture = buildValidFixture({
+      replayMode: "production_like",
+    });
+    fixture.provenance.modelRoute = "v2_rawstage2_gemini31";
+    const resolved = replayRunner.resolveModelRouteInvokeArgs(fixture);
+    assert.equal(resolved.ok, true);
+    assert.deepEqual(resolved.args, []);
+    assert.equal(
+      resolved.args.some((arg) => String(arg).includes("model-test-route")),
+      false,
     );
   });
 });
