@@ -193,6 +193,38 @@ function aggregateHash(fileHashes: RuntimeFileHash[]): string {
   return sha256(concat);
 }
 
+let cachedGitBinaryAvailable: boolean | null = null;
+
+/**
+ * 探测 git 二进制是否可用（当前会话 PATH 可解析）。
+ *
+ * FP-GIT-1（rel-prod-110 事故修复）：capture 会话 PATH 无 git 时，getGitHead/getWorktreeDirty
+ * 会静默退化为 ""/false，导致 codeCommit 丢失身份、退化指纹被冻结进 manifest（recorded
+ * fpHash 808378f4 vs 带 commit 身份的 d24a5faf），verify 在同样缺 git 的会话中产生假阳性 YES。
+ *
+ * 模块本体刻意保持静默退化语义，以兼容：
+ * 1) 测试 fixture 在临时目录（非 git 仓库）上直接调用 collectEnvironmentFingerprint；
+ * 2) 生产 gate（captureDefaultEnvironmentFingerprint）的 fail-closed 比对（退化 hash 与
+ *    完整 hash 必然不等，只会保守阻断，不会假阳性）。
+ *
+ * 阻断收口在 CLI 咽喉：evolution-cli.mjs 的 captureFingerprint() 在 capture/verify/freeze/
+ * drill 前调用本函数，git 不可用即 exit 9 响亮失败，禁止把退化指纹冻结进 release manifest。
+ */
+export function isGitBinaryAvailable(): boolean {
+  if (cachedGitBinaryAvailable === null) {
+    try {
+      execSync("git --version", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      cachedGitBinaryAvailable = true;
+    } catch {
+      cachedGitBinaryAvailable = false;
+    }
+  }
+  return cachedGitBinaryAvailable;
+}
+
 function getGitHead(projectRoot: string): string {
   try {
     return execSync("git rev-parse HEAD", {
@@ -201,6 +233,8 @@ function getGitHead(projectRoot: string): string {
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
   } catch {
+    // FP-GIT-1：git 二进制缺失与"非 git 仓库"在此无法区分，均退化为空串。
+    // 严格阻断由 CLI 咽喉（captureFingerprint 的 isGitBinaryAvailable 守卫）负责。
     return "";
   }
 }
@@ -214,6 +248,7 @@ function getWorktreeDirty(projectRoot: string): boolean {
     }).trim();
     return status.length > 0;
   } catch {
+    // FP-GIT-1：同上，静默退化；CLI 咽喉守卫负责拒绝退化指纹进入 release 生命周期。
     return false;
   }
 }

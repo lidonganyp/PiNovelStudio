@@ -30,7 +30,7 @@ import { join, resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
-import { collectEnvironmentFingerprint, computeFingerprintHash, verifyEnvironmentFingerprint } from "../dist-test/v2/governance/environment-fingerprint.js";
+import { collectEnvironmentFingerprint, computeFingerprintHash, verifyEnvironmentFingerprint, isGitBinaryAvailable } from "../dist-test/v2/governance/environment-fingerprint.js";
 import { captureDefaultBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
 import { createEvolutionReleaseRegistry } from "../dist-test/v2/governance/evolution-release-registry.js";
 import { createReleasePointerStore } from "../dist-test/v2/governance/release-pointer-store.js";
@@ -135,7 +135,18 @@ function constitutionHash() {
 
 /** 采集当前环境指纹（1A 默认配置）。 */
 function captureFingerprint() {
-  return collectEnvironmentFingerprint({
+  // FP-GIT-1（rel-prod-110 事故修复）：git 二进制不可用时 getGitHead 静默退化为空串，
+  // 退化指纹会被冻结进 manifest，且 verify 在同样缺 git 的会话中产生假阳性 YES
+  // （recorded 808378f4 vs 带 commit 身份的 d24a5faf）。此处是 capture/verify/freeze/drill
+  // 共用咽喉，git 缺失必须响亮失败，禁止退化指纹进入 release 生命周期。
+  if (!isGitBinaryAvailable()) {
+    console.error("[evolution] 错误：git 二进制不可用（当前会话 PATH 中无 git），拒绝采集环境指纹。");
+    console.error("  FP-GIT-1（rel-prod-110 事故修复）：git 缺失时 codeCommit 静默为空，");
+    console.error("  capture 会把退化指纹冻结进 manifest，verify 则产生假阳性 YES。");
+    console.error("  请将 git 加入会话 PATH 后重试（如 PowerShell: $env:Path = \"C:\\Program Files\\Git\\cmd;$env:Path\"）。");
+    process.exit(9);
+  }
+  const fp = collectEnvironmentFingerprint({
     projectRoot: projectRoot(),
     modelRoutingPath: "config/model-routing.json",
     promptBundlePaths: [],
@@ -166,6 +177,14 @@ function captureFingerprint() {
     envSwitchNames: ["V2_FORCE_STUB", "NOVEL_TEST_TOOLS", "NOVEL_DEBUG_TOOLS", "PINOVEL_UNIFIED_PIPELINE", "PINOVEL_DISABLE_FALLBACK"],
     secretEnvNames: ["GLM_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY", "CLAUDE_API_KEY", "GEMINI_API_KEY", "GPT_API_KEY", "ARK_API_KEY", "ERNIE_API_KEY"],
   });
+  // FP-GIT-1 第二道守卫：git 可用但 projectRoot 不是 git 仓库时 codeCommit 仍为空，
+  // 同样拒绝（生产指纹必须绑定 git commit 身份）。
+  if (!fp.codeCommit) {
+    console.error("[evolution] 错误：codeCommit 为空（projectRoot 不是 git 仓库？），拒绝生成环境指纹。");
+    console.error("  生产指纹必须绑定 git commit 身份。请在 git 仓库根目录运行。");
+    process.exit(9);
+  }
+  return fp;
 }
 
 // ============================================================================
