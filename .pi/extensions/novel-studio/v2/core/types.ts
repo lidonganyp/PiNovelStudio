@@ -528,6 +528,8 @@ export interface V2Input {
   chapterId: string;
   chapterNumber: number;
   projectRoot: string;
+  /** 批量/重试延续的统一预算账本 */
+  _priorBudgetLedger?: import("./budget-types.js").BudgetLedger;
   /** Production-eligible prose writer. Undefined uses the configured Gemini default. */
   writerModel?: "claude" | "gemini31";
   modelTestRoute?: string;
