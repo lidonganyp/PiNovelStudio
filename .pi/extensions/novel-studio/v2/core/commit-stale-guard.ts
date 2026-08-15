@@ -26,20 +26,19 @@
 
 import { existsSync, readFileSync } from "fs";
 import { join } from "node:path";
-import { computeConstitutionHash } from "../governance/production-release-gate.js";
+import {
+  computeConstitutionHash,
+  resolveProductionEvolutionRoot,
+} from "../governance/production-release-gate.js";
 import { computeNarrativeStateRevision } from "./final-state-commit.js";
 
 // ============================================================================
 // 常量
 // ============================================================================
 
-/** active production pointer 默认目录（与 production-release-gate.resolveEvolutionRoot 一致） */
+/** active production pointer 默认目录（与 production-release-gate.resolveProductionEvolutionRoot 一致） */
 function evolutionReleaseDir(projectRoot: string): string {
-  const env = process.env.PINOVEL_EVOLUTION_ROOT;
-  if (env) {
-    return join(projectRoot, env);
-  }
-  return join(projectRoot, ".pi", "extensions", "novel-studio", "config", "evolution-release");
+  return resolveProductionEvolutionRoot(projectRoot);
 }
 
 const POINTER_FILE_NAME = "active-production.json";

@@ -38,6 +38,7 @@ import {
   type EvalFixtureV1,
   type ReplayMode,
 } from "./eval-fixture-contract.js";
+import { resolveProductionEvolutionRoot } from "../governance/production-release-gate.js";
 
 // ============================================================================
 // 隔离违规类型
@@ -578,17 +579,7 @@ export interface ProductionSurfacePaths {
  */
 export function resolveDefaultProductionSurfacePaths(projectRoot: string): ProductionSurfacePaths {
   return {
-    evolutionRoot:
-      process.env.PINOVEL_EVOLUTION_ROOT && isAbsolute(process.env.PINOVEL_EVOLUTION_ROOT)
-        ? process.env.PINOVEL_EVOLUTION_ROOT
-        : join(
-            projectRoot,
-            ".pi",
-            "extensions",
-            "novel-studio",
-            "config",
-            "evolution-release",
-          ),
+    evolutionRoot: resolveProductionEvolutionRoot(projectRoot),
     workspacesRoot: join(projectRoot, "workspaces"),
   };
 }

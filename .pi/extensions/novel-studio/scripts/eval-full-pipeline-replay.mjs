@@ -39,6 +39,23 @@ const __dirname = dirname(__filename);
 const EXT_ROOT = resolve(__dirname, "..");
 const DEFAULT_OUT_DIR = join(EXT_ROOT, "reports", "eval-full-pipeline-replay");
 
+function resolveReplayRepoRoot(startDir) {
+  let dir = resolve(startDir);
+  for (let i = 0; i < 8; i += 1) {
+    const marker = join(dir, "docs", "top-tier-chinese-novel-system-development-plan.md");
+    const ext = join(dir, ".pi", "extensions", "novel-studio");
+    if (existsSync(marker) && existsSync(ext)) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return resolve(startDir);
+}
+
+const REPO_ROOT = resolveReplayRepoRoot(EXT_ROOT);
+
 function usageAndExit() {
   const usage = [
     "用法：node scripts/eval-full-pipeline-replay.mjs --fixture <path> [--fixture <path2> ...]",
@@ -193,10 +210,10 @@ if (!existsSync(runnerDist)) {
 const runner = await import(pathToFileURL(runnerDist).href);
 
 console.error(
-  `[eval-replay-cli] 开始回放：${fixtures.length} 个 fixture，projectRoot=${EXT_ROOT}`,
+  `[eval-replay-cli] 开始回放：${fixtures.length} 个 fixture，projectRoot=${REPO_ROOT}（extRoot=${EXT_ROOT}）`,
 );
 const report = await runner.runFullPipelineReplay({
-  projectRoot: EXT_ROOT,
+  projectRoot: REPO_ROOT,
   fixtures,
   ...(args.runId ? { runId: args.runId } : {}),
   ...(args.archiveRoot ? { archiveRoot: args.archiveRoot } : {}),

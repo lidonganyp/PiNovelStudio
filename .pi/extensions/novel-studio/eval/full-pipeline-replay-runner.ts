@@ -98,6 +98,47 @@ export type FullPipelineInvoke = (
   command: FullPipelineInvokeCommand,
 ) => Promise<FullPipelineInvokeResult>;
 
+/**
+ * 从扩展目录或任意子路径解析仓库根。
+ * 仓库根同时含 docs/top-tier-chinese-novel-system-development-plan.md
+ * 与 .pi/extensions/novel-studio。
+ */
+export function resolveReplayRepoRoot(startDir: string): string {
+  let dir = resolve(startDir);
+  for (let i = 0; i < 8; i += 1) {
+    const marker = join(dir, "docs", "top-tier-chinese-novel-system-development-plan.md");
+    const ext = join(dir, ".pi", "extensions", "novel-studio");
+    if (existsSync(marker) && existsSync(ext)) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return resolve(startDir);
+}
+
+export function resolveInvokeGenerateChapterScript(projectRoot: string): string {
+  const candidates = [
+    join(projectRoot, "scripts", "invoke-generate-chapter.mjs"),
+    join(projectRoot, ".pi", "extensions", "novel-studio", "scripts", "invoke-generate-chapter.mjs"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  let dir = resolve(projectRoot);
+  for (let i = 0; i < 6; i += 1) {
+    const repoScript = join(dir, "scripts", "invoke-generate-chapter.mjs");
+    if (existsSync(repoScript)) return repoScript;
+    const extScript = join(dir, ".pi", "extensions", "novel-studio", "scripts", "invoke-generate-chapter.mjs");
+    if (existsSync(extScript)) return extScript;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return join(projectRoot, "scripts", "invoke-generate-chapter.mjs");
+}
+
 export interface RunFullPipelineReplayOptions {
   /** 仓库根（scripts/ 与 dist/ 所在；也是生产面对照的真实项目根）。 */
   projectRoot: string;
@@ -841,7 +882,7 @@ export async function runFullPipelineReplay(
       toolName: "novel_generate_chapter",
       executable: process.execPath,
       args: [
-        join(projectRoot, "scripts", "invoke-generate-chapter.mjs"),
+        resolveInvokeGenerateChapterScript(projectRoot),
         lease.workspaceId,
         fixture.chapterSeed.chapterId,
         String(fixture.chapterSeed.chapterNumber),

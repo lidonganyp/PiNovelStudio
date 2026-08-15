@@ -26,7 +26,7 @@
  * - 默认指纹采集只读 projectRoot 下的配置/代码文件，不修改用户 WIP
  */
 
-import { basename, join, resolve, isAbsolute } from "node:path";
+import { basename, dirname, join, resolve, isAbsolute } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
@@ -259,25 +259,70 @@ export function captureDefaultEnvironmentFingerprint(projectRoot: string): strin
 // evolutionRoot 解析
 // ============================================================================
 
-function resolveEvolutionRoot(input: ReleaseGateInput): string {
-  if (input.evolutionRoot) {
-    return isAbsolute(input.evolutionRoot)
-      ? input.evolutionRoot
-      : resolve(input.projectRoot, input.evolutionRoot);
+const REPO_EVOLUTION_SEGMENTS = [
+  ".pi",
+  "extensions",
+  "novel-studio",
+  "config",
+  "evolution-release",
+] as const;
+
+function repoLayoutEvolutionRoot(root: string): string {
+  return join(root, ...REPO_EVOLUTION_SEGMENTS);
+}
+
+function extLayoutEvolutionRoot(root: string): string {
+  return join(root, "config", "evolution-release");
+}
+
+function evolutionRootLooksPresent(dir: string): boolean {
+  return existsSync(join(dir, "active-production.json")) || existsSync(dir);
+}
+
+/**
+ * 解析生产治理根（active-production.json 所在目录）。
+ *
+ * projectRoot 可能是仓库根或扩展根：
+ *   - 仓库根：{repo}/.pi/extensions/novel-studio/config/evolution-release
+ *   - 扩展根：{ext}/config/evolution-release
+ * 不得在扩展根上再套一层 `.pi/extensions/novel-studio`。
+ */
+export function resolveProductionEvolutionRoot(
+  projectRoot: string,
+  evolutionRoot?: string,
+): string {
+  if (evolutionRoot) {
+    return isAbsolute(evolutionRoot)
+      ? evolutionRoot
+      : resolve(projectRoot, evolutionRoot);
   }
   const env = process.env.PINOVEL_EVOLUTION_ROOT;
   if (env) {
-    return isAbsolute(env) ? env : resolve(input.projectRoot, env);
+    return isAbsolute(env) ? env : resolve(projectRoot, env);
   }
-  // 默认：{projectRoot}/.pi/extensions/novel-studio/config/evolution-release/
-  return join(
-    input.projectRoot,
-    ".pi",
-    "extensions",
-    "novel-studio",
-    "config",
-    "evolution-release",
-  );
+
+  const start = resolve(projectRoot);
+  const repoAtStart = repoLayoutEvolutionRoot(start);
+  const extAtStart = extLayoutEvolutionRoot(start);
+  if (evolutionRootLooksPresent(repoAtStart)) return repoAtStart;
+  if (evolutionRootLooksPresent(extAtStart)) return extAtStart;
+
+  let dir = start;
+  for (let i = 0; i < 6; i += 1) {
+    const repo = repoLayoutEvolutionRoot(dir);
+    const ext = extLayoutEvolutionRoot(dir);
+    if (existsSync(join(repo, "active-production.json"))) return repo;
+    if (existsSync(join(ext, "active-production.json"))) return ext;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return repoAtStart;
+}
+
+function resolveEvolutionRoot(input: ReleaseGateInput): string {
+  return resolveProductionEvolutionRoot(input.projectRoot, input.evolutionRoot);
 }
 
 // ============================================================================
