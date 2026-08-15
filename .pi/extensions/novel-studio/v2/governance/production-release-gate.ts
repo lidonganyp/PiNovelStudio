@@ -197,8 +197,9 @@ const DEFAULT_EVAL_PROTOCOL_VERSION = "2026-08-01";
 /**
  * 计算 CreativeConstitution hash（CORE-WRITING-PRINCIPLES.md + WORLDBUILDING-CANON.md）。
  * 与 evolution-cli.mjs constitutionHash() 一致。
+ * CONCURRENCY-WAVE4：导出供 commit-stale-guard 在提交边界做 constitution_changed 检测。
  */
-function computeConstitutionHash(projectRoot: string): string {
+export function computeConstitutionHash(projectRoot: string): string {
   const extRoot = join(projectRoot, ".pi", "extensions", "novel-studio");
   const candidates = [
     join(extRoot, "CORE-WRITING-PRINCIPLES.md"),

@@ -1,25 +1,28 @@
 /**
- * UserModificationDeltaCalculator — 用户修改差分计算器（Phase 4A，计划 §4A）
+ * UserModificationDeltaCalculator — 用户修改差分计算器（Phase 4A + USER-FEEDBACK-EVIDENCE-PIPELINE-1）
  *
- * 对比系统交付正文与用户最终修改稿，提取修改类型和修改量，作为 Phase 6 在线学习
+ * 对比系统交付正文与用户最终修改稿，提取修改类型和修改量，作为策略学习
  * 的高权重证据来源。
  *
- * 设计原则（计划 §4A & project_memory 约束）：
+ * 设计原则：
  * - 不再硬编码 userModificationDelta = null
- * - 计算结果包含：editDistance（0-1）、modificationSpans（句级）、modificationTypes
- * - 句级 diff 而非字级（中文文本字级 diff 噪声过大，且语义不可靠）
- * - 修改类型分类：deletion（删句）/ insertion（增句）/ rewording（改措辞）/ structural（调整结构）
+ * - 计算结果包含：editDistance、modificationSpans、editScope/editType/attributionConfidence
+ * - 句级 diff 而非字级
+ * - editDistance 只描述幅度，不直接决定输赢
+ * - 事实/设定/剧情方向修改不直接惩罚文学策略
  * - 不调用 LLM，纯规则驱动
  * - 不污染生产 prompt；只产出 evidence
- *
- * 与 user-feedback-ingestor.ts 的关系：
- * - ingestEdit 接收 editDistance（number）
- * - 本模块把 userFinalText → editDistance + 类型/spans，由 handler 调用后传给 ingestor
- *
- * 与 AuthorStyleHumanReviewPackage.userModificationDelta 的关系：
- * - 该字段从 null 占位回填为本模块的计算结果
- * - positiveBenefitClaim 仍保持 false（直到获得足够用户样本，由后续阶段决定）
  */
+
+import type {
+  AttributionConfidence,
+  EditClassification,
+  EditScope,
+  EditType,
+} from "./feedback-evidence-contracts.js";
+import {
+  isLiteraryStrategyPenaltyEdit,
+} from "./feedback-evidence-contracts.js";
 
 // ============================================================================
 // 常量
@@ -111,6 +114,18 @@ export interface UserModificationDelta {
   userFinalLength: number;
   /** 计算原因（用于 trace 审计） */
   reason: string;
+  /** USER-FEEDBACK-EVIDENCE-PIPELINE-1：分层修改语义 */
+  editScope: EditScope;
+  editType: EditType;
+  attributionConfidence: AttributionConfidence;
+  factIssue: boolean;
+  settingCompletion: boolean;
+  retainedCoreEffect: boolean;
+  /** 真实独立决策数；单次修改恒为 1 */
+  decisionCount: 1;
+  /** 加权证据量（不等于样本数） */
+  weightedEvidence: number;
+  classification: EditClassification;
 }
 
 // ============================================================================
@@ -249,6 +264,179 @@ function lcsLength<T>(a: T[], b: T[], equals: (x: T, y: T) => boolean): number {
 }
 
 // ============================================================================
+// 分层修改语义（USER-FEEDBACK-EVIDENCE-PIPELINE-1 §5.3）
+// ============================================================================
+
+/** 事实/设定类关键词（规则启发式，不调用模型） */
+const FACT_HINT_RE =
+  /事实|时间线|年份|年龄|死亡|已死|还活|设定冲突|世界观|地点错误|人名错误|身份错误|前后矛盾|canon|timeline/i;
+const SETTING_HINT_RE =
+  /补充设定|补设定|世界观补充|背景补充|设定补充|世界书|lore/i;
+const PLOT_HINT_RE =
+  /剧情方向|主线|支线|大纲|改结局|改走向|plot/i;
+const VOICE_HINT_RE =
+  /语气|口吻|声音|人设语气|说话方式|voice/i;
+const MOTIVATION_HINT_RE =
+  /动机|目的|为什么|意图|motivation/i;
+
+/**
+ * 从 diff 统计与可选备注推断 editScope / editType / attribution。
+ * 纯规则；无法归因时 confidence=low/none，由上游记 neutral。
+ */
+export function classifyEditSemantics(input: {
+  editDistance: number;
+  heavy: boolean;
+  structuralRatio: number;
+  modificationTypes: ModificationTypeStats;
+  note?: string;
+  deliveredLength: number;
+  userFinalLength: number;
+}): EditClassification {
+  const {
+    editDistance,
+    heavy,
+    structuralRatio,
+    modificationTypes,
+    note = "",
+    deliveredLength,
+    userFinalLength,
+  } = input;
+
+  // editScope
+  let editScope: EditScope;
+  if (editDistance < 0.05 && modificationTypes.rewording + modificationTypes.deletion + modificationTypes.insertion <= 1) {
+    editScope = "token";
+  } else if (editDistance < 0.15) {
+    editScope = "sentence";
+  } else if (editDistance < 0.35 && structuralRatio < STRUCTURAL_RATIO_THRESHOLD) {
+    editScope = "paragraph";
+  } else if (structuralRatio >= STRUCTURAL_RATIO_THRESHOLD || heavy) {
+    editScope = deliveredLength > 0 && Math.abs(userFinalLength - deliveredLength) / Math.max(deliveredLength, 1) > 0.5
+      ? "chapter"
+      : "scene";
+  } else {
+    editScope = "paragraph";
+  }
+
+  // editType（备注关键词优先，否则从 span 统计推断）
+  let editType: EditType;
+  let attributionConfidence: AttributionConfidence = "medium";
+  let factIssue = false;
+  let settingCompletion = false;
+
+  if (FACT_HINT_RE.test(note)) {
+    editType = "fact";
+    factIssue = true;
+    attributionConfidence = "high";
+  } else if (SETTING_HINT_RE.test(note)) {
+    editType = "setting_completion";
+    settingCompletion = true;
+    attributionConfidence = "high";
+  } else if (PLOT_HINT_RE.test(note)) {
+    editType = "plot_direction";
+    attributionConfidence = "high";
+  } else if (VOICE_HINT_RE.test(note)) {
+    editType = "voice";
+    attributionConfidence = "high";
+  } else if (MOTIVATION_HINT_RE.test(note)) {
+    editType = "motivation";
+    attributionConfidence = "high";
+  } else if (structuralRatio >= STRUCTURAL_RATIO_THRESHOLD || modificationTypes.structural > 0) {
+    editType = "structure";
+    attributionConfidence = heavy ? "high" : "medium";
+  } else if (
+    modificationTypes.rewording > 0 &&
+    modificationTypes.deletion + modificationTypes.insertion === 0 &&
+    editDistance < 0.15
+  ) {
+    // 局部措辞/错别字级
+    editType = editDistance < 0.05 ? "typo" : "language";
+    attributionConfidence = "medium";
+  } else if (modificationTypes.deletion + modificationTypes.insertion > modificationTypes.rewording) {
+    editType = heavy ? "structure" : "language";
+    attributionConfidence = heavy ? "medium" : "low";
+  } else {
+    editType = "language";
+    attributionConfidence = "low";
+  }
+
+  // 无备注且仅微小差异 → 归因弱
+  if (!note && editDistance < MODIFICATION_THRESHOLD * 2) {
+    attributionConfidence = "low";
+  }
+
+  const literaryPenalty = isLiteraryStrategyPenaltyEdit(editType);
+  // 局部 typo/language 且非 heavy：认为可能保留核心效果
+  const retainedCoreEffect =
+    !heavy &&
+    (editType === "typo" || editType === "language" || factIssue || settingCompletion);
+
+  // weightedEvidence：幅度加权，但 decisionCount 恒为 1
+  let weightedEvidence = 1;
+  if (editType === "typo") {
+    weightedEvidence = 0;
+  } else if (editType === "language" && !heavy) {
+    weightedEvidence = 1;
+  } else if (literaryPenalty && heavy) {
+    weightedEvidence = 3;
+  } else if (literaryPenalty) {
+    weightedEvidence = 2;
+  } else {
+    // fact / setting / plot：不进文学信誉，权重记 0
+    weightedEvidence = 0;
+  }
+
+  return {
+    editScope,
+    editType,
+    attributionConfidence,
+    factIssue,
+    settingCompletion,
+    retainedCoreEffect,
+    decisionCount: 1,
+    weightedEvidence,
+  };
+}
+
+function withClassification(
+  base: Omit<
+    UserModificationDelta,
+    | "editScope"
+    | "editType"
+    | "attributionConfidence"
+    | "factIssue"
+    | "settingCompletion"
+    | "retainedCoreEffect"
+    | "decisionCount"
+    | "weightedEvidence"
+    | "classification"
+  >,
+  note?: string,
+): UserModificationDelta {
+  const classification = classifyEditSemantics({
+    editDistance: base.editDistance,
+    heavy: base.heavy,
+    structuralRatio: base.structuralRatio,
+    modificationTypes: base.modificationTypes,
+    note,
+    deliveredLength: base.deliveredLength,
+    userFinalLength: base.userFinalLength,
+  });
+  return {
+    ...base,
+    editScope: classification.editScope,
+    editType: classification.editType,
+    attributionConfidence: classification.attributionConfidence,
+    factIssue: classification.factIssue,
+    settingCompletion: classification.settingCompletion,
+    retainedCoreEffect: classification.retainedCoreEffect,
+    decisionCount: 1,
+    weightedEvidence: classification.weightedEvidence,
+    classification,
+  };
+}
+
+// ============================================================================
 // 核心差分计算
 // ============================================================================
 
@@ -260,59 +448,68 @@ function lcsLength<T>(a: T[], b: T[], equals: (x: T, y: T) => boolean): number {
  * 2. 切句 → 句级 LCS 找出共同句子和顺序变化（structural）
  * 3. 共同句子中找改措辞（相似但非完全相同）
  * 4. 非共同句子分类为删除（delivered 独有）或插入（userFinal 独有）
+ * 5. 分层语义：editScope/editType/attributionConfidence/decisionCount
  *
  * @param deliveredText 系统交付的正文
  * @param userFinalText 用户最终修改稿
+ * @param note 可选用户备注（帮助事实/设定/声音归因）
  */
 export function computeUserModificationDelta(
   deliveredText: string,
   userFinalText: string,
+  note?: string,
 ): UserModificationDelta {
   // ── 边界：空文本 ──────────────────────────────────────────────────────
   if (deliveredText.length === 0 && userFinalText.length === 0) {
-    return {
-      modified: false,
-      editDistance: 0,
-      heavy: false,
-      modificationSpans: [],
-      modificationTypes: { deletion: 0, insertion: 0, rewording: 0, structural: 0 },
-      structuralRatio: 0,
-      deliveredLength: 0,
-      userFinalLength: 0,
-      reason: "双方文本均为空，无修改",
-    };
+    return withClassification(
+      {
+        modified: false,
+        editDistance: 0,
+        heavy: false,
+        modificationSpans: [],
+        modificationTypes: { deletion: 0, insertion: 0, rewording: 0, structural: 0 },
+        structuralRatio: 0,
+        deliveredLength: 0,
+        userFinalLength: 0,
+        reason: "双方文本均为空，无修改",
+      },
+      note,
+    );
   }
 
   if (deliveredText.length === 0 || userFinalText.length === 0) {
     // 一方为空：视为全文删除或全文插入
     const isDeletion = deliveredText.length > 0;
-    return {
-      modified: true,
-      editDistance: 1,
-      heavy: true,
-      modificationSpans: [
-        {
-          type: isDeletion ? "deletion" : "insertion",
-          deliveredStart: 0,
-          deliveredEnd: deliveredText.length,
-          deliveredExcerpt: deliveredText.slice(0, 50),
-          userStart: 0,
-          userEnd: userFinalText.length,
-          userExcerpt: userFinalText.slice(0, 50),
-          similarity: 0,
+    return withClassification(
+      {
+        modified: true,
+        editDistance: 1,
+        heavy: true,
+        modificationSpans: [
+          {
+            type: isDeletion ? "deletion" : "insertion",
+            deliveredStart: 0,
+            deliveredEnd: deliveredText.length,
+            deliveredExcerpt: deliveredText.slice(0, 50),
+            userStart: 0,
+            userEnd: userFinalText.length,
+            userExcerpt: userFinalText.slice(0, 50),
+            similarity: 0,
+          },
+        ],
+        modificationTypes: {
+          deletion: isDeletion ? 1 : 0,
+          insertion: isDeletion ? 0 : 1,
+          rewording: 0,
+          structural: 0,
         },
-      ],
-      modificationTypes: {
-        deletion: isDeletion ? 1 : 0,
-        insertion: isDeletion ? 0 : 1,
-        rewording: 0,
-        structural: 0,
+        structuralRatio: 0,
+        deliveredLength: deliveredText.length,
+        userFinalLength: userFinalText.length,
+        reason: isDeletion ? "用户清空了交付正文" : "用户在空交付上写了正文",
       },
-      structuralRatio: 0,
-      deliveredLength: deliveredText.length,
-      userFinalLength: userFinalText.length,
-      reason: isDeletion ? "用户清空了交付正文" : "用户在空交付上写了正文",
-    };
+      note,
+    );
   }
 
   // ── 1. 全文 Levenshtein → editDistance ──────────────────────────────
@@ -455,17 +652,20 @@ export function computeUserModificationDelta(
     }
   }
 
-  return {
-    modified,
-    editDistance,
-    heavy,
-    modificationSpans,
-    modificationTypes: typeStats,
-    structuralRatio,
-    deliveredLength: deliveredText.length,
-    userFinalLength: userFinalText.length,
-    reason: reasonParts.join("；"),
-  };
+  return withClassification(
+    {
+      modified,
+      editDistance,
+      heavy,
+      modificationSpans,
+      modificationTypes: typeStats,
+      structuralRatio,
+      deliveredLength: deliveredText.length,
+      userFinalLength: userFinalText.length,
+      reason: reasonParts.join("；"),
+    },
+    note,
+  );
 }
 
 /**

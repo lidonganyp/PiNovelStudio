@@ -24,6 +24,10 @@
  */
 
 import type { StrategyPolicyStore, StrategyEvidence } from "./strategy-policy-store.js";
+import {
+  allowsSingleStrategyEvidence,
+  buildStrategyBundleId,
+} from "./feedback-evidence-contracts.js";
 
 // ============================================================================
 // 常量：外部反馈等级权重（计划 §7.2）
@@ -50,10 +54,21 @@ export interface StrategyContext {
   sourceChapter: string;
   /** 当前模型版本键（由 ModelVersionMigration.detectModelVersion 派生） */
   modelVersion: string;
-  /** 触发的策略 id */
+  /** 触发的策略 id（单策略因果时使用） */
   strategyId: string;
   /** 编辑机会类型（审计用） */
   opportunityType: string;
+  /** bundle 级学习目标（多策略协作时优先） */
+  strategyBundleId?: string;
+  /** 共同作用的策略列表 */
+  strategyIds?: string[];
+  /** 候选/暴露血缘 */
+  orchestratorRunId?: string;
+  candidateId?: string;
+  exposureId?: string;
+  promptBundleId?: string;
+  /** 是否允许拆单策略（消融/随机分流/明确单策略暴露） */
+  allowSingleStrategySplit?: boolean;
 }
 
 /** 裁判结果（来自 Phase 4 JudgeArbitrator） */
@@ -116,6 +131,11 @@ export interface RecordedOutcome {
   recorded: boolean;
   /** 未写入原因（recorded=false 时） */
   reason?: string;
+  /** bundle 学习目标（多策略时） */
+  strategyBundleId?: string;
+  /** 实际写入的信誉键（bundleId 或 strategyId） */
+  reputationKey?: string;
+  decisionCount?: number;
 }
 
 // ============================================================================
@@ -166,6 +186,7 @@ export class StrategyOutcomeRecorder {
 
     // 编辑层失败回退 raw（无裁判）：策略未产出可用候选 → loss
     if (!judge && !userSignal && selection.fellBackToRaw) {
+      const writeTarget = this.resolveReputationWriteTarget(context);
       const evidence = this.buildEvidence(
         context,
         "loss",
@@ -173,15 +194,28 @@ export class StrategyOutcomeRecorder {
         "judge",
         note ?? "编辑层失败回退 raw，策略未产出可用候选（loss）"
       );
-      store.recordOutcome(context.strategyId, context.modelVersion, evidence);
+      const evidenceWithBundle: StrategyEvidence = {
+        ...evidence,
+        strategyBundleId: writeTarget.strategyBundleId,
+        decisionCount: 1,
+        evidenceId: `outcome:${context.sourceChapter}:${writeTarget.reputationKey}:${Date.now()}`,
+      };
+      store.recordOutcome(
+        writeTarget.reputationKey,
+        context.modelVersion,
+        evidenceWithBundle,
+      );
       return {
         strategyId: context.strategyId,
         modelVersion: context.modelVersion,
         outcome: "loss",
         weight: WEIGHT_JUDGE_SINGLE,
         source: "judge",
-        evidence,
+        evidence: evidenceWithBundle,
         recorded: true,
+        strategyBundleId: writeTarget.strategyBundleId,
+        reputationKey: writeTarget.reputationKey,
+        decisionCount: 1,
       };
     }
 
@@ -196,7 +230,7 @@ export class StrategyOutcomeRecorder {
       note ?? determination.note
     );
 
-    // weight=0（机械信号）不写入策略信誉
+    // weight=0（机械信号 / raw 修改）不写入策略信誉
     if (determination.weight === 0) {
       return {
         strategyId: context.strategyId,
@@ -207,10 +241,27 @@ export class StrategyOutcomeRecorder {
         evidence,
         recorded: false,
         reason: determination.note ?? "weight=0，仅诊断不写入策略信誉",
+        strategyBundleId: this.resolveBundleId(context),
+        reputationKey: undefined,
+        decisionCount: 1,
       };
     }
 
-    store.recordOutcome(context.strategyId, context.modelVersion, evidence);
+    const writeTarget = this.resolveReputationWriteTarget(context);
+    const evidenceWithBundle: StrategyEvidence = {
+      ...evidence,
+      strategyBundleId: writeTarget.strategyBundleId,
+      decisionCount: 1,
+      evidenceId:
+        evidence.evidenceId ??
+        `outcome:${context.sourceChapter}:${writeTarget.reputationKey}:${Date.now()}`,
+    };
+
+    store.recordOutcome(
+      writeTarget.reputationKey,
+      context.modelVersion,
+      evidenceWithBundle,
+    );
 
     return {
       strategyId: context.strategyId,
@@ -218,9 +269,50 @@ export class StrategyOutcomeRecorder {
       outcome: determination.outcome,
       weight: determination.weight,
       source: determination.source,
-      evidence,
+      evidence: evidenceWithBundle,
       recorded: true,
+      strategyBundleId: writeTarget.strategyBundleId,
+      reputationKey: writeTarget.reputationKey,
+      decisionCount: 1,
     };
+  }
+
+  /**
+   * bundle 优先：多策略时默认写 bundle 信誉；单策略或授权拆分时写 strategyId。
+   */
+  private resolveReputationWriteTarget(context: StrategyContext): {
+    reputationKey: string;
+    strategyBundleId: string;
+  } {
+    const strategyIds =
+      context.strategyIds && context.strategyIds.length > 0
+        ? context.strategyIds
+        : [context.strategyId];
+    const strategyBundleId =
+      context.strategyBundleId ?? buildStrategyBundleId(strategyIds);
+
+    const singleOk = allowsSingleStrategyEvidence({
+      strategyIds,
+      explicitSingleStrategyExposure: context.allowSingleStrategySplit === true,
+      ablationExperiment: context.allowSingleStrategySplit === true,
+      randomSplit: context.allowSingleStrategySplit === true,
+    });
+
+    if (strategyIds.length > 1 && !singleOk) {
+      return { reputationKey: strategyBundleId, strategyBundleId };
+    }
+    return {
+      reputationKey: context.strategyId,
+      strategyBundleId,
+    };
+  }
+
+  private resolveBundleId(context: StrategyContext): string {
+    const strategyIds =
+      context.strategyIds && context.strategyIds.length > 0
+        ? context.strategyIds
+        : [context.strategyId];
+    return context.strategyBundleId ?? buildStrategyBundleId(strategyIds);
   }
 
   // --------------------------------------------------------------------------
@@ -253,17 +345,21 @@ export class StrategyOutcomeRecorder {
       }
       // 等级 2：用户实际修改最终正文
       if (userSignal.modifiedFinalText) {
-        // 用户修改了 editorial 交付稿 → 视为对 editorial 的否定（loss）
-        // 用户修改了 raw 交付稿 → 仍是 loss（raw 也需改进，但不计入策略信誉）
-        // 这里统一记为 loss（策略未能产出令用户满意的候选）
         const deliveredEditorial = selection.deliveredSource === "editorial";
+        if (!deliveredEditorial) {
+          // USER-FEEDBACK-EVIDENCE-PIPELINE-1：raw/fallback 修改不计入策略信誉
+          return {
+            outcome: "tie",
+            weight: 0,
+            source: "user",
+            note: "用户修改了 raw/fallback 交付稿（策略未参与交付），不计入策略信誉",
+          };
+        }
         return {
-          outcome: deliveredEditorial ? "loss" : "loss",
+          outcome: "loss",
           weight: WEIGHT_USER_MODIFICATION,
           source: "user",
-          note: deliveredEditorial
-            ? "用户修改了 editorial 交付稿，视为对策略候选的否定"
-            : "用户修改了 raw 交付稿（策略未参与交付），记 loss",
+          note: "用户修改了 editorial 交付稿，视为对策略候选的否定",
         };
       }
     }

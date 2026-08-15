@@ -23,3 +23,7 @@ export * from "./verification/narrative-verifier-suite.js";
 export * from "./verification/verification-feedback-compiler.js";
 export * from "./agent/candidate-patch-service.js";
 export * from "./agent/agentic-raw-candidate-source.js";
+
+// Protocol Layer（Phase 1-3：ModelTurn + CapabilityRegistry + ProtocolAdapter）
+// NativeFunctionCallingAdapter 是 eval-only，不在此 barrel 导出。
+export * from "./protocol/index.js";

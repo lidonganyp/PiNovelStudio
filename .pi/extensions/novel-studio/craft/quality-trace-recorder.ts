@@ -8,7 +8,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
-import type { FailureEnvelope } from "./failure-envelope.js";
+import type { FailureEnvelope, FailureSeverity, RetryPlan } from "./failure-envelope.js";
+// P7 Stage A 双写：只追加 failure_recorded 审计事件，不切换读路径、不改既有写路径。
+import type { AuditEventRecorder } from "../v2/core/audit/audit-event-recorder.js";
+import type { AuditStage } from "../v2/core/audit/audit-event-types.js";
+import { computeContentHash, stableStringify } from "../v2/core/audit/content-hash.js";
+import { mapLegacyFailureClass } from "../v2/core/failure-types.js";
+// P7 Stage C-1 写路径开关 + 明细独立内容库 + 投影缓存物化（默认 legacy 不变）。
+import { rebuildQualityTraceFromEvents } from "../v2/core/audit/trace-projections.js";
+import { createTraceContentStore, type TraceContentStore } from "../v2/core/audit/trace-content-store.js";
+import { resolveTraceWriteMode, type TraceWriteMode } from "../v2/core/audit/trace-write-mode.js";
 // Phase 7: 以下 legacy type-only import 已内联或降级为 unknown，解除对 dead craft 文件的耦合
 // EventDialogueContract / EventProgressionTrace / SegmentRevisionBaselineTrace /
 // SegmentCraftMetrics / MicroSectionRepairAttemptRecord 均来自已删除的 legacy 模块
@@ -24,6 +33,23 @@ export interface QualityTraceRecorderOptions {
   workspaceId: string;
   chapterId: string;
   appendExisting?: boolean;
+  /**
+   * P7 Stage A 双写：可选审计事件追加口。
+   * 未注入时 no-op（默认），生产由 AuditRunSession 实现，测试可注入空 sink。
+   */
+  auditSink?: AuditEventRecorder;
+  /**
+   * P7 Stage C：写路径模式。默认（未设置）由 resolveTraceWriteMode() 解析，
+   * 读环境变量 PINOVEL_TRACE_WRITE_MODE（"legacy" 强制回退，否则 projection）。
+   * Stage C-2 起默认 projection，本字段仅用于显式注入 / 测试。
+   */
+  writeMode?: TraceWriteMode;
+  /**
+   * P7 Stage C-1：明细独立内容库。projection 模式下 recordGate 把完整 evidence
+   * 追加写到此 store（而非塞进 document.gates[]）。未注入且 writeMode=projection
+   * 时自动创建；legacy 模式下忽略。
+   */
+  contentStore?: TraceContentStore;
 }
 
 export type QualityTraceCraftGateResult = "PASS" | "RETRY" | "BLOCK" | "WARNING_PASS";
@@ -610,12 +636,60 @@ function loadBuildInfo(): QualityTraceBuildInfo {
 
 const CACHED_BUILD_INFO: QualityTraceBuildInfo = loadBuildInfo();
 
+/**
+ * 从 gate evidence 中策展读侧证据子集（P7 Stage B-Read）。
+ *
+ * 只提取 R1-R4 读侧消费的 strategyContext / modelCalls / releaseGovernance 三个
+ * 字段，不携带完整候选正文（candidates / finalSelection / judgeEvidence /
+ * comparison 等留在旧文件，不进审计流）。缺失字段不写入，确保 payload 不含
+ * 大对象/完整正文。evidence 非对象（null/数组/原始值）时返回空对象。
+ */
+function curateGateEvidence(evidence: unknown): Record<string, unknown> {
+  const curated: Record<string, unknown> = {};
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return curated;
+  }
+  const record = evidence as Record<string, unknown>;
+  if (record.strategyContext !== undefined) {
+    curated.strategyContext = record.strategyContext;
+  }
+  if (record.modelCalls !== undefined) {
+    curated.modelCalls = record.modelCalls;
+  }
+  if (record.releaseGovernance !== undefined) {
+    curated.releaseGovernance = record.releaseGovernance;
+  }
+  return curated;
+}
+
 export class QualityTraceRecorder {
   private readonly document: QualityTraceDocument;
   private readonly outputPath: string;
+  private readonly auditSink?: AuditEventRecorder;
+  private readonly writeMode: TraceWriteMode;
+  private readonly contentStore?: TraceContentStore;
+  // 发射侧去重：同一 FailureEnvelope 内容只发射一次 failure_recorded（多实例 append 模式）。
+  private readonly emittedFailureEventIds = new Set<string>();
+  // 发射侧去重：同一 gate 内容只发射一次 gate_evaluated（多实例 append 模式）。
+  private readonly emittedGateEventIds = new Set<string>();
+  // Stage C-2：projection 下内容库写失败时，完整 evidence 的回退项（flush 物化后补回）。
+  private readonly fallbackGates: QualityTraceGateRecord[] = [];
+  // 发射侧去重：内容库写失败告警（trace_content_store_write_failed）只发射一次。
+  private readonly emittedContentStoreFailureIds = new Set<string>();
 
   constructor(options: QualityTraceRecorderOptions) {
+    this.auditSink = options.auditSink;
+    this.writeMode = options.writeMode ?? resolveTraceWriteMode();
     this.outputPath = join(options.workspacePath, options.workspaceId, "traces", `${options.chapterId}-quality-trace.json`);
+    this.contentStore =
+      options.contentStore ??
+      (this.writeMode === "projection"
+        ? createTraceContentStore({
+            workspacePath: options.workspacePath,
+            workspaceId: options.workspaceId,
+            chapterId: options.chapterId,
+          })
+        : undefined);
     this.document = (options.appendExisting !== false ? this.loadExistingDocument(options) : null) || {
       schemaVersion: 1,
       workspaceId: options.workspaceId,
@@ -638,7 +712,22 @@ export class QualityTraceRecorder {
   }
 
   recordGate(record: QualityTraceGateRecord): void {
-    this.document.gates.push(record);
+    if (this.writeMode === "projection") {
+      // P7 Stage C 明细迁独立内容库：完整 evidence 写 content store，
+      // 不再塞进 document.gates[]（旧文件在投影模式下只承载策展投影缓存）。
+      // Stage C-2：内容库写失败不得静默丢失完整 evidence——回退进 fallbackGates，
+      // flush 物化后补回完整 evidence，并发射非静默 audit 事件。
+      const ok = this.contentStore?.writeGate(record.stage, record.evidence) ?? true;
+      if (!ok) {
+        this.fallbackGates.push(record);
+        this.emitContentStoreWriteFailed(record);
+      }
+    } else {
+      this.document.gates.push(record);
+    }
+    // P7 Stage B-Read 双写：向审计流追加 gate_evaluated，
+    // 携带策展读侧证据子集（strategyContext/modelCalls/releaseGovernance，不含完整正文）。
+    this.emitGateEvaluated(record);
   }
 
   recordChapterContract(contract: unknown): void {
@@ -813,6 +902,20 @@ export class QualityTraceRecorder {
     envelope: FailureEnvelope,
     attemptHistory?: QualityTraceFailureEnvelopeRecord["attemptHistory"],
   ): void {
+    // P7 Stage A 双写：向审计流追加 failure_recorded（§5.2 完整 8 字段）。
+    this.emitFailureRecorded(envelope);
+    // P7 Stage D：projection 模式下 failureEnvelopes[] 收敛为可重建投影缓存——
+    // 由 materializeProjectionCache 从审计流 rebuildQualityTraceFromEvents 物化。
+    // 仅当「发射侧 recordEvent」与「重建侧 getEntries」均可用时才走物化路径，
+    // 否则（无审计流或只有单侧 sink）回退直接写入，避免 failureEnvelopes 静默丢失
+    // （failureEnvelope 无独立内容库，不落盘即彻底丢失，故必须兜底）。
+    if (this.canRebuildFailureEnvelopesFromAudit()) {
+      // attemptHistory 是 §5.2 标注的 unreconstructed 字段（审计事件 payload 不携带），
+      // 经核对当前无任何生产/eval 调用方传递 attemptHistory，故物化时安全丢弃，
+      // 由 rebuildQualityTraceFromEvents 的 unreconstructed 清单显式声明缺位。
+      return;
+    }
+    // 直接写入（legacy 模式，或 projection 无完整审计流可重建）。
     if (!Array.isArray(this.document.failureEnvelopes)) {
       this.document.failureEnvelopes = [];
     }
@@ -822,6 +925,162 @@ export class QualityTraceRecorder {
       attemptHistory,
     };
     this.document.failureEnvelopes.push(record);
+  }
+
+  /**
+   * P7 Stage D：projection 模式下能否从审计流重建 failureEnvelopes[]。
+   *
+   * 需同时满足「发射侧 recordEvent」（recordFailureEnvelope 能把 failure_recorded
+   * 写进审计流）与「重建侧 getEntries」（materializeProjectionCache 能读回并逐字段
+   * 还原）。任一缺失即回退直接写入，避免 failureEnvelope 无独立内容库、不落盘即
+   * 彻底丢失。
+   */
+  private canRebuildFailureEnvelopesFromAudit(): boolean {
+    return (
+      this.writeMode === "projection" &&
+      typeof this.auditSink?.recordEvent === "function" &&
+      typeof this.auditSink?.getEntries === "function"
+    );
+  }
+
+  /**
+   * P7 Stage A 双写：在 quality-trace.json 继续写入的同时，向审计流追加一条
+   * failure_recorded 事件（内容寻址 eventId，发射侧去重，写失败不抛）。
+   *
+   * eventId = failureRecorded:<sha256(stage|gate|severity|reason|canonicalEvidence)>，
+   * 保证同一阻断归因在 append 多实例 / 重试下只发射一次，且可复现。
+   */
+  private emitFailureRecorded(envelope: FailureEnvelope): void {
+    if (!this.auditSink?.recordEvent) return;
+    const canonicalEvidence = stableStringify(envelope.evidence ?? null);
+    const canonical = [
+      envelope.stage,
+      envelope.gate ?? "",
+      envelope.severity,
+      envelope.reason,
+      canonicalEvidence,
+    ].join("|");
+    const eventId = `failureRecorded:${computeContentHash(canonical)}`;
+    if (this.emittedFailureEventIds.has(eventId)) return;
+    this.emittedFailureEventIds.add(eventId);
+    try {
+      this.auditSink.recordEvent({
+        eventType: "failure_recorded",
+        eventId,
+        stage: (envelope.stage && envelope.stage.trim()
+          ? envelope.stage
+          : "unknown") as AuditStage,
+        status: "failed",
+        failureClass: mapLegacyFailureClass(envelope.severity),
+        gate: envelope.gate || undefined,
+        decisionReason: envelope.reason,
+        userActionRequired: envelope.userActionRequired,
+        payload: {
+          // §5.2：payload 原样携带完整 FailureEnvelope（非摘要），
+          // 供 Stage B 投影 rebuildQualityTraceFromEvents 逐字段还原 failureEnvelopes[]。
+          envelope: {
+            stage: envelope.stage,
+            gate: envelope.gate,
+            severity: envelope.severity,
+            reason: envelope.reason,
+            evidence: envelope.evidence ?? null,
+            recoverable: envelope.recoverable,
+            retryPlan: envelope.retryPlan ?? null,
+            userActionRequired: envelope.userActionRequired ?? null,
+          },
+          source: "quality_trace",
+        },
+      });
+    } catch {
+      // 审计事件追加失败不阻断 trace 写入主路径
+    }
+  }
+
+  /**
+   * P7 Stage B-Read 双写：在 quality-trace.json 继续写入的同时，向审计流追加一条
+   * gate_evaluated 事件（内容寻址 eventId，发射侧去重，写失败不抛）。
+   *
+   * eventId = gateEvaluated:<sha256(stage|status|passed|blocked|canonicalEvidence)>，
+   * 保证同一门禁在多实例 append / 重试下只发射一次，且可复现。
+   *
+   * payload.evidence 只携带策展读侧证据子集（strategyContext/modelCalls/
+   * releaseGovernance），不携带完整候选正文（candidates/finalSelection/
+   * judgeEvidence 留在旧文件，不进审计流，遵守「payload 禁止完整正文」）。
+   */
+  private emitGateEvaluated(record: QualityTraceGateRecord): void {
+    if (!this.auditSink?.recordEvent) return;
+    const curatedEvidence = curateGateEvidence(record.evidence);
+    const canonical = [
+      record.stage,
+      record.status,
+      record.passed ? "1" : "0",
+      record.blocked ? "1" : "0",
+      stableStringify(curatedEvidence),
+    ].join("|");
+    const eventId = `gateEvaluated:${computeContentHash(canonical)}`;
+    if (this.emittedGateEventIds.has(eventId)) return;
+    this.emittedGateEventIds.add(eventId);
+    const status = record.blocked
+      ? ("blocked" as const)
+      : record.passed
+        ? ("completed" as const)
+        : ("failed" as const);
+    try {
+      this.auditSink.recordEvent({
+        eventType: "gate_evaluated",
+        eventId,
+        stage: "gate",
+        status,
+        gate: record.stage,
+        decisionReason: record.reason,
+        payload: {
+          gateStage: record.stage,
+          passed: record.passed,
+          blocked: record.blocked,
+          score: record.score,
+          reason: record.reason,
+          issueTypes: Array.isArray(record.issueTypes) ? record.issueTypes : [],
+          revisionHints: Array.isArray(record.revisionHints)
+            ? record.revisionHints
+            : [],
+          evidence: curatedEvidence,
+        },
+      });
+    } catch {
+      // 审计事件追加失败不阻断 trace 写入主路径
+    }
+  }
+
+  /**
+   * P7 Stage C-2 双写：内容库写失败时发射非静默审计信号，避免「完整 evidence 未进
+   * 内容库」这件事无迹可寻。完整 evidence 已回退进 document.gates（见 recordGate），
+   * 本事件仅作可观测告警（eventTypeHint=trace_content_store_write_failed）。
+   *
+   * 内容寻址 eventId（stage+reason），append 多实例 / 重试下只发射一次。
+   */
+  private emitContentStoreWriteFailed(record: QualityTraceGateRecord): void {
+    if (!this.auditSink?.recordEvent) return;
+    const canonical = [record.stage, record.reason].join("|");
+    const eventId = `traceContentStoreWriteFailed:${computeContentHash(canonical)}`;
+    if (this.emittedContentStoreFailureIds.has(eventId)) return;
+    this.emittedContentStoreFailureIds.add(eventId);
+    try {
+      this.auditSink.recordEvent({
+        eventType: "custom",
+        eventId,
+        stage: "gate",
+        status: "failed",
+        gate: record.stage,
+        decisionReason: "quality-trace 内容库写失败，完整 evidence 已回退进旧文件",
+        payload: {
+          eventTypeHint: "trace_content_store_write_failed",
+          gateStage: record.stage,
+          reason: record.reason,
+        },
+      });
+    } catch {
+      // 审计事件追加失败不阻断 trace 写入主路径
+    }
   }
 
   recordChapterStyleEvidence(input: QualityTraceChapterStyleEvidenceInput): void {
@@ -841,9 +1100,79 @@ export class QualityTraceRecorder {
   }
 
   flush(): string {
+    if (this.writeMode === "projection") {
+      this.materializeProjectionCache();
+    }
     mkdirSync(join(this.outputPath, ".."), { recursive: true });
     writeFileSync(this.outputPath, `${JSON.stringify(this.document, null, 2)}\n`, "utf-8");
     return this.outputPath;
+  }
+
+  /**
+   * P7 Stage C/D 投影缓存物化：projection 模式下，旧文件只承载可重建子集的投影缓存。
+   *
+   * gates[] 从审计流（auditSink.getEntries）经 rebuildQualityTraceFromEvents 重建为
+   * 策展读侧证据子集（strategyContext/modelCalls/releaseGovernance，不含完整正文）；
+   * failureEnvelopes[] 同样从审计流逐字段还原（§5.2 8 字段等价），完整明细已在
+   * content store。events[]/patches[]/v2Summary/performanceProfile 等仍为直接写入
+   * （审计流不携带这些字段，见 rebuildQualityTraceFromEvents.unreconstructed）。
+   *
+   * Stage C-2：内容库写失败的回退项在物化后补回完整 evidence（按 stage+reason 匹配
+   * 策展子集，覆盖为完整 evidence），确保完整明细不因内容库失败而静默丢失。
+   *
+   * 无 getEntries 时静默跳过（保持 legacy 行为），不阻断 flush。
+   */
+  private materializeProjectionCache(): void {
+    const entries = this.auditSink?.getEntries?.() ?? [];
+    const rebuilt = rebuildQualityTraceFromEvents(entries, {
+      workspaceId: this.document.workspaceId,
+      chapterId: this.document.chapterId,
+    });
+    this.document.gates = rebuilt.gates.map((g) => ({
+      stage: g.stage,
+      status: g.status,
+      passed: g.passed,
+      blocked: g.blocked,
+      score: g.score ?? 0,
+      reason: g.reason,
+      issueTypes: g.issueTypes,
+      revisionHints: g.revisionHints,
+      evidence: g.evidence,
+    }));
+    // 内容库写失败回退：完整 evidence 覆盖策展子集（不得静默丢失）。
+    for (const fb of this.fallbackGates) {
+      const idx = this.document.gates.findIndex(
+        (g) => g.stage === fb.stage && g.reason === fb.reason,
+      );
+      if (idx >= 0) {
+        this.document.gates[idx] = { ...this.document.gates[idx], evidence: fb.evidence };
+      } else {
+        this.document.gates.push(fb);
+      }
+    }
+    // P7 Stage D：failureEnvelopes[] 也从审计流物化（§5.2 8 字段逐字段等价）。
+    // recordedAt 取审计事件 timestamp（best-effort，缺失回退 now）；attemptHistory 为
+    // unreconstructed 字段，物化时丢弃（recordFailureEnvelope 已核对无生产调用方传递）。
+    // 仅当审计流可重建（recordEvent + getEntries 均可用）时物化，否则保留
+    // recordFailureEnvelope 的直接写入（无独立内容库，不得静默丢失）。
+    if (this.canRebuildFailureEnvelopesFromAudit()) {
+      this.document.failureEnvelopes = rebuilt.failureEnvelopes.map(
+        (e): QualityTraceFailureEnvelopeRecord => ({
+          stage: e.stage,
+          gate: e.gate ?? "",
+          severity: e.severity as FailureSeverity,
+          reason: e.reason,
+          evidence: e.evidence ?? null,
+          recoverable: e.recoverable,
+          // retryPlan / userActionRequired 按 rebuildQualityTraceFromEvents 的归一化
+          // 结果原样透传（保留 null / boolean 等运行时值），与 §5.2 双向一致契约对齐，
+          // 不得再二次归一化（否则 null→undefined 会破坏与投影的逐字段等价）。
+          retryPlan: e.retryPlan as RetryPlan | undefined,
+          userActionRequired: e.userActionRequired as string[] | undefined,
+          recordedAt: e.recordedAt ?? new Date().toISOString(),
+        }),
+      );
+    }
   }
 
   private loadExistingDocument(options: QualityTraceRecorderOptions): QualityTraceDocument | null {

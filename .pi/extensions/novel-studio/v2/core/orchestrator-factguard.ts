@@ -57,11 +57,204 @@ import {
   type ImmutableFactsInput,
   type UnauthorizedHighImpactDiagnostic,
 } from "./immutable-facts-compiler.js";
-import type { Diagnostic } from "./types.js";
+import type { ContextFact, Diagnostic } from "./types.js";
+import { consumeToolResult } from "./trust/tool-result-consumer.js";
+import { emitTrustAuditEvent } from "./trust/trust-audit.js";
 
 // ==========================================================================
 // FactGuard（候选事实校验，raw 与 editorial 共用）
 // ==========================================================================
+
+/**
+ * 工具结果进入 FactGuard 硬路径前的强制消费闸门。
+ * 未验证 reference/untrusted 文本不得作为硬事实输入。
+ * 返回允许进入 hard gate 的条目；拒绝项写入 TrustAudit。
+ */
+export function gateToolResultsForFactGuard(input: {
+  items: Array<{
+    toolName: string;
+    callId?: string;
+    text?: string;
+    details?: {
+      sourceRef?: string;
+      evidenceLevel?: string;
+      contentTrust?: string;
+      canAffectHardGate?: boolean;
+      verifiedBy?: string;
+      [key: string]: unknown;
+    };
+  }>;
+  workspaceId?: string;
+  chapterId?: string;
+}): {
+  allowed: typeof input.items;
+  denied: Array<{ toolName: string; reason: string }>;
+} {
+  const allowed: typeof input.items = [];
+  const denied: Array<{ toolName: string; reason: string }> = [];
+  for (const item of input.items) {
+    const decision = consumeToolResult({
+      toolName: item.toolName,
+      callId: item.callId,
+      text: item.text,
+      details: item.details,
+      purpose: "fact_guard_input",
+      workspaceId: input.workspaceId,
+      chapterId: input.chapterId,
+    });
+    if (decision.allowed) {
+      allowed.push(item);
+    } else {
+      denied.push({ toolName: item.toolName, reason: decision.reason });
+    }
+  }
+  if (denied.length > 0) {
+    emitTrustAuditEvent({
+      decisionType: "tool_result_consume",
+      allowed: false,
+      reason: `FactGuard 拒绝 ${denied.length} 条未验证工具结果`,
+      workspaceId: input.workspaceId,
+      chapterId: input.chapterId,
+      evidence: { denied },
+    });
+  }
+  return { allowed, denied };
+}
+
+/** 权威配置/已提交状态路径：可作为 hard-path 事实来源 */
+const AUTHORITATIVE_SOURCE_RE =
+  /^(?:series\/outline\.md|series\/skeleton\.json|skeleton\.json|chapters\/|narrative-state-store\.json|world-canon|constitution|config\.json|WORLDBUILDING-CANON|CORE-WRITING-PRINCIPLES)/;
+
+/**
+ * 过滤 CompiledContext.facts：仅权威/已验证条目可进入 FactGuard 硬路径。
+ * 生产接线点：checkCandidateFactGuard 每次调用必经此函数。
+ */
+export function filterContextFactsForFactGuard(
+  facts: readonly ContextFact[],
+  meta?: { workspaceId?: string; chapterId?: string },
+): {
+  factsForHardPath: ContextFact[];
+  authorizedHighImpactSources: Array<{ text: string; sourceRef: string }>;
+  denied: Array<{ id: string; reason: string }>;
+} {
+  const factsForHardPath: ContextFact[] = [];
+  const authorizedHighImpactSources: Array<{ text: string; sourceRef: string }> = [];
+  const denied: Array<{ id: string; reason: string }> = [];
+
+  for (const fact of facts) {
+    // candidate_experience / style_ref 永不进硬路径
+    if (fact.kind === "candidate_experience" || fact.kind === "style_ref") {
+      denied.push({
+        id: fact.id,
+        reason: `kind=${fact.kind} 不可作为 FactGuard 硬路径来源`,
+      });
+      continue;
+    }
+
+    const sourceIds = (fact.sourceIds ?? []).map((id) => String(id ?? "").trim()).filter(Boolean);
+    if (sourceIds.length === 0) {
+      denied.push({
+        id: fact.id,
+        reason: "无 sourceIds：未知来源默认拒绝进入 FactGuard 硬路径",
+      });
+      continue;
+    }
+
+    const isAuthoritative = sourceIds.some((id) => AUTHORITATIVE_SOURCE_RE.test(id));
+
+    // suggestion 仅权威路径可进硬路径
+    if (fact.kind === "suggestion" && !isAuthoritative) {
+      denied.push({
+        id: fact.id,
+        reason: "suggestion 非权威来源，不得进 FactGuard 硬路径",
+      });
+      continue;
+    }
+
+    // 检索/工具衍生：必须经 consumeToolResult(fact_guard_input) 且验证通过
+    const looksLikeToolOrRetrieval = sourceIds.some(
+      (id) =>
+        /^(?:tool:|retrieval:|ranked:|search_|query_|ch\d+#|novelos:)/i.test(id) ||
+        id.includes("trajectory") ||
+        id.includes("tool-result"),
+    );
+
+    if (looksLikeToolOrRetrieval) {
+      if (isAuthoritative) {
+        // 同时带权威路径标记时允许（极少见）
+        factsForHardPath.push(fact);
+        authorizedHighImpactSources.push({
+          text: fact.content,
+          sourceRef: sourceIds.find((id) => AUTHORITATIVE_SOURCE_RE.test(id)) ?? sourceIds[0],
+        });
+        continue;
+      }
+      const gate = gateToolResultsForFactGuard({
+        items: [
+          {
+            toolName: "context.facts",
+            text: fact.content,
+            details: {
+              sourceRef: sourceIds[0] ?? fact.id,
+              evidenceLevel: "inferred",
+              contentTrust: "reference",
+              canAffectHardGate: false,
+            },
+          },
+        ],
+        workspaceId: meta?.workspaceId,
+        chapterId: meta?.chapterId,
+      });
+      if (gate.allowed.length === 0) {
+        denied.push({
+          id: fact.id,
+          reason: gate.denied[0]?.reason ?? "未验证工具/检索事实",
+        });
+        continue;
+      }
+      // 仅已通过验证升级的工具结果可进硬路径
+      factsForHardPath.push(fact);
+      authorizedHighImpactSources.push({
+        text: fact.content,
+        sourceRef: sourceIds[0],
+      });
+      continue;
+    }
+
+    // 未知/非权威来源：默认拒绝（含 kind=fact + sourceIds=["candidate"] 等）
+    // 只有明确权威路径或已验证工具结果可进硬路径
+    if (!isAuthoritative) {
+      denied.push({
+        id: fact.id,
+        reason: `未知/未授权来源默认拒绝：sourceIds=${sourceIds.join(",")}`,
+      });
+      continue;
+    }
+
+    factsForHardPath.push(fact);
+    authorizedHighImpactSources.push({
+      text: fact.content,
+      sourceRef: sourceIds.find((id) => AUTHORITATIVE_SOURCE_RE.test(id)) ?? sourceIds[0],
+    });
+  }
+
+  if (denied.length > 0) {
+    emitTrustAuditEvent({
+      decisionType: "tool_result_consume",
+      allowed: false,
+      reason: `FactGuard 硬路径过滤 ${denied.length} 条不可信 context.facts`,
+      workspaceId: meta?.workspaceId,
+      chapterId: meta?.chapterId,
+      evidence: {
+        deniedCount: denied.length,
+        deniedSample: denied.slice(0, 5),
+      },
+    });
+  }
+
+  return { factsForHardPath, authorizedHighImpactSources, denied };
+}
+
 
 /**
  * 候选事实校验。使用 FactContinuityGuard 做 6 类硬阻断检查。
@@ -77,6 +270,17 @@ export function checkCandidateFactGuard(
   input: UnifiedOrchestratorInput,
   baselineText?: string,
 ): { ok: boolean; errors: string[]; report: FactContinuityReport; constraintManifestHash?: string } {
+  // PROMPT-INJECTION-TRUST：工具/检索衍生事实进入 FactGuard 硬路径前强制消费闸门。
+  // candidate_experience 等不可信 kind 不得作为 hard-gate 授权来源；
+  // 权威路径（outline/skeleton/chapters/narrative-state/constitution）保留。
+  const trustedContextFacts = filterContextFactsForFactGuard(
+    input.context.facts ?? [],
+    {
+      workspaceId: input.workspaceId,
+      chapterId: input.chapterId,
+    },
+  );
+
   const guard = createFactContinuityGuard();
   // CANON-IDENTITY-1: 从 characterStates 编译身份契约，传给 FactGuard
   const identityInputs = (input.context.characterStates ?? []).length > 0
@@ -91,7 +295,11 @@ export function checkCandidateFactGuard(
   const ontologyContract = compileOntologyContract(input.ontologyLevels ?? []);
   const guardInput: FactContinuityInput = {
     text,
-    context: input.context,
+    context: {
+      ...input.context,
+      // 硬路径仅消费通过信任闸门的 facts（不可信检索文本不得影响 hard block）
+      facts: trustedContextFacts.factsForHardPath,
+    },
     knownCharacterNames: input.characterNames,
     constraintManifest: input.contextSafety?.manifest,
     expectedChapterNumber: input.chapterNumber,
@@ -118,13 +326,7 @@ export function checkCandidateFactGuard(
       })),
       openLoops: input.context.openLoops,
       authorizedHighImpactSources: [
-        ...(input.context.facts ?? [])
-          .filter((fact) => (fact.sourceIds ?? []).some((sourceId) =>
-            /^(?:series\/outline\.md|series\/skeleton\.json|skeleton\.json|chapters\/|narrative-state-store\.json|world-canon|constitution)/.test(sourceId)))
-          .map((fact) => ({
-            text: fact.content,
-            sourceRef: fact.sourceIds?.[0] ?? fact.id,
-          })),
+        ...trustedContextFacts.authorizedHighImpactSources,
         ...loadCanonicalHighImpactSources(input),
       ],
     };

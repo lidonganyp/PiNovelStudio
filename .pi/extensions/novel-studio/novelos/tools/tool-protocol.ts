@@ -7,6 +7,10 @@
  * - 工具声明 requiredPermission（由 PermissionPolicy 校验）
  * - 工具有 timeoutMs 上限，超时可诊断可停止
  *
+ * PROMPT-INJECTION-TRUST-ARCHITECTURE-1 Phase 2：
+ * - 工具正文默认 contentTrust=reference，canAffectHardGate=false
+ * - 统一 TrustedToolResult 信封；未验证文本不能进 CanonState
+ *
  * 与 pi-agent-core AgentTool 的关系：ToolProtocol 扩展 AgentTool，
  * 追加 requiredPermission / sideEffect / timeoutMs / evidenceLevel 约束元数据。
  * NarrativeToolRegistry 负责把 ToolProtocol 转成 AgentTool 供 Agent 消费。
@@ -18,6 +22,14 @@
 
 import type { AgentTool } from "../adapters/pi-agent-core-adapter.js";
 import type { TSchema } from "typebox";
+import type { ToolContentTrust } from "../../v2/core/trust/trust-types.js";
+import {
+  makeTrustedToolResult,
+  wrapNarrativeDetailsAsTrusted,
+  type ToolResultConsumePurpose,
+  evaluateToolResultConsumption,
+} from "../../v2/core/trust/tool-result-trust.js";
+import type { TrustedToolResult } from "../../v2/core/trust/trust-types.js";
 
 // ============================================================================
 // 证据等级
@@ -99,6 +111,17 @@ export interface NarrativeToolResultDetails {
   truncated: boolean;
   /** 系统确定性生成的下一条检索建议（无则 null） */
   nextQueryHint: string | null;
+  /**
+   * 内容可信度（PROMPT-INJECTION-TRUST-ARCHITECTURE-1）。
+   * 默认 reference；不得由模型自行声明为 system_fact。
+   */
+  contentTrust?: ToolContentTrust;
+  /** 是否可影响硬门禁；默认 false */
+  canAffectHardGate?: boolean;
+  /** 验证器标识 */
+  verifiedBy?: string;
+  /** 内容 hash */
+  contentHash?: string;
   /** 额外领域数据（工具特定） */
   [key: string]: unknown;
 }
@@ -167,11 +190,62 @@ export function makeNarrativeToolResult(
   content: [{ type: "text"; text: string }];
   details: NarrativeToolResultDetails;
 } {
+  // 强制默认：工具正文为 reference，不可进硬门禁
+  const contentTrust: ToolContentTrust = details.contentTrust ?? "reference";
+  const canAffectHardGate =
+    contentTrust === "system_fact" && details.canAffectHardGate === true
+      ? true
+      : false;
   return {
     content: [{ type: "text", text }],
-    details,
+    details: {
+      ...details,
+      contentTrust,
+      canAffectHardGate,
+      verifiedBy: canAffectHardGate ? details.verifiedBy : undefined,
+    },
   };
 }
+
+/**
+ * 将叙事工具结果提升为 TrustedToolResult 信封（默认 reference）。
+ * 供 FactGuard / 状态提交消费闸门使用。
+ */
+export function toTrustedToolResult(
+  toolName: string,
+  text: string,
+  details: NarrativeToolResultDetails,
+  callId?: string,
+): TrustedToolResult<Record<string, unknown>> {
+  return wrapNarrativeDetailsAsTrusted({
+    toolName,
+    text,
+    details,
+    callId,
+  });
+}
+
+/**
+ * 工具结果消费闸门（导出供编排器/FactGuard 使用）。
+ */
+export function canConsumeToolResultFor(
+  result: TrustedToolResult,
+  purpose: ToolResultConsumePurpose,
+): boolean {
+  return evaluateToolResultConsumption({ result, purpose }).allowed;
+}
+
+export {
+  makeTrustedToolResult,
+  evaluateToolResultConsumption,
+  wrapNarrativeDetailsAsTrusted,
+};
+
+/**
+ * 生产工具结果消费入口（re-export）。
+ * 编排器 / FactGuard / 状态提交应调用 consumeToolResult，而非直接信任 details。
+ */
+export { consumeToolResult, assertToolResultSafeForCanon } from "../../v2/core/trust/tool-result-consumer.js";
 
 /**
  * 结构化工具执行超时错误（Tool Interface Contract v1 子任务3）。

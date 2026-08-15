@@ -23,6 +23,9 @@
 
 import { QualityTraceRecorder } from "../../craft/quality-trace-recorder.js";
 import type { FailureEnvelope } from "../../craft/failure-envelope.js";
+import type { AuditEventRecorder } from "../core/audit/audit-event-recorder.js";
+import type { TraceWriteMode } from "../core/audit/trace-write-mode.js";
+import type { TraceContentStore } from "../core/audit/trace-content-store.js";
 import type {
   Candidate,
   CandidateComparison,
@@ -190,6 +193,17 @@ export interface V2TraceRecord {
   /** Step 1d：模型调用预算（final_selected 阶段） */
   modelBudget?: { soft: number; hard: number; used: number; capped: boolean };
   /**
+   * MODEL-ROUTING-GOVERNANCE：分层预算 / 观测 / 失败策略 / 质量-成本分析。
+   * 由 unified-orchestrator 出口写入 stageResults，再由 unified-entry 持久化到
+   * final_selected 与 blocked error 记录，供 quality-trace.json 验收。
+   */
+  routingGovernance?: unknown;
+  layeredBudget?: unknown;
+  modelCallObservability?: unknown;
+  qualityCostAnalysis?: unknown;
+  failureStrategyDecision?: unknown;
+  failureStrategyTrace?: unknown;
+  /**
    * 成功章节的用户反馈归因上下文。
    * novel_strategy_feedback 可凭 chapterId 从 trace 推断这些字段，避免普通用户手填内部版本键/策略 ID。
    */
@@ -197,7 +211,15 @@ export interface V2TraceRecord {
     modelVersion: string;
     selectedStrategyIds: string[];
     sourceChapter: string;
-    opportunityType: "author_style";
+    opportunityType: "author_style" | string;
+    /** USER-FEEDBACK-EVIDENCE-PIPELINE-1：完整 StrategyExposure 可选字段 */
+    strategyBundleId?: string;
+    orchestratorRunId?: string;
+    exposureId?: string;
+    promptBundleId?: string;
+    candidateId?: string;
+    deliveredSource?: "raw" | "fallback" | "editorial";
+    exposureSnapshot?: unknown;
   };
   /**
    * Step 5：NovelOS agentic_raw shadow 候选摘要（novelos_agentic 阶段）。
@@ -267,6 +289,12 @@ export interface V2TraceAdapterOptions {
   chapterId: string;
   /** 是否追加到已有 trace（默认 true，与 legacy 多实例 append 模式一致） */
   append?: boolean;
+  /** P7 Stage A 双写：透传给 QualityTraceRecorder 的可选审计事件追加口。 */
+  auditSink?: AuditEventRecorder;
+  /** P7 Stage C-1：透传写路径模式（默认 resolveTraceWriteMode() 解析）。 */
+  writeMode?: TraceWriteMode;
+  /** P7 Stage C-1：透传明细独立内容库（projection 模式下 recordGate 分流写入）。 */
+  contentStore?: TraceContentStore;
 }
 
 // ============================================================================
@@ -314,6 +342,9 @@ export function createLegacyTraceAdapter(
     workspaceId: options.workspaceId,
     chapterId: options.chapterId,
     appendExisting: options.append !== false,
+    auditSink: options.auditSink,
+    writeMode: options.writeMode,
+    contentStore: options.contentStore,
   });
   const records: V2TraceRecord[] = [];
   let v2Mode: "full_chain" | "rawStage2" | "direct_baseline" = "full_chain";

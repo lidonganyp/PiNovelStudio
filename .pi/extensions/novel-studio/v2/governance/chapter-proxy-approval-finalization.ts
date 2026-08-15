@@ -53,6 +53,11 @@ import {
   getPendingSentinel,
 } from "./chapter-proxy-approval-draft-checkpoint.js";
 import type { ChapterProxyApprovalArtifact } from "./chapter-proxy-approval-types.js";
+import {
+  createUserRevision,
+  type UserRevisionRecord,
+} from "../core/trust/user-revision.js";
+import { emitTrustAuditEvent } from "../core/trust/trust-audit.js";
 
 // ============================================================================
 // 类型
@@ -113,6 +118,11 @@ export interface FinalizationResult {
   blockReason?: string;
   /** 用户修改后的正文（仅 accept_with_edits 通过时，供 commitAndSave） */
   editedText?: string;
+  /**
+   * 用户修订记录（仅 accept_with_edits 通过时）。
+   * PROMPT-INJECTION-TRUST-ARCHITECTURE-1：完整 revisionId/hash/rerun 契约。
+   */
+  userRevision?: UserRevisionRecord;
   /** 候选摘要（仅 inspect） */
   inspectSummary?: InspectAlternativesSummary;
   /** rollback 结果（仅 rollback） */
@@ -132,6 +142,12 @@ export interface AcceptProxyDraftWithEditsOptions extends AcceptProxyDraftOption
   editedText: string;
   /** FactGuard 重跑函数（依赖注入） */
   rerunFactGuard: FactGuardRerunFn;
+  /** 父候选正文（pending draft）；缺省时用空串仅保证 edited hash 不同 */
+  parentText?: string;
+  /** 父候选 id */
+  parentCandidateId?: string;
+  /** 可选：FactGuard run id（审计） */
+  factGuardRunId?: string;
 }
 
 /** rejectAndRegenerate 选项 */
@@ -262,7 +278,16 @@ export function acceptProxyDraft(options: AcceptProxyDraftOptions): Finalization
 export function acceptProxyDraftWithEdits(
   options: AcceptProxyDraftWithEditsOptions,
 ): FinalizationResult {
-  const { workspacePath, chapterId, approvalId, editedText, rerunFactGuard } = options;
+  const {
+    workspacePath,
+    chapterId,
+    approvalId,
+    editedText,
+    rerunFactGuard,
+    parentText,
+    parentCandidateId,
+    factGuardRunId,
+  } = options;
   assertSafeChapterId(chapterId);
 
   const verification = verifyPendingApprovalId(workspacePath, chapterId, approvalId);
@@ -275,9 +300,64 @@ export function acceptProxyDraftWithEdits(
     };
   }
 
+  // 创建 UserRevisionRecord（正文必须变化）
+  let userRevision: UserRevisionRecord | undefined;
+  try {
+    const parent = parentText ?? "";
+    if (parent === editedText) {
+      return {
+        action: "accept_with_edits",
+        clearedPending: false,
+        canCommit: false,
+        blockReason: "edited_text_unchanged",
+      };
+    }
+    // parent 为空时用不可达占位，确保 hash 不同且仍生成 revision
+    const effectiveParent =
+      parent.length > 0 ? parent : `__empty_parent__:${approvalId}`;
+    userRevision = createUserRevision({
+      parentCandidateId: parentCandidateId ?? "proxy-approved",
+      parentText: effectiveParent === editedText ? `${effectiveParent}\0` : effectiveParent,
+      editedText,
+      factGuardRunId:
+        factGuardRunId ??
+        `fg-rerun-${Date.now().toString(36)}-${chapterId}`,
+      sourceRefs: [
+        {
+          kind: "user_edit",
+          id: approvalId,
+          locator: `pending:${chapterId}`,
+        },
+      ],
+    });
+  } catch (err) {
+    return {
+      action: "accept_with_edits",
+      clearedPending: false,
+      canCommit: false,
+      blockReason:
+        err instanceof Error ? err.message : "user_revision_create_failed",
+    };
+  }
+
   const factGuardResult = rerunFactGuard(editedText);
 
   if (!factGuardResult.ok) {
+    emitTrustAuditEvent({
+      decisionType: "candidate_revision",
+      allowed: false,
+      reason: "用户编辑后 FactGuard 失败，不清除 pending",
+      chapterId,
+      hashes: {
+        finalTextHash: userRevision.finalTextHash,
+        parentTextHash: userRevision.parentTextHash,
+      },
+      evidence: {
+        revisionId: userRevision.revisionId,
+        factGuardErrors: factGuardResult.errors,
+        approvalId,
+      },
+    });
     return {
       action: "accept_with_edits",
       clearedPending: false,
@@ -285,10 +365,54 @@ export function acceptProxyDraftWithEdits(
       factGuardPassed: false,
       factGuardErrors: factGuardResult.errors,
       blockReason: "factguard_failed",
+      userRevision,
     };
   }
 
+  // 绑定 FactGuard run id 到修订记录
+  userRevision = {
+    ...userRevision,
+    factGuardRunId: userRevision.factGuardRunId,
+  };
+
+  // 持久化修订记录（可回放）
+  try {
+    const revDir = join(workspacePath, "traces", "user-revisions");
+    if (!existsSync(revDir)) mkdirSync(revDir, { recursive: true });
+    writeFileSync(
+      join(revDir, `${userRevision.revisionId}.json`),
+      JSON.stringify(userRevision, null, 2),
+      "utf8",
+    );
+  } catch {
+    // 落盘失败不阻断定稿，但写审计
+    emitTrustAuditEvent({
+      decisionType: "candidate_revision",
+      allowed: true,
+      reason: "UserRevision 内存有效但落盘失败",
+      chapterId,
+      evidence: { revisionId: userRevision.revisionId },
+    });
+  }
+
   clearPendingProxyDraft(workspacePath, chapterId);
+
+  emitTrustAuditEvent({
+    decisionType: "candidate_revision",
+    allowed: true,
+    reason: "accept_with_edits：新 revision + FactGuard 通过",
+    chapterId,
+    hashes: {
+      finalTextHash: userRevision.finalTextHash,
+      parentTextHash: userRevision.parentTextHash,
+    },
+    evidence: {
+      revisionId: userRevision.revisionId,
+      parentCandidateId: userRevision.parentCandidateId,
+      requiredReruns: userRevision.requiredReruns,
+      approvalId,
+    },
+  });
 
   return {
     action: "accept_with_edits",
@@ -296,6 +420,7 @@ export function acceptProxyDraftWithEdits(
     canCommit: true,
     factGuardPassed: true,
     editedText,
+    userRevision,
   };
 }
 

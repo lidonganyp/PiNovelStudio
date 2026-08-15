@@ -315,12 +315,43 @@ export function attachToolMetricsTracer(options: {
   runtime: NovelOSRuntime;
   trajectory: TrajectoryStore;
   tracer?: ToolCallMetricsTracer;
+  /** AUDIT-1：工具 started/result 细事件 */
+  auditSink?: import("../../v2/core/audit/audit-run-session.js").AuditEventSink;
 }): () => void {
   const active = options.tracer ?? new ToolCallMetricsTracer();
   const unsubscribe = options.runtime.subscribe((event: AgentEvent) => {
+    if (event.type === "tool_execution_start" && options.auditSink) {
+      options.auditSink.recordToolEvent({
+        eventType: "tool_call_started",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        capability: "retrieval",
+      });
+    }
     const metrics = active.handle(event);
     if (metrics) {
       options.trajectory.recordToolCallMetrics(metrics);
+      if (options.auditSink) {
+        // tool-protocol EvidenceLevel ≠ audit EvidenceLevel；工具结果默认 observed
+        options.auditSink.recordToolEvent({
+          eventType: metrics.timeout
+            ? "tool_call_timeout"
+            : "tool_result_received",
+          toolCallId: metrics.toolCallId,
+          toolName: metrics.toolName,
+          capability: "retrieval",
+          durationMs: metrics.latencyMs,
+          evidenceLevel: "observed",
+          payload: {
+            empty: metrics.empty,
+            isError: metrics.isError,
+            timeout: metrics.timeout,
+            sourceRefCount: metrics.sourceRefCount,
+            resultChars: metrics.resultChars,
+            toolEvidenceLevel: metrics.evidenceLevel ?? null,
+          },
+        });
+      }
     }
   });
   return unsubscribe;

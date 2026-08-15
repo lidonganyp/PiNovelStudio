@@ -1,10 +1,28 @@
 /**
  * CONTEXT-SAFETY-1 — 硬约束分层、上下文预算与可回源裁剪。
+ *
+ * PROMPT-INJECTION-TRUST-ARCHITECTURE-1：
+ * - ConstraintManifestItem 扩展 trustClass/authority/expiry/canPromote/contentHash
+ * - 与 ContextPackage 分槽编译协作；P0/P1 仍不可静默丢弃
  */
 
 import { createHash } from "node:crypto";
 import type { ChapterIntent } from "./chapter-intent-builder.js";
 import type { CompiledContext } from "./types.js";
+import type {
+  Authority,
+  ContentSlot,
+  ExpiryPolicy,
+  TrustClass,
+} from "./trust/trust-types.js";
+import {
+  asReferenceMaterial,
+  buildContextPackage,
+  type ContextPackage,
+} from "./trust/context-package.js";
+import { emitTrustAuditEvent } from "./trust/trust-audit.js";
+// 拉入信任架构公共 barrel，确保生产闭包包含全部 trust 模块（Eval/编排器可直接 import dist）
+import "./trust/index.js";
 
 export type ConstraintPriority = "P0" | "P1" | "P2" | "P3" | "P4";
 
@@ -16,6 +34,20 @@ export interface ConstraintManifestItem {
   sourceRefs: string[];
   estimatedTokens: number;
   origin: { area: "intent" | "context"; field: string; key?: string };
+  /** 信任层（PROMPT-INJECTION-TRUST-ARCHITECTURE-1） */
+  trustClass?: TrustClass;
+  /** 权限类别 */
+  authority?: Authority;
+  /** 上下文槽位 */
+  slot?: ContentSlot;
+  /** 过期策略 */
+  expiry?: ExpiryPolicy;
+  /** 是否允许晋级 */
+  canPromote?: boolean;
+  /** 内容 hash */
+  contentHash?: string;
+  /** 结构化来源引用（扩展） */
+  structuredSourceRefs?: Array<{ kind: string; id?: string; locator?: string }>;
 }
 
 export interface ConstraintManifest {
@@ -68,6 +100,58 @@ export interface ContextSafetyResult {
   report: ContextBudgetReport;
 }
 
+function inferTrustForPriority(
+  priority: ConstraintPriority,
+  kind: string,
+): { trustClass: TrustClass; authority: Authority; slot: ContentSlot; canPromote: boolean } {
+  if (priority === "P0") {
+    if (kind === "canon" || kind.startsWith("long_term")) {
+      return {
+        trustClass: "committed_state",
+        authority: "hard_constraint",
+        slot: "COMMITTED_STATE",
+        canPromote: false,
+      };
+    }
+    if (kind === "forbidden_drift" || kind === "world_rule") {
+      return {
+        trustClass: "author_authority",
+        authority: "hard_constraint",
+        slot: kind === "world_rule" ? "IMMUTABLE_FACTS" : "AUTHOR_CONTRACT",
+        canPromote: false,
+      };
+    }
+    return {
+      trustClass: "author_authority",
+      authority: "hard_constraint",
+      slot: "IMMUTABLE_FACTS",
+      canPromote: false,
+    };
+  }
+  if (priority === "P1") {
+    return {
+      trustClass: "author_authority",
+      authority: "hard_constraint",
+      slot: "AUTHOR_CONTRACT",
+      canPromote: false,
+    };
+  }
+  if (priority === "P4" || kind === "style_advisory" || kind === "candidate_experience") {
+    return {
+      trustClass: "retrieved_reference",
+      authority: "reference_only",
+      slot: "REFERENCE_MATERIAL",
+      canPromote: false,
+    };
+  }
+  return {
+    trustClass: "retrieved_reference",
+    authority: kind === "world_reference" ? "reference_only" : "soft_guidance",
+    slot: "REFERENCE_MATERIAL",
+    canPromote: false,
+  };
+}
+
 export function createConstraintManifest(input: {
   intent: ChapterIntent;
   context: CompiledContext;
@@ -82,7 +166,29 @@ export function createConstraintManifest(input: {
     origin: ConstraintManifestItem["origin"],
   ): void => {
     if (!content?.trim()) return;
-    items.push({ id, priority, kind, content: content.trim(), sourceRefs, estimatedTokens: estimateTokens(content), origin });
+    const trimmed = content.trim();
+    const trust = inferTrustForPriority(priority, kind);
+    const contentHash = createHash("sha256").update(trimmed, "utf8").digest("hex");
+    items.push({
+      id,
+      priority,
+      kind,
+      content: trimmed,
+      sourceRefs,
+      estimatedTokens: estimateTokens(trimmed),
+      origin,
+      trustClass: trust.trustClass,
+      authority: trust.authority,
+      slot: trust.slot,
+      expiry: { kind: "never" },
+      canPromote: trust.canPromote,
+      contentHash,
+      structuredSourceRefs: sourceRefs.map((ref) => ({
+        kind: "other",
+        id: ref,
+        locator: ref,
+      })),
+    });
   };
 
   input.intent.inviolableFacts.forEach((content, index) =>
@@ -149,13 +255,84 @@ export function createConstraintManifest(input: {
   input.context.styleReferences.forEach((entry) =>
     add(`p4:style:${entry.id}`, "P4", "style_advisory", entry.content, entry.sourceIds, { area: "context", field: "styleReferences", key: entry.id }));
 
-  const manifestHash = hash(items.map(({ id, priority, content, sourceRefs }) => ({ id, priority, content, sourceRefs })));
+  const manifestHash = hash(items.map(({ id, priority, content, sourceRefs, contentHash: ch }) => ({ id, priority, content, sourceRefs, contentHash: ch })));
   return {
     schema: "pinovel.constraint-manifest",
     version: "1.0",
     manifestId: `constraint-manifest:${manifestHash.slice(0, 16)}`,
     manifestHash,
     items,
+  };
+}
+
+/**
+ * 将 ConstraintManifest 编译为分槽 ContextPackage。
+ * 风格/历史/检索类条目强制 REFERENCE_MATERIAL，无指令权。
+ * 注入短语不会提升信任层。
+ */
+export function compileConstraintManifestToContextPackage(
+  manifest: ConstraintManifest,
+): { ok: boolean; package?: ContextPackage; errors: string[] } {
+  const items = manifest.items.map((item) => {
+    const trust = inferTrustForPriority(item.priority, item.kind);
+    // 强制：P3/P4 与 style 一律 reference
+    if (
+      item.priority === "P4" ||
+      item.priority === "P3" ||
+      item.kind === "style_advisory" ||
+      item.kind === "candidate_experience" ||
+      item.kind === "world_reference"
+    ) {
+      return asReferenceMaterial({
+        id: item.id,
+        content: item.content,
+        sourceRefs: item.sourceRefs.map((ref) => ({
+          kind: "other" as const,
+          id: ref,
+          locator: ref,
+        })),
+        purpose: "reference_only_no_instruction_authority",
+      });
+    }
+    return {
+      id: item.id,
+      content: item.content,
+      slot: item.slot ?? trust.slot,
+      trustClass: item.trustClass ?? trust.trustClass,
+      authority: item.authority ?? trust.authority,
+      canPromote: item.canPromote ?? false,
+      expiry: item.expiry ?? ({ kind: "never" } as ExpiryPolicy),
+      purpose: `constraint:${item.kind}`,
+      priority: item.priority,
+      kind: item.kind,
+      sourceRefs: item.sourceRefs.map((ref) => ({
+        kind: "other" as const,
+        id: ref,
+        locator: ref,
+      })),
+    };
+  });
+
+  const result = buildContextPackage({ items });
+  emitTrustAuditEvent({
+    decisionType: "context_compile",
+    allowed: result.ok,
+    reason: result.ok
+      ? `ContextPackage 编译成功 manifest=${manifest.manifestHash.slice(0, 12)}`
+      : `ContextPackage 编译阻断：${result.errors.join("; ")}`,
+    hashes: {
+      manifestHash: manifest.manifestHash,
+      contextHash: result.package.contextHash,
+    },
+    evidence: {
+      blockReason: result.blockReason,
+      itemCount: manifest.items.length,
+    },
+  });
+  return {
+    ok: result.ok,
+    package: result.package,
+    errors: result.errors,
   };
 }
 

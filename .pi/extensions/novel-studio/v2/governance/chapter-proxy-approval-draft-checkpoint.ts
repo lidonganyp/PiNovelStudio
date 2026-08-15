@@ -31,12 +31,13 @@ import {
   mkdirSync,
   unlinkSync,
 } from "node:fs";
-import { join, resolve, relative } from "node:path";
+import { join, resolve, relative, basename } from "node:path";
 import {
   validateStateEntry,
   type NarrativeStateEntry,
   type StagedStateUpdate,
 } from "../core/final-state-commit.js";
+import { computeArtifactHash } from "../core/autonomy-policy.js";
 
 // ============================================================================
 // 类型
@@ -56,10 +57,25 @@ export interface SaveProxyApprovedDraftOptions {
   selectedSource: string;
   /** 代理审批稿正文 */
   finalText: string;
-  /** 保存时间戳（ISO 字符串） */
+  /** 保存时间戳（ISO 字符串）；同时作为 revision */
   savedAt: string;
   /** 候选选定时的完整暂存状态，供用户定稿后按最终正文重新锚定 */
   stagedStateUpdate?: StagedStateUpdate;
+  /**
+   * workspaceId（P3：pending 绑定）。
+   * 未提供时从 workspacePath 目录名推断。
+   */
+  workspaceId?: string;
+  /**
+   * 正文 artifactHash（P3）。
+   * 未提供时由 finalText 计算完整 sha256 hex。
+   */
+  artifactHash?: string;
+  /**
+   * pending revision（P3）。
+   * 未提供时使用 savedAt。
+   */
+  revision?: string;
 }
 
 /** loadProxyApprovedDraft 返回 */
@@ -72,6 +88,12 @@ export interface LoadProxyApprovedDraftResult {
   savedAt: string;
   draftFilePath: string;
   stagedStateUpdate?: StagedStateUpdate;
+  /** P3：正文绑定 hash */
+  artifactHash?: string;
+  /** P3：pending 版本 */
+  revision?: string;
+  /** P3：workspace 绑定 */
+  workspaceId?: string;
 }
 
 /** pending sentinel 公开结构（用于定稿操作 approvalId 双重绑定校验） */
@@ -80,6 +102,12 @@ export interface PendingSentinelInfo {
   approvalId: string;
   status: "pending";
   savedAt: string;
+  /** P3：正文绑定 hash；旧 sentinel 可能缺失 */
+  artifactHash?: string;
+  /** P3：pending 版本；旧 sentinel 可能缺失 */
+  revision?: string;
+  /** P3：workspace 绑定；旧 sentinel 可能缺失 */
+  workspaceId?: string;
 }
 
 /** pending sentinel 内部结构 */
@@ -88,6 +116,28 @@ interface PendingSentinel {
   approvalId: string;
   status: "pending";
   savedAt: string;
+  artifactHash?: string;
+  revision?: string;
+  workspaceId?: string;
+}
+
+/** P3：pending 版本绑定校验结果 */
+export interface PendingBindingValidation {
+  ok: boolean;
+  reason?: string;
+  blockReason?:
+    | "pending_missing"
+    | "pending_unreadable"
+    | "workspace_mismatch"
+    | "chapter_mismatch"
+    | "approval_id_mismatch"
+    | "stale_revision"
+    | "artifact_hash_mismatch"
+    | "artifact_hash_missing"
+    | "draft_missing";
+  sentinel?: PendingSentinelInfo;
+  artifactHash?: string;
+  revision?: string;
 }
 
 // ============================================================================
@@ -192,6 +242,14 @@ function ensureDir(dir: string): void {
  *
  * 不写正式 chapters/ 目录、不执行 FinalStateCommit、不推进 frontier。
  */
+function inferWorkspaceId(workspacePath: string, explicit?: string): string {
+  if (typeof explicit === "string" && explicit.trim().length > 0) {
+    return explicit.trim();
+  }
+  // workspaces/{workspaceId} → basename
+  return basename(resolve(workspacePath));
+}
+
 export function saveProxyApprovedDraft(options: SaveProxyApprovedDraftOptions): void {
   const {
     workspacePath,
@@ -217,6 +275,16 @@ export function saveProxyApprovedDraft(options: SaveProxyApprovedDraftOptions): 
     );
   }
 
+  const workspaceId = inferWorkspaceId(workspacePath, options.workspaceId);
+  const artifactHash =
+    typeof options.artifactHash === "string" && options.artifactHash.trim().length > 0
+      ? options.artifactHash.trim()
+      : computeArtifactHash(finalText);
+  const revision =
+    typeof options.revision === "string" && options.revision.trim().length > 0
+      ? options.revision.trim()
+      : savedAt;
+
   // 1. 写 draft 正文（原子写入）
   atomicWrite(dPath, finalText);
 
@@ -229,17 +297,24 @@ export function saveProxyApprovedDraft(options: SaveProxyApprovedDraftOptions): 
     finalText,
     savedAt,
     draftFilePath: dPath,
+    artifactHash,
+    revision,
+    workspaceId,
     ...(stagedStateUpdate ? { stagedStateUpdate } : {}),
   };
   atomicWrite(mPath, JSON.stringify(meta, null, 2));
 
   // 3. 写 pending sentinel（覆盖写入：最新 pending draft 指向最新 approvalId）
+  // P3：绑定 artifactHash / revision / workspaceId，从“存在性标记”升级为“待提交版本绑定”
   const sPath = pendingSentinelPath(draftDir, chapterId);
   const sentinel: PendingSentinel = {
     chapterId,
     approvalId,
     status: "pending",
     savedAt,
+    artifactHash,
+    revision,
+    workspaceId,
   };
   atomicWrite(sPath, JSON.stringify(sentinel, null, 2));
 }
@@ -297,6 +372,20 @@ export function loadProxyApprovedDraft(
 
   const stagedStateUpdate = parseStagedStateUpdate(obj.stagedStateUpdate, approvalId);
 
+  // P3：旧 draft 无 hash 时，可从 finalText 安全补齐（只读推导，不改写磁盘）
+  const artifactHash =
+    typeof obj.artifactHash === "string" && obj.artifactHash.length > 0
+      ? obj.artifactHash
+      : computeArtifactHash(obj.finalText);
+  const revision =
+    typeof obj.revision === "string" && obj.revision.length > 0
+      ? obj.revision
+      : obj.savedAt;
+  const workspaceId =
+    typeof obj.workspaceId === "string" && obj.workspaceId.length > 0
+      ? obj.workspaceId
+      : undefined;
+
   return {
     approvalId: obj.approvalId,
     chapterId: obj.chapterId,
@@ -305,6 +394,9 @@ export function loadProxyApprovedDraft(
     finalText: obj.finalText,
     savedAt: obj.savedAt,
     draftFilePath: obj.draftFilePath,
+    artifactHash,
+    revision,
+    ...(workspaceId ? { workspaceId } : {}),
     ...(stagedStateUpdate ? { stagedStateUpdate } : {}),
   };
 }
@@ -485,10 +577,174 @@ export function getPendingSentinel(
       approvalId: sentinel.approvalId,
       status: "pending",
       savedAt: sentinel.savedAt,
+      ...(typeof sentinel.artifactHash === "string"
+        ? { artifactHash: sentinel.artifactHash }
+        : {}),
+      ...(typeof sentinel.revision === "string"
+        ? { revision: sentinel.revision }
+        : {}),
+      ...(typeof sentinel.workspaceId === "string"
+        ? { workspaceId: sentinel.workspaceId }
+        : {}),
     };
   } catch {
     return null;
   }
+}
+
+// ============================================================================
+// validatePendingBinding — P3 待提交版本绑定校验
+// ============================================================================
+
+/**
+ * 校验 pending 是否绑定到指定待提交版本。
+ *
+ * 校验顺序（计划 P3）：
+ * 1. pending sentinel 可解析
+ * 2. workspaceId/chapterId 匹配
+ * 3. approvalId 匹配
+ * 4. revision 匹配
+ * 5. 当前正文哈希匹配
+ *
+ * 旧 sentinel 缺少 artifactHash 时：
+ * - 能从 draft metadata / finalText 安全补齐则迁移到返回值
+ * - 无法安全补齐则阻断（artifact_hash_missing）
+ * - 不允许无哈希状态直接提交
+ */
+export function validatePendingBinding(options: {
+  workspacePath: string;
+  workspaceId: string;
+  chapterId: string;
+  approvalId: string;
+  revision: string;
+  /** 当前待提交正文；提供时校验 artifactHash */
+  finalText?: string;
+  /** 显式期望 hash；与 finalText 二选一或同时提供（同时提供时必须一致） */
+  expectedArtifactHash?: string;
+}): PendingBindingValidation {
+  const {
+    workspacePath,
+    workspaceId,
+    chapterId,
+    approvalId,
+    revision,
+  } = options;
+
+  const sentinel = getPendingSentinel(workspacePath, chapterId);
+  if (sentinel === null) {
+    // 区分：文件不存在 vs 不可读
+    const draftDir = resolveDraftCheckpointDir(workspacePath);
+    const sPath = pendingSentinelPath(draftDir, chapterId);
+    if (existsSync(sPath)) {
+      return {
+        ok: false,
+        reason: "pending sentinel 存在但不可解析",
+        blockReason: "pending_unreadable",
+      };
+    }
+    return {
+      ok: false,
+      reason: "无 pending sentinel",
+      blockReason: "pending_missing",
+    };
+  }
+
+  if (sentinel.chapterId !== chapterId) {
+    return {
+      ok: false,
+      reason: `chapterId 不匹配：sentinel=${sentinel.chapterId} requested=${chapterId}`,
+      blockReason: "chapter_mismatch",
+      sentinel,
+    };
+  }
+
+  if (
+    typeof sentinel.workspaceId === "string" &&
+    sentinel.workspaceId.length > 0 &&
+    sentinel.workspaceId !== workspaceId
+  ) {
+    return {
+      ok: false,
+      reason: `workspaceId 不匹配：sentinel=${sentinel.workspaceId} requested=${workspaceId}`,
+      blockReason: "workspace_mismatch",
+      sentinel,
+    };
+  }
+
+  if (sentinel.approvalId !== approvalId) {
+    return {
+      ok: false,
+      reason: `approvalId 不匹配：sentinel=${sentinel.approvalId} requested=${approvalId}`,
+      blockReason: "approval_id_mismatch",
+      sentinel,
+    };
+  }
+
+  const effectiveRevision = sentinel.revision ?? sentinel.savedAt;
+  if (effectiveRevision !== revision) {
+    return {
+      ok: false,
+      reason: `revision 不匹配：sentinel=${effectiveRevision} requested=${revision}`,
+      blockReason: "stale_revision",
+      sentinel,
+      revision: effectiveRevision,
+    };
+  }
+
+  // 解析 / 补齐 artifactHash
+  let artifactHash = sentinel.artifactHash;
+  if (!artifactHash || artifactHash.length === 0) {
+    const draft = loadProxyApprovedDraft(workspacePath, approvalId);
+    if (draft === null) {
+      return {
+        ok: false,
+        reason: "旧 pending 缺少 artifactHash 且 draft 不可用，fail-closed",
+        blockReason: "artifact_hash_missing",
+        sentinel,
+        revision: effectiveRevision,
+      };
+    }
+    artifactHash = draft.artifactHash ?? computeArtifactHash(draft.finalText);
+  }
+
+  let expectedHash = options.expectedArtifactHash;
+  if (typeof options.finalText === "string") {
+    const fromText = computeArtifactHash(options.finalText);
+    if (expectedHash && expectedHash !== fromText) {
+      return {
+        ok: false,
+        reason: "expectedArtifactHash 与 finalText 计算结果不一致",
+        blockReason: "artifact_hash_mismatch",
+        sentinel,
+        artifactHash,
+        revision: effectiveRevision,
+      };
+    }
+    expectedHash = fromText;
+  }
+
+  if (expectedHash && artifactHash !== expectedHash) {
+    return {
+      ok: false,
+      reason: `artifactHash 不匹配：pending=${artifactHash} current=${expectedHash}`,
+      blockReason: "artifact_hash_mismatch",
+      sentinel,
+      artifactHash,
+      revision: effectiveRevision,
+    };
+  }
+
+  return {
+    ok: true,
+    sentinel: {
+      ...sentinel,
+      artifactHash,
+      revision: effectiveRevision,
+      workspaceId: sentinel.workspaceId ?? workspaceId,
+    },
+    artifactHash,
+    revision: effectiveRevision,
+  };
 }
 
 // ============================================================================
@@ -568,11 +824,19 @@ export function restorePendingSentinel(
   const draftDir = resolveDraftCheckpointDir(workspacePath);
   ensureDir(draftDir);
   const sPath = pendingSentinelPath(draftDir, chapterId);
+  const artifactHash =
+    draft.artifactHash ?? computeArtifactHash(draft.finalText);
+  const revision = draft.revision ?? savedAt;
+  const workspaceId =
+    draft.workspaceId ?? inferWorkspaceId(workspacePath);
   const sentinel: PendingSentinel = {
     chapterId,
     approvalId,
     status: "pending",
     savedAt,
+    artifactHash,
+    revision,
+    workspaceId,
   };
   atomicWrite(sPath, JSON.stringify(sentinel, null, 2));
 

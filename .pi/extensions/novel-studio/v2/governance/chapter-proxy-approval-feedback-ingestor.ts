@@ -50,6 +50,14 @@ import {
   type StrategyPolicyStore,
 } from "../learning/strategy-policy-store.js";
 import type { StrategyContext, RecordedOutcome } from "../learning/strategy-outcome-recorder.js";
+import {
+  isCompleteLineage,
+  type FeedbackLineage,
+} from "../learning/feedback-evidence-contracts.js";
+import {
+  appendFeedbackEvidenceEvents,
+  observationFromRecordedOutcome,
+} from "../learning/feedback-evidence-ledger-store.js";
 
 // ============================================================================
 // 类型
@@ -109,7 +117,8 @@ export interface IngestProxyApprovalFeedbackResult {
 export type SkipReason =
   | "already_ingested"
   | "no_strategy_context"
-  | "unsupported_action";
+  | "unsupported_action"
+  | "incomplete_lineage";
 
 /** 批量摄入选项（与单条相同，但消费整个 feedback.jsonl） */
 export interface IngestAllProxyApprovalFeedbackOptions
@@ -268,6 +277,18 @@ export function ingestProxyApprovalFeedbackToStrategy(
       continue;
     }
 
+    // 2b. 代理反馈血缘检查（USER-FEEDBACK-EVIDENCE-PIPELINE-1）：
+    // 缺少完整血缘的代理反馈不得按 proxy_confirmed 强更新。
+    // 完全缺失 lineage 与字段不完整一律 incomplete_lineage（历史记录需显式回填）。
+    const lineagePartial = record.lineage;
+    if (!isCompleteLineage(lineagePartial as FeedbackLineage)) {
+      skippedReasons.push({
+        approvalId: record.approvalId,
+        reason: "incomplete_lineage",
+      });
+      continue;
+    }
+
     // 3. 映射为 ingest 信号
     const signal = mapFeedbackToIngestSignal(record);
     if (signal.kind === "skip") {
@@ -278,12 +299,15 @@ export function ingestProxyApprovalFeedbackToStrategy(
       continue;
     }
 
-    // 4. 调用 ingestor 写入 store
+    // 4. 调用 ingestor 写入 store（feedbackEventId=approvalId 保证幂等）
+    const completeLineage = lineagePartial as FeedbackLineage;
     let outcome: RecordedOutcome;
     if (signal.kind === "choice") {
       outcome = ingestor.ingestChoice(store, {
         context,
         chosen: signal.chosen,
+        feedbackEventId: `proxy:${record.approvalId}`,
+        lineage: completeLineage,
       });
     } else {
       // signal.kind === "edit"
@@ -292,12 +316,41 @@ export function ingestProxyApprovalFeedbackToStrategy(
         deliveredSource: signal.deliveredSource,
         modified: signal.modified,
         editDistance: signal.editDistance,
+        feedbackEventId: `proxy:${record.approvalId}`,
+        lineage: completeLineage,
       });
     }
 
     if (outcome.recorded) {
       outcomes.push(outcome);
       ingestedApprovalIds.add(record.approvalId);
+
+      // Phase 4：追加 canonical ledger observation（失败不阻断策略物化）
+      try {
+        const evidenceId =
+          outcome.evidence.evidenceId ?? `proxy:${record.approvalId}`;
+        const observation = observationFromRecordedOutcome({
+          evidenceId,
+          strategyId: context.strategyId,
+          modelVersion: context.modelVersion,
+          sourceChapter: context.sourceChapter,
+          outcome: outcome.outcome,
+          weight: outcome.weight,
+          decisionCount: outcome.decisionCount ?? 1,
+          feedbackLevel: "proxy_confirmed",
+          attributionConfidence: "high",
+          strategyBundleId: completeLineage.strategyBundleId,
+          strategyIds: [context.strategyId],
+          note: outcome.evidence.note,
+          lineage: completeLineage,
+          recorded: true,
+        });
+        if (observation) {
+          appendFeedbackEvidenceEvents(workspaceId, projectRoot, [observation]);
+        }
+      } catch {
+        // 账本写入失败不得回滚已确认正文，也不撤销已物化信誉；下一次可重算对齐
+      }
     } else {
       // recorded=false 表示无明确信号（如 modified=false）；不计入 ingested，
       // 但也不视为 skip（这是 ingestor 的正常 tie 处理，不应污染 evidence log）

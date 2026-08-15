@@ -424,16 +424,44 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           attempts: 0,
           succeeded: false,
         };
-        try {
+        // RECOVERY-P2：外层章节重试必须透传累计 RecoveryBudget，禁止每轮重置。
+          // BG-01：同步透传累计统一预算账本 _priorBudgetLedger，禁止每轮重置。
+          // 同时当 recoveryAction=checkpoint / attempt 耗尽 / recoverable=false 时停止重试。
+          let _priorRecoveryBudget: unknown = undefined;
+          let _priorBudgetLedger: unknown = undefined;
+          try {
           while (_mtAttempt <= _mtMaxRetries) {
             const _mtInput = _mtAttempt === 0
               ? input
-              : { ...input, _modelTimeoutRetryAttempt: _mtAttempt } as any;
+              : {
+                  ...input,
+                  _modelTimeoutRetryAttempt: _mtAttempt,
+                  // 延续上一轮已消耗的章节级恢复预算与统一预算账本
+                  ...(_priorRecoveryBudget
+                    ? { _priorRecoveryBudget }
+                    : {}),
+                  ...(_priorBudgetLedger
+                    ? { _priorBudgetLedger }
+                    : {}),
+                } as any;
             _mtResult = await handlers.handleGenerateChapter(_mtInput);
             const _mtEnv = _mtResult?.failureEnvelope;
+            // 透传本轮累计预算给下一轮
+            if (_mtResult?.stageResults?.recoveryBudget) {
+              _priorRecoveryBudget = _mtResult.stageResults.recoveryBudget;
+            }
+            if (_mtResult?.stageResults?.budgetLedger) {
+              const { snapshot: _ledgerSnap, ..._ledgerRest } = _mtResult.stageResults.budgetLedger;
+              _priorBudgetLedger = _ledgerRest;
+            }
+            const _mtRecoveryAction =
+              _mtEnv?.recoveryAction ??
+              _mtResult?.stageResults?.recoveryDecision?.recoveryAction;
             const _mtShouldRetry = _mtEnv?.gate === "model_timeout"
               && _mtEnv?.recoverable === true
               && _mtEnv?.severity === "recoverable"
+              && _mtRecoveryAction !== "checkpoint"
+              && _mtRecoveryAction !== "stop"
               && _mtAttempt < _mtMaxRetries;
             if (!_mtShouldRetry) break;
             // 记录首次失败 envelope，attempts+1（即重试次数）

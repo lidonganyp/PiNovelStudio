@@ -89,6 +89,22 @@ export interface ProxyApprovalFeedbackRecord {
     backupPath?: string;
     narrativeStateRestoreRequired?: boolean;
   };
+  /**
+   * USER-FEEDBACK-EVIDENCE-PIPELINE-1：候选/策略血缘。
+   * 缺少完整血缘的代理反馈不得按 proxy_confirmed 强更新。
+   */
+  lineage?: {
+    orchestratorRunId?: string;
+    candidateId?: string;
+    strategyBundleId?: string;
+    strategyId?: string;
+    modelVersion?: string;
+    promptBundleId?: string;
+    exposureId?: string;
+    feedbackEventId?: string;
+    sourceChapter?: string;
+    deliveredSource?: "editorial" | "raw" | "fallback";
+  };
 }
 
 /** recordProxyApprovalFeedback 选项 */

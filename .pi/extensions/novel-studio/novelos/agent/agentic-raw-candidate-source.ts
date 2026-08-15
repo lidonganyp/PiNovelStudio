@@ -53,6 +53,16 @@ import {
   attachToolMetricsTracer,
   recordToolVisibility,
 } from "../trajectory/tool-metrics-tracer.js";
+import {
+  createAgentWorkPackage,
+  summarizeAgentWorkPackage,
+  type AgentWorkPackage,
+} from "../../v2/core/agent-work-package.js";
+import {
+  getDefaultAllowedResources,
+  getDefaultForbiddenResources,
+  getInputFieldWhitelist,
+} from "../../v2/core/agent-input-whitelist.js";
 
 // ============================================================================
 // 公共接口（编排器通过此接口调用，不直接依赖 NovelOS 内部）
@@ -153,6 +163,20 @@ export interface AgenticRawSourceInput {
    * 这是 "guided facade vs 9 工具" 的受控对照，非全量切换；失败即可回退到 9 专用工具。
    */
   toolMode?: NarrativeToolMode;
+  /**
+   * AUDIT-1：统一审计细事件 sink（工具授权/结果）。
+   * 由 orchestrator 从 AuditRunSession 注入；未提供时不写 AuditEvent。
+   */
+  auditSink?: import("../../v2/core/audit/audit-run-session.js").AuditEventSink;
+  /**
+   * MA：编排器透传的 run 身份（用于工作包与血缘；可选）。
+   */
+  orchestratorRunId?: string;
+  taskId?: string;
+  contextHash?: string;
+  promptBundleHash?: string;
+  constraintManifestHash?: string;
+  strategyBundleId?: string;
 }
 
 /**
@@ -241,6 +265,10 @@ export interface AgenticRawSourceResult {
     /** P0-4：覆盖状态（uncertain=启发式无法判定，恢复责任归系统） */
     coverageStatus?: "covered" | "uncertain" | "missing";
   }>;
+  /**
+   * MA：本次 Agentic 调用使用的工作包摘要（供编排器 trace；无正文）。
+   */
+  workPackageSummary?: Record<string, unknown>;
 }
 
 /**
@@ -344,6 +372,7 @@ export function createAgenticRawCandidateSource(
         retrievalPromptOverride,
         systemPromptOverride,
         toolMode,
+        auditSink,
       } = input;
 
       // ── 0b. Phase 8 Stage P eval-only fail-closed 守卫 ─────────────────
@@ -425,6 +454,8 @@ export function createAgenticRawCandidateSource(
         workspaceId,
         sessionId,
         persist: !fullPipelinePreview,
+        // P7 Stage A 双写：flush 后向审计流追加 trajectory_flushed。
+        auditSink,
       });
 
       trajectory.recordSessionStart(session);
@@ -497,6 +528,27 @@ export function createAgenticRawCandidateSource(
         }),
       );
 
+      // MA-2.3：为本次 Agentic 会话创建工作包，强制工具 action/resource 边界
+      const agentWorkPackage: AgentWorkPackage = createAgentWorkPackage({
+        taskId: input.taskId ?? `agentic:${workspaceId}:${chapterId}`,
+        orchestratorRunId:
+          input.orchestratorRunId ?? `run:agentic:${workspaceId}:${chapterId}:${sessionId}`,
+        workspaceId,
+        chapterId,
+        agentRole: "novelos_agentic",
+        sessionId,
+        objective: "NovelOS Agentic 初稿生成（不直接交付）",
+        stage: "stage1_novelosAgentic",
+        inputFieldWhitelist: getInputFieldWhitelist("novelos_agentic"),
+        allowedResources: getDefaultAllowedResources("novelos_agentic", sessionId),
+        forbiddenResources: getDefaultForbiddenResources("novelos_agentic"),
+        contextHash: input.contextHash ?? `ctx:${workspaceId}:${chapterId}`,
+        promptBundleHash: input.promptBundleHash,
+        constraintManifestHash: input.constraintManifestHash,
+        strategyBundleId: input.strategyBundleId,
+      });
+      const workPackageSummary = summarizeAgentWorkPackage(agentWorkPackage);
+
       let runtime: NovelOSRuntime;
       try {
         runtime = createNovelOSRuntime({
@@ -522,6 +574,13 @@ export function createAgenticRawCandidateSource(
           trajectory,
           kind: AGENTIC_RAW_KIND,
           timeoutMs,
+          // AUDIT-1：工具授权/结果细事件
+          auditSink,
+          // MA-2.3：工具执行前工作包强制校验
+          workPackage: agentWorkPackage,
+          autonomyTaskId: agentWorkPackage.taskId,
+          autonomyWorkspaceId: workspaceId,
+          autonomyChapterId: chapterId,
         });
       } catch (err) {
         // Runtime 创建失败 → fallback
@@ -531,16 +590,20 @@ export function createAgenticRawCandidateSource(
         const failureKind = classifyFailureKind(reason, "not_run", "runtime_init");
         trajectory.recordFailure({
           stage: "novelos_runtime_init",
-          severity: "soft",
+          // RECOVERY-P0：废止 soft；生产写 recoverable，禁止 one_shot_raw fallback
+          severity: "recoverable",
           reason: `Runtime 创建失败：${reason}`,
           recoverable: true,
-          retryPlan: "fallback to one_shot_raw",
+          retryPlan: "retry_stage_or_checkpoint",
         });
         await trajectory.flush();
-        return makeFallbackResult(
-          sessionId, trajectory.getOutputPath(), budget, "not_run",
-          `Runtime 创建失败：${reason}`, failureKind,
-        );
+        return {
+          ...makeFallbackResult(
+            sessionId, trajectory.getDetailOutputPath(), budget, "not_run",
+            `Runtime 创建失败：${reason}`, failureKind,
+          ),
+          workPackageSummary,
+        };
       }
 
       // ── 5c. Phase 0：挂载工具调用指标追踪器 ──────────────────────────
@@ -550,6 +613,7 @@ export function createAgenticRawCandidateSource(
       const unsubscribeMetrics = attachToolMetricsTracer({
         runtime,
         trajectory,
+        auditSink,
       });
 
       // ── 6. 运行 NarrativeAgentLoop ───────────────────────────────────
@@ -598,17 +662,22 @@ export function createAgenticRawCandidateSource(
         const failureKind = classifyFailureKind(reason, "model_error", "model_error");
         trajectory.recordFailure({
           stage: "novelos_agent_loop",
-          severity: "soft",
+          severity: "recoverable",
+          failureClass: "recoverable",
+          recoveryAction: "retry_stage",
           reason: `agent loop 异常：${reason}`,
           recoverable: true,
-          retryPlan: "fallback to one_shot_raw",
+          retryPlan: "retry_stage_or_checkpoint",
         });
         unsubscribeMetrics();
         await trajectory.flush();
-        return makeFallbackResult(
-          sessionId, trajectory.getOutputPath(), budget, "model_error",
-          `agent loop 异常：${reason}`, failureKind,
-        );
+        return {
+          ...makeFallbackResult(
+            sessionId, trajectory.getDetailOutputPath(), budget, "model_error",
+            `agent loop 异常：${reason}`, failureKind,
+          ),
+          workPackageSummary,
+        };
       }
 
       // Phase 0：loop 结束（无论成败）卸载工具指标追踪器，避免事件流泄漏
@@ -653,23 +722,26 @@ export function createAgenticRawCandidateSource(
               ? "must_verify_coverage_failed"
               : "empty_draft",
         );
-        return makeFallbackResult(
-          sessionId, trajectory.getOutputPath(), budget,
-          loopResult.lineage.stopReason,
-          fallbackReason,
-          fallbackKind,
-          {
-            firstAction: loopResult.lineage.firstAction,
-            actualRetrievalCalls: loopResult.lineage.actualRetrievalCalls,
-            mustVerifyCount: loopResult.lineage.evidencePlan.mustVerify.length,
-            mustVerifyCoveredCount:
-              loopResult.lineage.coverageGate?.confirmedItems.length ?? 0,
-            coverageResult: loopResult.lineage.coverageGate,
-            modelCallsByKind: loopResult.lineage.modelCallsByKind,
-            sourceRefs: loopResult.lineage.sourceRefs,
-            toolCalls: loopResult.lineage.toolCalls,
-          },
-        );
+        return {
+          ...makeFallbackResult(
+            sessionId, trajectory.getDetailOutputPath(), budget,
+            loopResult.lineage.stopReason,
+            fallbackReason,
+            fallbackKind,
+            {
+              firstAction: loopResult.lineage.firstAction,
+              actualRetrievalCalls: loopResult.lineage.actualRetrievalCalls,
+              mustVerifyCount: loopResult.lineage.evidencePlan.mustVerify.length,
+              mustVerifyCoveredCount:
+                loopResult.lineage.coverageGate?.confirmedItems.length ?? 0,
+              coverageResult: loopResult.lineage.coverageGate,
+              modelCallsByKind: loopResult.lineage.modelCallsByKind,
+              sourceRefs: loopResult.lineage.sourceRefs,
+              toolCalls: loopResult.lineage.toolCalls,
+            },
+          ),
+          workPackageSummary,
+        };
       }
 
       // 成功 → 构造 agentic_raw Candidate
@@ -702,11 +774,12 @@ export function createAgenticRawCandidateSource(
       return {
         candidate,
         sessionId,
-        trajectoryPath: trajectory.getOutputPath(),
+        trajectoryPath: trajectory.getDetailOutputPath(),
         budgetSnapshot: budget.getSnapshot(),
         stopReason: loopResult.lineage.stopReason,
         sourceRefs: loopResult.lineage.sourceRefs,
         toolCalls: loopResult.lineage.toolCalls,
+        workPackageSummary,
         // AGENTIC-EVIDENCE-MERGE-1 可观测性
         decisionMode: "agentic_inline",
         firstAction: loopResult.lineage.firstAction,

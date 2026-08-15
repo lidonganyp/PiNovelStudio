@@ -405,10 +405,15 @@ function buildReputationSnapshot(
   strategyId: string,
   rep: StrategyReputation,
 ): StrategyReputationSnapshot {
+  // USER-FEEDBACK-EVIDENCE-PIPELINE-1：
+  // sampleCount = decisionCount 累加；胜率分母用 weightedEvidenceTotal（若有），
+  // 否则回退 sampleCount，保持历史兼容。
+  const weightDenom =
+    typeof rep.weightedEvidenceTotal === "number" && rep.weightedEvidenceTotal > 0
+      ? rep.weightedEvidenceTotal
+      : rep.sampleCount;
   const winRate =
-    rep.sampleCount > 0
-      ? (rep.alpha - WEAK_PRIOR_ALPHA) / rep.sampleCount
-      : 0;
+    weightDenom > 0 ? (rep.alpha - WEAK_PRIOR_ALPHA) / weightDenom : 0;
   return {
     modelVersion,
     strategyId,

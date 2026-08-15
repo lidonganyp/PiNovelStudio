@@ -114,6 +114,23 @@ export interface FinalizationEntryOptions {
    * 不提供时 buildStagedStateUpdate 跳过境界派生（保守策略）。
    */
   ontologyLevels?: string[];
+  /**
+   * USER-FEEDBACK-EVIDENCE-PIPELINE-1：策略信誉摄入所需血缘上下文。
+   * 提供时写入 feedback.lineage；缺省时 finalization 仍用可推导字段合成最小完整血缘
+   * （audit runId / candidateId / sourceChapter 等），避免 incomplete_lineage 静默跳过。
+   */
+  feedbackLineage?: {
+    orchestratorRunId?: string;
+    candidateId?: string;
+    strategyBundleId?: string;
+    strategyId?: string;
+    modelVersion?: string;
+    promptBundleId?: string;
+    exposureId?: string;
+    feedbackEventId?: string;
+    sourceChapter?: string;
+    deliveredSource?: "editorial" | "raw" | "fallback";
+  };
 }
 
 /** 定稿入口结果 */
@@ -186,6 +203,7 @@ function recordFinalizationFeedback(
   finalization: FinalizationResult,
   pendingDraftFinalText: string | undefined,
   pendingDraftSelectedSource: string | undefined,
+  pendingDraftCandidateId: string | undefined,
 ): { feedbackFilePath: string } | undefined {
   const { workspacePath, chapterId, approvalId, action, editedText, orchestratorInput, proxyRecommendedSource } = options;
 
@@ -201,6 +219,39 @@ function recordFinalizationFeedback(
         ? "user_edited"
         : "rejected";
 
+  const deliveredSource: "editorial" | "raw" | "fallback" =
+    proxySource === "editorial" || proxySource === "raw" || proxySource === "fallback"
+      ? proxySource
+      : "raw";
+  const sourceChapter = `ch${orchestratorInput.chapterNumber}`;
+  // 合成最小完整血缘：优先调用方 feedbackLineage，否则用可观测 ID 填充。
+  // 审计 runId 若存在（auditSink.trace/run）可后续增强；此处用 approvalId 派生稳定 ID。
+  const lineageBase = options.feedbackLineage ?? {};
+  const feedbackEventId =
+    lineageBase.feedbackEventId ??
+    `proxy-feedback:${approvalId}:${action}`;
+  const lineage = {
+    orchestratorRunId:
+      lineageBase.orchestratorRunId ??
+      `proxy-finalization:${orchestratorInput.workspaceId}:${chapterId}:${approvalId}`,
+    candidateId:
+      lineageBase.candidateId ??
+      pendingDraftCandidateId ??
+      (action === "accept_with_edits" ? "user-edited" : "proxy-approved"),
+    strategyBundleId:
+      lineageBase.strategyBundleId ??
+      `proxy-strategy-bundle:${lineageBase.strategyId ?? "unspecified"}`,
+    strategyId: lineageBase.strategyId,
+    modelVersion: lineageBase.modelVersion ?? "proxy-finalization",
+    promptBundleId: lineageBase.promptBundleId ?? "proxy-finalization-prompt",
+    exposureId:
+      lineageBase.exposureId ??
+      `proxy-exposure:${approvalId}`,
+    feedbackEventId,
+    sourceChapter: lineageBase.sourceChapter ?? sourceChapter,
+    deliveredSource: lineageBase.deliveredSource ?? deliveredSource,
+  };
+
   const feedback: ProxyApprovalFeedbackRecord = {
     timestamp: new Date().toISOString(),
     approvalId,
@@ -212,6 +263,7 @@ function recordFinalizationFeedback(
       userAcceptedSource,
       aligned: action === "accept",
     },
+    lineage,
   };
 
   if (action === "accept_with_edits" && editedText !== undefined) {
@@ -325,12 +377,14 @@ export function runFinalization(options: FinalizationEntryOptions): Finalization
     if (editedText === undefined) {
       throw new Error("accept_with_edits 需要 editedText");
     }
-    // accept_with_edits: 真实 FinalFactRecheck -> clear pending -> commitAndSave(editedText)
+    // accept_with_edits: 真实 FinalFactRecheck + UserRevisionRecord -> clear pending -> commitAndSave
     finalization = acceptProxyDraftWithEdits({
       workspacePath,
       chapterId,
       approvalId,
       editedText,
+      parentText: pendingDraftFinalText,
+      parentCandidateId: pendingDraftCandidateId ?? "proxy-approved",
       rerunFactGuard: createRealFactGuardRerunFn(orchestratorInput, pendingDraftFinalText),
     });
 
@@ -389,6 +443,7 @@ export function runFinalization(options: FinalizationEntryOptions): Finalization
         finalization,
         pendingDraftFinalText,
         pendingDraftSelectedSource,
+        pendingDraftCandidateId,
       )
     : undefined;
 

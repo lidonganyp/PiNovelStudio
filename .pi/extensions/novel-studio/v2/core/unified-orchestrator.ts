@@ -877,8 +877,8 @@ export class UnifiedOrchestrator {
               inputTokens: ledgerTokens.in,
               outputTokens: ledgerTokens.out,
               latencyMs: durationMs,
-              cost: 0,
               failed: false,
+              provider: output.provider ?? expectedLock.provider,
             },
           );
           stageResults._budgetLedgerState = budgetLedgerState;
@@ -962,8 +962,8 @@ export class UnifiedOrchestrator {
               inputTokens: 0,
               outputTokens: 0,
               latencyMs: failDurationMs,
-              cost: 0,
               failed: true,
+              provider: expectedLock.provider,
             },
           );
           stageResults._budgetLedgerState = budgetLedgerState;

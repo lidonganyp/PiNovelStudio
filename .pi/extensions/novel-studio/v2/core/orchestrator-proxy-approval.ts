@@ -34,6 +34,7 @@ import {
 import {
   createChapterProxyApprovalRegistry,
 } from "../governance/chapter-proxy-approval-registry.js";
+import { computeArtifactHash } from "./autonomy-policy.js";
 
 // ============================================================================
 // 类型
@@ -253,6 +254,33 @@ export async function runProxyApprovalStage(
     shouldHardBlock,
     hardBlockReason,
   };
+
+  // RUN-LIFECYCLE-P4：pending 审批稿落盘成功后写 approval_requested
+  // （聚合 approvalState=pending / awaiting_approval；hash 绑定供 finalization 校验）
+  if (shouldSkipCommit && result.artifact.approvalId) {
+    const artifactHash = computeArtifactHash(finalText);
+    const revision = result.artifact.decidedAt ?? new Date().toISOString();
+    input.auditSink?.recordLifecycleEvent?.({
+      eventType: "approval_requested",
+      decisionReason: "proxy_approved draft pending user confirmation",
+      approvalId: result.artifact.approvalId,
+      candidateId: selectedCandidateId,
+      revision,
+      outputHash: artifactHash,
+      payload: {
+        finalStatus: result.finalStatus,
+        draftSaved: true,
+        selectedSource: "editorial",
+        artifactRevision: revision,
+        artifactHash,
+      },
+    });
+    stageResults.proxyApproval = {
+      ...(stageResults.proxyApproval as Record<string, unknown>),
+      artifactHash,
+      revision,
+    };
+  }
 
   return {
     ran: true,

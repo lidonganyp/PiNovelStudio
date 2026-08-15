@@ -21,7 +21,9 @@
  *
  * 边界（READY_LOCAL）：
  * - 闭包自包含（仅依赖 node:fs / node:path / node:crypto + governance sibling 类型）
- * - 可安全进入生产闭包（dist/）与 dist-test 闭包
+ * - P7 Stage B-Read：新增 trace-projection-reader 读侧投影依赖（纯投影叶子模块，
+ *   仅 import trace-projections + audit-event-types + node:fs/path，不拉入
+ *   orchestrator 写闭包），仍可安全进入生产闭包（dist/）与 dist-test 闭包
  */
 
 import { createHash } from "node:crypto";
@@ -29,6 +31,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ChapterProxyApprovalArtifact } from "./chapter-proxy-approval-types.js";
+// P7 Stage B-Read：投影优先读（审计流 → legacy 读视图），旧文件回退。
+// 注意：这是「读侧投影」最小依赖（纯投影叶子模块），非 orchestrator 写闭包。
+import { loadQualityTraceProjection } from "../core/audit/trace-projection-reader.js";
 
 // ============================================================================
 // 类型
@@ -139,7 +144,20 @@ export function readChapterCostStats(
     }
   }
 
-  // 2. 回退读 trace
+  // 2. 投影优先：从审计流重建 legacy 读视图（Stage B-Read），命中则按投影计算成本
+  try {
+    const projection = loadQualityTraceProjection(workspacePath, artifact.chapterId);
+    if (projection) {
+      const modelCalls = extractModelCallsFromTrace(projection);
+      if (modelCalls && modelCalls.length > 0) {
+        return computeCostStatsFromModelCalls(modelCalls);
+      }
+    }
+  } catch {
+    // 投影读失败不阻断；继续回退读旧 trace 文件
+  }
+
+  // 3. 回退读 trace
   const tracePath = join(workspacePath, "traces", `${artifact.chapterId}-quality-trace.json`);
   if (!existsSync(tracePath)) return null;
 

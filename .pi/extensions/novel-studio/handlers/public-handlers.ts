@@ -15,6 +15,13 @@ import { join } from "node:path";
 import { getProjectRoot } from "../utils/config.js";
 import { loadStrategyTraceContext } from "./strategy-feedback-trace-context.js";
 import {
+  appendPublicFeedbackLedgerObservation,
+  appendPublicFeedbackLedgerRevoke,
+  buildFeedbackEventId,
+  recomputeStrategyReputationFromLedger,
+  resolveFeedbackLineage,
+} from "./strategy-feedback-lineage.js";
+import {
   clearUnhealthyProviders,
   clearChapterTimeoutCounts,
 } from "../api/fallback-manager.js";
@@ -200,11 +207,24 @@ export async function handleGenerateChapter(input: {
       recoverable: false,
     };
     try {
+      // P7 Stage A：顶层异常也发射 failure_recorded（旧 quality-trace.json 继续写）。
+      // 顶层异常通常发生在 runUnifiedPipeline 内部会话建立之前（import 失败 / 会话创建失败），
+      // 故此处新建独立 AuditRunSession：start → 透传 sink → 终态，保证事件流完整且可审计。
+      const { createAuditRunSession } = await import("../v2/core/audit/audit-run-session.js");
+      const auditSession = createAuditRunSession({
+        projectRoot: _unifiedProjectRoot,
+        workspaceId,
+        chapterId,
+        chapterNumber,
+        persist: true,
+      });
+      auditSession.start({ topLevelException: true });
       const { createLegacyTraceAdapter } = await import("../v2/adapters/legacy-trace-adapter.js");
       const traceAdapter = createLegacyTraceAdapter({
         workspacePath: join(_unifiedProjectRoot, "workspaces"),
         workspaceId,
         chapterId,
+        auditSink: auditSession,
       });
       traceAdapter.record({
         stage: "unified_entry" as any,
@@ -218,6 +238,10 @@ export async function handleGenerateChapter(input: {
         contextHash: "top-level-exception",
       });
       traceAdapter.flush();
+      auditSession.finalizeInterrupted(
+        `unified entry exception: ${e?.message ?? e}`,
+        e
+      );
     } catch (traceErr) {
       // trace 写入失败不阻断返回（与 unified-entry 一致的容错策略）
       process.stderr.write(
@@ -420,6 +444,13 @@ export async function handleStrategyFeedback(input: {
   status?: "active" | "dormant" | "retired";
   reason?: string;
   note?: string;
+  /** USER-FEEDBACK-EVIDENCE-PIPELINE-1：可选完整血缘覆盖 / 幂等键 */
+  feedbackEventId?: string;
+  orchestratorRunId?: string;
+  candidateId?: string;
+  strategyBundleId?: string;
+  exposureId?: string;
+  promptBundleId?: string;
 }): Promise<any> {
   const projectRoot = (input as any)._projectRoot || getProjectRoot();
   const traceContext = input.chapterId
@@ -447,9 +478,161 @@ export async function handleStrategyFeedback(input: {
     "../v2/learning/user-modification-delta.js"
   );
 
+  // PROMPT-INJECTION-TRUST：公共反馈入口安全分类 + next-request-only 闸门
+  const {
+    classifyUserFeedbackTrustCategory,
+    assertFeedbackCannotBypassSecurity,
+    assertFeedbackAffectsNextRequestOnly,
+  } = await import("../v2/learning/feedback-evidence-contracts.js");
+  const { emitTrustAuditEvent } = await import("../v2/core/trust/trust-audit.js");
+  const { installTrustAuditBridge } = await import(
+    "../v2/core/trust/trust-audit-bridge.js"
+  );
+  const uninstallFeedbackTrustBridge = installTrustAuditBridge({
+    projectRoot,
+    workspaceId: input.workspaceId,
+  });
+
+  const feedbackTextForTrust =
+    input.naturalLanguageFeedback?.trim() ||
+    input.note?.trim() ||
+    input.reason?.trim() ||
+    "";
+  const feedbackTrustCategory = classifyUserFeedbackTrustCategory(
+    feedbackTextForTrust,
+    {
+      isFactCorrection: false,
+      isContextCorrection: false,
+      isWorkflowPreference: input.action === "status_override",
+    },
+  );
+  const securityGate = assertFeedbackCannotBypassSecurity(feedbackTrustCategory, []);
+  if (!securityGate.ok) {
+    emitTrustAuditEvent({
+      decisionType: "feedback_isolation",
+      allowed: false,
+      reason: securityGate.reason,
+      workspaceId: input.workspaceId,
+      chapterId: input.chapterId,
+      evidence: {
+        category: feedbackTrustCategory,
+        textPreview: feedbackTextForTrust.slice(0, 120),
+      },
+    });
+    uninstallFeedbackTrustBridge();
+    return {
+      ok: false,
+      rejected: true,
+      trustCategory: feedbackTrustCategory,
+      reason: securityGate.reason,
+      nextRequestOnly: true,
+    };
+  }
+  // 显式禁止反馈改当前正文/硬门禁（契约断言）
+  const mutationCheck = assertFeedbackAffectsNextRequestOnly([]);
+  if (!mutationCheck.ok) {
+    uninstallFeedbackTrustBridge();
+    return {
+      ok: false,
+      rejected: true,
+      reason: `反馈禁止修改：${mutationCheck.violations.join(", ")}`,
+    };
+  }
+  emitTrustAuditEvent({
+    decisionType: "feedback_isolation",
+    allowed: true,
+    reason: `反馈分类=${feedbackTrustCategory}，next-request-only`,
+    workspaceId: input.workspaceId,
+    chapterId: input.chapterId,
+    evidence: { category: feedbackTrustCategory },
+  });
+
   const store = loadStrategyPolicyStore(input.workspaceId, projectRoot);
   const ingestor = createUserFeedbackIngestor();
   let result: any;
+  type LineageAudit = {
+    complete: boolean;
+    reason: string;
+    lineage: Record<string, unknown>;
+    ledgerAppended?: number;
+    ledgerError?: string;
+  };
+  const lineageAuditState: { value: LineageAudit | null } = { value: null };
+
+  const resolveLineageForStrategy = (strategyId: string, actionLabel: string) => {
+    const feedbackEventId = buildFeedbackEventId({
+      workspaceId: input.workspaceId,
+      strategyId,
+      action: actionLabel,
+      chapterId: input.chapterId,
+      explicitId: input.feedbackEventId,
+    });
+    return resolveFeedbackLineage({
+      workspaceId: input.workspaceId,
+      strategyId,
+      modelVersion,
+      sourceChapter: sourceChapter ?? "",
+      feedbackEventId,
+      deliveredSource: input.deliveredSource ?? input.candidateSource ?? "editorial",
+      selectedStrategyIds,
+      orchestratorRunId: input.orchestratorRunId,
+      candidateId: input.candidateId,
+      strategyBundleId: input.strategyBundleId,
+      exposureId: input.exposureId,
+      promptBundleId: input.promptBundleId,
+      traceContext,
+    });
+  };
+
+  const persistLedgerFromResult = (
+    strategyId: string,
+    outcomeResult: {
+      outcome?: "win" | "loss" | "tie";
+      weight?: number;
+      decisionCount?: number;
+      recorded?: boolean;
+      evidence?: { evidenceId?: string; note?: string };
+      feedbackLevel?: string;
+      attributionConfidence?: string;
+      reason?: string;
+    },
+    lineageResolved: ReturnType<typeof resolveFeedbackLineage>,
+    nonLiterary = false,
+  ) => {
+    const evidenceId =
+      outcomeResult.evidence?.evidenceId ??
+      lineageResolved.lineage.feedbackEventId ??
+      buildFeedbackEventId({
+        workspaceId: input.workspaceId,
+        strategyId,
+        action: input.action ?? "unknown",
+        chapterId: input.chapterId,
+      });
+    const ledger = appendPublicFeedbackLedgerObservation({
+      workspaceId: input.workspaceId,
+      projectRoot,
+      strategyId,
+      modelVersion,
+      sourceChapter: sourceChapter ?? "",
+      outcome: outcomeResult.outcome ?? "tie",
+      weight: outcomeResult.weight ?? 0,
+      decisionCount: outcomeResult.decisionCount ?? 1,
+      recorded: outcomeResult.recorded === true,
+      evidenceId,
+      feedbackLevel: outcomeResult.feedbackLevel,
+      attributionConfidence: outcomeResult.attributionConfidence,
+      note: outcomeResult.evidence?.note ?? outcomeResult.reason,
+      lineage: lineageResolved.completeLineage ?? lineageResolved.lineage,
+      nonLiterary,
+    });
+    lineageAuditState.value = {
+      complete: lineageResolved.complete,
+      reason: lineageResolved.reason,
+      lineage: lineageResolved.lineage as Record<string, unknown>,
+      ledgerAppended: ledger.appended,
+      ledgerError: ledger.error,
+    };
+  };
 
   // Phase 4A：若调用方提供了 userFinalText + deliveredText，自动计算 userModificationDelta
   // 不再让 editDistance 由调用方手填（避免硬编码 null / 不一致）
@@ -494,52 +677,97 @@ export async function handleStrategyFeedback(input: {
           strategyId: compiledFeedback.strategyId,
           opportunityType,
         };
-        switch (compiledFeedback.inferredAction) {
-          case "choice":
-            // positive 情感 → 用户接受 editorial（策略生效 = win）
-            result = ingestor.ingestChoice(store, {
-              context: compileContext,
-              chosen: "editorial",
+        const lineageResolved = resolveLineageForStrategy(
+          compiledFeedback.strategyId,
+          compiledFeedback.inferredAction,
+        );
+        // 自然语言未归因 / 血缘不完整：只记 neutral，不污染文学信誉
+        if (
+          !lineageResolved.complete ||
+          compiledFeedback.inferredAction === "rating"
+        ) {
+          result = {
+            recorded: false,
+            outcome: "tie",
+            weight: 0,
+            decisionCount: 1,
+            feedbackLevel: lineageResolved.complete
+              ? "implicit_accept"
+              : "natural_language_unattributed",
+            reason: lineageResolved.complete
+              ? compiledFeedback.reason
+              : `${compiledFeedback.reason}；${lineageResolved.reason}`,
+            evidence: {
+              evidenceId: lineageResolved.lineage.feedbackEventId,
               note: compiledFeedback.reason,
-            });
-            break;
-          case "edit":
-            // negative 情感 → 用户修改 editorial（策略无效 = loss）
-            result = ingestor.ingestEdit(store, {
-              context: compileContext,
-              deliveredSource: "editorial",
-              modified: true,
-              editDistance: undefined,
-              note: compiledFeedback.reason,
-            });
-            break;
-          case "rating":
-          default:
-            // neutral 情感 → 评分 3（tie，不显著影响信誉）
-            result = ingestor.ingestRating(store, {
-              context: compileContext,
-              rating: compiledFeedback.inferredRating,
-              candidateSource: "editorial",
-              note: compiledFeedback.reason,
-            });
-            break;
+            },
+          };
+          persistLedgerFromResult(
+            compiledFeedback.strategyId,
+            result,
+            lineageResolved,
+            true,
+          );
+        } else {
+          const feedbackEventId = String(lineageResolved.lineage.feedbackEventId);
+          switch (compiledFeedback.inferredAction) {
+            case "choice":
+              result = ingestor.ingestChoice(store, {
+                context: compileContext,
+                chosen: "editorial",
+                note: compiledFeedback.reason,
+                lineage: lineageResolved.completeLineage,
+                feedbackEventId,
+              });
+              break;
+            case "edit":
+              result = ingestor.ingestEdit(store, {
+                context: compileContext,
+                deliveredSource: "editorial",
+                modified: true,
+                editDistance: undefined,
+                note: compiledFeedback.reason,
+                lineage: lineageResolved.completeLineage,
+                feedbackEventId,
+              });
+              break;
+            default:
+              result = {
+                recorded: false,
+                outcome: "tie",
+                weight: 0,
+                reason: compiledFeedback.reason,
+              };
+              break;
+          }
+          if (result) {
+            persistLedgerFromResult(
+              compiledFeedback.strategyId,
+              result,
+              lineageResolved,
+            );
+          }
+          saveStrategyPolicyStore(store, input.workspaceId, projectRoot);
         }
-        saveStrategyPolicyStore(store, input.workspaceId, projectRoot);
       }
       // P1 修复（审阅包回填）：NL feedback 路径也回填 sidecar（若 chapterId + delta 可用）
       const nlBackfill = await backfillReviewPackageIfAvailable(input, projectRoot, computedDelta);
       // action 未提供且编译器无法映射（strategyId=null）→ 只标记接收，不记录 outcome
+      uninstallFeedbackTrustBridge();
       return {
         status: "ok",
         workspaceId: input.workspaceId,
         action: compiledFeedback.inferredAction,
         strategyId: compiledFeedback.strategyId,
         modelVersion,
+        trustCategory: feedbackTrustCategory,
+        nextRequestOnly: true,
         result: result ?? { recorded: false, reason: compiledFeedback.reason },
         compiledFeedback,
         naturalLanguageFeedbackAccepted,
         userModificationDelta: computedDelta,
         reviewPackageBackfill: nlBackfill,
+        lineageAudit: lineageAuditState.value,
       };
     }
     // action 显式提供 → 走下方 switch；compiledFeedback 作为可审计证据附在返回中
@@ -563,11 +791,33 @@ export async function handleStrategyFeedback(input: {
     case "choice": {
       if (!input.chosen) throw new Error("choice 操作需要 chosen 参数");
       if (!sourceChapter) throw new Error("choice 操作需要 sourceChapter 参数（可由 chapterId 推断）");
-      result = ingestor.ingestChoice(store, {
-        context,
-        chosen: input.chosen,
-        note: input.note,
-      });
+      {
+        const lineageResolved = resolveLineageForStrategy(input.strategyId!, "choice");
+        if (!lineageResolved.complete) {
+          result = {
+            recorded: false,
+            outcome: "tie",
+            weight: 0,
+            decisionCount: 1,
+            feedbackLevel: "natural_language_unattributed",
+            reason: lineageResolved.reason,
+            evidence: {
+              evidenceId: lineageResolved.lineage.feedbackEventId,
+              note: lineageResolved.reason,
+            },
+          };
+          persistLedgerFromResult(input.strategyId!, result, lineageResolved, true);
+        } else {
+          result = ingestor.ingestChoice(store, {
+            context,
+            chosen: input.chosen,
+            note: input.note,
+            lineage: lineageResolved.completeLineage,
+            feedbackEventId: String(lineageResolved.lineage.feedbackEventId),
+          });
+          persistLedgerFromResult(input.strategyId!, result, lineageResolved);
+        }
+      }
       break;
     }
     case "edit": {
@@ -589,25 +839,78 @@ export async function handleStrategyFeedback(input: {
         modified = input.modified;
         editDistance = input.editDistance;
       }
-      result = ingestor.ingestEdit(store, {
-        context,
-        deliveredSource: input.deliveredSource,
-        modified,
-        editDistance,
-        note: editNote,
-      });
+      {
+        const lineageResolved = resolveLineageForStrategy(input.strategyId!, "edit");
+        if (!lineageResolved.complete) {
+          result = {
+            recorded: false,
+            outcome: "tie",
+            weight: 0,
+            decisionCount: 1,
+            feedbackLevel: "natural_language_unattributed",
+            reason: lineageResolved.reason,
+            evidence: {
+              evidenceId: lineageResolved.lineage.feedbackEventId,
+              note: lineageResolved.reason,
+            },
+          };
+          persistLedgerFromResult(input.strategyId!, result, lineageResolved, true);
+        } else {
+          result = ingestor.ingestEdit(store, {
+            context,
+            deliveredSource: input.deliveredSource,
+            modified,
+            editDistance,
+            note: editNote,
+            delta: computedDelta ?? undefined,
+            classification: computedDelta?.classification,
+            lineage: lineageResolved.completeLineage,
+            feedbackEventId: String(lineageResolved.lineage.feedbackEventId),
+          });
+          persistLedgerFromResult(
+            input.strategyId!,
+            result,
+            lineageResolved,
+            result?.attribution?.outcome === "neutral" &&
+              (computedDelta?.factIssue === true ||
+                computedDelta?.settingCompletion === true),
+          );
+        }
+      }
       break;
     }
     case "rating": {
       if (input.rating === undefined) throw new Error("rating 操作需要 rating 参数");
       if (!input.candidateSource) throw new Error("rating 操作需要 candidateSource 参数");
       if (!sourceChapter) throw new Error("rating 操作需要 sourceChapter 参数（可由 chapterId 推断）");
-      result = ingestor.ingestRating(store, {
-        context,
-        rating: input.rating,
-        candidateSource: input.candidateSource,
-        note: input.note,
-      });
+      {
+        const lineageResolved = resolveLineageForStrategy(input.strategyId!, "rating");
+        if (!lineageResolved.complete) {
+          result = {
+            recorded: false,
+            outcome: "tie",
+            weight: 0,
+            decisionCount: 1,
+            feedbackLevel: "natural_language_unattributed",
+            reason: lineageResolved.reason,
+            evidence: {
+              evidenceId: lineageResolved.lineage.feedbackEventId,
+              note: lineageResolved.reason,
+            },
+          };
+          persistLedgerFromResult(input.strategyId!, result, lineageResolved, true);
+        } else {
+          result = ingestor.ingestRating(store, {
+            context,
+            rating: input.rating,
+            candidateSource: input.candidateSource,
+            note: input.note,
+            lineage: lineageResolved.completeLineage,
+            feedbackEventId: String(lineageResolved.lineage.feedbackEventId),
+          });
+          persistLedgerFromResult(input.strategyId!, result, lineageResolved);
+        }
+      }
       break;
     }
     case "status_override": {
@@ -622,7 +925,37 @@ export async function handleStrategyFeedback(input: {
       break;
     }
     case "revert": {
-      result = ingestor.revertLastOutcome(store, input.strategyId!, modelVersion);
+      // 优先 evidenceId 定点撤销；兼容 revertLastOutcome
+      if (input.feedbackEventId) {
+        result = ingestor.revertOutcomeByEvidenceId(
+          store,
+          input.strategyId!,
+          modelVersion,
+          input.feedbackEventId,
+        );
+      } else {
+        result = ingestor.revertLastOutcome(store, input.strategyId!, modelVersion);
+      }
+      // P7 旧真相源清理：撤销写账本 revoke（不再只直写 strategy-policy.json）。
+      // 以实际被撤销 evidence 的 store evidenceId 为目标，与观测写入时一致；
+      // 未真正撤销（reverted=false 或 evidence 缺失）不落账本。
+      if (result?.reverted === true && result?.evidence?.evidenceId) {
+        appendPublicFeedbackLedgerRevoke({
+          workspaceId: input.workspaceId,
+          projectRoot,
+          evidenceId: result.evidence.evidenceId,
+          reason: input.reason ?? result.reason,
+        });
+        // P6：撤销后从账本统一重算被撤销策略的信誉（账本为唯一真相源，
+        // strategy-policy.json 只是可重建投影）。失败不阻断——保留 store 就地突变结果。
+        recomputeStrategyReputationFromLedger({
+          workspaceId: input.workspaceId,
+          projectRoot,
+          store,
+          strategyId: input.strategyId!,
+          modelVersion,
+        });
+      }
       break;
     }
     default:
@@ -638,18 +971,22 @@ export async function handleStrategyFeedback(input: {
   // naturalLanguageFeedbackAccepted / compiledFeedback 已在上方 P1-3 编译路径初始化
   // 显式 action 路径下，若同时提供了 naturalLanguageFeedback，compiledFeedback 作为可审计证据返回
 
+  uninstallFeedbackTrustBridge();
   return {
     status: "ok",
     workspaceId: input.workspaceId,
     action: input.action!,
     strategyId: input.strategyId!,
     modelVersion,
+    trustCategory: feedbackTrustCategory,
+    nextRequestOnly: true,
     traceContext: traceContext
       ? {
           tracePath: traceContext.tracePath,
           inferredModelVersion: !input.modelVersion,
           inferredSelectedStrategyIds: !input.selectedStrategyIds?.length,
           inferredSourceChapter: !input.sourceChapter,
+          hasCompleteLineage: lineageAuditState.value?.complete ?? false,
         }
       : null,
     result,
@@ -659,6 +996,8 @@ export async function handleStrategyFeedback(input: {
     reviewPackageBackfill: backfillResult,
     /** Phase 4D（P1-3）：自然语言反馈接收状态与编译结果（可审计） */
     naturalLanguageFeedbackAccepted,
+    /** USER-FEEDBACK-EVIDENCE-PIPELINE-1：血缘与 ledger 审计 */
+    lineageAudit: lineageAuditState.value,
     ...(compiledFeedback ? { compiledFeedback } : {}),
   };
 }

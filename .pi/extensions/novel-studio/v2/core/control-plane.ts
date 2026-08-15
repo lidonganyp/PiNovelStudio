@@ -2,9 +2,19 @@
  * CONTROL-PLANE-1 — 统一主链路任务包与能力策略。
  *
  * 控制平面只负责边界、授权、模型锁和审计，不参与正文或文学判断。
+ *
+ * 职责分离（计划 20260812-2）：
+ * - CapabilityPolicy / ExecutionCapabilityPolicy：编排器或系统是否具备执行能力
+ * - ModelAutonomyPolicy（autonomy-policy.ts）：模型是否可自主请求/触发动作
+ * 禁止用 CapabilityPolicy 单独表达模型自主性。
  */
 
 import { createHash } from "node:crypto";
+import type {
+  ActorType,
+  AutonomyLevel,
+  ControlDecisionRecord,
+} from "./control-types.js";
 
 export type CapabilityName =
   | "network.model_call"
@@ -17,6 +27,12 @@ export type CapabilityName =
   | "artifact.export";
 
 export type CapabilityMode = "allow" | "deny" | "authorized_once";
+
+/**
+ * 执行能力策略别名：明确表达“编排器/系统执行授权”，
+ * 与模型自主性策略（ModelAutonomyPolicy）分离。
+ */
+export type ExecutionCapabilityPolicy = CapabilityPolicy;
 
 export interface ModelLock {
   route: string;
@@ -71,6 +87,14 @@ export interface CapabilityDecisionTrace {
   allowed: boolean;
   consumed: boolean;
   timestamp: string;
+  /** P6：可选 actor（默认 orchestrator 执行侧） */
+  actor?: ActorType;
+  /** P6：可选自主性等级 */
+  requestedLevel?: AutonomyLevel;
+  effectiveLevel?: AutonomyLevel;
+  action?: string;
+  blockReason?: string;
+  traceId?: string;
 }
 
 export interface CapabilityPolicyInput {
@@ -104,7 +128,18 @@ export class CapabilityPolicy {
     this.reasons = { ...input.reasons };
   }
 
-  authorize(capability: CapabilityName, reason: string): CapabilityAuthorization {
+  authorize(
+    capability: CapabilityName,
+    reason: string,
+    meta?: {
+      actor?: ActorType;
+      requestedLevel?: AutonomyLevel;
+      effectiveLevel?: AutonomyLevel;
+      action?: string;
+      blockReason?: string;
+      traceId?: string;
+    },
+  ): CapabilityAuthorization {
     const mode = this.modes[capability] ?? "deny";
     const alreadyConsumed = this.consumedOnce.has(capability);
     const allowed = mode === "allow" || (mode === "authorized_once" && !alreadyConsumed);
@@ -112,18 +147,34 @@ export class CapabilityPolicy {
     if (mode === "authorized_once" && allowed) {
       this.consumedOnce.add(capability);
     }
+    const actor = meta?.actor ?? "orchestrator";
+    // 硬规则：模型 actor 永远不能获得 state.commit / chapter.save
+    const modelForbidden =
+      actor === "model" &&
+      (capability === "state.commit" || capability === "chapter.save");
+    const finalAllowed = modelForbidden ? false : allowed;
     const trace: CapabilityDecisionTrace = {
       capability,
-      mode,
+      mode: modelForbidden ? "deny" : mode,
       source: this.source,
       scope: this.scope,
-      reason: this.reasons[capability] ?? reason,
-      allowed,
-      consumed,
+      reason: modelForbidden
+        ? `模型禁止执行能力：${capability}`
+        : (this.reasons[capability] ?? reason),
+      allowed: finalAllowed,
+      consumed: modelForbidden ? false : consumed,
       timestamp: new Date().toISOString(),
+      actor,
+      requestedLevel: meta?.requestedLevel,
+      effectiveLevel: meta?.effectiveLevel,
+      action: meta?.action,
+      blockReason: modelForbidden
+        ? "actor_forbidden"
+        : meta?.blockReason,
+      traceId: meta?.traceId,
     };
     this.decisions.push(trace);
-    return { allowed, consumed, trace };
+    return { allowed: finalAllowed, consumed: trace.consumed, trace };
   }
 
   summary(): Record<string, unknown> {
@@ -294,3 +345,15 @@ function stableStringify(value: unknown): string {
   }
   return JSON.stringify(value);
 }
+
+// 再导出控制协议类型，便于单点 import
+export type {
+  ActorType,
+  AutonomyLevel,
+  ControlDecisionRecord,
+} from "./control-types.js";
+export {
+  AUTONOMY_LEVEL_RANK,
+  MODEL_FORBIDDEN_ACTIONS,
+  MODEL_MAX_AUTONOMY_LEVEL,
+} from "./control-types.js";

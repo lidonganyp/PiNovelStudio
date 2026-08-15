@@ -56,6 +56,102 @@ import {
   type ModelGenerateFn,
   type ModelGenerateInput,
 } from "../adapters/legacy-model-route-adapter.js";
+// AUDIT-1：统一事件契约 + Phase 3 最小主链路会话（run_started/终止/failure_recorded）。
+import {
+  AuditEventStore,
+  createAuditEvent,
+  createAuditRunSession,
+  validateAuditEvent,
+  diagnoseTraceCompleteness,
+  computeContentHash,
+  createEventId,
+  createRunId,
+  createTraceId,
+} from "./audit/index.js";
+import { productionFailureToAuditEvent } from "./failure-envelope.js";
+import type { AuditEventRecorder } from "./audit/audit-event-recorder.js";
+// RUN-LIFECYCLE-P1：统一 RunAggregate 契约进入生产闭包（经 unified-entry 编译入口）
+import {
+  createEmptyRunAggregate,
+  reduceRunAggregate,
+  replayRunAggregate,
+  assertWorkflowTransition,
+  canWorkflowTransition,
+  assertArtifactBinding,
+  RUN_AGGREGATE_SCHEMA_VERSION,
+  RUN_ERROR_CODES,
+  toRecoveryLifecycleState,
+  fromRecoveryLifecycleState,
+  createRunAggregateRepository,
+  rebuildRunAggregateFromEvents,
+  loadMaterializedRunAggregate,
+  saveMaterializedRunAggregate,
+  assertAggregateMatchesReplay,
+  projectCurrentRunState,
+  projectCheckpointIndex,
+  projectApprovalPending,
+  projectTransitionHistory,
+  writeRunProjections,
+  rebuildProjectionsFromAggregate,
+  revokeEvidence,
+  revokeEvidenceWithLearningRecompute,
+  listActiveEvidenceIds,
+  isEvidenceActive,
+  startCompensationRun,
+  assertParentRunNotRetreated,
+} from "./run/index.js";
+export {
+  AuditEventStore,
+  createAuditEvent,
+  createAuditRunSession,
+  validateAuditEvent,
+  diagnoseTraceCompleteness,
+  computeContentHash,
+  createEventId,
+  createRunId,
+  createTraceId,
+  productionFailureToAuditEvent,
+  createEmptyRunAggregate,
+  reduceRunAggregate,
+  replayRunAggregate,
+  assertWorkflowTransition,
+  canWorkflowTransition,
+  assertArtifactBinding,
+  RUN_AGGREGATE_SCHEMA_VERSION,
+  RUN_ERROR_CODES,
+  toRecoveryLifecycleState,
+  fromRecoveryLifecycleState,
+  createRunAggregateRepository,
+  rebuildRunAggregateFromEvents,
+  loadMaterializedRunAggregate,
+  saveMaterializedRunAggregate,
+  assertAggregateMatchesReplay,
+  projectCurrentRunState,
+  projectCheckpointIndex,
+  projectApprovalPending,
+  projectTransitionHistory,
+  writeRunProjections,
+  rebuildProjectionsFromAggregate,
+  revokeEvidence,
+  revokeEvidenceWithLearningRecompute,
+  listActiveEvidenceIds,
+  isEvidenceActive,
+  startCompensationRun,
+  assertParentRunNotRetreated,
+};
+export type { AuditEvent } from "./audit/index.js";
+export type {
+  RunAggregate,
+  WorkflowState,
+  ApprovalState,
+  CommitIntent,
+  ArtifactBinding,
+  RunAggregateRepository,
+  CurrentRunStateProjection,
+  CheckpointIndexProjection,
+  ApprovalPendingProjection,
+  TransitionHistoryEntry,
+} from "./run/index.js";
 import {
   createLegacyTraceAdapter,
   deriveContextHashFromCompiled,
@@ -83,6 +179,79 @@ import {
   type CapabilityName,
   type TrustedControlPlane,
 } from "./control-plane.js";
+import {
+  resolveRunRouting,
+  fingerprintRunRouting,
+  type RunRoutingContext,
+} from "./run-routing-context.js";
+// WP-01..07：治理模块纳入生产闭包（供 trace/测试/审计脚本复用，无行为旁路）
+export {
+  resolveRunRouting,
+  assertModelCallMatchesLock,
+  assertModelCallMatchesLockOrThrow,
+  fingerprintRunRouting,
+  toGenerationModelLock,
+  toJudgeModelLock,
+} from "./run-routing-context.js";
+export type { RunRoutingContext, WriterModelChoice } from "./run-routing-context.js";
+export {
+  classifyRoute,
+  listRouteCatalog,
+  validateRouteCatalog,
+  assertCallerAllowed,
+  assertProductionCallerIsolation,
+  modelVersionIsolationKey,
+  isSameModelVersionBucket,
+} from "./route-catalog.js";
+export type { RouteClass, RouteMetadata } from "./route-catalog.js";
+export {
+  createLayeredBudget,
+  reserveLayeredBudget,
+  settleLayeredBudget,
+  snapshotLayeredBudget,
+  canAffordModelCall,
+  computeChapterCostBreakdown,
+  DEFAULT_LAYERED_BUDGET,
+} from "./layered-budget.js";
+export type { LayeredBudget, BudgetStage, BudgetType } from "./layered-budget.js";
+export {
+  FAILURE_STRATEGY_MATRIX,
+  getFailureStrategyRule,
+  classifyFailureType,
+  decideFailureStrategy,
+  assertNoCrossModelDisguise,
+  appendAttemptHistory,
+} from "./failure-strategy-matrix.js";
+export type { FailureType, FailureStrategyDecision } from "./failure-strategy-matrix.js";
+export {
+  computeLatencyStats,
+  estimateCallCost,
+  buildCostReport,
+  buildRoutingStabilityReport,
+  buildLongTailReport,
+  projectModelCallEntry,
+  assertAllCallsHaveTraceCost,
+} from "./model-call-observability.js";
+export type { ObservableModelCall, LatencyStats, CostReport } from "./model-call-observability.js";
+export {
+  computeJointQualityCostScore,
+  aggregateQualityCostObservations,
+  evaluateCostReductionGuard,
+  assertSingleModelVersionBucket,
+} from "./quality-cost-metrics.js";
+export type { QualityCostObservation, QualityCostAggregate } from "./quality-cost-metrics.js";
+export {
+  createRoutingGovernanceState,
+  reserveForModelCall,
+  settleModelCall,
+  recordFailureStrategy,
+  buildGovernanceReports,
+  attachGovernanceReports,
+} from "./routing-governance-runtime.js";
+export type {
+  RoutingGovernanceState,
+  GovernanceReports,
+} from "./routing-governance-runtime.js";
 import { compileContextSafety, createConstraintManifest } from "./context-safety.js";
 // EVOLUTION-RELEASE-GOVERNANCE-G6：生产入口发行治理门禁
 // 真相源：docs/evolution-release-governance-development-plan.md §Phase G6
@@ -751,6 +920,24 @@ export function buildJudgeEvidence(jr: ArbitratorResult): JudgeEvidenceTrace {
  * - projectGain：editorial 胜出=positive（amplified 超越 baseline）；raw=neutral（基线交付）。
  *   统一主链路不交付劣于 raw 的正文，故无 negative。
  */
+/**
+ * 测试/审计用：导出与生产相同的 trace record 构建逻辑，
+ * 供治理字段 quality-trace 持久化验收（不改变生产调用路径）。
+ */
+export function buildTraceRecordsFromOrchResultForTest(
+  orchResult: UnifiedOrchestratorOutput,
+  contextHash: string,
+  releaseGovernance?: V2TraceRecord["releaseGovernance"],
+  bundleInfo?: { bundleId: string; hashDimensions: string[] },
+): V2TraceRecord[] {
+  return buildTraceRecordsFromOrchResult(
+    orchResult,
+    contextHash,
+    releaseGovernance,
+    bundleInfo,
+  );
+}
+
 function buildTraceRecordsFromOrchResult(
   orchResult: UnifiedOrchestratorOutput,
   contextHash: string,
@@ -867,7 +1054,19 @@ function buildTraceRecordsFromOrchResult(
       rejectedRepairs: [],
     };
     const authorStyleStrategySelection = orchResult.stageResults.authorStyleStrategySelection as
-      | { modelVersion?: unknown; selectedStrategyIds?: unknown }
+      | {
+          modelVersion?: unknown;
+          selectedStrategyIds?: unknown;
+          strategyBundleId?: unknown;
+          orchestratorRunId?: unknown;
+          exposureId?: unknown;
+          promptBundleId?: unknown;
+          candidateId?: unknown;
+          deliveredSource?: unknown;
+          sourceChapter?: unknown;
+          opportunityType?: unknown;
+          exposureSnapshot?: unknown;
+        }
       | undefined;
     const strategyModelVersion = typeof authorStyleStrategySelection?.modelVersion === "string"
       ? authorStyleStrategySelection.modelVersion
@@ -879,6 +1078,11 @@ function buildTraceRecordsFromOrchResult(
           (value): value is string => typeof value === "string" && value.length > 0,
         )
       : [];
+    const asString = (value: unknown): string | undefined =>
+      typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+    const sourceChapter =
+      asString(authorStyleStrategySelection?.sourceChapter) ??
+      (/^ch/i.test(orchResult.chapterId) ? orchResult.chapterId : `ch${orchResult.chapterId}`);
     records.push({
       stage: "final_selected",
       timestamp: now,
@@ -890,15 +1094,34 @@ function buildTraceRecordsFromOrchResult(
       modelBudget: orchResult.stageResults.modelBudget as
         | { soft: number; hard: number; used: number; capped: boolean }
         | undefined,
+      // MODEL-ROUTING-GOVERNANCE：成功路径持久化完整治理报告（quality-trace 可验收）
+      routingGovernance: orchResult.stageResults.routingGovernance,
+      layeredBudget: orchResult.stageResults.layeredBudget,
+      modelCallObservability: orchResult.stageResults.modelCallObservability,
+      qualityCostAnalysis: orchResult.stageResults.qualityCostAnalysis,
+      failureStrategyDecision: orchResult.stageResults.failureStrategyDecision,
+      failureStrategyTrace: orchResult.stageResults.failureStrategyTrace,
       ...(strategyModelVersion
         ? {
             strategyContext: {
               modelVersion: strategyModelVersion,
               selectedStrategyIds,
-              sourceChapter: /^ch/i.test(orchResult.chapterId)
-                ? orchResult.chapterId
-                : `ch${orchResult.chapterId}`,
-              opportunityType: "author_style" as const,
+              sourceChapter,
+              opportunityType:
+                asString(authorStyleStrategySelection?.opportunityType) ?? "author_style",
+              // USER-FEEDBACK-EVIDENCE-PIPELINE-1：完整 StrategyExposure 字段落盘
+              strategyBundleId: asString(authorStyleStrategySelection?.strategyBundleId),
+              orchestratorRunId: asString(authorStyleStrategySelection?.orchestratorRunId),
+              exposureId: asString(authorStyleStrategySelection?.exposureId),
+              promptBundleId: asString(authorStyleStrategySelection?.promptBundleId),
+              candidateId: asString(authorStyleStrategySelection?.candidateId),
+              deliveredSource:
+                authorStyleStrategySelection?.deliveredSource === "raw" ||
+                authorStyleStrategySelection?.deliveredSource === "fallback" ||
+                authorStyleStrategySelection?.deliveredSource === "editorial"
+                  ? authorStyleStrategySelection.deliveredSource
+                  : "editorial",
+              exposureSnapshot: authorStyleStrategySelection?.exposureSnapshot,
             },
           }
         : {}),
@@ -918,10 +1141,22 @@ function buildTraceRecordsFromOrchResult(
     // P1 修复（第三轮）：映射 UnifiedFailureEnvelope → FailureEnvelope，保留 gate/severity/retryPlan/userActionRequired。
     // UnifiedFailureEnvelope.severity 用 "hard"|"fatal"，FailureEnvelope 用 "hard_block"；
     // 映射时 "hard"/"fatal" → "hard_block"，"preflight"/"recoverable" 保持不变。
+    // RECOVERY-P0：生产真相源优先 failureClass；severity/hard_block 仅边界兼容
+    const failureClass =
+      (fe as { failureClass?: string }).failureClass ??
+      (fe.severity === "preflight"
+        ? "preflight"
+        : fe.severity === "recoverable"
+          ? "recoverable"
+          : fe.severity === "fatal"
+            ? "fatal"
+            : "blocked");
     const mappedSeverity: FailureEnvelope["severity"] =
-      fe.severity === "preflight" ? "preflight"
-      : fe.severity === "recoverable" ? "recoverable"
-      : "hard_block";
+      failureClass === "preflight"
+        ? "preflight"
+        : failureClass === "recoverable"
+          ? "recoverable"
+          : "hard_block";
     const mappedEnvelope: FailureEnvelope = {
       stage: fe.stage,
       gate: fe.gate ?? fe.stage,
@@ -931,9 +1166,13 @@ function buildTraceRecordsFromOrchResult(
       // 用 reason + blockCategory + candidateDisposition 作为结构化证据。
       evidence: {
         reason: fe.reason,
+        failureClass,
+        recoveryAction: (fe as { recoveryAction?: string }).recoveryAction ?? null,
         blockCategory: fe.blockCategory ?? null,
         candidateDisposition: fe.candidateDisposition ?? null,
         stageResults: orchResult.stageResults,
+        recoveryDecision: orchResult.stageResults?.recoveryDecision ?? null,
+        recoveryCheckpoint: orchResult.stageResults?.recoveryCheckpoint ?? null,
       },
       recoverable: fe.recoverable,
       retryPlan: fe.retryPlan as FailureEnvelope["retryPlan"],
@@ -956,6 +1195,13 @@ function buildTraceRecordsFromOrchResult(
       modelBudget: orchResult.stageResults.modelBudget as
         | { soft: number; hard: number; used: number; capped: boolean }
         | undefined,
+      // MODEL-ROUTING-GOVERNANCE：blocked 路径除 evidence.stageResults 外，顶层也落盘治理报告
+      routingGovernance: orchResult.stageResults.routingGovernance,
+      layeredBudget: orchResult.stageResults.layeredBudget,
+      modelCallObservability: orchResult.stageResults.modelCallObservability,
+      qualityCostAnalysis: orchResult.stageResults.qualityCostAnalysis,
+      failureStrategyDecision: orchResult.stageResults.failureStrategyDecision,
+      failureStrategyTrace: orchResult.stageResults.failureStrategyTrace,
       releaseGovernance,
     });
   }
@@ -1013,7 +1259,10 @@ interface PersistUnifiedTraceInput {
     workspacePath: string;
     workspaceId: string;
     chapterId: string;
+    auditSink?: AuditEventRecorder;
   }) => V2TraceAdapter;
+  /** P7 Stage A 双写：透传给 adapter 的审计事件追加口。 */
+  auditSink?: AuditEventRecorder;
 }
 
 /**
@@ -1032,6 +1281,7 @@ export function persistUnifiedTraceWithFallback(
       workspacePath: join(input.projectRoot, "workspaces"),
       workspaceId: input.workspaceId,
       chapterId: input.chapterId,
+      auditSink: input.auditSink,
     });
     for (const record of input.traceRecords) adapter.record(record);
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1096,6 +1346,7 @@ function persistEarlyBlockedTrace(
   failureEnvelope: Partial<FailureEnvelope> & { stage: string; reason: string; recoverable: boolean },
   releaseGovernance?: V2TraceRecord["releaseGovernance"],
   fullPipelinePreview?: boolean,
+  auditSink?: AuditEventRecorder,
 ): string | null {
   if (fullPipelinePreview) return null;
   try {
@@ -1103,6 +1354,7 @@ function persistEarlyBlockedTrace(
       workspacePath: join(projectRoot, "workspaces"),
       workspaceId,
       chapterId,
+      auditSink,
     });
     const now = new Date().toISOString();
     // P1 修复（第三轮）：使用 failureEnvelope.stage（如 "story_preservation"）作为 trace record 的 stage，
@@ -1398,10 +1650,34 @@ export async function runUnifiedPipeline(
       onUpdate,
     });
     // Eval 模式不写 trace / 不保存策略信誉库 / 不提交状态（编排器 evalMode 已跳过 commitAndSave）
+    // Eval 也不写 AuditEventStore（评估隔离；生产事实链从下方非 eval 路径开始）。
     return mapOrchResultToV2Output(
       evalOrchResult, workspaceId, chapterId, chapterNumber, [], []
     );
   }
+
+  // ── AUDIT-1 Phase 3 最小切片：run 生命周期 + failure_recorded ──────────
+  // fullPipelinePreview 仅内存（不落盘），正式生产 persist=true → events.jsonl。
+  // 所有生产返回经 seal() 保证 run_started + 终止事件；未捕获异常写 run_interrupted。
+  const auditSession = createAuditRunSession({
+    projectRoot,
+    workspaceId,
+    chapterId,
+    chapterNumber,
+    persist: !effectiveFullPipelinePreview,
+  });
+  const seal = <T extends V2Output>(output: T): T => auditSession.attachToOutput(output);
+
+  try {
+  auditSession.start({
+    fullPipelinePreview: effectiveFullPipelinePreview,
+    modelTestRoute: modelTestRoute ?? null,
+    writerModel: writerModel ?? null,
+  });
+
+  // TrustAudit 并发隔离：整条生产主路径绑定本 run 的 ALS 上下文，
+  // 防止单进程并发生成时 trust 事件串写到其它 run 的 events.jsonl。
+  return await auditSession.runInTrustContextAsync(async () => {
 
   // ── G6: 生产入口发行治理门禁（计划 §Phase G6） ──────────────────────
   // 在 ContextCompiler 之前执行：未审批 release / fingerprint 不匹配 / 无 active pointer
@@ -1420,6 +1696,9 @@ export async function runUnifiedPipeline(
     environmentFingerprint: releaseGateResult.ok ? releaseGateResult.environmentFingerprint : null,
     approvalRef: releaseGateResult.ok ? releaseGateResult.approvalRef : null,
     canaryEvidenceRunId: releaseGateResult.ok ? releaseGateResult.canaryEvidenceRunId : null,
+    // DG-3：release 行为身份（bundleId / modelVersion / 组件 hash）写入生产 trace，
+    // 满足计划 §5 DG-3 验收「生产 trace 100% 含 releaseId/bundleId/modelVersion 及关键组件 hash」。
+    behaviorIdentity: releaseGateResult.ok ? releaseGateResult.behaviorIdentity : null,
   };
   if (!releaseGateResult.ok) {
     // P2 修复（Phase 1 整改）：release gate 阻断也写 trace，使早期阻断可审计。
@@ -1431,8 +1710,9 @@ export async function runUnifiedPipeline(
       releaseGateResult.failureEnvelope,
       releaseGovernanceTrace,
       effectiveFullPipelinePreview,
+      auditSession,
     );
-    return {
+    return seal({
       status: "blocked",
       workspaceId,
       chapterId,
@@ -1449,7 +1729,7 @@ export async function runUnifiedPipeline(
           reason: releaseGateResult.failureEnvelope.reason,
         },
       },
-    };
+    });
   }
 
   // ── Phase 2A：完整 Preflight 接入（计划 §2A） ──────────────────────────
@@ -1491,8 +1771,9 @@ export async function runUnifiedPipeline(
       },
       releaseGovernanceTrace,
       effectiveFullPipelinePreview,
+      auditSession,
     );
-    return {
+    return seal({
       status: "blocked",
       workspaceId,
       chapterId,
@@ -1528,22 +1809,30 @@ export async function runUnifiedPipeline(
       selectedSource: null,
       selectedCandidateId: "",
       isUnderSpecified: false,
-    };
+    });
   }
 
   const useStub = process.env.V2_FORCE_STUB === "1";
   const testRouteLock = resolveModelTestRouteLock(modelTestRoute);
   const writerRouteLock = testRouteLock ? null : resolveWriterModelRouteLock(writerModel);
+  // WP-01：任务级路由一次解析并冻结（与 writer/test lock 对齐，不另建第二套路由）。
+  const runRouting: RunRoutingContext = resolveRunRouting({
+    writerModel: writerModel === "claude" || writerModel === "gemini31" ? writerModel : undefined,
+    modelTestRoute: modelTestRoute ? String(modelTestRoute) : undefined,
+    budgetProfile: testRouteLock ? "eval_lab" : effectiveFullPipelinePreview ? "preview" : "production_default",
+    caller: "novel_generate_chapter",
+  });
+  void fingerprintRunRouting(runRouting);
   const generationModelLock = testRouteLock
     ? { route: testRouteLock.generateRoute, provider: testRouteLock.provider, model: testRouteLock.model }
     : writerRouteLock
       ? { route: writerRouteLock.rawRoute, provider: writerRouteLock.provider, model: writerRouteLock.model }
-    : { route: "runtime", provider: "runtime", model: "runtime" };
+    : { ...runRouting.generationLock };
   const judgeModelLock = testRouteLock
     ? { route: testRouteLock.judgeRoute, provider: "gpt", model: "gpt-5.6-sol" }
     : writerRouteLock
       ? { route: writerRouteLock.judgeRoute, provider: "gpt", model: "gpt-5.6-sol" }
-    : { route: "runtime", provider: "runtime", model: "runtime" };
+    : { ...runRouting.judgeLock };
   const controlPlane = buildTrustedControlPlane({
     taskId: `NOVEL-GENERATE:${workspaceId}:${chapterId}`,
     objective: `通过统一主链路生成 ${chapterId}`,
@@ -1558,7 +1847,7 @@ export async function runUnifiedPipeline(
     generationLock: generationModelLock,
     judgeLock: judgeModelLock,
     modelTransport: useStub ? "stub" : "network",
-    enforceModelLocks: testRouteLock !== null || writerRouteLock !== null,
+    enforceModelLocks: true,
   });
   const stateReadDecision = controlPlane.policy.authorize(
     "state.read",
@@ -1569,14 +1858,14 @@ export async function runUnifiedPipeline(
     persistEarlyBlockedTrace(
       projectRoot, workspaceId, chapterId,
       { stage: "control_plane_state_read", gate: "capability_denied", severity: "hard_block", reason: "capability denied: state.read (workspace context read denied)", evidence: { capability: "state.read", denial: stateReadDecision }, recoverable: false },
-      releaseGovernanceTrace, effectiveFullPipelinePreview,
+      releaseGovernanceTrace, effectiveFullPipelinePreview, auditSession,
     );
-    return buildEntryControlPlaneBlockedOutput(
+    return seal(buildEntryControlPlaneBlockedOutput(
       input,
       controlPlane,
       "state.read",
       "workspace context read denied",
-    );
+    ));
   }
 
   // ── 1. ContextCompiler：加载 workspace + 编译 context ──────────────────
@@ -1603,9 +1892,9 @@ export async function runUnifiedPipeline(
     persistEarlyBlockedTrace(
       projectRoot, workspaceId, chapterId,
       { stage: "context_compiler", gate: "context_load", severity: "hard_block", reason: `ContextCompiler 异常：${msg}`, evidence: { error: msg }, recoverable: false },
-      releaseGovernanceTrace, effectiveFullPipelinePreview,
+      releaseGovernanceTrace, effectiveFullPipelinePreview, auditSession,
     );
-    return {
+    return seal({
       status: "blocked",
       workspaceId, chapterId, chapterNumber,
       text: "",
@@ -1625,7 +1914,7 @@ export async function runUnifiedPipeline(
       selectedSource: null,
       selectedCandidateId: "",
       isUnderSpecified: false,
-    };
+    });
   }
   const context = compiled.context;
   const seed = compiled.sourceSeed;
@@ -1809,14 +2098,14 @@ export async function runUnifiedPipeline(
     persistEarlyBlockedTrace(
       projectRoot, workspaceId, chapterId,
       { stage: "control_plane_state_stage", gate: "capability_denied", severity: "hard_block", reason: "capability denied: state.stage (narrative state staging denied)", evidence: { capability: "state.stage", denial: stateStageDecision }, recoverable: false },
-      releaseGovernanceTrace, effectiveFullPipelinePreview,
+      releaseGovernanceTrace, effectiveFullPipelinePreview, auditSession,
     );
-    return buildEntryControlPlaneBlockedOutput(
+    return seal(buildEntryControlPlaneBlockedOutput(
       input,
       controlPlane,
       "state.stage",
       "narrative state staging denied",
-    );
+    ));
   }
   const ontologyLevels = loadOntologyLevels(workspaceId, projectRoot);
   const stagedStateUpdate = buildStagedStateUpdate(seed, chapterNumber, ontologyLevels);
@@ -1847,6 +2136,8 @@ export async function runUnifiedPipeline(
     projectRoot,
     productionFlow,
     toolMode,
+    // AUDIT-1 Phase 3 续：模型回合 + 工具细事件写入同一 AuditEventStore
+    auditSink: auditSession,
     intent: contextSafety.workingIntent,
     context: contextSafety.workingContext,
     constitution: context.constitution ?? null,
@@ -1874,6 +2165,7 @@ export async function runUnifiedPipeline(
     outcomeRecorder,
     agenticCandidateSource,
     controlPlane,
+    runRouting,
     contextSafety,
     sceneSolution,
     craftGenes,
@@ -1961,9 +2253,33 @@ export async function runUnifiedPipeline(
       workspaceId,
       chapterId,
       traceRecords,
+      auditSink: auditSession,
     });
     tracePath = tracePersistence.path;
     orchResult.stageResults.tracePersistence = tracePersistence;
+    // P7 Stage A 双写：quality-trace.json 落盘后向审计流追加 trace_persisted。
+    // causedByEventId 回溯到最近 final_submission（缺失则 chapter_saved → run_started）。
+    {
+      const auditEntries = auditSession.getEntries();
+      const causedByEventId =
+        [...auditEntries].reverse().find((e) => e.eventType === "final_submission")?.eventId ??
+        [...auditEntries].reverse().find((e) => e.eventType === "chapter_saved")?.eventId ??
+        auditEntries.find((e) => e.eventType === "run_started")?.eventId;
+      auditSession.recordEvent({
+        eventType: "custom",
+        eventId: `tracePersisted:${auditSession.runId}:${chapterId}`,
+        stage: "final_submission",
+        status: tracePersistence.status === "failed" ? "failed" : "completed",
+        decisionReason: `trace persisted (status=${tracePersistence.status})`,
+        causedByEventId,
+        payload: {
+          eventTypeHint: "trace_persisted",
+          status: tracePersistence.status,
+          path: tracePersistence.path ?? null,
+          primaryAttempts: tracePersistence.primaryAttempts,
+        },
+      });
+    }
     if (tracePersistence.status === "fallback") {
       orchResult.warnings.push(`主 trace 写入失败，已保存备用归档：${tracePersistence.path}`);
     } else if (tracePersistence.status === "failed") {
@@ -2017,7 +2333,7 @@ export async function runUnifiedPipeline(
   };
 
   if (orchResult.status === "blocked") {
-    return {
+    return seal({
       status: "blocked",
       workspaceId,
       chapterId,
@@ -2032,10 +2348,10 @@ export async function runUnifiedPipeline(
       selectedCandidateId: orchResult.selectedCandidateId,
       // INTENT-COMPLETENESS-1：透传 under-specified 标记。
       isUnderSpecified: orchResult.isUnderSpecified,
-    };
+    });
   }
 
-  return {
+  return seal({
     status: "ok",
     workspaceId,
     chapterId,
@@ -2049,5 +2365,48 @@ export async function runUnifiedPipeline(
     selectedCandidateId: orchResult.selectedCandidateId,
     // INTENT-COMPLETENESS-1：透传 under-specified 标记。
     isUnderSpecified: orchResult.isUnderSpecified,
-  };
+  });
+  }); // runInTrustContextAsync — TrustAudit 并发隔离
+  } catch (pipelineErr) {
+    // 未捕获异常：写 run_interrupted + failure_recorded，再结构化返回（不静默）
+    const msg = pipelineErr instanceof Error ? pipelineErr.message : String(pipelineErr);
+    try {
+      auditSession.finalizeInterrupted(`pipeline exception: ${msg}`, pipelineErr);
+    } catch {
+      // audit 写入失败不掩盖原始异常
+    }
+    const summary = auditSession.toStageResultsSummary();
+    return {
+      status: "blocked",
+      workspaceId,
+      chapterId,
+      chapterNumber,
+      text: "",
+      candidates: [],
+      diagnostics: [],
+      failureEnvelope: {
+        stage: "run",
+        gate: "pipeline_exception",
+        severity: "fatal",
+        reason: msg,
+        evidence: {
+          error: pipelineErr instanceof Error
+            ? { message: pipelineErr.message, name: pipelineErr.name }
+            : String(pipelineErr),
+        },
+        recoverable: false,
+        degradedTo: "hard_block",
+        failureClass: "fatal",
+      },
+      stageResults: {
+        unifiedPipeline: true,
+        pipelineException: true,
+        auditRun: summary,
+      },
+      isPreviewRun: effectiveFullPipelinePreview,
+      selectedSource: null,
+      selectedCandidateId: "",
+      isUnderSpecified: false,
+    };
+  }
 }

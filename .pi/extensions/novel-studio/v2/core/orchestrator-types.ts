@@ -24,6 +24,7 @@ import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-
 import type { NarrativeToolMode } from "../../novelos/agent/evidence-plan.js";
 import type { ContextSafetyResult } from "./context-safety.js";
 import type { TrustedControlPlane } from "./control-plane.js";
+import type { RunRoutingContext } from "./run-routing-context.js";
 import type { SceneSolutionCard } from "./scene-solution-search.js";
 import type { PortableCraftGene } from "./portable-craft-gene.js";
 import type { PromptPatternResolution } from "./prompt-pattern-library.js";
@@ -98,6 +99,19 @@ export interface ModelCallEntry {
   promptProfile?: WriterPromptProfile;
   /** raw prompt 实际消费的身份/章卡字段，供共源审计。 */
   consumedFields?: string[];
+  /** WP-05：运行 ID / 阶段 / 预算类型等可观测字段 */
+  runId?: string;
+  stage?: string;
+  modelVersion?: string;
+  promptBundleHash?: string;
+  contextHash?: string;
+  temperature?: number;
+  timeout?: number;
+  waitMs?: number;
+  retryIndex?: number;
+  budgetType?: "normal" | "recovery";
+  failureType?: string;
+  cost?: number;
 }
 
 export interface UnifiedOrchestratorInput {
@@ -106,6 +120,41 @@ export interface UnifiedOrchestratorInput {
   chapterNumber: number;
   /** 正式生产流程：NovelOS Agentic 初稿 → 作者风格整章优化 → 用户评价。 */
   productionFlow?: "agentic_style";
+  /**
+   * RECOVERY-P2：章节级恢复预算覆盖（测试/调优）。
+   * 未提供时使用 DEFAULT_RECOVERY_BUDGET。
+   */
+  recoveryBudgetOverrides?: {
+    maxStageAttempts?: number;
+    maxTotalAttempts?: number;
+    maxModelCalls?: number;
+    maxRecoveryModelCalls?: number;
+    maxLatencyMs?: number;
+  };
+  /**
+   * RECOVERY-P2：外层章节重试透传的累计恢复预算（内部字段）。
+   * 由 register-tools model_timeout 重试环写入；禁止每轮重置。
+   */
+  _priorRecoveryBudget?: {
+    maxStageAttempts: number;
+    maxTotalAttempts: number;
+    maxModelCalls: number;
+    maxRecoveryModelCalls: number;
+    maxLatencyMs: number;
+    usedStageAttempts: number;
+    usedTotalAttempts: number;
+    usedModelCalls: number;
+    usedRecoveryModelCalls: number;
+    usedLatencyMs: number;
+  };
+  /** 工具层 model_timeout 重试序号（0=首次，1=第一次重试…） */
+  _modelTimeoutRetryAttempt?: number;
+  /**
+   * BG-01：外层章节重试透传的累计统一预算账本（内部字段）。
+   * 由 register-tools model_timeout 重试环从 stageResults.budgetLedger 回填；
+   * 未提供时每轮 orchestrate 新建账本。
+   */
+  _priorBudgetLedger?: import("./budget-types.js").BudgetLedger;
   /**
    * @deprecated 历史短路径开关（FactGuard 后直接返回 raw）。被 fullPipelinePreview 取代，
    * 保留为向后兼容别名：入口处 normalize 为 fullPipelinePreview（同一行为）。
@@ -277,6 +326,11 @@ export interface UnifiedOrchestratorInput {
   judgeModelGenerate?: ModelGenerateFn;
   /** 由可信入口构建的控制平面；公开工具入参不暴露此字段。 */
   controlPlane?: TrustedControlPlane;
+  /**
+   * WP-01：任务级路由运行锁。一次运行开始时解析并冻结；
+   * wrapModelFn 每次调用前 assertModelCallMatchesLock。
+   */
+  runRouting?: RunRoutingContext;
   contextSafety?: ContextSafetyResult;
   /** 随机种子（judge 匿名化，可复现） */
   seed?: number;
@@ -407,6 +461,12 @@ export interface UnifiedOrchestratorInput {
    * 签名为 (event: unknown) => void 与 V2Input.onUpdate 一致；实际 event 为 ProgressEvent。
    */
   onUpdate?: (event: unknown) => void;
+  /**
+   * AUDIT-1 Phase 3 续：细事件写入 sink（模型回合 / 工具授权结果）。
+   * 由 runUnifiedPipeline 注入 AuditRunSession；未提供时不写细事件（向后兼容）。
+   * 写失败不得抛到生成主路径。
+   */
+  auditSink?: import("./audit/audit-run-session.js").AuditEventSink;
 }
 
 /**
@@ -489,17 +549,24 @@ export interface UnifiedOrchestratorOutput {
 export interface UnifiedFailureEnvelope {
   stage: string;
   /**
-   * 阻断严重程度。
-   * - preflight：生成前预检失败（缺配置/角色档案/风格档案等），不可自动恢复。
-   * - recoverable：模型随机失败（超时/空结果），可由工具层同阶段重试一次；重试耗尽转 hard。
-   * - hard：内容/事实/故事保持类阻断，不可自动恢复，需系统重试或用户介入。
-   * - fatal：raw 生成阶段不可恢复失败。
-   *
-   * P1 修复（Phase 1 整改）：新增 "recoverable"，使工具层 model_timeout 重试条件可达。
-   * 原先 severity 仅 preflight|hard|fatal，导致 register-tools.ts 的
-   * `severity === "recoverable"` 检查永不命中，超时被误判为不可恢复。
+   * 阻断严重程度（兼容工具层重试条件）。
+   * 生产真相源是 failureClass（五类）；severity 由 failureClass 派生。
+   * - preflight：生成前预检失败
+   * - recoverable：可自动有界重试
+   * - hard：blocked 的兼容映射（废止 hard 作为生产分类）
+   * - fatal：致命失败
    */
   severity: "preflight" | "recoverable" | "hard" | "fatal";
+  /**
+   * 统一失败分类（生产唯一真相：preflight|recoverable|interrupted|blocked|fatal）。
+   * 新生产 trace 必须写入；旧 trace 经 mapLegacyFailureClass 只读映射。
+   */
+  failureClass?:
+    | "preflight"
+    | "recoverable"
+    | "interrupted"
+    | "blocked"
+    | "fatal";
   /**
    * 门禁标识（与 craft/failure-envelope.ts 的 gate 同义）。
    * 工具层 register-tools.ts 用 `gate === "model_timeout"` 判断是否同阶段重试。
@@ -509,7 +576,36 @@ export interface UnifiedFailureEnvelope {
   gate?: string;
   reason: string;
   recoverable: boolean;
-  /** raw 失败 -> hard_block（无 legacy 回退） */
+  /** 恢复动作（系统裁决，非模型请求） */
+  recoveryAction?:
+    | "user_fix"
+    | "retry_gate"
+    | "retry_stage"
+    | "resume_checkpoint"
+    | "regenerate_candidate"
+    | "checkpoint"
+    | "rollback"
+    | "stop";
+  /** 当前尝试序号（0-based） */
+  attempt?: number;
+  /** 最大尝试次数 */
+  maxAttempts?: number;
+  /** 章节级恢复预算快照 */
+  chapterBudgetUsed?: Record<string, unknown>;
+  /** 已完成工作（resume 不重复） */
+  completedWork?: string[];
+  /** 下一步（人类可读） */
+  nextStep?: string;
+  /** 审计 traceId */
+  traceId?: string;
+  /**
+   * AUDIT-1：与 AuditEvent 因果链对齐（Phase 1）。
+   * eventId 标识本失败事件；parent/causedBy 用于重试与中断归因。
+   */
+  eventId?: string;
+  parentEventId?: string | null;
+  causedByEventId?: string | null;
+  /** raw 失败 -> hard_block（无 legacy 回退；字段名历史兼容） */
   degradedTo: "hard_block";
   /** 阻断候选只能作为审计证据，不是可交付正文。 */
   candidateDisposition?: "blocked_evidence_only";
@@ -531,7 +627,8 @@ export interface UnifiedFailureEnvelope {
     strategy:
       | "revise_inputs_and_retry_same_chapter"
       | "retry_gate"
-      | "chapter_level_retry";
+      | "chapter_level_retry"
+      | "terminal_block_no_retry";
     maxAttempts: number;
   };
   /**
@@ -592,4 +689,6 @@ export interface ControlPlaneTrace {
     generation: Record<string, unknown>;
     judge: Record<string, unknown>;
   };
+  /** P6：统一控制决策记录（capability + autonomy） */
+  controlDecisions?: unknown[];
 }

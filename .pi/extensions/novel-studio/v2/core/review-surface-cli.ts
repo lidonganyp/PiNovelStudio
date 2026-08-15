@@ -31,6 +31,7 @@ import {
   type EligibleSampleRegistryResult,
   type AnonymousHumanVerdict,
 } from "./eligible-sample-registry.js";
+import { sanitizeReviewSurfaceText } from "./trust/review-surface-safety.js";
 
 // BLOCKED-CANDIDATE-EVIDENCE-CLI-ADOPTION-1：接入 blocked-candidate-evidence/v1 只读渲染。
 // import 类型用于本地函数签名（renderBlockedCandidateEvidence 入参）；
@@ -839,6 +840,16 @@ export function redactSecrets(text: string): { redacted: string; log: string[] }
   if (thinkPattern.test(redacted)) {
     redacted = redacted.replace(thinkPattern, "[REDACTED:internal-reasoning]");
     log.push("redacted internal-reasoning (<think> block)");
+  }
+
+  // 4. PROMPT-INJECTION-TRUST-ARCHITECTURE-1：统一信任脱敏层二次扫描
+  // （password/private key/敏感路径等），与 review-surface-safety 对齐
+  const extra = sanitizeReviewSurfaceText(redacted);
+  if (extra.redacted.length > 0) {
+    redacted = extra.text;
+    for (const label of extra.redacted) {
+      log.push(`redacted trust-layer:${label}`);
+    }
   }
 
   return { redacted, log };

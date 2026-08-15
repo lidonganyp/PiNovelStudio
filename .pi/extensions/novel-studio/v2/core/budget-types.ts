@@ -3,16 +3,19 @@
  *
  * budget-ledger.ts 的类型契约层：硬/软预算、必经阶段保留、恢复预算、
  * 预约（reservation）、用量（usage）、成本快照与决策记录。
- * 取代 layered-budget.ts + recovery-budget.ts 的分散类型定义。
+ * 目标取代 layered-budget.ts + recovery-budget.ts 的分散类型定义；
+ * 生产尚未收敛为单一权威（见 docs/project-memory.md BUDGET-LEDGER）。
  */
 
-/** 必经阶段标识（与 mandatoryReserve 键一一对应） */
+/** 必经阶段标识（mandatoryReserve 五键 + 辅助阶段） */
 export type BudgetStage =
   | "agenticDraft"
   | "styleOptimization"
   | "storyPreservation"
   | "finalFactRecheck"
-  | "completeness";
+  | "completeness"
+  | "agenticVerification"
+  | "other";
 
 /** 预算类别：normal 常规 / recovery 恢复 / mandatory 必经保留 */
 export type BudgetType = "normal" | "recovery" | "mandatory";
@@ -88,13 +91,17 @@ export interface BudgetUsage {
   failedCalls: number;
 }
 
-/** 成本快照（阶段结算时追加） */
+/** 成本快照（阶段结算时追加；货币字段按结算时价格表版本解释） */
 export interface BudgetCostSnapshot {
   timestamp: number;
   stage: BudgetStage;
   cost: number;
+  actualCost: number;
+  overage: number;
+  unitPriceScheduleVersion: string;
   tokensInput: number;
   tokensOutput: number;
+  provider?: string;
 }
 
 /** 账本决策记录（预约创建 / 结算） */
@@ -116,6 +123,7 @@ export interface BudgetLedger {
   mandatoryReserve: MandatoryReserve;
   optionalExploration: number;
   recoveryReserve: RecoveryReserve;
+  unitPriceScheduleVersion: string;
   reservations: Record<string, BudgetReservation>;
   usage: BudgetUsage;
   costSnapshots: BudgetCostSnapshot[];

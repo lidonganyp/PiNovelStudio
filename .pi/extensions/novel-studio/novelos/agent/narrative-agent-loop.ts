@@ -200,7 +200,9 @@ export class NarrativeAgentLoop {
         await this.trajectory.flush();
         coverageGateResult = this.coverageGate.checkAndBlock({
           evidencePlan: plan,
-          trajectoryPath: this.trajectory.getOutputPath(),
+          // P7 Stage D：coverage gate 读完整轨迹明细（projection 下在内容库），
+          // 旧 trajectory.jsonl 已收敛为摘要投影缓存，不再承载 ranked_evidence 明细。
+          trajectoryPath: this.trajectory.getDetailOutputPath(),
           inviolableFacts: input.inviolableFacts ?? [],
           contextCoveredFacts: this.collectContextCoveredFacts(input),
         });
@@ -243,10 +245,12 @@ export class NarrativeAgentLoop {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.trajectory.recordFailure({
         stage: "novelos_draft_generation",
-        severity: "soft",
+        severity: "recoverable",
+        failureClass: "recoverable",
+        recoveryAction: "retry_stage",
         reason: `模型调用失败：${errMsg}`,
         recoverable: true,
-        retryPlan: "fallback to one_shot_raw",
+        retryPlan: "retry_stage_or_checkpoint",
       });
       // AGENTIC-EVIDENCE-MERGE-1 修复：把底层错误消息传入 lineage.failureReason，
       // 让 agentic-raw-candidate-source.ts 的 classifyFailureKind 能识别超时模式
@@ -276,10 +280,12 @@ export class NarrativeAgentLoop {
     if (turns.draftText.trim().length === 0) {
       this.trajectory.recordFailure({
         stage: "novelos_draft_generation",
-        severity: "soft",
+        severity: "recoverable",
+        failureClass: "recoverable",
+        recoveryAction: "retry_stage",
         reason: "模型未返回有效 draft 文本",
         recoverable: true,
-        retryPlan: "fallback to one_shot_raw",
+        retryPlan: "retry_stage_or_checkpoint",
       });
       return this.makeFallback(
         plan,
@@ -335,7 +341,9 @@ export class NarrativeAgentLoop {
         const errMsg = err instanceof Error ? err.message : String(err);
         this.trajectory.recordFailure({
           stage: "novelos_verify_patch",
-          severity: "soft",
+          severity: "recoverable",
+          failureClass: "recoverable",
+          recoveryAction: "retry_gate",
           reason: `verify/patch 失败，保留原 draft：${errMsg}`,
           recoverable: true,
           retryPlan: "保留最后已接受候选，verifierCleared=false",
@@ -679,7 +687,9 @@ export class NarrativeAgentLoop {
         const errMsg = err instanceof Error ? err.message : String(err);
         this.trajectory.recordFailure({
           stage: "novelos_patch_generation",
-          severity: "soft",
+          severity: "recoverable",
+          failureClass: "recoverable",
+          recoveryAction: "retry_gate",
           reason: `patch 生成失败：${errMsg}`,
           recoverable: true,
           retryPlan: "保留原 draft，verifierCleared=false",
@@ -931,10 +941,12 @@ export class NarrativeAgentLoop {
     this.candidateWorkspace.saveLineage(lineage);
     this.trajectory.recordFailure({
       stage: "novelos_agent_loop",
-      severity: "soft",
+      severity: "recoverable",
+      failureClass: "recoverable",
+      recoveryAction: "retry_stage",
       reason: `agent loop fallback: ${stopReason}`,
       recoverable: true,
-      retryPlan: "fallback to one_shot_raw",
+      retryPlan: "retry_stage_or_checkpoint",
     });
     return {
       text: "",

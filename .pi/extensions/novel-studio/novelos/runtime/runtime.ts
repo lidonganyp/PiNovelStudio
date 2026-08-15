@@ -22,6 +22,12 @@ import { createNovelOSAgent } from "../adapters/pi-agent-core-adapter.js";
 import type { BudgetPolicy, BudgetSnapshot } from "./budget-policy.js";
 import type { NovelSession } from "../session/novel-session.js";
 import type { TrajectoryStore, TrajectoryFailureEnvelope } from "../trajectory/trajectory-store.js";
+import {
+  createModelAutonomyPolicy,
+  type ModelAutonomyPolicy,
+} from "../../v2/core/autonomy-policy.js";
+import type { AgentWorkPackage } from "../../v2/core/agent-work-package.js";
+import { evaluateToolCallAgainstWorkPackage } from "../../v2/core/agent-work-package-tool-gate.js";
 
 // ============================================================================
 // 常量
@@ -94,6 +100,29 @@ export interface NovelOSRuntimeOptions {
   afterToolCall?: AgentOptions["afterToolCall"];
   /** 模型调用超时 ms */
   timeoutMs?: number;
+  /**
+   * AUTONOMY-P1：模型自主性策略（工具执行前双重守护）。
+   * 未提供时使用默认 ModelAutonomyPolicy（模型禁止 commit 级动作）。
+   * 传入 null 可显式关闭（仅测试）。
+   */
+  autonomyPolicy?: ModelAutonomyPolicy | null;
+  /** 自主性审计用 taskId；默认 session.sessionId 或 "novelos-runtime" */
+  autonomyTaskId?: string;
+  /** 自主性审计用 workspaceId；默认 session.workspaceId 或 "unknown" */
+  autonomyWorkspaceId?: string;
+  /** 自主性审计用 chapterId */
+  autonomyChapterId?: string;
+  /**
+   * MA-2.3 / MA-3.2：代理工作包（工具执行前 scope/action 强制校验）。
+   * 提供时 beforeToolCall 在自主性策略之后、自定义 hook 之前执行工作包门闩。
+   * 未提供时行为不变（仅 autonomy + 检索预算）。
+   */
+  workPackage?: AgentWorkPackage | null;
+  /**
+   * AUDIT-1：统一审计细事件 sink。
+   * 工具 authorize/deny 在 beforeToolCall 写入；结果由 tool-metrics-tracer 写入。
+   */
+  auditSink?: import("../../v2/core/audit/audit-run-session.js").AuditEventSink;
 }
 
 /** NovelOS Runtime 实例 */
@@ -106,8 +135,15 @@ export interface NovelOSRuntime {
   prompt(text: string): Promise<void>;
   /** 等待运行结束 */
   waitForIdle(): Promise<void>;
-  /** bounded stop */
-  abort(): Promise<void>;
+  /**
+   * bounded stop。
+   * RECOVERY-P5：记录 interrupted failure envelope；不自动提交、不自动 resume。
+   */
+  abort(reason?: string): Promise<void>;
+  /** 是否已被中断（abort 后为 true） */
+  isInterrupted(): boolean;
+  /** 最近一次中断原因 */
+  getInterruptReason(): string | null;
   /** 订阅事件流（与内部 trajectory/budget 订阅并行） */
   subscribe(listener: (event: AgentEvent) => void): () => void;
   /** 预算快照 */
@@ -144,7 +180,29 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
     beforeToolCall: customBeforeToolCall,
     afterToolCall: customAfterToolCall,
     timeoutMs,
+    autonomyPolicy: autonomyPolicyOption,
+    autonomyTaskId,
+    autonomyWorkspaceId,
+    autonomyChapterId,
+    workPackage,
   } = options;
+
+  // AUTONOMY-P1：默认启用模型自主性策略；显式 null 关闭（仅测试）
+  const autonomyPolicy =
+    autonomyPolicyOption === null
+      ? null
+      : (autonomyPolicyOption ?? createModelAutonomyPolicy());
+  const autonomyTask =
+    autonomyTaskId ??
+    (session as { sessionId?: string }).sessionId ??
+    "novelos-runtime";
+  const autonomyWorkspace =
+    autonomyWorkspaceId ??
+    (session as { workspaceId?: string }).workspaceId ??
+    "unknown";
+  const autonomyChapter =
+    autonomyChapterId ??
+    (session as { chapterId?: string }).chapterId;
 
   // Phase 2D 缺口三执行：统计已计划的检索类工具调用次数，达到 retrievalBudget 时
   // 用 beforeToolCall 阻断后续检索调用（不终止 loop），让"检索深度 → 工具调用次数"
@@ -178,32 +236,202 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
     return undefined;
   };
 
-  // 构造默认 beforeToolCall：检索预算用尽时阻断检索工具执行（发出阻断工具结果，
-  // 提示模型停止检索并生成正文）；非检索工具或预算未用尽时放行。
-  const beforeToolCall: AgentOptions["beforeToolCall"] = customBeforeToolCall
-    ? async (ctx, signal) => {
-        const customResult = await customBeforeToolCall(ctx, signal);
-        if (customResult?.block) return customResult;
-        return handleRetrieval(ctx);
+  // AUTONOMY-P1：模型工具调用前自主性守护（state.commit / chapter.save 等永久拒绝）
+  const handleAutonomy = (
+    ctx: { toolCall: { name?: string } },
+  ): { block?: boolean; reason?: string } | undefined => {
+    if (!autonomyPolicy) return undefined;
+    const toolName = ctx.toolCall.name ?? "";
+    const decision = autonomyPolicy.authorizeToolCall({
+      toolName,
+      taskId: autonomyTask,
+      workspaceId: autonomyWorkspace,
+      chapterId: autonomyChapter,
+    });
+    if (!decision.allowed) {
+      return {
+        block: true,
+        reason:
+          `自主性策略阻断工具 "${toolName}"：${decision.reason}` +
+          (decision.blockReason ? ` [${decision.blockReason}]` : ""),
+      };
+    }
+    return undefined;
+  };
+
+  // MA-2.3：工作包动作/资源范围强制校验
+  const handleWorkPackage = (
+    ctx: { toolCall: { name?: string; arguments?: unknown; args?: unknown } },
+  ): { block?: boolean; reason?: string } | undefined => {
+    if (!workPackage) return undefined;
+    const toolName = ctx.toolCall.name ?? "";
+    const toolArgs =
+      (ctx.toolCall as { arguments?: unknown }).arguments ??
+      (ctx.toolCall as { args?: unknown }).args;
+    const gate = evaluateToolCallAgainstWorkPackage({
+      workPackage,
+      toolName,
+      toolArgs,
+    });
+    if (!gate.allowed) {
+      return {
+        block: true,
+        reason:
+          `工作包阻断工具 "${toolName}"：${gate.reason ?? "out_of_scope"}` +
+          (gate.code ? ` [${gate.code}]` : ""),
+      };
+    }
+    return undefined;
+  };
+
+  const auditSink = options.auditSink;
+
+  // 构造默认 beforeToolCall：
+  // 1) 模型自主性守护（commit 级工具永久拒绝）
+  // 2) 工作包 scope/action 强制校验（MA-2.3）
+  // 3) 自定义 hook
+  // 4) 检索预算用尽时阻断检索工具
+  // 5) AUDIT-1：授权/拒绝细事件（requested + authorized/denied）
+  const beforeToolCall: AgentOptions["beforeToolCall"] = async (ctx, signal) => {
+    const toolName = ctx.toolCall.name ?? "";
+    const toolCallId =
+      (ctx.toolCall as { id?: string; toolCallId?: string }).id ??
+      (ctx.toolCall as { id?: string; toolCallId?: string }).toolCallId ??
+      `tool-${toolName}-${Date.now().toString(36)}`;
+
+    auditSink?.recordToolEvent({
+      eventType: "tool_call_requested",
+      toolCallId,
+      toolName,
+      capability: "retrieval",
+    });
+
+    const autonomyResult = handleAutonomy(ctx);
+    if (autonomyResult?.block) {
+      auditSink?.recordToolEvent({
+        eventType: "tool_call_denied",
+        toolCallId,
+        toolName,
+        capability: "governance",
+        decisionReason: autonomyResult.reason,
+      });
+      return autonomyResult;
+    }
+
+    const workPackageResult = handleWorkPackage(ctx);
+    if (workPackageResult?.block) {
+      auditSink?.recordToolEvent({
+        eventType: "tool_call_denied",
+        toolCallId,
+        toolName,
+        capability: "governance",
+        decisionReason: workPackageResult.reason,
+      });
+      return workPackageResult;
+    }
+
+    if (customBeforeToolCall) {
+      const customResult = await customBeforeToolCall(ctx, signal);
+      if (customResult?.block) {
+        auditSink?.recordToolEvent({
+          eventType: "tool_call_denied",
+          toolCallId,
+          toolName,
+          decisionReason: customResult.reason,
+        });
+        return customResult;
       }
-    : async (ctx) => handleRetrieval(ctx);
+    }
+    const retrievalResult = handleRetrieval(ctx);
+    if (retrievalResult?.block) {
+      auditSink?.recordToolEvent({
+        eventType: "tool_call_denied",
+        toolCallId,
+        toolName,
+        capability: "retrieval",
+        decisionReason: retrievalResult.reason,
+      });
+      return retrievalResult;
+    }
+
+    auditSink?.recordToolEvent({
+      eventType: "tool_call_authorized",
+      toolCallId,
+      toolName,
+      capability: "retrieval",
+      decisionReason: "authorized by runtime policy",
+    });
+    return undefined;
+  };
 
   // 构造默认 afterToolCall：仅在整体预算耗尽时返回 { terminate: true } 停止 loop。
   // 检索预算由 beforeToolCall 阻断处理，不再通过 terminate 终止（避免吞掉最终正文回合）。
-  const afterToolCall: AgentOptions["afterToolCall"] = customAfterToolCall
-    ? async (ctx, signal) => {
-        const customResult = await customAfterToolCall(ctx, signal);
-        if (budget.isExhausted()) {
-          return { ...(customResult ?? {}), terminate: true };
-        }
-        return customResult;
-      }
-    : async (_ctx, _signal) => {
-        if (budget.isExhausted()) {
-          return { terminate: true };
-        }
-        return undefined;
+  const afterToolCall: AgentOptions["afterToolCall"] = async (ctx, signal) => {
+    // PROMPT-INJECTION-TRUST：工具结果默认 reference，记录消费意图（资料）
+    // 硬路径（canon/hard_gate）由编排器侧 consumeToolResult 再强制检查
+    try {
+      const { consumeToolResult } = await import(
+        "../../v2/core/trust/tool-result-consumer.js"
+      );
+      const toolName = (ctx as { toolCall?: { name?: string } }).toolCall?.name ?? "unknown";
+      const toolCallId =
+        (ctx as { toolCall?: { id?: string; toolCallId?: string } }).toolCall?.id ??
+        (ctx as { toolCall?: { id?: string; toolCallId?: string } }).toolCall?.toolCallId ??
+        `after-${toolName}`;
+      const result = (ctx as {
+        result?: {
+          content?: Array<{ type?: string; text?: string }>;
+          details?: Record<string, unknown>;
+        };
+      }).result;
+      const text =
+        result?.content?.find((c) => c.type === "text")?.text ??
+        (typeof result === "object" && result && "text" in (result as object)
+          ? String((result as { text?: string }).text ?? "")
+          : "");
+      const details = (result?.details ?? {}) as {
+        sourceRef?: string;
+        evidenceLevel?: string;
+        [key: string]: unknown;
       };
+      const decision = consumeToolResult({
+        toolName,
+        callId: toolCallId,
+        text,
+        details,
+        purpose: "reference_material",
+      });
+      auditSink?.recordToolEvent({
+        eventType: "tool_result_received",
+        toolCallId,
+        toolName,
+        capability: "retrieval",
+        decisionReason: decision.reason,
+        evidenceLevel: "observed",
+        payload: {
+          contentTrust: decision.trusted.contentTrust,
+          canAffectHardGate: decision.trusted.canAffectHardGate,
+          consumePurpose: "reference_material",
+          consumeAllowed: decision.allowed,
+          contentHash: decision.trusted.contentHash,
+        },
+      });
+    } catch {
+      // 消费闸门失败不阻断工具 loop；硬路径另有 fail-closed
+    }
+
+    if (customAfterToolCall) {
+      const customResult = await customAfterToolCall(ctx, signal);
+      if (budget.isExhausted()) {
+        return { ...(customResult ?? {}), terminate: true };
+      }
+      return customResult;
+    }
+    if (budget.isExhausted()) {
+      return { terminate: true };
+    }
+    return undefined;
+  };
 
   const agent = createNovelOSAgent({
     systemPrompt,
@@ -247,6 +475,10 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
     }
   });
 
+  // RECOVERY-P5：中断状态（abort 后禁止自动继续提交）
+  let interrupted = false;
+  let interruptReason: string | null = null;
+
   const runtime: NovelOSRuntime = {
     session,
     agent,
@@ -254,14 +486,28 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
     trajectory,
 
     async prompt(text: string): Promise<void> {
+      if (interrupted) {
+        trajectory.recordFailure({
+          stage: "novelos_prompt",
+          severity: "interrupted",
+          failureClass: "interrupted",
+          recoveryAction: "checkpoint",
+          reason: `runtime interrupted: ${interruptReason ?? "abort"}；拒绝继续 prompt`,
+          recoverable: false,
+          retryPlan: "explicit_resume_required",
+        });
+        return;
+      }
       if (budget.isExhausted()) {
         const snapshot = budget.getSnapshot();
         const envelope: TrajectoryFailureEnvelope = {
           stage: "novelos_prompt",
-          severity: "soft",
+          severity: "recoverable",
+          failureClass: "recoverable",
+          recoveryAction: "checkpoint",
           reason: `budget exhausted: ${snapshot.exhaustedReason ?? "unknown"}`,
           recoverable: true,
-          retryPlan: "fallback to one_shot_raw",
+          retryPlan: "checkpoint_or_blocked",
         };
         trajectory.recordFailure(envelope);
         return;
@@ -279,8 +525,27 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
       return agent.waitForIdle();
     },
 
-    async abort(): Promise<void> {
+    async abort(reason?: string): Promise<void> {
+      interrupted = true;
+      interruptReason = reason ?? "user_abort";
+      trajectory.recordFailure({
+        stage: "novelos_runtime_abort",
+        severity: "interrupted",
+        failureClass: "interrupted",
+        recoveryAction: "checkpoint",
+        reason: `runtime abort: ${interruptReason}`,
+        recoverable: false,
+        retryPlan: "explicit_resume_required",
+      });
       await agent.abort();
+    },
+
+    isInterrupted(): boolean {
+      return interrupted;
+    },
+
+    getInterruptReason(): string | null {
+      return interruptReason;
     },
 
     subscribe(listener: (event: AgentEvent) => void): () => void {

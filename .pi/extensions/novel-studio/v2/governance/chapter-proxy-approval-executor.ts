@@ -264,6 +264,9 @@ export async function executeChapterProxyApproval(
         selectedSource: recommendedSource,
         finalText: options.draftCheckpoint.finalText,
         savedAt: artifact.decidedAt,
+        revision: artifact.decidedAt,
+        // artifactHash 由 saveProxyApprovedDraft 从 finalText 计算；
+        // 与 RunAggregate / approval_requested 事件绑定同一 revision 语义
         ...(options.draftCheckpoint.stagedStateUpdate
           ? { stagedStateUpdate: options.draftCheckpoint.stagedStateUpdate }
           : {}),

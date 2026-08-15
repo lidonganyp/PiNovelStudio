@@ -19,6 +19,7 @@
 
 import type { StrategyPolicyStore, StrategyReputation } from "./strategy-policy-store.js";
 import type { EditorialStrategyDef } from "../core/editorial-strategy-registry.js";
+import { buildStrategyBundleId } from "./feedback-evidence-contracts.js";
 
 // ============================================================================
 // 常量
@@ -43,6 +44,16 @@ export interface StrategySelection {
   samples: StrategySample[];
   /** 未选原因（供可解释性） */
   notes: string[];
+  /**
+   * 实际暴露快照（USER-FEEDBACK-EVIDENCE-PIPELINE-1）。
+   * 记录真实被选中的策略集合与 bundle，供 trace / 反馈归因使用。
+   * 注意：这是选择快照，不是采样全部结果。
+   */
+  exposureSnapshot: {
+    strategyIds: string[];
+    strategyBundleId: string;
+    selectedCount: number;
+  };
 }
 
 export interface StrategySample {
@@ -166,7 +177,19 @@ export class ContextualStrategySelector {
       );
     }
 
-    return { selected, staticFallback, samples, notes };
+    // 实际暴露：优先 selected；若 selected 为空且存在 staticFallback，记录 fallback 暴露
+    // （调用方可能仍按静态 registry 生成候选）。反馈归因应使用真实交付后的 exposure。
+    const exposedIds =
+      selected.length > 0
+        ? selected.map((s) => s.strategyId)
+        : [];
+    const exposureSnapshot = {
+      strategyIds: exposedIds,
+      strategyBundleId: buildStrategyBundleId(exposedIds),
+      selectedCount: exposedIds.length,
+    };
+
+    return { selected, staticFallback, samples, notes, exposureSnapshot };
   }
 }
 

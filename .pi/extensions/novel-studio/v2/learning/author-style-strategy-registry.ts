@@ -94,6 +94,15 @@ export interface AuthorStyleStrategySelection {
   }>;
   /** 未选原因（供可解释性） */
   notes: string[];
+  /**
+   * USER-FEEDBACK-EVIDENCE-PIPELINE-1：实际暴露快照。
+   * 供 orchestrator/trace/反馈归因使用；不是全部采样结果。
+   */
+  exposureSnapshot: {
+    strategyIds: string[];
+    strategyBundleId: string;
+    selectedCount: number;
+  };
 }
 
 // ============================================================================
@@ -215,6 +224,7 @@ export function selectAuthorStyleStrategies(input: {
     staticFallback: staticFallbackAuthorStyle,
     samples: selection.samples,
     notes: selection.notes,
+    exposureSnapshot: selection.exposureSnapshot,
   };
 }
 
