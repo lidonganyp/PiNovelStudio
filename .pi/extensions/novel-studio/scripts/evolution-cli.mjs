@@ -65,6 +65,15 @@ import {
   evaluateCanaryPromotionGate,
   verifyCanaryResultArtifacts,
 } from "../dist-test/v2/governance/canary-promotion-gate.js";
+// EVAL-REPLAY-ACCEPTANCE-LOOP P6：离线回放证据门禁 + fixture 冻结采集。
+// eval-evidence-gate 只读不写、绝不修改 production pointer；
+// fixture capture 只读源 workspace，唯一输出是显式指定的 fixture 归档目录。
+import {
+  evaluateEvalEvidenceGate,
+  writeEvalPendingReviewReport,
+  resolveEvalEvidenceEnforcement,
+} from "../dist-test/v2/governance/eval-evidence-gate.js";
+import { captureEvalFixture } from "../dist-test/v2/core/eval-fixture-capture.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = resolve(__dirname, ".."); // .pi/extensions/novel-studio
@@ -1119,6 +1128,41 @@ function cmdPromote(args) {
   let canaryEvidenceRunId = null;
   let canaryEvidenceRef = null;
   if (target === "active_prod") {
+    // EVAL-REPLAY-ACCEPTANCE-LOOP P6：生产晋级前评估离线回放证据。
+    //  - R3（Prompt/工具协议/上下文/路由/预算重大变更）：无条件强制，证据缺失/未通过 → exit 5；
+    //  - R0/R1/R2：渐进采纳（与 canary gate 一致）——提供 --eval-evidence-root /
+    //    PINOVEL_EVAL_EVIDENCE_ROOT 时 fail-closed 检查；未提供时打 advisory 警告。
+    // 真实 replay 基线建立后收敛为全强制。
+    {
+      const evalRunRoot =
+        args["eval-evidence-root"] || process.env.PINOVEL_EVAL_EVIDENCE_ROOT || null;
+      const enforcement = resolveEvalEvidenceEnforcement(manifest.changeClass);
+      if (evalRunRoot || enforcement === "mandatory") {
+        const evalGate = evaluateEvalEvidenceGate({
+          releaseId,
+          bundleId: manifest.bundleId ?? null,
+          changeClass: manifest.changeClass,
+          evalRunRoot,
+        });
+        if (evalGate.verdict !== "approved") {
+          console.error(
+            `[evolution:promote] EVAL_EVIDENCE_REQUIRED: ${evalGate.code} — ${evalGate.reason}`,
+          );
+          console.error(
+            `[evolution:promote] 请先完成离线回放并使 eval-gate 通过（evolution:eval-gate --release-id ${releaseId} --eval-run-root <path>）`,
+          );
+          process.exit(5);
+        }
+        console.log(
+          `[evolution:promote] eval evidence: ${evalGate.code}（${enforcement}）`,
+        );
+      } else {
+        console.warn(
+          `[evolution:promote] ⚠ EVAL_EVIDENCE_ADVISORY: changeClass=${manifest.changeClass} 未提供 --eval-evidence-root；离线回放证据缺失（真实 replay 基线建立后将转为强制）`,
+        );
+      }
+    }
+
     const workspacePath = args["workspace"] || process.env.PINOVEL_WORKSPACE_PATH || null;
     const canaryRunId = args["canary-run"] || null;
     let canaryTrace = null;
@@ -2106,6 +2150,175 @@ function cmdCanaryAuthorize(releaseId, workspacePath, authFile, authJson) {
 }
 
 // ============================================================================
+// 子命令：eval-gate / eval-capture（EVAL-REPLAY-ACCEPTANCE-LOOP P6）
+// ============================================================================
+
+/**
+ * P6 eval-gate：评估 release 的离线回放证据（只读 + 待审批报告落盘）。
+ *
+ * 治理边界（与 canary gate 一致）：
+ *  - 绝不修改 production pointer、绝不自动晋级；
+ *  - verdict=rejected/insufficient 时仅 --hold-on-reject 显式要求才执行 hold
+ *    （复用 G5 hold 语义：只改 manifest 状态，不切 pointer）；
+ *  - 生成 eval-pending-review.json 待审批报告，人工审批仍走既有 promote 流程。
+ */
+function cmdEvalGate(args) {
+  const releaseId = args["release-id"];
+  if (!releaseId) {
+    console.error("[evolution:eval-gate] 错误：必须提供 --release-id <id>");
+    process.exit(2);
+  }
+  const evalRunRoot =
+    args["eval-run-root"] || process.env.PINOVEL_EVAL_EVIDENCE_ROOT || null;
+  if (!evalRunRoot) {
+    console.error(
+      "[evolution:eval-gate] 错误：必须提供 --eval-run-root <path>（或设置 PINOVEL_EVAL_EVIDENCE_ROOT）",
+    );
+    process.exit(2);
+  }
+
+  const registry = createEvolutionReleaseRegistry({ releasesDir: releasesDir() });
+  const manifest = registry.loadManifest(releaseId);
+  if (!manifest) {
+    console.error(`[evolution:eval-gate] 错误：releaseId ${releaseId} 不存在`);
+    process.exit(3);
+  }
+
+  const gate = evaluateEvalEvidenceGate({
+    releaseId,
+    bundleId: manifest.bundleId ?? null,
+    changeClass: manifest.changeClass,
+    evalRunRoot: resolve(evalRunRoot),
+  });
+
+  // 待审批报告落盘（不执行任何状态迁移）
+  const reportPath = writeEvalPendingReviewReport({
+    releasesDir: releasesDir(),
+    releaseId,
+    gate,
+    changeClass: manifest.changeClass,
+  });
+
+  console.log(`[evolution:eval-gate] verdict: ${gate.verdict.toUpperCase()}`);
+  console.log(`  code            : ${gate.code}`);
+  console.log(`  reason          : ${gate.reason}`);
+  console.log(`  changeClass     : ${manifest.changeClass}（${resolveEvalEvidenceEnforcement(manifest.changeClass)}）`);
+  console.log(`  evalRunRoot     : ${gate.evidence.evalRunRoot}`);
+  console.log(`  deterministic   : ${gate.evidence.deterministicGradePassed ? "passed" : "failed"}`);
+  if (gate.evidence.failedChecks.length > 0) {
+    console.log(`  failedChecks    : ${gate.evidence.failedChecks.join(", ")}`);
+  }
+  if (matrixRequiredFor(manifest.changeClass)) {
+    console.log(`  matrix          : ${gate.evidence.matrixReportFound ? `verdict=${gate.evidence.matrixVerdict}, pass^3=${gate.evidence.candidatePassPow3}` : "(missing)"}`);
+  }
+  console.log(`  pending report  : ${reportPath}`);
+
+  if (gate.verdict === "approved") {
+    console.log(`  next            : 人工审批（既有 promote 流程 APPROVAL_REQUIRED）`);
+    return;
+  }
+
+  if (args["hold-on-reject"] === true) {
+    const actor = args["actor"] || "system";
+    const reason = `eval-gate ${gate.code}: ${gate.reason}`;
+    const ALLOWED_FROM = new Set(["active_dev", "candidate_prod", "active_prod"]);
+    if (!ALLOWED_FROM.has(manifest.status)) {
+      console.error(
+        `[evolution:eval-gate] --hold-on-reject：当前状态 ${manifest.status} 不允许 hold（仅 active_dev/candidate_prod/active_prod），跳过 hold`,
+      );
+    } else {
+      try {
+        registry.transitionStatus(releaseId, "held", { actor, reason });
+        registry.recordStateEvent({
+          eventId: `evt-${releaseId}-eval-gate-hold-${Date.now()}`,
+          releaseId,
+          fromStatus: manifest.status,
+          toStatus: "held",
+          reason,
+          actor,
+          timestamp: new Date().toISOString(),
+        });
+        console.log(`  hold            : ${manifest.status} → held（actor=${actor}；未切 pointer）`);
+      } catch (e) {
+        console.error(`[evolution:eval-gate] --hold-on-reject hold 失败：${e.message}`);
+        process.exit(5);
+      }
+    }
+  }
+
+  process.exit(1);
+}
+
+function matrixRequiredFor(changeClass) {
+  return changeClass === "R2" || changeClass === "R3";
+}
+
+/**
+ * P6 eval-capture：从真实 workspace 冻结 EvalFixture（只读采集）。
+ * provenance 直接来自 release manifest 行为身份（同源，不建第二套 hash 体系）。
+ */
+function cmdEvalCapture(args) {
+  const releaseId = args["release-id"];
+  const workspaceId = args["workspace-id"];
+  const chapterNumber = Number(args["chapter-number"]);
+  if (!releaseId || !workspaceId || !Number.isInteger(chapterNumber) || chapterNumber < 1) {
+    console.error(
+      "[evolution:eval-capture] 错误：必须提供 --release-id <id> --workspace-id <id> --chapter-number <n>",
+    );
+    process.exit(2);
+  }
+  const archiveDir = args["archive-dir"];
+  if (!archiveDir) {
+    console.error("[evolution:eval-capture] 错误：必须提供 --archive-dir <path>（fixture 归档目录）");
+    process.exit(2);
+  }
+  const replayMode = args["replay-mode"] || "stub";
+  const VALID_MODES = new Set(["stub", "recorded", "synthetic", "dev_real_model", "production_like"]);
+  if (!VALID_MODES.has(replayMode)) {
+    console.error(`[evolution:eval-capture] 错误：--replay-mode 必须是 ${[...VALID_MODES].join("|")}，实际 ${replayMode}`);
+    process.exit(2);
+  }
+
+  const registry = createEvolutionReleaseRegistry({ releasesDir: releasesDir() });
+  const manifest = registry.loadManifest(releaseId);
+  if (!manifest) {
+    console.error(`[evolution:eval-capture] 错误：releaseId ${releaseId} 不存在`);
+    process.exit(3);
+  }
+
+  const chapterId = args["chapter-id"] || `chapter-${String(chapterNumber).padStart(3, "0")}`;
+  const result = captureEvalFixture({
+    projectRoot: projectRoot(),
+    workspaceId,
+    chapterNumber,
+    chapterId,
+    chapterTitle: args["chapter-title"] || `${chapterId}`,
+    replayMode,
+    manifest,
+    archiveDir: resolve(archiveDir),
+    ...(args["model-route"] ? { modelRoute: args["model-route"] } : {}),
+    ...(args["provider"] ? { provider: args["provider"] } : {}),
+  });
+
+  if (!result.ok) {
+    console.error(`[evolution:eval-capture] CAPTURE_FAILED：fixture 校验未通过（fail-closed，未落盘）`);
+    for (const err of result.errors) {
+      console.error(`  ${err.field}: ${err.rule} — ${err.message}`);
+    }
+    process.exit(5);
+  }
+
+  console.log(`[evolution:eval-capture] ✓ fixture 已冻结`);
+  console.log(`  fixtureId       : ${result.fixture.fixtureId}`);
+  console.log(`  fixtureHash     : ${result.fixtureHash}`);
+  console.log(`  fixturePath     : ${result.fixturePath}`);
+  console.log(`  release         : ${result.fixture.provenance.releaseId} (bundle ${result.fixture.provenance.bundleId})`);
+  console.log(`  workspace       : ${workspaceId} → chapter ${chapterNumber}（${replayMode}）`);
+  console.log(`  characters      : ${Object.keys(result.fixture.workspace.characterProfiles).length}`);
+  console.log(`  priorChapters   : ${result.fixture.workspace.historicalChapters.length}`);
+}
+
+// ============================================================================
 // 参数解析 + 入口
 // ============================================================================
 
@@ -2145,6 +2358,8 @@ function printHelp() {
   npm run evolution:rollback -- [--kind development|production] [--actor <a>] [--reason <r>]
   npm run evolution:health -- --release-id <id> | --all [options]
   npm run evolution:canary -- --release-id <id> --workspace <path> [--apply | --status | --authorize ... | --complete ...]
+  npm run evolution:eval-capture -- --release-id <id> --workspace-id <id> --chapter-number <n> --archive-dir <path> [--replay-mode <m>]
+  npm run evolution:eval-gate -- --release-id <id> --eval-run-root <path> [--hold-on-reject]
 
 子命令:
   capture       采集当前环境指纹，创建 draft manifest 写入 registry
@@ -2162,6 +2377,26 @@ function printHelp() {
                 默认模式打印决策；--apply 执行（bounded_canary 需授权）；
                 --status 查看历史；--authorize 写入 workspace 级授权；
                 --complete 校验并追加真实 canary 完成证据
+  eval-capture  P6：从真实 workspace 只读冻结 EvalFixture（provenance 同源 release manifest）
+  eval-gate     P6：评估离线回放证据（确定性 Grader + R2/R3 矩阵 pass^3）；
+                生成 eval-pending-review.json 待审批报告，绝不自动切 pointer；
+                verdict != approved 退出码 1；--hold-on-reject 执行 G5 hold
+
+eval-gate 选项:
+  --release-id <id>            必填，目标 release ID
+  --eval-run-root <path>       必填（或 PINOVEL_EVAL_EVIDENCE_ROOT），eval run 归档根
+  --hold-on-reject             verdict=rejected/insufficient 时执行 hold（不切 pointer）
+
+eval-capture 选项:
+  --release-id <id>            必填，provenance 来源 release
+  --workspace-id <id>          必填，源 workspace（只读）
+  --chapter-number <n>         必填，目标章节号
+  --archive-dir <path>         必填，fixture 归档目录
+  --replay-mode <m>            stub | recorded | synthetic | dev_real_model | production_like（默认 stub）
+  --chapter-id <id>            默认 chapter-NNN
+  --chapter-title <t>          默认 chapterId
+  --model-route <r>            默认 v2_rawstage2_gemini31
+  --provider <p>               默认 gemini
 
 health 选项:
   --release-id <id>            指定 release ID（与 --all 互斥）
@@ -2186,6 +2421,7 @@ promote 生产选项:
   --confirm-prod               candidate_prod/active_prod 必须显式确认
   --workspace <path>           R2/R3 active_prod 的 canary workspace 路径
   --canary-run <id>            R2/R3 active_prod 的 completed canary trace ID
+  --eval-evidence-root <path>  active_prod 的离线回放证据根（R3 强制；R0-R2 提供即 fail-closed）
 
 proxy-review 选项:
   --release-id <id>        必填，被审批的 release ID
@@ -2246,6 +2482,12 @@ async function main() {
       break;
     case "canary":
       cmdCanary(args);
+      break;
+    case "eval-gate":
+      cmdEvalGate(args);
+      break;
+    case "eval-capture":
+      cmdEvalCapture(args);
       break;
     case undefined:
     case "--help":

@@ -20,6 +20,8 @@
     "v2/core/eval-failure-attribution.ts",
     "v2/core/eval-replay-matrix.ts",
     "v2/core/eval-deterministic-grader.ts",
+    "v2/core/eval-fixture-capture.ts",
+    "v2/governance/eval-evidence-gate.ts",
     "types/pi-coding-agent.d.ts",
     "novelos/eval/eval-types.ts",
     "novelos/eval/fixtures.ts",

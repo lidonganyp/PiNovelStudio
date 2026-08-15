@@ -105,6 +105,29 @@ import "../v2/governance/evolution-release-registry.js";
 import "../v2/governance/release-pointer-store.js";
 import "../v2/governance/environment-fingerprint.js";
 
+// DATA-VERSION-RELEASE-GOVERNANCE DG-1：统一行为身份与 bundleId 派生。
+// 纯函数模块（仅 node:crypto + sibling canonicalize），不依赖 legacy-index /
+// agents / workflow / lab / novelbench，可安全纳入 dist-test。
+import "../v2/governance/behavior-bundle.js";
+
+// DATA-VERSION-RELEASE-GOVERNANCE DG-2：生产级行为快照捕获与独立校验。
+// 纯 node 内建（crypto/fs/path/child_process）+ sibling behavior-bundle，
+// 不依赖 legacy-index / agents / workflow / lab / novelbench，可安全纳入 dist-test。
+import "../v2/governance/behavior-snapshot.js";
+
+// DATA-VERSION-RELEASE-GOVERNANCE DG-4：策略证据按完整行为环境分区。
+// 纯函数模块（0 import），不依赖 legacy-index / agents / workflow / lab / novelbench，
+// 可安全纳入 dist-test。strategy-policy-store.ts 已 import 本模块进入 dist/ 与 dist-eval/ 闭包；
+// 此处显式纳入 dist-test/ 供测试直接 import 分区键派生与污染检测纯函数。
+import "../v2/learning/strategy-evidence-partition.js";
+
+// DATA-VERSION-RELEASE-GOVERNANCE DG-5：发布生命周期与权限收敛（纯函数权限决策层）。
+// 仅 type-only 依赖 evolution-release-types，不依赖 legacy-index / agents / workflow /
+// lab / novelbench，可安全纳入 dist-test。
+// 运行时绑定（transitionStatus / pointer switchActive / canary 执行层）由 DG-6 / DG-7
+// 完成单一基线迁移时显式接入；本阶段先固化规则并测试。
+import "../v2/governance/release-lifecycle-permissions.js";
+
 // EVOLUTION-RELEASE-GOVERNANCE-1B：系统版本代理审批（ReleaseProxyApproval）。
 // 4 个模块闭包自包含（仅依赖 1A governance sibling + node 内建），不依赖 legacy-index /
 // agents / workflow / lab / novelbench，可安全纳入 dist-test。
@@ -225,6 +248,17 @@ import "../v2/governance/canary-workspace-authorization.js";
 import "../v2/governance/canary-trace-store.js";
 import "../v2/governance/canary-actions.js";
 import "../v2/governance/canary-promotion-gate.js";
+
+// EVAL-REPLAY-ACCEPTANCE-LOOP P6：离线回放证据门禁 + fixture 冻结采集。
+// 闭包自包含（eval-fixture-contract 零依赖；deterministic-grader 仅依赖 fixture-contract；
+// fixture-capture type-only 依赖 governance/evolution-release-types），
+// 不依赖 legacy-index / agents / workflow / lab / novelbench，可安全纳入 dist-test。
+// eval-evidence-gate 只读不写、绝不修改 production pointer（治理边界与 canary gate 一致）；
+// 同时纳入 tsconfig.eval.json 编译到 dist-eval/ 供 eval 基础设施消费。
+import "../v2/core/eval-fixture-contract.js";
+import "../v2/core/eval-deterministic-grader.js";
+import "../v2/core/eval-fixture-capture.js";
+import "../v2/governance/eval-evidence-gate.js";
 
 // G7-Finalization-Handler-Prod-Binding：用户定稿消费链 handler（计划 §12.2 line 587）。
 // 方案："其他"——保持 6 公开工具契约，通过 novel_workspace_manager action="proxy_finalization"

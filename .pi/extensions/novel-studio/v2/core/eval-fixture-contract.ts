@@ -617,7 +617,11 @@ export function parseEvalFixtureV1(raw: unknown): EvalFixtureParseResult {
  * 在字段顺序不同时 hash 一致。
  */
 export function computeEvalFixtureHash(fixture: EvalFixtureV1): string {
-  const canonical = canonicalize(fixture);
+  // createdAt 是采集时间元数据，不属于行为内容指纹：排除后同一
+  // workspace+release 快照重复采集得到稳定 hash，fixture 索引才能幂等。
+  const snapshot = { ...fixture } as Record<string, unknown>;
+  delete snapshot.createdAt;
+  const canonical = canonicalize(snapshot);
   return createHash("sha256").update(canonical, "utf-8").digest("hex");
 }
 
