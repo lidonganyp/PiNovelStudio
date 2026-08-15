@@ -259,6 +259,7 @@ import "../v2/core/eval-fixture-contract.js";
 import "../v2/core/eval-deterministic-grader.js";
 import "../v2/core/eval-fixture-capture.js";
 import "../v2/core/eval-replay-matrix.js";
+import "../v2/core/eval-replay-trace-stats.js";
 import "../v2/governance/eval-evidence-gate.js";
 
 // G7-Finalization-Handler-Prod-Binding：用户定稿消费链 handler（计划 §12.2 line 587）。

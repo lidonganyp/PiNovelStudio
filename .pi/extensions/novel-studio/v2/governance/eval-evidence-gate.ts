@@ -16,7 +16,7 @@
  * 检查链（全部确定性，零 LLM 调用）：
  *  1. eval run manifest 存在且通过 validateReplayRunManifestV1；
  *  2. release/bundle 绑定与目标 release 一致（防串证据）；
- *  3. Deterministic Grader（P5）通过全部 10 项检查；
+ *  3. Deterministic Grader（P5）通过全部检查（含 model_call_evidence）；
  *  4. 隔离违规 = 0（P1 生产面零污染）；
  *  5. R2/R3 额外要求 matrix-report：必须带 schema/四臂/hash/release-bundle 绑定，
  *     P6 重新计算 verdict 与 pass^3，不信任落盘的两个字段。
@@ -396,6 +396,26 @@ export interface ReplayCliSuccessInput {
   unclassifiedCount: number;
   gradePassed: boolean;
   evalGateVerdict: EvalEvidenceVerdict | null;
+  replayMode?: string;
+  modelCalls?: number;
+  modelCallsByProvider?: Record<string, number>;
+  modelCallsByRequestedRoute?: Record<string, number>;
+  unauthorizedCrossModelCount?: number;
+  releaseIdentity?: {
+    devMode: boolean;
+    releaseId: string | null;
+    environmentFingerprint: string | null;
+    approvalRef: string | null;
+    bundleId: string | null;
+    modelVersion: string | null;
+  } | null;
+  expectedRelease?: {
+    releaseId: string;
+    environmentFingerprint?: string | null;
+    approvalRef?: string | null;
+    bundleId?: string | null;
+    modelVersion?: string | null;
+  } | null;
 }
 
 export interface ReplayCliSuccessResult {
@@ -430,6 +450,62 @@ export function evaluateReplayCliSuccess(
     reasons.push(
       `P6 eval-gate 未通过（verdict=${String(input.evalGateVerdict)}）`,
     );
+  }
+  if (input.replayMode === "production_like") {
+    if ((input.modelCalls ?? 0) <= 0) {
+      reasons.push(`modelCalls=${String(input.modelCalls ?? 0)}（production_like 要求大于 0）`);
+    }
+    if (input.releaseIdentity?.devMode === true) {
+      reasons.push("devMode=true（production_like 禁止 DEV_MODE 旁路）");
+    }
+    const identity = input.releaseIdentity;
+    if (!identity) {
+      reasons.push("production_like 缺少 release 身份");
+    } else {
+      if (!identity.releaseId) reasons.push("生产身份缺失：releaseId");
+      if (!identity.environmentFingerprint) reasons.push("生产身份缺失：environmentFingerprint");
+      if (!identity.approvalRef) reasons.push("生产身份缺失：approvalRef");
+      if (!identity.bundleId) reasons.push("生产身份缺失：bundleId");
+      if (!identity.modelVersion) reasons.push("生产身份缺失：modelVersion");
+    }
+    if ((input.unauthorizedCrossModelCount ?? 0) !== 0) {
+      reasons.push(
+        `unauthorizedCrossModelCount=${String(input.unauthorizedCrossModelCount)}（要求 0）`,
+      );
+    }
+    const expected = input.expectedRelease;
+    if (expected && identity) {
+      if (identity.releaseId && identity.releaseId !== expected.releaseId) {
+        reasons.push(`releaseId 与 active manifest 不一致：${identity.releaseId} vs ${expected.releaseId}`);
+      }
+      if (
+        expected.environmentFingerprint &&
+        identity.environmentFingerprint &&
+        identity.environmentFingerprint !== expected.environmentFingerprint
+      ) {
+        reasons.push("environmentFingerprint 与 active manifest 不一致");
+      }
+      if (expected.bundleId && identity.bundleId && identity.bundleId !== expected.bundleId) {
+        reasons.push("bundleId 与 active manifest 不一致");
+      }
+    }
+    const routes = input.modelCallsByRequestedRoute ?? {};
+    const providers = input.modelCallsByProvider ?? {};
+    for (const provider of Object.keys(providers)) {
+      if (provider !== "gemini31" && provider !== "claude") {
+        reasons.push(`provider 路由漂移：${provider}`);
+      }
+    }
+    for (const route of Object.keys(routes)) {
+      const allowed =
+        route === "v2_rawstage2_gemini31" ||
+        route === "v2_amplified_gemini31" ||
+        route === "v2_rawstage2" ||
+        route === "v2_amplified";
+      if (!allowed) {
+        reasons.push(`requestedRoute 漂移：${route}`);
+      }
+    }
   }
   return { ok: reasons.length === 0, reasons };
 }

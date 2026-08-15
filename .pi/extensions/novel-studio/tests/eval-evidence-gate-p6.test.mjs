@@ -693,6 +693,89 @@ test("gate: 回放 CLI 成功判定必须包含 grader + P6，不能只看 compl
   assert.deepEqual(ok.reasons, []);
 });
 
+test("gate: production_like 在 modelCalls=0 / devMode / 身份缺失 / 路由漂移时 fail-closed", () => {
+  const base = {
+    allCompleted: true,
+    isolationViolationCount: 0,
+    traceRetentionRate: 1,
+    unclassifiedCount: 0,
+    gradePassed: true,
+    evalGateVerdict: "approved",
+    replayMode: "production_like",
+    expectedRelease: {
+      releaseId: "rel-prod-116",
+      environmentFingerprint: "fp-116",
+      approvalRef: "apr-116",
+      bundleId: "bundle-116",
+      modelVersion: "gemini-3.1-pro-preview",
+    },
+  };
+  const zeroCalls = evaluateReplayCliSuccess({ ...base, modelCalls: 0 });
+  assert.equal(zeroCalls.ok, false);
+  assert.ok(zeroCalls.reasons.some((r) => r.includes("modelCalls")));
+
+  const devMode = evaluateReplayCliSuccess({
+    ...base,
+    modelCalls: 3,
+    releaseIdentity: {
+      devMode: true,
+      releaseId: "rel-prod-116",
+      environmentFingerprint: "fp-116",
+      approvalRef: "apr-116",
+      bundleId: "bundle-116",
+      modelVersion: "gemini-3.1-pro-preview",
+    },
+  });
+  assert.equal(devMode.ok, false);
+  assert.ok(devMode.reasons.some((r) => r.includes("devMode")));
+
+  const missingIdentity = evaluateReplayCliSuccess({
+    ...base,
+    modelCalls: 3,
+    releaseIdentity: null,
+  });
+  assert.equal(missingIdentity.ok, false);
+  assert.ok(missingIdentity.reasons.some((r) => r.includes("身份")));
+
+  const drifted = evaluateReplayCliSuccess({
+    ...base,
+    modelCalls: 3,
+    unauthorizedCrossModelCount: 1,
+    modelCallsByProvider: { glm: 3 },
+    modelCallsByRequestedRoute: { narrator_testing_glm: 3 },
+    releaseIdentity: {
+      devMode: false,
+      releaseId: "rel-prod-116",
+      environmentFingerprint: "fp-116",
+      approvalRef: "apr-116",
+      bundleId: "bundle-116",
+      modelVersion: "gemini-3.1-pro-preview",
+    },
+  });
+  assert.equal(drifted.ok, false);
+  assert.ok(drifted.reasons.some((r) => /漂移|unauthorized/.test(r)));
+
+  const pass = evaluateReplayCliSuccess({
+    ...base,
+    modelCalls: 3,
+    unauthorizedCrossModelCount: 0,
+    modelCallsByProvider: { gemini31: 3 },
+    modelCallsByRequestedRoute: {
+      v2_rawstage2_gemini31: 1,
+      v2_amplified_gemini31: 2,
+    },
+    releaseIdentity: {
+      devMode: false,
+      releaseId: "rel-prod-116",
+      environmentFingerprint: "fp-116",
+      approvalRef: "apr-116",
+      bundleId: "bundle-116",
+      modelVersion: "gemini-3.1-pro-preview",
+    },
+  });
+  assert.equal(pass.ok, true, JSON.stringify(pass.reasons));
+});
+
 test("gate: 待审批报告落盘（不执行状态迁移）", () => {
   const root = makeTempRoot();
   try {

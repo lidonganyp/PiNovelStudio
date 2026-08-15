@@ -137,7 +137,15 @@ export interface ReplayIsolationEnv {
   PINOVEL_EVAL_RELEASE_ID: string;
   PINOVEL_EVAL_BUNDLE_ID: string;
   PINOVEL_EVAL_TRACE_ARCHIVE_PATH: string;
-  PINOVEL_DEV_MODE: "1";
+  /**
+   * recorded / synthetic / stub / dev_real_model 仍可走 DEV_MODE。
+   * production_like 禁止设置：子进程必须进入真实 G6 生产身份。
+   */
+  PINOVEL_DEV_MODE?: "1";
+  /** production_like：指向源仓真实治理根，供子进程 G6 读取 active_prod。 */
+  PINOVEL_EVOLUTION_ROOT?: string;
+  /** production_like：指向源仓干净树，供 G6 采集与 manifest 一致的指纹。 */
+  PINOVEL_FINGERPRINT_ROOT?: string;
   /**
    * F4-4：确定性回放传输标记（stub/recorded/synthetic 模式强制携带）。
    * - V2_FORCE_STUB=1 兜底：确定性模式下任何传输 env 丢失都不得触网；
@@ -148,6 +156,11 @@ export interface ReplayIsolationEnv {
   PINOVEL_EVAL_REPLAY_TRANSPORT?: "stub" | "recorded" | "synthetic";
 }
 
+export interface BuildReplayIsolationEnvOptions {
+  /** 源仓项目根（production_like 用来解析真实治理根与指纹根）。 */
+  sourceProjectRoot?: string;
+}
+
 /**
  * 构造回放子进程的隔离 env（合并到 process.env 之上）。
  * 真实模型模式必须包含全部隔离字段，缺失 → 抛错（fail-closed）。
@@ -155,11 +168,16 @@ export interface ReplayIsolationEnv {
  * scratchDataRoot 非空时设置 PINOVEL_PROJECT_ROOT，使子进程把数据根
  * 解析到 scratch 隔离根（要求 scratch 已物化项目标记，见
  * materializeScratchProjectSkeleton）。
+ *
+ * production_like 不得设置 PINOVEL_DEV_MODE：子进程必须走真实 G6，
+ * 通过 PINOVEL_EVOLUTION_ROOT + PINOVEL_FINGERPRINT_ROOT 读取源仓
+ * 生产身份，同时 workspace 仍写在 scratch。
  */
 export function buildReplayIsolationEnv(
   fixture: EvalFixtureV1,
   base?: NodeJS.ProcessEnv,
   scratchDataRoot?: string,
+  options?: BuildReplayIsolationEnvOptions,
 ): ReplayIsolationEnv & NodeJS.ProcessEnv {
   const prereq = validateReplayIsolationPrerequisites(fixture);
   if (REAL_MODEL_REPLAY_MODES.includes(fixture.replayMode) && !prereq.ok) {
@@ -176,15 +194,23 @@ export function buildReplayIsolationEnv(
     PINOVEL_EVAL_RELEASE_ID: fixture.provenance.releaseId,
     PINOVEL_EVAL_BUNDLE_ID: fixture.provenance.bundleId,
     PINOVEL_EVAL_TRACE_ARCHIVE_PATH: fixture.traceArchivePath,
-    // F1 语义修正：回放子进程运行在 DEV_MODE（scratch 隔离根没有主仓治理面，
-    // 子进程内 release gate 无法在 scratch 复刻；伪造治理数据不可接受）。
-    // production_like 的生产 release gate 验证由 Runner 层以主仓真实治理状态
-    // 前置承担（verifyProductionLikeReleaseGate），生产模型路由等价性由
-    // invoke 脚本的 eval 隔离路由策略（PINOVEL_EVAL_ONLY=1 不缺省注入 GLM）
-    // + fixture.provenance.modelRoute 显式参数共同保证。
-    PINOVEL_DEV_MODE: "1",
     ...(scratchDataRoot ? { PINOVEL_PROJECT_ROOT: scratchDataRoot } : {}),
   };
+  if (fixture.replayMode === "production_like") {
+    delete env.PINOVEL_DEV_MODE;
+    const sourceRoot = options?.sourceProjectRoot?.trim();
+    if (!sourceRoot) {
+      throw new Error(
+        "production_like 隔离 env 缺少 sourceProjectRoot（fail-closed：无法传播真实生产身份）",
+      );
+    }
+    env.PINOVEL_EVOLUTION_ROOT = resolveProductionEvolutionRoot(sourceRoot);
+    env.PINOVEL_FINGERPRINT_ROOT = sourceRoot;
+  } else {
+    // recorded / synthetic / stub / dev_real_model：scratch 没有完整治理面，
+    // 仍用 DEV_MODE 避免子进程误读空治理根。production_like 不得走这条旁路。
+    env.PINOVEL_DEV_MODE = "1";
+  }
   // F4-4：stub/recorded/synthetic 是确定性回放模式，统一携带传输标记。
   // 传输 env 本身（recorded 结果文件 / synthetic 故障计划）由 Runner 物化
   // 后附加到子进程 env（见 full-pipeline-replay-runner）。

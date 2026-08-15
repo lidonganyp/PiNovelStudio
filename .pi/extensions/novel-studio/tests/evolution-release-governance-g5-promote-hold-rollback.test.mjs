@@ -460,6 +460,8 @@ test("promote: candidate_prod → active_prod 强制 actor=user（默认）切�
     const registry = makeRegistry(root);
     const manifest = registry.loadManifest("rel-001");
     assert.equal(manifest.status, "active_prod");
+    assert.equal(typeof manifest.activatedAt, "string");
+    assert.ok(!Number.isNaN(Date.parse(manifest.activatedAt)), "active_prod 必须写入 activatedAt");
 
     // prod pointer 切换（actor=user）
     const store = makeStore(root);

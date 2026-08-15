@@ -77,6 +77,12 @@ export interface ReleaseGateInput {
    * 未提供时调用 captureDefaultEnvironmentFingerprint(projectRoot) 现场采集。
    */
   currentFingerprintHash?: string;
+  /**
+   * 指纹采集根。production_like 子进程的 projectRoot 是 scratch，
+   * 必须用源仓干净树采集指纹，否则无法与 active manifest 对齐。
+   * 未提供时读 PINOVEL_FINGERPRINT_ROOT，再回退 projectRoot。
+   */
+  fingerprintRoot?: string;
   /** 兼容注入：明确的 canary workspace 路径。 */
   workspacePath?: string;
   /** workspace 根目录；默认 {projectRoot}/workspaces，用事件中的 workspaceId 定位 canary。 */
@@ -98,14 +104,14 @@ export interface ReleaseGateOkResult {
   /** R2/R3 完成态 canary run；R0/R1/dev mode 为 null。 */
   canaryEvidenceRunId: string | null;
   /**
-   * DG-3 行为身份（bundleId + modelVersion + 8 组件 hash + evalProtocolVersion）。
+   * DG-3 行为身份（bundleId + modelVersion + 组件 hash + evalProtocolVersion）。
    * 用于生产 trace 写入 release 行为身份。dev mode / 旧 manifest（未捕获）时为全 null。
    */
   behaviorIdentity: BehaviorIdentityTrace;
 }
 
 /**
- * DG-3 行为身份 trace（bundleId + modelVersion + 8 组件 hash + evalProtocolVersion）。
+ * DG-3 行为身份 trace（bundleId + modelVersion + 组件 hash + evalProtocolVersion）。
  * 与 behavior-bundle.ts 的组件 hash 字段一一对应；字段为 null 表示 manifest 未捕获该身份。
  */
 export interface BehaviorIdentityTrace {
@@ -119,6 +125,7 @@ export interface BehaviorIdentityTrace {
   recoveryPolicyHash: string | null;
   knowledgeSnapshotHash: string | null;
   runtimeFingerprint: string | null;
+  capabilityPackageSetHash: string | null;
   evalProtocolVersion: string | null;
 }
 
@@ -239,6 +246,19 @@ function resolveEvolutionRoot(input: ReleaseGateInput): string {
   return resolveProductionEvolutionRoot(input.projectRoot, input.evolutionRoot);
 }
 
+function resolveFingerprintRoot(input: ReleaseGateInput): string {
+  if (input.fingerprintRoot && input.fingerprintRoot.trim().length > 0) {
+    return isAbsolute(input.fingerprintRoot)
+      ? input.fingerprintRoot
+      : resolve(input.projectRoot, input.fingerprintRoot);
+  }
+  const env = process.env.PINOVEL_FINGERPRINT_ROOT;
+  if (env && env.trim().length > 0) {
+    return isAbsolute(env) ? env : resolve(input.projectRoot, env);
+  }
+  return input.projectRoot;
+}
+
 // ============================================================================
 // 行为身份 trace 提取（DG-3）
 // ============================================================================
@@ -254,6 +274,7 @@ const BEHAVIOR_IDENTITY_TRACE_FIELDS = [
   "recoveryPolicyHash",
   "knowledgeSnapshotHash",
   "runtimeFingerprint",
+  "capabilityPackageSetHash",
   "evalProtocolVersion",
 ] as const;
 
@@ -497,7 +518,8 @@ export function evaluateProductionReleaseGate(
   }
 
   // 6. 指纹对比
-  const currentFp = collectDefaultEnvironmentFingerprint(input.projectRoot);
+  const fingerprintRoot = resolveFingerprintRoot(input);
+  const currentFp = collectDefaultEnvironmentFingerprint(fingerprintRoot);
   const currentHash = input.currentFingerprintHash ?? computeFingerprintHash(currentFp);
   if (manifest.environmentFingerprint !== currentHash) {
     const persisted = loadPersistedEnvironmentFingerprint(
@@ -533,6 +555,11 @@ export function evaluateProductionReleaseGate(
   // 旧 manifest（无 bundleId）跳过组件校验；DG-6 迁移后强制完整身份。
   const behaviorIdentity = extractBehaviorIdentityTrace(manifest);
   if (behaviorIdentity.bundleId !== null) {
+    if (!behaviorIdentity.capabilityPackageSetHash) {
+      return releaseGateBlocked(
+        "capabilityPackageSetHash missing：生产 release 必须显式冻结 CapabilityPackageSet（CPG-1.5）",
+      );
+    }
     const consistency = validateBundleIdConsistency(manifest);
     if (!consistency.ok) {
       return releaseGateBlocked(
@@ -541,7 +568,7 @@ export function evaluateProductionReleaseGate(
       );
     }
     const snapshot = captureDefaultBehaviorSnapshot(
-      input.projectRoot,
+      fingerprintRoot,
       behaviorIdentity.modelVersion ?? DEFAULT_RELEASE_FINGERPRINT_SPEC.generationModel,
       behaviorIdentity.evalProtocolVersion ?? DEFAULT_EVAL_PROTOCOL_VERSION,
     );

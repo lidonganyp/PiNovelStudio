@@ -17,12 +17,17 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   validateReplayRunManifestV1,
   type ReplayRunManifestV1,
 } from "./eval-fixture-contract.js";
+import {
+  extractReplayModelCalls,
+  extractReplayRecoveryAttempts,
+  summarizeReplayModelCalls,
+} from "./eval-replay-trace-stats.js";
 
 // ============================================================================
 // A/B 矩阵类型
@@ -426,9 +431,39 @@ function loadReplayManifestFromRunRoot(runRoot: string): ReplayRunManifestV1 {
  * coverage / completeness / continuity 取自可观测编排证据（trace 留存、
  * 完成率、隔离），不编造文学分数。失败分类完整率只统计 failed 样本。
  */
+function loadArmTraceStats(
+  runRoot: string | undefined,
+  fixtureId: string,
+): { tokenCost: number; recoveryAttempts: number } {
+  if (!runRoot) {
+    return { tokenCost: 0, recoveryAttempts: 0 };
+  }
+  const tracesDir = join(runRoot, "samples", fixtureId, "traces");
+  if (!existsSync(tracesDir)) {
+    return { tokenCost: 0, recoveryAttempts: 0 };
+  }
+  const calls = [];
+  let recoveryAttempts = 0;
+  for (const name of readdirSync(tracesDir)) {
+    if (!name.endsWith(".json") || name.includes("evidence-report")) {
+      continue;
+    }
+    try {
+      const trace = JSON.parse(readFileSync(join(tracesDir, name), "utf-8")) as unknown;
+      calls.push(...extractReplayModelCalls(trace));
+      recoveryAttempts += extractReplayRecoveryAttempts(trace);
+    } catch {
+      // 损坏 trace 不编造成本
+    }
+  }
+  const stats = summarizeReplayModelCalls(calls, recoveryAttempts);
+  return { tokenCost: stats.tokenCost, recoveryAttempts: stats.recoveryAttempts };
+}
+
 export function deriveArmMetricsFromReplayManifest(
   manifest: ReplayRunManifestV1,
   armId: MatrixArmId,
+  options?: { runRoot?: string },
 ): MatrixArmMetrics {
   const counted = manifest.samples.filter(
     (sample) =>
@@ -451,6 +486,33 @@ export function deriveArmMetricsFromReplayManifest(
   const durations = counted.map((sample) => sample.durationMs);
   const total = manifest.summary.totalSamples;
   const completed = manifest.summary.completed;
+  const runRoot = options?.runRoot ?? manifest.runRoot;
+  let tokenCost = 0;
+  let firstAttemptOk = 0;
+  let recoveredOk = 0;
+  let recoveredDenom = 0;
+  for (const sample of counted) {
+    const fromManifest = typeof sample.tokenCost === "number" ? sample.tokenCost : null;
+    const fromManifestRecovery =
+      typeof sample.recoveryAttemptCount === "number" ? sample.recoveryAttemptCount : null;
+    const fromTrace = loadArmTraceStats(runRoot, sample.fixtureId);
+    tokenCost += fromManifest ?? fromTrace.tokenCost;
+    const recoveryAttempts = fromManifestRecovery ?? fromTrace.recoveryAttempts;
+    if (recoveryAttempts === 0) {
+      if (sample.status === "completed") {
+        firstAttemptOk += 1;
+      }
+    } else {
+      recoveredDenom += 1;
+      if (sample.status === "completed") {
+        recoveredOk += 1;
+      }
+    }
+  }
+  const p95LatencyMs = percentile(durations, 95);
+  const longTailFailures = counted.filter(
+    (sample) => sample.status === "failed" && sample.durationMs > p95LatencyMs * 2,
+  ).length;
   return {
     armId,
     runId: manifest.runId,
@@ -463,13 +525,12 @@ export function deriveArmMetricsFromReplayManifest(
     continuity: manifest.summary.isolationViolationCount === 0 ? 1 : 0,
     userEditDistance: null,
     modelCalls: manifest.samples.reduce((sum, sample) => sum + sample.modelCalls, 0),
-    tokenCost: 0,
-    firstAttemptSuccessRate: total === 0 ? 0 : completed / total,
-    recoveredSuccessRate:
-      completed + failed.length === 0 ? 0 : completed / (completed + failed.length),
+    tokenCost,
+    firstAttemptSuccessRate: counted.length === 0 ? 0 : firstAttemptOk / counted.length,
+    recoveredSuccessRate: recoveredDenom === 0 ? 1 : recoveredOk / recoveredDenom,
     p50LatencyMs: percentile(durations, 50),
-    p95LatencyMs: percentile(durations, 95),
-    longTailFailures: 0,
+    p95LatencyMs,
+    longTailFailures,
     perSamplePass: counted.map(
       (sample) =>
         sample.status === "completed" &&
@@ -575,7 +636,7 @@ export function generateMatrixReportFromReplayRuns(
         );
       }
     }
-    arms.push(deriveArmMetricsFromReplayManifest(manifest, armId));
+    arms.push(deriveArmMetricsFromReplayManifest(manifest, armId, { runRoot }));
   }
   const compared = compareMatrixArms({
     candidateReleaseId: options.candidateReleaseId,

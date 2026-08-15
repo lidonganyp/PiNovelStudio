@@ -1691,6 +1691,9 @@ export async function runUnifiedPipeline(
   const releaseGateResult = evaluateProductionReleaseGate({
     projectRoot,
     workspacesRoot: join(projectRoot, "workspaces"),
+    ...(process.env.PINOVEL_FINGERPRINT_ROOT
+      ? { fingerprintRoot: process.env.PINOVEL_FINGERPRINT_ROOT }
+      : {}),
   });
   const releaseGovernanceTrace = {
     devMode: releaseGateResult.devMode,

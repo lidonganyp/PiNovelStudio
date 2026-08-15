@@ -54,6 +54,9 @@ const workspaceAdapter = await import(
 const replayRunner = await import(
   `file://${join(evalDist, "eval", "full-pipeline-replay-runner.js")}`
 );
+const traceStats = await import(
+  `file://${join(evalDist, "v2", "core", "eval-replay-trace-stats.js")}`
+);
 
 // ============================================================================
 // 测试夹具构造
@@ -306,6 +309,128 @@ describe("P0 eval-fixture-contract：ReplayRunManifest 校验", () => {
 // P1：回放隔离层
 // ============================================================================
 
+describe("P0.2 真实 trace 模型调用统计", () => {
+  it("从 v2_final_selected.evidence.modelCalls 统计 3 次 Gemini 生产路由", () => {
+    const trace = {
+      gates: [
+        { stage: "v2_novelos_agentic", evidence: {} },
+        {
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [
+              {
+                route: "v2_rawstage2",
+                requestedRoute: "v2_rawstage2_gemini31",
+                provider: "gemini31",
+                actualProvider: "gemini31",
+                expectedProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
+                expectedModel: "gemini-3.1-pro-preview",
+              },
+              {
+                route: "v2_amplified_gemini31",
+                requestedRoute: "v2_amplified_gemini31",
+                provider: "gemini31",
+                actualProvider: "gemini31",
+                expectedProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
+                expectedModel: "gemini-3.1-pro-preview",
+              },
+              {
+                route: "v2_amplified_gemini31",
+                requestedRoute: "v2_amplified_gemini31",
+                provider: "gemini31",
+                actualProvider: "gemini31",
+                expectedProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
+                expectedModel: "gemini-3.1-pro-preview",
+              },
+            ],
+            releaseGovernance: {
+              devMode: false,
+              releaseId: "rel-prod-116",
+              environmentFingerprint: "fp-116",
+              approvalRef: "apr-116",
+              behaviorIdentity: {
+                bundleId: "bundle-116",
+                modelVersion: "gemini-3.1-pro-preview",
+              },
+            },
+          },
+        },
+      ],
+    };
+    const calls = traceStats.extractReplayModelCalls(trace);
+    const stats = traceStats.summarizeReplayModelCalls(calls);
+    assert.equal(stats.modelCalls, 3);
+    assert.equal(stats.byProvider.gemini31, 3);
+    assert.equal(stats.byRequestedRoute.v2_rawstage2_gemini31, 1);
+    assert.equal(stats.byRequestedRoute.v2_amplified_gemini31, 2);
+    assert.equal(stats.unauthorizedCrossModelCount, 0);
+    const identity = traceStats.extractReplayReleaseIdentity(trace);
+    assert.equal(identity.devMode, false);
+    assert.equal(identity.releaseId, "rel-prod-116");
+    assert.equal(identity.bundleId, "bundle-116");
+  });
+
+  it("顶层 modelCalls 为空时不得把真实调用统计成 0", () => {
+    const trace = {
+      modelCalls: [],
+      gates: [
+        {
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [
+              {
+                requestedRoute: "v2_rawstage2_gemini31",
+                actualProvider: "gemini31",
+                expectedProvider: "gemini31",
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const stats = traceStats.summarizeReplayModelCalls(traceStats.extractReplayModelCalls(trace));
+    assert.equal(stats.modelCalls, 1);
+  });
+
+  it("汇总 tokenCost 与 recoveryAttempts，不把缺失写成虚构 0 成本以外的已测值", () => {
+    const trace = {
+      recoveryAttempts: [{ reason: "timeout" }],
+      gates: [
+        {
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [
+              {
+                requestedRoute: "v2_rawstage2_gemini31",
+                actualProvider: "gemini31",
+                tokenUsage: { in: 1602, out: 3746 },
+              },
+              {
+                requestedRoute: "v2_amplified_gemini31",
+                actualProvider: "gemini31",
+                tokenUsage: { in: 1719, out: 4705 },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const calls = traceStats.extractReplayModelCalls(trace);
+    const stats = traceStats.summarizeReplayModelCalls(
+      calls,
+      traceStats.extractReplayRecoveryAttempts(trace),
+    );
+    assert.equal(stats.modelCalls, 2);
+    assert.equal(stats.tokenIn, 3321);
+    assert.equal(stats.tokenOut, 8451);
+    assert.equal(stats.tokenCost, 11772);
+    assert.equal(stats.recoveryAttempts, 1);
+  });
+});
+
 describe("P1 eval-replay-isolation：fail-closed 与 scratch 生命周期", () => {
   it("production_like 指向 rel-dev-* release → 隔离违规", () => {
     const fixture = buildValidFixture({
@@ -348,6 +473,36 @@ describe("P1 eval-replay-isolation：fail-closed 与 scratch 生命周期", () =
       isolation.assertReplayIsolationEnv(env, { requireRealModelFields: true })
         .ok,
       true,
+    );
+  });
+
+  it("production_like 不得设置 PINOVEL_DEV_MODE，必须传播真实治理根", () => {
+    const fixture = buildValidFixture({ replayMode: "production_like" });
+    const sourceRoot = join(__dirname, ".tmp-eval-prod-like-env");
+    mkdirSync(join(sourceRoot, "config", "evolution-release"), { recursive: true });
+    writeFileSync(
+      join(sourceRoot, "config", "evolution-release", "active-production.json"),
+      JSON.stringify({ releaseId: "rel-prod-110" }),
+      "utf-8",
+    );
+    try {
+      const env = isolation.buildReplayIsolationEnv(fixture, process.env, undefined, {
+        sourceProjectRoot: sourceRoot,
+      });
+      assert.notEqual(env.PINOVEL_DEV_MODE, "1");
+      assert.equal(env.PINOVEL_DEV_MODE, undefined);
+      assert.ok(String(env.PINOVEL_EVOLUTION_ROOT).includes("evolution-release"));
+      assert.equal(env.PINOVEL_FINGERPRINT_ROOT, sourceRoot);
+    } finally {
+      rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("production_like 缺少 sourceProjectRoot → fail-closed", () => {
+    const fixture = buildValidFixture({ replayMode: "production_like" });
+    assert.throws(
+      () => isolation.buildReplayIsolationEnv(fixture),
+      /sourceProjectRoot/,
     );
   });
 
@@ -924,7 +1079,7 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
       ),
     );
     assert.equal(report.failedChecks.length, 0);
-    assert.equal(report.checks.length, 10);
+    assert.equal(report.checks.length, 11);
   });
 
   it("trace 归档缺失 → trace_retention 违规；failed 无 envelope → silent_degrade 违规", () => {
@@ -971,6 +1126,86 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
     assert.ok(report.failedChecks.includes("trace_retention"));
     assert.ok(report.failedChecks.includes("silent_degrade"));
     assert.ok(report.failedChecks.includes("failure_envelope_completeness"));
+  });
+
+  it("production_like 归档 trace 有 2 次 gate 调用但 manifest.modelCalls=0 → model_call_evidence 失败", () => {
+    const fixture = buildValidFixture({
+      fixtureId: "fixture.model-calls-mismatch-115b",
+      replayMode: "production_like",
+    });
+    const sampleDir = join(tmpRun, "samples", fixture.fixtureId);
+    const tracesDir = join(sampleDir, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
+    writeFileSync(
+      join(sampleDir, "state-projection.json"),
+      JSON.stringify({ narrativeStateHash: HEX64("state-115b") }),
+    );
+    const traceFile = join(tracesDir, "chapter-002-quality-trace.json");
+    writeFileSync(
+      traceFile,
+      JSON.stringify({
+        modelCalls: [],
+        gates: [
+          {
+            stage: "v2_final_selected",
+            evidence: {
+              modelCalls: [
+                {
+                  requestedRoute: "v2_rawstage2_gemini31",
+                  actualProvider: "gemini31",
+                  expectedProvider: "gemini31",
+                  tokenUsage: { in: 1602, out: 3746 },
+                },
+                {
+                  requestedRoute: "v2_amplified_gemini31",
+                  actualProvider: "gemini31",
+                  expectedProvider: "gemini31",
+                  tokenUsage: { in: 1719, out: 4705 },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const manifest = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-grade-115b-mismatch",
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "production_like",
+      releaseId: fixture.provenance.releaseId,
+      bundleId: fixture.provenance.bundleId,
+      runRoot: tmpRun,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      finishedAt: "2026-08-15T00:01:00.000Z",
+      samples: [
+        buildManifestEntry(fixture, traceFile, {
+          replayMode: "production_like",
+          modelCalls: 0,
+        }),
+      ],
+      summary: {
+        totalSamples: 1,
+        countedSamples: 1,
+        completed: 1,
+        failed: 0,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    };
+
+    const report = grader.gradeDeterministic(manifest, tmpRun);
+    assert.equal(report.passed, false);
+    assert.ok(report.failedChecks.includes("model_call_evidence"));
+    const check = report.checks.find((c) => c.name === "model_call_evidence");
+    assert.ok(
+      check.violations.some((v) => v.detail.includes("manifest=0") && v.detail.includes("trace=2")),
+      JSON.stringify(check.violations),
+    );
   });
 
   it("gradeDeterministicFromRunRoot：manifest 缺失 → fail-closed", () => {
@@ -1461,11 +1696,27 @@ describe("F4-4 隔离 env：确定性回放模式携带传输标记", () => {
   });
 
   it("dev_real_model / production_like -> 不携带确定性传输标记（走真实模型）", () => {
-    for (const mode of ["dev_real_model", "production_like"]) {
-      const fixture = buildValidFixture({ replayMode: mode });
-      const env = isolation.buildReplayIsolationEnv(fixture);
-      assert.equal(env.V2_FORCE_STUB, undefined, `${mode} 不应设置 V2_FORCE_STUB`);
-      assert.equal(env.PINOVEL_EVAL_REPLAY_TRANSPORT, undefined, `${mode} 不应声明确定性传输`);
+    const sourceRoot = join(__dirname, ".tmp-eval-prod-like-transport");
+    mkdirSync(join(sourceRoot, "config", "evolution-release"), { recursive: true });
+    writeFileSync(
+      join(sourceRoot, "config", "evolution-release", "active-production.json"),
+      JSON.stringify({ releaseId: "rel-prod-110" }),
+      "utf-8",
+    );
+    try {
+      for (const mode of ["dev_real_model", "production_like"]) {
+        const fixture = buildValidFixture({ replayMode: mode });
+        const env = isolation.buildReplayIsolationEnv(
+          fixture,
+          process.env,
+          undefined,
+          mode === "production_like" ? { sourceProjectRoot: sourceRoot } : undefined,
+        );
+        assert.equal(env.V2_FORCE_STUB, undefined, `${mode} 不应设置 V2_FORCE_STUB`);
+        assert.equal(env.PINOVEL_EVAL_REPLAY_TRANSPORT, undefined, `${mode} 不应声明确定性传输`);
+      }
+    } finally {
+      rmSync(sourceRoot, { recursive: true, force: true });
     }
   });
 });
@@ -1567,6 +1818,158 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
     });
     assert.equal(report.verdict, "reject");
     assert.ok(report.verdictReasons.some((r) => r.includes("四臂不完整")));
+  });
+
+  it("deriveArmMetrics 从 gate modelCalls 读 tokenCost，不写死 0 / 100%", () => {
+    const runRoot = join(tmpMatrix, "trace-cost-arm");
+    const fixtureId = "fixture.trace-cost.1";
+    const tracesDir = join(runRoot, "samples", fixtureId, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    writeFileSync(
+      join(tracesDir, "chapter-002-quality-trace.json"),
+      JSON.stringify({
+        modelCalls: [],
+        recoveryAttempts: [],
+        gates: [
+          {
+            stage: "v2_final_selected",
+            evidence: {
+              modelCalls: [
+                {
+                  requestedRoute: "v2_rawstage2_gemini31",
+                  actualProvider: "gemini31",
+                  tokenUsage: { in: 1602, out: 3746 },
+                },
+                {
+                  requestedRoute: "v2_amplified_gemini31",
+                  actualProvider: "gemini31",
+                  tokenUsage: { in: 1719, out: 4705 },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    const recoveredFixtureId = "fixture.trace-cost.2";
+    mkdirSync(join(runRoot, "samples", recoveredFixtureId, "traces"), { recursive: true });
+    writeFileSync(
+      join(runRoot, "samples", recoveredFixtureId, "traces", "chapter-002-quality-trace.json"),
+      JSON.stringify({
+        recoveryAttempts: [{ reason: "timeout" }],
+        gates: [
+          {
+            stage: "v2_final_selected",
+            evidence: {
+              modelCalls: [
+                {
+                  requestedRoute: "v2_rawstage2_gemini31",
+                  actualProvider: "gemini31",
+                  tokenUsage: { in: 100, out: 200 },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    const tailFixtureId = "fixture.trace-cost.3";
+    mkdirSync(join(runRoot, "samples", tailFixtureId, "traces"), { recursive: true });
+    writeFileSync(
+      join(runRoot, "samples", tailFixtureId, "traces", "chapter-002-quality-trace.json"),
+      JSON.stringify({
+        recoveryAttempts: [],
+        gates: [{ stage: "v2_final_selected", evidence: { modelCalls: [] } }],
+      }),
+    );
+    const shortSamples = Array.from({ length: 17 }, (_, i) => ({
+      fixtureId: `fixture.trace-cost.short.${i + 1}`,
+      fixtureHash: HEX64(`short-${i}`),
+      replayMode: "production_like",
+      scratchWorkspaceId: `eval-short-${i}`,
+      status: "completed",
+      failureAttribution: null,
+      failureEnvelopes: [],
+      traceArchived: true,
+      traceArchivePath: join(runRoot, "samples", fixtureId, "traces"),
+      isolationViolations: [],
+      modelCalls: 0,
+      durationMs: 400,
+    }));
+    const manifest = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-trace-cost",
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "production_like",
+      releaseId: "rel-prod-110",
+      bundleId: "bundle-20260815",
+      runRoot,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      finishedAt: "2026-08-15T00:01:00.000Z",
+      samples: [
+        {
+          fixtureId,
+          fixtureHash: HEX64("trace-cost-1"),
+          replayMode: "production_like",
+          scratchWorkspaceId: "eval-trace-cost-1",
+          status: "completed",
+          failureAttribution: null,
+          failureEnvelopes: [],
+          traceArchived: true,
+          traceArchivePath: tracesDir,
+          isolationViolations: [],
+          modelCalls: 2,
+          durationMs: 400,
+        },
+        {
+          fixtureId: recoveredFixtureId,
+          fixtureHash: HEX64("trace-cost-2"),
+          replayMode: "production_like",
+          scratchWorkspaceId: "eval-trace-cost-2",
+          status: "completed",
+          failureAttribution: null,
+          failureEnvelopes: [],
+          traceArchived: true,
+          traceArchivePath: join(runRoot, "samples", recoveredFixtureId, "traces"),
+          isolationViolations: [],
+          modelCalls: 1,
+          durationMs: 800,
+        },
+        {
+          fixtureId: tailFixtureId,
+          fixtureHash: HEX64("trace-cost-3"),
+          replayMode: "production_like",
+          scratchWorkspaceId: "eval-trace-cost-3",
+          status: "failed",
+          failureAttribution: "model_timeout",
+          failureEnvelopes: [{ stage: "raw", reason: "timeout", severity: "hard" }],
+          traceArchived: true,
+          traceArchivePath: join(runRoot, "samples", tailFixtureId, "traces"),
+          isolationViolations: [],
+          modelCalls: 0,
+          durationMs: 20_000,
+        },
+        ...shortSamples,
+      ],
+      summary: {
+        totalSamples: 20,
+        countedSamples: 20,
+        completed: 19,
+        failed: 1,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    };
+    writeFileSync(join(runRoot, "manifest.json"), JSON.stringify(manifest, null, 2));
+
+    const arm = matrix.deriveArmMetricsFromReplayManifest(manifest, "candidate", { runRoot });
+    assert.equal(arm.tokenCost, 12072, `tokenCost 应从 traces 汇总，实际 ${arm.tokenCost}`);
+    assert.equal(arm.userEditDistance, null);
+    assert.equal(arm.firstAttemptSuccessRate, 18 / 20);
+    assert.equal(arm.recoveredSuccessRate, 1);
+    assert.equal(arm.longTailFailures, 1);
   });
 });
 

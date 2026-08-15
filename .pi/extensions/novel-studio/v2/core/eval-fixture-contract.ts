@@ -844,6 +844,25 @@ export interface ReplayRunSampleEntry {
   isolationViolations: Array<{ kind: string; detail: string }>;
   /** 模型调用次数与成本（无模型回放为 0）。 */
   modelCalls: number;
+  /** production_like：按 provider 聚合（如 gemini31=3）。 */
+  modelCallsByProvider?: Record<string, number>;
+  /** production_like：按 requestedRoute 聚合。 */
+  modelCallsByRequestedRoute?: Record<string, number>;
+  /** production_like：未授权跨模型调用数（要求 0）。 */
+  unauthorizedCrossModelCount?: number;
+  /** 从真实 quality-trace 汇总的 token（in+out）；无调用为 0。 */
+  tokenCost?: number;
+  /** 从真实 quality-trace 汇总的恢复尝试次数。 */
+  recoveryAttemptCount?: number;
+  /** production_like：从真实 trace 提取的生产身份。 */
+  releaseIdentity?: {
+    devMode: boolean;
+    releaseId: string | null;
+    environmentFingerprint: string | null;
+    approvalRef: string | null;
+    bundleId: string | null;
+    modelVersion: string | null;
+  };
   /** 端到端延迟（ms）。 */
   durationMs: number;
 }

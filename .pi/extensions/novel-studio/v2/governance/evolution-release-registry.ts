@@ -469,11 +469,15 @@ export function createEvolutionReleaseRegistry(
       }
     }
 
-    // 构造更新后的 manifest：只更新 status 和 approvalRef（其他字段保持不变）
+    // 构造更新后的 manifest：只更新生命周期字段（status / approvalRef / activatedAt）
+    const enteringActive = newStatus === "active_prod" || newStatus === "active_dev";
     const updated: EvolutionReleaseManifest = {
       ...existing,
       status: newStatus,
       approvalRef: finalApprovalRef,
+      activatedAt: enteringActive
+        ? (existing.activatedAt ?? new Date().toISOString())
+        : existing.activatedAt,
     };
 
     // 原子写入（绕过 frozen immutability 检查；

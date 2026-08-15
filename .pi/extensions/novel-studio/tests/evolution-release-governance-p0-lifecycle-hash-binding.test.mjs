@@ -155,6 +155,31 @@ test("P0-lifecycle-1b: payload hash 在 approvalRef 变化中保持稳定", () =
   );
 });
 
+test("P1.1: transitionStatus 进入 active_prod 必须写入 activatedAt", () => {
+  const root = makeTempRoot();
+  try {
+    const registry = createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
+    const base = makeManifest("rel-act-1", "candidate_prod", "fp-act", "apv-act");
+    registry.writeManifest(base);
+    assert.equal(registry.loadManifest("rel-act-1").activatedAt, null);
+
+    const updated = registry.transitionStatus("rel-act-1", "active_prod", { actor: "user" });
+    assert.equal(updated.status, "active_prod");
+    assert.equal(typeof updated.activatedAt, "string");
+    assert.ok(!Number.isNaN(Date.parse(updated.activatedAt)));
+
+    const reloaded = registry.loadManifest("rel-act-1");
+    assert.equal(reloaded.activatedAt, updated.activatedAt);
+    assert.equal(
+      computeReleasePayloadHash(base),
+      computeReleasePayloadHash(reloaded),
+      "activatedAt 不得改变 payload hash",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("P0-lifecycle-1c: payload hash 在 activatedAt 变化中保持稳定", () => {
   const base = makeManifest("rel-hash-1c", "active_prod", "fp-hash-1c", "apv-1c");
   const notActivated = { ...base, activatedAt: null };

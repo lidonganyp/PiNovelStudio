@@ -66,6 +66,15 @@ import {
   type FailureAttributionResult,
 } from "../v2/core/eval-failure-attribution.js";
 import { evaluateProductionReleaseGate } from "../v2/governance/production-release-gate.js";
+import {
+  evaluateProductionLikeEvidence,
+  extractReplayModelCalls,
+  extractReplayRecoveryAttempts,
+  extractReplayReleaseIdentity,
+  summarizeReplayModelCalls,
+  type ReplayModelCallStats,
+  type ReplayReleaseIdentity,
+} from "../v2/core/eval-replay-trace-stats.js";
 
 // ============================================================================
 // 类型定义
@@ -282,14 +291,20 @@ export function resolveModelRouteInvokeArgs(
  * 环境指纹）evaluateProductionReleaseGate，并要求 gate 通过且 active release
  * 与 fixture provenance 同源（releaseId 一致 + bundleId 一致）。
  *
- * 子进程 PINOVEL_DEV_MODE=1 bypass 仅因 scratch 隔离根没有主仓治理面
- * （在 scratch 内伪造治理数据不可接受）；生产等价性由本前置检查承担，
- * 证据以 isolation violation / failure envelope 形式进入 run manifest。
+ * production_like 子进程不再设置 PINOVEL_DEV_MODE。本前置检查确认
+ * 源仓真实 G6 可通过，并给出子进程必须写入 trace 的期望身份。
  */
 export function verifyProductionLikeReleaseGate(
   projectRoot: string,
   fixture: EvalFixtureV1,
-): { ok: true; releaseId: string; bundleId: string | null } | { ok: false; reason: string } {
+): {
+  ok: true;
+  releaseId: string;
+  bundleId: string | null;
+  environmentFingerprint: string | null;
+  approvalRef: string | null;
+  modelVersion: string | null;
+} | { ok: false; reason: string } {
   const savedDevMode = process.env.PINOVEL_DEV_MODE;
   delete process.env.PINOVEL_DEV_MODE;
   try {
@@ -318,7 +333,14 @@ export function verifyProductionLikeReleaseGate(
         reason: `active_prod bundleId=${gateBundleId} 与 fixture provenance bundleId=${fixtureBundleId} 不匹配（行为身份漂移，需重新采集 fixture）`,
       };
     }
-    return { ok: true, releaseId: gate.releaseId, bundleId: gateBundleId };
+    return {
+      ok: true,
+      releaseId: gate.releaseId ?? fixture.provenance.releaseId,
+      bundleId: gateBundleId,
+      environmentFingerprint: gate.environmentFingerprint ?? null,
+      approvalRef: gate.approvalRef ?? null,
+      modelVersion: gate.behaviorIdentity?.modelVersion ?? null,
+    };
   } finally {
     if (savedDevMode !== undefined) {
       process.env.PINOVEL_DEV_MODE = savedDevMode;
@@ -515,31 +537,44 @@ function collectFailureEnvelopes(
   return envelopes;
 }
 
-/** 统计 scratch 内模型调用次数（quality-trace 的 modelCalls 数组长度）。 */
-function countModelCalls(lease: ScratchWorkspaceLease): number {
+export function collectReplayTraceEvidence(lease: ScratchWorkspaceLease): {
+  stats: ReplayModelCallStats;
+  identity: ReplayReleaseIdentity | null;
+} {
+  const empty: ReplayModelCallStats = {
+    modelCalls: 0,
+    tokenIn: 0,
+    tokenOut: 0,
+    tokenCost: 0,
+    recoveryAttempts: 0,
+    byProvider: {},
+    byRequestedRoute: {},
+    unauthorizedCrossModelCount: 0,
+  };
   const tracesDir = join(lease.workspacePath, "traces");
   if (!existsSync(tracesDir)) {
-    return 0;
+    return { stats: empty, identity: null };
   }
-  let total = 0;
+  const mergedCalls = [];
+  let recoveryAttempts = 0;
+  let identity: ReplayReleaseIdentity | null = null;
   for (const name of readdirSync(tracesDir)) {
-    if (!name.endsWith(".json")) {
+    if (!name.endsWith(".json") || name.includes("evidence-report")) {
       continue;
     }
     try {
-      const trace = JSON.parse(readFileSync(join(tracesDir, name), "utf-8")) as Record<
-        string,
-        unknown
-      >;
-      const modelCalls = trace.modelCalls;
-      if (Array.isArray(modelCalls)) {
-        total += modelCalls.length;
+      const trace = JSON.parse(readFileSync(join(tracesDir, name), "utf-8")) as unknown;
+      mergedCalls.push(...extractReplayModelCalls(trace));
+      recoveryAttempts += extractReplayRecoveryAttempts(trace);
+      const nextIdentity = extractReplayReleaseIdentity(trace);
+      if (nextIdentity) {
+        identity = nextIdentity;
       }
     } catch {
       // trace 损坏已在 failure envelope 收集处记录，此处跳过计数
     }
   }
-  return total;
+  return { stats: summarizeReplayModelCalls(mergedCalls, recoveryAttempts), identity };
 }
 
 function hasTraceArchive(lease: ScratchWorkspaceLease): boolean {
@@ -859,7 +894,9 @@ export async function runFullPipelineReplay(
     });
     const materializeResult = materializeWorkspace(lease, fixture);
 
-    const invokeEnv = buildReplayIsolationEnv(fixture, process.env, lease.scratchRoot);
+    const invokeEnv = buildReplayIsolationEnv(fixture, process.env, lease.scratchRoot, {
+      sourceProjectRoot: projectRoot,
+    });
     // F4-4：确定性回放传输 env 接线。recorded 结果 / synthetic 故障计划物化到
     // scratch 隔离根（不进主仓），unified-entry 按 PINOVEL_EVAL_REPLAY_TRANSPORT
     // 声明 fail-closed 消费（传输 env 丢失 -> 抛错，不静默回退 stub/网络）。
@@ -927,8 +964,45 @@ export async function runFullPipelineReplay(
 
     // 收集失败 envelope 与模型调用统计
     const envelopes = collectFailureEnvelopes(lease, fixture.chapterSeed.chapterId);
-    const modelCalls = countModelCalls(lease);
+    const traceEvidence = collectReplayTraceEvidence(lease);
+    const modelCalls = traceEvidence.stats.modelCalls;
     const traceArchived = hasTraceArchive(lease);
+    if (fixture.replayMode === "production_like") {
+      const expected = {
+        releaseId: fixture.provenance.releaseId,
+        environmentFingerprint: "",
+        approvalRef: "",
+        bundleId: fixture.provenance.bundleId,
+        modelVersion: fixture.provenance.modelVersion,
+      };
+      const gateCheck = verifyProductionLikeReleaseGate(projectRoot, fixture);
+      if (gateCheck.ok) {
+        expected.environmentFingerprint = gateCheck.environmentFingerprint ?? "";
+        expected.approvalRef = gateCheck.approvalRef ?? "";
+        expected.bundleId = gateCheck.bundleId ?? fixture.provenance.bundleId;
+        expected.modelVersion = gateCheck.modelVersion ?? fixture.provenance.modelVersion;
+      }
+      const productionCheck = evaluateProductionLikeEvidence({
+        modelCalls,
+        stats: traceEvidence.stats,
+        identity: traceEvidence.identity,
+        expectedRelease: expected,
+        modelRoute: fixture.provenance.modelRoute,
+      });
+      if (!productionCheck.ok) {
+        envelopes.push({
+          stage: "replay-isolation",
+          gate: "production_like_identity",
+          severity: "hard",
+          reason: productionCheck.reasons.join("; "),
+          raw: {
+            stats: traceEvidence.stats,
+            identity: traceEvidence.identity,
+            reasons: productionCheck.reasons,
+          },
+        });
+      }
+    }
 
     // 归因：仅失败样本进入分类器。成功 invoke 不得记 unclassified。
     const attribution = resolveSampleAttribution({
@@ -1011,6 +1085,12 @@ export async function runFullPipelineReplay(
         : null,
       isolationViolations: allViolations.map((v) => ({ kind: v.kind, detail: v.detail })),
       modelCalls,
+      modelCallsByProvider: traceEvidence.stats.byProvider,
+      modelCallsByRequestedRoute: traceEvidence.stats.byRequestedRoute,
+      unauthorizedCrossModelCount: traceEvidence.stats.unauthorizedCrossModelCount,
+      tokenCost: traceEvidence.stats.tokenCost,
+      recoveryAttemptCount: traceEvidence.stats.recoveryAttempts,
+      releaseIdentity: traceEvidence.identity ?? undefined,
       durationMs,
     };
     samples.push({

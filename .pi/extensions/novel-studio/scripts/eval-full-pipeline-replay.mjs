@@ -55,6 +55,24 @@ function resolveReplayRepoRoot(startDir) {
 }
 
 const REPO_ROOT = resolveReplayRepoRoot(EXT_ROOT);
+const PROJECT_ROOT = process.env.PINOVEL_PROJECT_ROOT
+  ? resolve(process.env.PINOVEL_PROJECT_ROOT)
+  : REPO_ROOT;
+
+// 与 evolution-cli 对齐：从仓库根或 PINOVEL_DOTENV_PATH 注入密钥/开关，
+// 避免 capture 与 production_like 因 secretEnvStates 集合不同而指纹漂移。
+const dotenvPath = process.env.PINOVEL_DOTENV_PATH || join(REPO_ROOT, ".env");
+if (existsSync(dotenvPath)) {
+  for (const line of readFileSync(dotenvPath, "utf-8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const value = trimmed.slice(eqIdx + 1).trim();
+    if (!process.env[key]) process.env[key] = value;
+  }
+}
 
 function usageAndExit() {
   const usage = [
@@ -210,10 +228,10 @@ if (!existsSync(runnerDist)) {
 const runner = await import(pathToFileURL(runnerDist).href);
 
 console.error(
-  `[eval-replay-cli] 开始回放：${fixtures.length} 个 fixture，projectRoot=${REPO_ROOT}（extRoot=${EXT_ROOT}）`,
+  `[eval-replay-cli] 开始回放：${fixtures.length} 个 fixture，projectRoot=${PROJECT_ROOT}（extRoot=${EXT_ROOT}）`,
 );
 const report = await runner.runFullPipelineReplay({
-  projectRoot: REPO_ROOT,
+  projectRoot: PROJECT_ROOT,
   fixtures,
   ...(args.runId ? { runId: args.runId } : {}),
   ...(args.archiveRoot ? { archiveRoot: args.archiveRoot } : {}),
@@ -315,6 +333,24 @@ const evalGate = gateMod.evaluateEvalEvidenceGate({
 });
 const allCompleted = report.samples.every((s) => s.entry.status === "completed");
 const unclassifiedCount = report.attributionSummary?.unclassified ?? 0;
+const replayMode = report.manifest.replayMode;
+const modelCalls = report.samples.reduce((sum, sample) => sum + (sample.entry.modelCalls ?? 0), 0);
+const modelCallsByProvider = {};
+const modelCallsByRequestedRoute = {};
+let unauthorizedCrossModelCount = 0;
+let releaseIdentity = null;
+for (const sample of report.samples) {
+  for (const [key, value] of Object.entries(sample.entry.modelCallsByProvider ?? {})) {
+    modelCallsByProvider[key] = (modelCallsByProvider[key] ?? 0) + Number(value);
+  }
+  for (const [key, value] of Object.entries(sample.entry.modelCallsByRequestedRoute ?? {})) {
+    modelCallsByRequestedRoute[key] = (modelCallsByRequestedRoute[key] ?? 0) + Number(value);
+  }
+  unauthorizedCrossModelCount += sample.entry.unauthorizedCrossModelCount ?? 0;
+  if (sample.entry.releaseIdentity) {
+    releaseIdentity = sample.entry.releaseIdentity;
+  }
+}
 const cliVerdict = gateMod.evaluateReplayCliSuccess({
   allCompleted,
   isolationViolationCount: report.isolationViolationCount,
@@ -322,6 +358,16 @@ const cliVerdict = gateMod.evaluateReplayCliSuccess({
   unclassifiedCount,
   gradePassed: grade.passed,
   evalGateVerdict: evalGate.verdict,
+  replayMode,
+  modelCalls,
+  modelCallsByProvider,
+  modelCallsByRequestedRoute,
+  unauthorizedCrossModelCount,
+  releaseIdentity,
+  expectedRelease: {
+    releaseId,
+    bundleId,
+  },
 });
 
 const verdictPath = join(args.outDir, "cli-verdict.json");
