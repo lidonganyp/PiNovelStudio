@@ -18,7 +18,8 @@
  *  2. release/bundle 绑定与目标 release 一致（防串证据）；
  *  3. Deterministic Grader（P5）通过全部 10 项检查；
  *  4. 隔离违规 = 0（P1 生产面零污染）；
- *  5. R2/R3 额外要求 matrix-report（P3）：verdict=pass 且 candidate pass^3 = 1。
+ *  5. R2/R3 额外要求 matrix-report：必须带 schema/四臂/hash/release-bundle 绑定，
+ *     P6 重新计算 verdict 与 pass^3，不信任落盘的两个字段。
  */
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -31,6 +32,10 @@ import {
   gradeDeterministicFromRunRoot,
   type DeterministicGradeReport,
 } from "../core/eval-deterministic-grader.js";
+import {
+  parseBoundMatrixReport,
+  recomputeBoundMatrixReport,
+} from "../core/eval-replay-matrix.js";
 import type { ChangeClass } from "./evolution-release-types.js";
 
 // ============================================================================
@@ -71,6 +76,7 @@ export interface EvalEvidenceGateResult {
     matrixReportFound: boolean;
     matrixVerdict: string | null;
     candidatePassPow3: number | null;
+    matrixRecomputed: boolean;
     isolationViolationCount: number;
     traceRetentionRate: number | null;
   };
@@ -87,19 +93,23 @@ export function matrixEvidenceRequired(changeClass: ChangeClass): boolean {
 // 内部工具
 // ============================================================================
 
-interface MatrixReportFile {
-  verdict?: unknown;
-  candidatePassPow3?: unknown;
-}
-
-function readMatrixReport(evalRunRoot: string): MatrixReportFile | null {
+function readMatrixReportRaw(evalRunRoot: string): unknown | null {
   const path = join(evalRunRoot, "matrix-report.json");
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as MatrixReportFile;
+    return JSON.parse(readFileSync(path, "utf-8"));
   } catch {
-    return null;
+    return { __parseError: true };
   }
+}
+
+function isPlainParseError(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value as { __parseError?: boolean }).__parseError === true
+  );
 }
 
 function loadRunManifest(evalRunRoot: string): {
@@ -156,6 +166,7 @@ export function evaluateEvalEvidenceGate(
     matrixReportFound: false,
     matrixVerdict: null,
     candidatePassPow3: null,
+    matrixRecomputed: false,
     isolationViolationCount: 0,
     traceRetentionRate: null,
   };
@@ -222,11 +233,11 @@ export function evaluateEvalEvidenceGate(
     };
   }
 
-  // -- 5. R2/R3 matrix 证据 --------------------------------------------------
+  // -- 5. R2/R3 matrix 证据：schema + 四臂 + hash + 重新计算 -----------------
   if (matrixEvidenceRequired(input.changeClass)) {
-    const matrix = readMatrixReport(input.evalRunRoot);
-    evidence.matrixReportFound = matrix !== null;
-    if (!matrix) {
+    const rawMatrix = readMatrixReportRaw(input.evalRunRoot);
+    evidence.matrixReportFound = rawMatrix !== null && !(isPlainParseError(rawMatrix));
+    if (rawMatrix === null) {
       return {
         verdict: "insufficient",
         code: "EVAL_EVIDENCE_MATRIX_MISSING",
@@ -235,25 +246,54 @@ export function evaluateEvalEvidenceGate(
         gradeReport: grade,
       };
     }
-    const verdict = typeof matrix.verdict === "string" ? matrix.verdict : null;
-    evidence.matrixVerdict = verdict;
-    if (verdict !== "pass") {
+    const parsed = parseBoundMatrixReport(
+      isPlainParseError(rawMatrix) ? null : rawMatrix,
+    );
+    if (!parsed.ok || !parsed.report) {
       return {
         verdict: "rejected",
-        code: "EVAL_EVIDENCE_MATRIX_REJECTED",
-        reason: `A/B 矩阵 verdict=${String(verdict)}（要求 pass）`,
+        code: "EVAL_EVIDENCE_MATRIX_INVALID",
+        reason: `matrix-report schema/hash 校验失败：${parsed.errors.join("; ")}`,
         evidence,
         gradeReport: grade,
       };
     }
-    const passPow3 =
-      typeof matrix.candidatePassPow3 === "number" ? matrix.candidatePassPow3 : null;
-    evidence.candidatePassPow3 = passPow3;
-    if (passPow3 === null || passPow3 < 1) {
+    if (parsed.report.candidateReleaseId !== input.releaseId) {
+      return {
+        verdict: "rejected",
+        code: "EVAL_EVIDENCE_MATRIX_RELEASE_MISMATCH",
+        reason: `矩阵绑定 release ${parsed.report.candidateReleaseId} 与目标 ${input.releaseId} 不一致`,
+        evidence,
+        gradeReport: grade,
+      };
+    }
+    if (input.bundleId && parsed.report.candidateBundleId !== input.bundleId) {
+      return {
+        verdict: "rejected",
+        code: "EVAL_EVIDENCE_MATRIX_BUNDLE_MISMATCH",
+        reason: `矩阵绑定 bundle ${parsed.report.candidateBundleId} 与目标 ${input.bundleId} 不一致`,
+        evidence,
+        gradeReport: grade,
+      };
+    }
+    const recomputed = recomputeBoundMatrixReport(parsed.report);
+    evidence.matrixRecomputed = true;
+    evidence.matrixVerdict = recomputed.verdict;
+    evidence.candidatePassPow3 = recomputed.candidatePassPow3;
+    if (recomputed.verdict !== "pass") {
+      return {
+        verdict: "rejected",
+        code: "EVAL_EVIDENCE_MATRIX_REJECTED",
+        reason: `A/B 矩阵重新计算 verdict=${recomputed.verdict}：${recomputed.verdictReasons.join("；")}`,
+        evidence,
+        gradeReport: grade,
+      };
+    }
+    if (recomputed.candidatePassPow3 === null || recomputed.candidatePassPow3 < 1) {
       return {
         verdict: "rejected",
         code: "EVAL_EVIDENCE_PASS_POW3_UNSATISFIED",
-        reason: `发布关键路径 pass^3=${String(passPow3)}（要求 =1，即连续 3 次全通过）`,
+        reason: `发布关键路径重新计算 pass^3=${String(recomputed.candidatePassPow3)}（要求 =1）`,
         evidence,
         gradeReport: grade,
       };
@@ -335,13 +375,61 @@ export type EvalEvidenceEnforcement = "mandatory" | "advisory";
 
 /**
  * eval evidence 强制级别：
- *  - R3（Prompt/工具协议/上下文/路由/预算重大变更）：无条件强制；
- *  - R0/R1/R2：advisory（提供 evalRunRoot 时仍 fail-closed 检查，
- *    未提供时打 EVAL_EVIDENCE_ADVISORY 警告）。
- * 与 canary gate 的渐进采纳一致；真实 replay 基线建立后可收敛为全强制。
+ *  生产晋级（active_prod）对 R0-R3 全部 mandatory。
+ *  Eval → Replay → Review → Release 不可绕过；未提供 evalRunRoot 即阻断。
+ *  R0/R1 仍为 deterministic-only（不强制四臂矩阵）；R2/R3 额外强制矩阵。
  */
 export function resolveEvalEvidenceEnforcement(
-  changeClass: ChangeClass,
+  _changeClass: ChangeClass,
 ): EvalEvidenceEnforcement {
-  return changeClass === "R3" ? "mandatory" : "advisory";
+  return "mandatory";
+}
+
+// ============================================================================
+// 回放 CLI 强制后置判定（不能只看 completed + 零隔离）
+// ============================================================================
+
+export interface ReplayCliSuccessInput {
+  allCompleted: boolean;
+  isolationViolationCount: number;
+  traceRetentionRate: number | null;
+  unclassifiedCount: number;
+  gradePassed: boolean;
+  evalGateVerdict: EvalEvidenceVerdict | null;
+}
+
+export interface ReplayCliSuccessResult {
+  ok: boolean;
+  reasons: string[];
+}
+
+/**
+ * 回放 CLI 的强制成功条件。P6 eval-gate 是必经后置步骤，
+ * 不得以“全部 completed 且零隔离违规”单独宣告 PASS。
+ */
+export function evaluateReplayCliSuccess(
+  input: ReplayCliSuccessInput,
+): ReplayCliSuccessResult {
+  const reasons: string[] = [];
+  if (!input.allCompleted) {
+    reasons.push("存在未 completed 样本");
+  }
+  if (input.isolationViolationCount !== 0) {
+    reasons.push(`隔离违规 ${input.isolationViolationCount} 条（要求 0）`);
+  }
+  if (input.traceRetentionRate !== 1) {
+    reasons.push(`trace 留存率 ${String(input.traceRetentionRate)}（要求 1）`);
+  }
+  if (input.unclassifiedCount !== 0) {
+    reasons.push(`未分类失败 ${input.unclassifiedCount}（要求 0）`);
+  }
+  if (!input.gradePassed) {
+    reasons.push("确定性 grader 未通过");
+  }
+  if (input.evalGateVerdict !== "approved") {
+    reasons.push(
+      `P6 eval-gate 未通过（verdict=${String(input.evalGateVerdict)}）`,
+    );
+  }
+  return { ok: reasons.length === 0, reasons };
 }

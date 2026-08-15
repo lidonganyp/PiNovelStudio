@@ -1,0 +1,25 @@
+{
+  "ok": false,
+  "reasons": [
+    "存在未 completed 样本",
+    "隔离违规 1 条（要求 0）",
+    "trace 留存率 0（要求 1）",
+    "确定性 grader 未通过",
+    "P6 eval-gate 未通过（verdict=insufficient）"
+  ],
+  "grade": {
+    "passed": false,
+    "failedChecks": [
+      "isolation_constraints"
+    ]
+  },
+  "evalGate": {
+    "verdict": "insufficient",
+    "code": "EVAL_EVIDENCE_MANIFEST_INVALID",
+    "reason": "eval run manifest 校验失败：/samples/0/isolationViolations: isolation_violation_present — /samples/0/isolationViolations 必须为空数组（存在违规的 run 不得进入结果统计）"
+  },
+  "releaseId": "rel-prod-111",
+  "bundleId": "0d5f0c70b7ffc96b174f58f2c5cc0c0467d5b4230f495cf84415cb41a6dbafd9",
+  "changeClass": "R1",
+  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-production-like-0d623fc"
+}

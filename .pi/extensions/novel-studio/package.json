@@ -20,6 +20,7 @@
     "smoke": "node scripts/artifact-operation-lock.mjs --command \"node --import ./tests/setup-test-env.mjs --test tests/phase5-unified-default-path.test.mjs\"",
     "replay:multi-agent-boundary": "node scripts/artifact-operation-lock.mjs --command \"node scripts/multi-agent-boundary-replay.mjs --samples=3\"",
     "replay:eval-full-pipeline": "node scripts/eval-full-pipeline-replay.mjs",
+    "replay:eval-matrix-report": "node scripts/eval-generate-matrix-report.mjs",
     "simplicity-gate": "node scripts/artifact-operation-lock.mjs --command \"node scripts/simplicity-gate.mjs\"",
     "typecheck": "npx tsc --noEmit",
     "evolution:capture": "node scripts/evolution-cli.mjs capture",

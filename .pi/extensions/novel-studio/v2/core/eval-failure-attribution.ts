@@ -140,6 +140,13 @@ const ATTRIBUTION_RULES: ReadonlyArray<AttributionRule> = [
     match: (input) => input.perspective === "replay",
   },
   {
+    ruleId: "rule:gate=invoke_failed",
+    attribution: "replay_environment",
+    match: (input, text) =>
+      input.gate === "invoke_failed" ||
+      containsAny(text, ["invoke_failed", "exit code", "exit_code"]),
+  },
+  {
     ruleId: "rule:gate=human_approval",
     attribution: "human_approval",
     match: (_input, text) =>

@@ -258,6 +258,7 @@ import "../v2/governance/canary-promotion-gate.js";
 import "../v2/core/eval-fixture-contract.js";
 import "../v2/core/eval-deterministic-grader.js";
 import "../v2/core/eval-fixture-capture.js";
+import "../v2/core/eval-replay-matrix.js";
 import "../v2/governance/eval-evidence-gate.js";
 
 // G7-Finalization-Handler-Prod-Binding：用户定稿消费链 handler（计划 §12.2 line 587）。
@@ -312,6 +313,10 @@ import "../v2/core/memory/memory-compression.js";
 import "../v2/core/memory/memory-lifecycle.js";
 import "../v2/core/memory/memory-retrieval.js";
 import "../v2/core/memory/index.js";
+
+// CONTEXT-EVIDENCE-GOVERNANCE-1 Wave 0：契约/映射表/A 基线常量。
+// 纯类型 + 常量，无 I/O；Wave 0 不进入生产读取/排序路径。纳入 dist-test 供契约测试消费。
+import "../v2/core/evidence-governance-contracts.js";
 
 // Marker export to prevent tree-shaking from removing side-effect imports
 export const TEST_MODULES_LOADED = true;

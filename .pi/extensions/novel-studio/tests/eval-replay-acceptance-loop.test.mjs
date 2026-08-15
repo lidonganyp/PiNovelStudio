@@ -51,6 +51,9 @@ const modelAdapter = await import(
 const workspaceAdapter = await import(
   `file://${join(evalDist, "v2", "adapters", "legacy-workspace-adapter.js")}`
 );
+const replayRunner = await import(
+  `file://${join(evalDist, "eval", "full-pipeline-replay-runner.js")}`
+);
 
 // ============================================================================
 // 测试夹具构造
@@ -1409,5 +1412,128 @@ describe("F4-4 隔离 env：确定性回放模式携带传输标记", () => {
       assert.equal(env.V2_FORCE_STUB, undefined, `${mode} 不应设置 V2_FORCE_STUB`);
       assert.equal(env.PINOVEL_EVAL_REPLAY_TRANSPORT, undefined, `${mode} 不应声明确定性传输`);
     }
+  });
+});
+
+// ============================================================================
+// 生产矩阵生成器 + 成功 invoke 不得污染归因
+// ============================================================================
+
+describe("矩阵报告必须由回放 run 生成，不得手写两字段过门", () => {
+  const tmpMatrix = join(__dirname, ".tmp-eval-matrix-gen");
+
+  before(() => {
+    mkdirSync(tmpMatrix, { recursive: true });
+  });
+  after(() => {
+    rmSync(tmpMatrix, { recursive: true, force: true });
+  });
+
+  const writeArmRun = (armId, sampleCount = 3) => {
+    const runRoot = join(tmpMatrix, armId);
+    mkdirSync(join(runRoot, "samples"), { recursive: true });
+    const samples = [];
+    for (let i = 0; i < sampleCount; i += 1) {
+      samples.push({
+        fixtureId: `fixture.${armId}.${i + 1}`,
+        fixtureHash: HEX64(`${armId}-${i}`),
+        replayMode: "stub",
+        scratchWorkspaceId: `eval-${armId}-${i}`,
+        status: "completed",
+        failureAttribution: null,
+        failureEnvelopes: [],
+        traceArchived: true,
+        traceArchivePath: join(runRoot, "samples", `fixture.${armId}.${i + 1}`, "traces"),
+        isolationViolations: [],
+        modelCalls: 0,
+        durationMs: 400 + i,
+      });
+    }
+    const manifest = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: `run-${armId}`,
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "stub",
+      releaseId: "rel-prod-110",
+      bundleId: "bundle-20260815",
+      runRoot,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      finishedAt: "2026-08-15T00:01:00.000Z",
+      samples,
+      summary: {
+        totalSamples: sampleCount,
+        countedSamples: sampleCount,
+        completed: sampleCount,
+        failed: 0,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    };
+    writeFileSync(join(runRoot, "manifest.json"), JSON.stringify(manifest, null, 2));
+    return runRoot;
+  };
+
+  it("generateMatrixReportFromReplayRuns 写出 schema/hash/release/bundle 绑定", () => {
+    const report = matrix.generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-20260815",
+      baselineReleaseId: "rel-prod-109",
+      armRunRoots: {
+        baseline: writeArmRun("baseline"),
+        candidate: writeArmRun("candidate"),
+        raw_direct: writeArmRun("raw_direct"),
+        recovery: writeArmRun("recovery"),
+      },
+      codeCommit: "abc1234deadbeef",
+    });
+    assert.equal(report.schemaId, "pinovel.eval-replay-matrix");
+    assert.equal(report.schemaVersion, 1);
+    assert.equal(report.candidateReleaseId, "rel-prod-110");
+    assert.equal(report.candidateBundleId, "bundle-20260815");
+    assert.equal(report.codeCommit, "abc1234deadbeef");
+    assert.equal(report.arms.length, 4);
+    assert.equal(report.verdict, "pass");
+    assert.equal(report.candidatePassPow3, 1);
+    assert.match(report.reportHash, /^[0-9a-f]{64}$/);
+    assert.equal(report.reportHash, matrix.computeMatrixReportHash(report));
+  });
+
+  it("缺臂时生成器仍产出合法报告且 verdict=reject", () => {
+    const report = matrix.generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-20260815",
+      baselineReleaseId: "rel-prod-109",
+      armRunRoots: {
+        candidate: writeArmRun("candidate-only"),
+      },
+      codeCommit: "abc1234deadbeef",
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("四臂不完整")));
+  });
+});
+
+describe("成功 invoke 不得记入失败归因", () => {
+  it("无 envelope + exit 0 + 未超时 → attribution=null", () => {
+    const result = replayRunner.resolveSampleAttribution({
+      envelopes: [],
+      timedOut: false,
+      exitCode: 0,
+      stderr: "",
+    });
+    assert.equal(result, null);
+  });
+
+  it("invoke 失败仍分类，不得 silently drop", () => {
+    const result = replayRunner.resolveSampleAttribution({
+      envelopes: [],
+      timedOut: false,
+      exitCode: 1,
+      stderr: "boom",
+    });
+    assert.ok(result);
+    assert.equal(result.attribution, "replay_environment");
   });
 });

@@ -1,0 +1,72 @@
+{
+  "runId": "closure-recorded-0d623fc",
+  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-recorded-0d623fc",
+  "isolationViolationCount": 0,
+  "attributionSummary": {
+    "total": 0,
+    "classified": 0,
+    "unclassified": 0,
+    "counts": {
+      "prompt": 0,
+      "model": 0,
+      "provider_network": 0,
+      "context": 0,
+      "retrieval": 0,
+      "tool_protocol": 0,
+      "budget": 0,
+      "timeout": 0,
+      "concurrency": 0,
+      "release_drift": 0,
+      "state_commit": 0,
+      "human_approval": 0,
+      "replay_environment": 0,
+      "grader_instability": 0,
+      "unclassified": 0
+    }
+  },
+  "manifest": {
+    "schemaId": "pinovel.eval-replay-run-manifest",
+    "schemaVersion": 1,
+    "runId": "closure-recorded-0d623fc",
+    "evalProtocolVersion": "pinovel.eval-protocol/1",
+    "replayMode": "recorded",
+    "releaseId": "rel-prod-111",
+    "bundleId": "0d5f0c70b7ffc96b174f58f2c5cc0c0467d5b4230f495cf84415cb41a6dbafd9",
+    "runRoot": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-recorded-0d623fc",
+    "startedAt": "2026-08-15T09:30:39.896Z",
+    "finishedAt": "2026-08-15T09:30:41.246Z",
+    "samples": [
+      {
+        "fixtureId": "fixture.closure-recorded-001",
+        "fixtureHash": "1041650fd36bc5f6f8446818d65d702916d35b6703dd70bb0e3818d4f11c0d06",
+        "replayMode": "recorded",
+        "scratchWorkspaceId": "eval-recorded-fixture-closure-recorded-001-run-McgKED",
+        "status": "completed",
+        "failureAttribution": null,
+        "failureEnvelopes": [],
+        "traceArchived": true,
+        "traceArchivePath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\reports\\eval-replay-closure-20260815\\archives\\closure-recorded-0d623fc\\samples\\fixture.closure-recorded-001\\traces",
+        "isolationViolations": [],
+        "modelCalls": 0,
+        "durationMs": 1246
+      }
+    ],
+    "summary": {
+      "totalSamples": 1,
+      "countedSamples": 1,
+      "completed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "traceRetentionRate": 1,
+      "isolationViolationCount": 0
+    }
+  },
+  "sampleStatuses": [
+    {
+      "fixtureId": "fixture.closure-recorded-001",
+      "mode": "recorded",
+      "status": "completed",
+      "attribution": null
+    }
+  ]
+}

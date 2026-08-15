@@ -131,6 +131,49 @@ export interface FullPipelineSampleReport {
   isolationViolations: IsolationViolation[];
 }
 
+export function resolveSampleAttribution(input: {
+  envelopes: ReadonlyArray<{
+    stage?: string;
+    gate?: string;
+    severity?: string;
+    reason?: string;
+  }>;
+  timedOut: boolean;
+  exitCode: number | null;
+  timeoutMs?: number;
+  stderr?: string;
+}): FailureAttributionResult | null {
+  if (input.envelopes.length > 0) {
+    const worst =
+      input.envelopes.find((e) => e.severity === "hard" || e.severity === "fatal") ??
+      input.envelopes[input.envelopes.length - 1];
+    return classifyFailureAttribution({
+      stage: worst.stage,
+      gate: worst.gate,
+      severity: worst.severity,
+      reason: worst.reason,
+    });
+  }
+  if (input.timedOut) {
+    return classifyFailureAttribution({
+      stage: "invoke",
+      gate: "model_timeout",
+      severity: "recoverable",
+      reason: `invoke timed out after ${input.timeoutMs ?? "?"}ms`,
+      randomnessDeclared: false,
+    });
+  }
+  if (input.exitCode !== 0) {
+    return classifyFailureAttribution({
+      stage: "invoke",
+      gate: "invoke_failed",
+      severity: "hard",
+      reason: (input.stderr ?? "").slice(0, 400) || `exit code ${input.exitCode}`,
+    });
+  }
+  return null;
+}
+
 export interface FullPipelineReplayRunReport {
   runId: string;
   runPath: string;
@@ -844,41 +887,14 @@ export async function runFullPipelineReplay(
     const modelCalls = countModelCalls(lease);
     const traceArchived = hasTraceArchive(lease);
 
-    // 归因：优先用 trace 内 envelope；invoke 层失败（超时/退出码）兜底
-    let attribution: FailureAttributionResult;
-    if (envelopes.length > 0) {
-      const worst =
-        envelopes.find((e) => e.severity === "hard" || e.severity === "fatal") ??
-        envelopes[envelopes.length - 1];
-      attribution = classifyFailureAttribution({
-        stage: worst.stage,
-        gate: worst.gate,
-        severity: worst.severity,
-        reason: worst.reason,
-      });
-    } else if (invokeResult.timedOut) {
-      attribution = classifyFailureAttribution({
-        stage: "invoke",
-        gate: "model_timeout",
-        severity: "recoverable",
-        reason: `invoke timed out after ${command.timeoutMs}ms`,
-        randomnessDeclared: false,
-      });
-    } else if (invokeResult.exitCode !== 0) {
-      attribution = classifyFailureAttribution({
-        stage: "invoke",
-        gate: "invoke_failed",
-        severity: "hard",
-        reason: invokeResult.stderr.slice(0, 400) || `exit code ${invokeResult.exitCode}`,
-      });
-    } else {
-      attribution = classifyFailureAttribution({
-        stage: "invoke",
-        gate: "invoke_ok",
-        severity: "recoverable",
-        reason: "invoke completed",
-      });
-    }
+    // 归因：仅失败样本进入分类器。成功 invoke 不得记 unclassified。
+    const attribution = resolveSampleAttribution({
+      envelopes,
+      timedOut: invokeResult.timedOut === true,
+      exitCode: invokeResult.exitCode,
+      timeoutMs: command.timeoutMs,
+      stderr: invokeResult.stderr,
+    });
 
     // 样本归档：manifest + invocation + fixture + trace/result 副本
     const sampleArchivePath = join(runPath, "samples", fixture.fixtureId);
@@ -939,7 +955,7 @@ export async function runFullPipelineReplay(
       replayMode: fixture.replayMode,
       scratchWorkspaceId: lease.workspaceId,
       status: failed ? "failed" : "completed",
-      failureAttribution: failed ? attribution.attribution : null,
+      failureAttribution: failed ? (attribution?.attribution ?? "unclassified") : null,
       failureEnvelopes: envelopes.map((e) => ({
         stage: e.stage,
         gate: e.gate,

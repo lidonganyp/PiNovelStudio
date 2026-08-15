@@ -1129,10 +1129,8 @@ function cmdPromote(args) {
   let canaryEvidenceRef = null;
   if (target === "active_prod") {
     // EVAL-REPLAY-ACCEPTANCE-LOOP P6：生产晋级前评估离线回放证据。
-    //  - R3（Prompt/工具协议/上下文/路由/预算重大变更）：无条件强制，证据缺失/未通过 → exit 5；
-    //  - R0/R1/R2：渐进采纳（与 canary gate 一致）——提供 --eval-evidence-root /
-    //    PINOVEL_EVAL_EVIDENCE_ROOT 时 fail-closed 检查；未提供时打 advisory 警告。
-    // 真实 replay 基线建立后收敛为全强制。
+    //  R0-R3 全部 mandatory：未提供 --eval-evidence-root / PINOVEL_EVAL_EVIDENCE_ROOT
+    //  或 gate 未 approved → exit 5。R0/R1 为 deterministic-only；R2/R3 另强制四臂矩阵。
     {
       const evalRunRoot =
         args["eval-evidence-root"] || process.env.PINOVEL_EVAL_EVIDENCE_ROOT || null;

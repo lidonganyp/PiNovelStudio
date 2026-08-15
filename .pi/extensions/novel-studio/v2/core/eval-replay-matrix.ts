@@ -16,6 +16,14 @@
  * 本地确定性，无 LLM 调用。
  */
 
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  validateReplayRunManifestV1,
+  type ReplayRunManifestV1,
+} from "./eval-fixture-contract.js";
+
 // ============================================================================
 // A/B 矩阵类型
 // ============================================================================
@@ -119,6 +127,17 @@ export interface MatrixComparisonReport {
   /** 人工盲评记录（可选；不参与 verdict）。 */
   humanBlindPreference?: HumanBlindPreference;
 }
+
+/** 生产落盘矩阵：在比较报告上绑定 commit 与内容 hash。 */
+export interface BoundMatrixReport extends MatrixComparisonReport {
+  /** 绑定的代码 commit（短或完整 SHA）；未知则为 null。 */
+  codeCommit: string | null;
+  /** 规范化主体 SHA-256（不含 reportHash / createdAt）。 */
+  reportHash: string;
+}
+
+export const MATRIX_REPORT_SCHEMA_ID = "pinovel.eval-replay-matrix";
+export const MATRIX_REPORT_SCHEMA_VERSION = 1;
 
 // ============================================================================
 // pass@k（无偏估计）与 pass^k（连续全通过观测率）
@@ -367,4 +386,375 @@ export function validateMatrixArmCompleteness(
   const present = new Set(arms.map((a) => a.armId));
   const missing = MATRIX_ARM_IDS.filter((id) => !present.has(id));
   return { complete: missing.length === 0, missing };
+}
+
+// ============================================================================
+// 生产矩阵生成器（从回放 run 派生，禁止手写 verdict）
+// ============================================================================
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readJsonUnknown(path: string): unknown {
+  return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+function loadReplayManifestFromRunRoot(runRoot: string): ReplayRunManifestV1 {
+  const path = join(runRoot, "manifest.json");
+  if (!existsSync(path)) {
+    throw new Error(`arm run 缺少 manifest.json：${runRoot}`);
+  }
+  let raw: unknown;
+  try {
+    raw = readJsonUnknown(path);
+  } catch (error) {
+    throw new Error(`arm run manifest 解析失败：${runRoot}：${(error as Error).message}`);
+  }
+  const validation = validateReplayRunManifestV1(raw);
+  if (!validation.valid) {
+    throw new Error(
+      `arm run manifest 校验失败：${runRoot}：${validation.errors.map((e) => `${e.field}:${e.rule}`).join("; ")}`,
+    );
+  }
+  return raw as ReplayRunManifestV1;
+}
+
+/**
+ * 从回放 manifest 派生一臂指标。
+ *
+ * coverage / completeness / continuity 取自可观测编排证据（trace 留存、
+ * 完成率、隔离），不编造文学分数。失败分类完整率只统计 failed 样本。
+ */
+export function deriveArmMetricsFromReplayManifest(
+  manifest: ReplayRunManifestV1,
+  armId: MatrixArmId,
+): MatrixArmMetrics {
+  const counted = manifest.samples.filter(
+    (sample) =>
+      (sample.status === "completed" || sample.status === "failed") &&
+      sample.isolationViolations.length === 0,
+  );
+  const failed = counted.filter((sample) => sample.status === "failed");
+  const unclassifiedFailed = failed.filter(
+    (sample) =>
+      sample.failureAttribution === null || sample.failureAttribution === "unclassified",
+  );
+  const factHardErrors = manifest.samples.reduce(
+    (total, sample) =>
+      total +
+      sample.failureEnvelopes.filter(
+        (envelope) => envelope.severity === "hard" || envelope.severity === "fatal",
+      ).length,
+    0,
+  );
+  const durations = counted.map((sample) => sample.durationMs);
+  const total = manifest.summary.totalSamples;
+  const completed = manifest.summary.completed;
+  return {
+    armId,
+    runId: manifest.runId,
+    sampleCount: counted.length,
+    factHardErrors,
+    failureClassificationCompleteness:
+      failed.length === 0 ? 1 : (failed.length - unclassifiedFailed.length) / failed.length,
+    coverage: manifest.summary.traceRetentionRate,
+    completeness: total === 0 ? 0 : completed / total,
+    continuity: manifest.summary.isolationViolationCount === 0 ? 1 : 0,
+    userEditDistance: null,
+    modelCalls: manifest.samples.reduce((sum, sample) => sum + sample.modelCalls, 0),
+    tokenCost: 0,
+    firstAttemptSuccessRate: total === 0 ? 0 : completed / total,
+    recoveredSuccessRate:
+      completed + failed.length === 0 ? 0 : completed / (completed + failed.length),
+    p50LatencyMs: percentile(durations, 50),
+    p95LatencyMs: percentile(durations, 95),
+    longTailFailures: 0,
+    perSamplePass: counted.map(
+      (sample) =>
+        sample.status === "completed" &&
+        sample.traceArchived &&
+        sample.isolationViolations.length === 0,
+    ),
+  };
+}
+
+export interface GenerateMatrixReportFromReplayRunsOptions {
+  candidateReleaseId: string;
+  candidateBundleId: string;
+  baselineReleaseId: string;
+  armRunRoots: Partial<Record<MatrixArmId, string>>;
+  codeCommit?: string | null;
+  zeroTolerance?: ZeroToleranceCounts;
+  humanBlindPreference?: HumanBlindPreference;
+}
+
+function canonicalMatrixHashPayload(report: {
+  schemaId: string;
+  schemaVersion: number;
+  candidateReleaseId: string;
+  candidateBundleId: string;
+  baselineReleaseId: string;
+  arms: MatrixArmMetrics[];
+  zeroTolerance: ZeroToleranceCounts;
+  codeCommit: string | null;
+}): string {
+  return JSON.stringify({
+    schemaId: report.schemaId,
+    schemaVersion: report.schemaVersion,
+    candidateReleaseId: report.candidateReleaseId,
+    candidateBundleId: report.candidateBundleId,
+    baselineReleaseId: report.baselineReleaseId,
+    arms: report.arms,
+    zeroTolerance: report.zeroTolerance,
+    codeCommit: report.codeCommit,
+  });
+}
+
+/** 计算矩阵报告绑定 hash（排除 createdAt / verdict / reportHash）。 */
+export function computeMatrixReportHash(
+  report: Pick<
+    BoundMatrixReport,
+    | "schemaId"
+    | "schemaVersion"
+    | "candidateReleaseId"
+    | "candidateBundleId"
+    | "baselineReleaseId"
+    | "arms"
+    | "zeroTolerance"
+    | "codeCommit"
+  >,
+): string {
+  return createHash("sha256")
+    .update(canonicalMatrixHashPayload(report), "utf-8")
+    .digest("hex");
+}
+
+export function bindMatrixReport(
+  compared: MatrixComparisonReport,
+  options: { codeCommit?: string | null } = {},
+): BoundMatrixReport {
+  const bound: Omit<BoundMatrixReport, "reportHash"> = {
+    ...compared,
+    schemaId: MATRIX_REPORT_SCHEMA_ID,
+    schemaVersion: MATRIX_REPORT_SCHEMA_VERSION,
+    codeCommit: options.codeCommit ?? null,
+  };
+  return {
+    ...bound,
+    reportHash: computeMatrixReportHash(bound),
+  };
+}
+
+/**
+ * 从四臂回放 run 根目录生成绑定矩阵报告。
+ *
+ * 缺臂不会抛错：compareMatrixArms 以四臂不完整 reject（fail-closed）。
+ * candidate 臂的 manifest release/bundle 必须与声明绑定一致，否则 reject。
+ */
+export function generateMatrixReportFromReplayRuns(
+  options: GenerateMatrixReportFromReplayRunsOptions,
+): BoundMatrixReport {
+  const arms: MatrixArmMetrics[] = [];
+  const bindingReasons: string[] = [];
+  for (const armId of MATRIX_ARM_IDS) {
+    const runRoot = options.armRunRoots[armId];
+    if (!runRoot) {
+      continue;
+    }
+    const manifest = loadReplayManifestFromRunRoot(runRoot);
+    if (armId === "candidate") {
+      if (manifest.releaseId !== options.candidateReleaseId) {
+        bindingReasons.push(
+          `candidate 臂 release ${manifest.releaseId} 与声明 ${options.candidateReleaseId} 不一致`,
+        );
+      }
+      if (manifest.bundleId !== options.candidateBundleId) {
+        bindingReasons.push(
+          `candidate 臂 bundle ${manifest.bundleId} 与声明 ${options.candidateBundleId} 不一致`,
+        );
+      }
+    }
+    arms.push(deriveArmMetricsFromReplayManifest(manifest, armId));
+  }
+  const compared = compareMatrixArms({
+    candidateReleaseId: options.candidateReleaseId,
+    candidateBundleId: options.candidateBundleId,
+    baselineReleaseId: options.baselineReleaseId,
+    arms,
+    zeroTolerance: options.zeroTolerance,
+    humanBlindPreference: options.humanBlindPreference,
+  });
+  const boundSource =
+    bindingReasons.length === 0
+      ? compared
+      : {
+          ...compared,
+          verdict: "reject" as const,
+          verdictReasons: [...bindingReasons, ...compared.verdictReasons],
+        };
+  return bindMatrixReport(boundSource, { codeCommit: options.codeCommit ?? null });
+}
+
+export function writeMatrixReport(evalRunRoot: string, report: BoundMatrixReport): string {
+  mkdirSync(evalRunRoot, { recursive: true });
+  const path = join(evalRunRoot, "matrix-report.json");
+  writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, "utf-8");
+  return path;
+}
+
+export interface ParseBoundMatrixReportResult {
+  ok: boolean;
+  report: BoundMatrixReport | null;
+  errors: string[];
+}
+
+function parseArmMetrics(raw: unknown, index: number, errors: string[]): MatrixArmMetrics | null {
+  if (!isPlainObject(raw)) {
+    errors.push(`/arms/${index} 必须为对象`);
+    return null;
+  }
+  if (!MATRIX_ARM_IDS.includes(raw.armId as MatrixArmId)) {
+    errors.push(`/arms/${index}/armId 非法：${String(raw.armId)}`);
+    return null;
+  }
+  if (typeof raw.runId !== "string" || raw.runId.trim().length === 0) {
+    errors.push(`/arms/${index}/runId 必须为非空字符串`);
+    return null;
+  }
+  if (!Array.isArray(raw.perSamplePass) || raw.perSamplePass.some((v) => typeof v !== "boolean")) {
+    errors.push(`/arms/${index}/perSamplePass 必须为 boolean[]`);
+    return null;
+  }
+  const numericFields = [
+    "sampleCount",
+    "factHardErrors",
+    "failureClassificationCompleteness",
+    "coverage",
+    "completeness",
+    "continuity",
+    "modelCalls",
+    "tokenCost",
+    "firstAttemptSuccessRate",
+    "recoveredSuccessRate",
+    "p50LatencyMs",
+    "p95LatencyMs",
+    "longTailFailures",
+  ] as const;
+  for (const field of numericFields) {
+    if (typeof raw[field] !== "number" || !Number.isFinite(raw[field] as number)) {
+      errors.push(`/arms/${index}/${field} 必须为有限数字`);
+    }
+  }
+  if (errors.some((error) => error.startsWith(`/arms/${index}/`))) {
+    return null;
+  }
+  return {
+    armId: raw.armId as MatrixArmId,
+    runId: raw.runId,
+    sampleCount: raw.sampleCount as number,
+    factHardErrors: raw.factHardErrors as number,
+    failureClassificationCompleteness: raw.failureClassificationCompleteness as number,
+    coverage: raw.coverage as number,
+    completeness: raw.completeness as number,
+    continuity: raw.continuity as number,
+    userEditDistance: typeof raw.userEditDistance === "number" ? raw.userEditDistance : null,
+    modelCalls: raw.modelCalls as number,
+    tokenCost: raw.tokenCost as number,
+    firstAttemptSuccessRate: raw.firstAttemptSuccessRate as number,
+    recoveredSuccessRate: raw.recoveredSuccessRate as number,
+    p50LatencyMs: raw.p50LatencyMs as number,
+    p95LatencyMs: raw.p95LatencyMs as number,
+    longTailFailures: raw.longTailFailures as number,
+    perSamplePass: raw.perSamplePass as boolean[],
+  };
+}
+
+/**
+ * 严格解析矩阵报告。两字段伪造（仅 verdict + pass^3）在此失败。
+ */
+export function parseBoundMatrixReport(raw: unknown): ParseBoundMatrixReportResult {
+  const errors: string[] = [];
+  if (!isPlainObject(raw)) {
+    return { ok: false, report: null, errors: ["matrix-report 必须为 JSON 对象"] };
+  }
+  if (raw.schemaId !== MATRIX_REPORT_SCHEMA_ID) {
+    errors.push(`schemaId 必须为 ${MATRIX_REPORT_SCHEMA_ID}`);
+  }
+  if (raw.schemaVersion !== MATRIX_REPORT_SCHEMA_VERSION) {
+    errors.push(`schemaVersion 必须为 ${MATRIX_REPORT_SCHEMA_VERSION}`);
+  }
+  for (const field of ["candidateReleaseId", "candidateBundleId", "baselineReleaseId"] as const) {
+    if (typeof raw[field] !== "string" || (raw[field] as string).trim().length === 0) {
+      errors.push(`${field} 必须为非空字符串`);
+    }
+  }
+  if (raw.codeCommit !== null && typeof raw.codeCommit !== "string") {
+    errors.push("codeCommit 必须为 string 或 null");
+  }
+  if (typeof raw.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(raw.reportHash)) {
+    errors.push("reportHash 必须为 64 位 hex");
+  }
+  if (!Array.isArray(raw.arms) || raw.arms.length === 0) {
+    errors.push("arms 必须为非空数组");
+  }
+  const arms: MatrixArmMetrics[] = [];
+  if (Array.isArray(raw.arms)) {
+    raw.arms.forEach((arm, index) => {
+      const parsed = parseArmMetrics(arm, index, errors);
+      if (parsed) arms.push(parsed);
+    });
+  }
+  const zeroTolerance: ZeroToleranceCounts = isPlainObject(raw.zeroTolerance)
+    ? {
+        statePollution: Number(raw.zeroTolerance.statePollution) || 0,
+        productionPointerMutation: Number(raw.zeroTolerance.productionPointerMutation) || 0,
+        factHardGateViolation: Number(raw.zeroTolerance.factHardGateViolation) || 0,
+        duplicateSubmission: Number(raw.zeroTolerance.duplicateSubmission) || 0,
+      }
+    : { ...EMPTY_ZERO_TOLERANCE };
+
+  if (errors.length > 0) {
+    return { ok: false, report: null, errors };
+  }
+
+  const draft: Omit<BoundMatrixReport, "reportHash"> & { reportHash: string } = {
+    schemaId: MATRIX_REPORT_SCHEMA_ID,
+    schemaVersion: MATRIX_REPORT_SCHEMA_VERSION,
+    candidateReleaseId: raw.candidateReleaseId as string,
+    candidateBundleId: raw.candidateBundleId as string,
+    baselineReleaseId: raw.baselineReleaseId as string,
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
+    arms,
+    zeroTolerance,
+    verdict: raw.verdict === "pass" ? "pass" : "reject",
+    verdictReasons: Array.isArray(raw.verdictReasons)
+      ? raw.verdictReasons.filter((item): item is string => typeof item === "string")
+      : [],
+    candidatePassAt3: typeof raw.candidatePassAt3 === "number" ? raw.candidatePassAt3 : null,
+    candidatePassPow3: typeof raw.candidatePassPow3 === "number" ? raw.candidatePassPow3 : null,
+    codeCommit: typeof raw.codeCommit === "string" ? raw.codeCommit : null,
+    reportHash: raw.reportHash as string,
+  };
+  const expectedHash = computeMatrixReportHash(draft);
+  if (draft.reportHash !== expectedHash) {
+    return {
+      ok: false,
+      report: null,
+      errors: [`reportHash 不匹配（期望 ${expectedHash}，实际 ${draft.reportHash}）`],
+    };
+  }
+  return { ok: true, report: draft, errors: [] };
+}
+
+/** 忽略落盘 verdict，按四臂内容重新计算。 */
+export function recomputeBoundMatrixReport(report: BoundMatrixReport): MatrixComparisonReport {
+  return compareMatrixArms({
+    candidateReleaseId: report.candidateReleaseId,
+    candidateBundleId: report.candidateBundleId,
+    baselineReleaseId: report.baselineReleaseId,
+    arms: report.arms,
+    zeroTolerance: report.zeroTolerance,
+    humanBlindPreference: report.humanBlindPreference,
+  });
 }

@@ -1,0 +1,761 @@
+{
+  "schemaId": "pinovel.eval-fixture",
+  "schemaVersion": 1,
+  "fixtureId": "fixture.closure-recorded-001",
+  "evalProtocolVersion": "pinovel.eval-protocol/1",
+  "evalOnly": true,
+  "replayMode": "recorded",
+  "createdAt": "2026-08-15T09:30:23.745Z",
+  "provenance": {
+    "releaseId": "rel-prod-111",
+    "bundleId": "0d5f0c70b7ffc96b174f58f2c5cc0c0467d5b4230f495cf84415cb41a6dbafd9",
+    "promptBundleHash": "2909e82c218a208bd50ee6accdd2ba468de006feac2de5eb796cddf37bbf5f5d",
+    "toolSchemaHash": "7abe6355408c43b8ddf9a8c5df7c01f9fab0087d84616423057855ade5b26257",
+    "contextCompilerHash": "04dda57436361ccb61b6642b7b87d7115ac551d7262cf18a0de9d799bae9e380",
+    "budgetHash": "242dd2cae395f1dbcbe3e8bd423c5a0adfc8ffa0db1ba0d09a777cb62a8070ed",
+    "modelVersion": "gemini-3.1-pro-preview",
+    "modelRoute": "v2_rawstage2_gemini31",
+    "provider": "gemini",
+    "graderVersion": "deterministic-v1"
+  },
+  "workspace": {
+    "sourceWorkspaceId": "ws-verify-01",
+    "config": {
+      "novelName": "Smoke Test Novel",
+      "genre": "xianxia",
+      "subGenres": [
+        "xiuzhen",
+        "doupai"
+      ],
+      "characters": [
+        {
+          "id": "ch1",
+          "name": "叶尘",
+          "role": "protagonist",
+          "aliases": [
+            "叶师弟"
+          ]
+        }
+      ]
+    },
+    "outline": "# Outline",
+    "characterProfiles": {
+      "ch1": "protagonist profile"
+    },
+    "historicalChapters": [
+      {
+        "chapterNumber": 1,
+        "chapterId": "chapter-001",
+        "contentHash": "36d933690c669c3f99cf62ccf295ff25c82258fb558b2e88be51bbe184ee14b7"
+      }
+    ],
+    "skeleton": {
+      "schemaVersion": 1,
+      "chapterSkeletons": {
+        "1": {
+          "chapterId": "chapter-001",
+          "title": "外门试炼",
+          "facts": [
+            "叶尘通过玄天宗外门试炼，正式入宗。",
+            "试炼中意外触发残破玉简，获得神秘感应。"
+          ],
+          "stateChanges": [
+            {
+              "characterId": "ch1",
+              "field": "修为",
+              "before": "凡人",
+              "after": "凝气一层"
+            }
+          ],
+          "activeDilemmas": [
+            "残破玉简来历不明，宗门内暗流涌动。"
+          ]
+        }
+      }
+    },
+    "styleProfile": {
+      "id": "eval-smoke-author",
+      "usagePolicy": {
+        "fullChapterOptimization": "required"
+      },
+      "editorialGuidance": [
+        "人物压力优先通过动作、停顿和环境变化呈现。",
+        "章末停在仍有压力的动作或状态上。"
+      ],
+      "characterVoiceGuidance": {
+        "叶尘": [
+          "少年感保留现实处境，不轻浮。"
+        ]
+      },
+      "kind": "fingerprint"
+    }
+  },
+  "chapterSeed": {
+    "chapterNumber": 2,
+    "chapterId": "chapter-002",
+    "chapterTitle": "Chapter 2",
+    "intent": {
+      "chapterFunction": "escalation"
+    },
+    "seedSource": "series/outline"
+  },
+  "priorNarrativeState": {
+    "canon": []
+  },
+  "modelPolicy": {
+    "requestTimeoutMs": 60000,
+    "totalTimeoutMs": 600000,
+    "maxModelCalls": 40,
+    "maxRecoveryModelCalls": 4
+  },
+  "expectedInvariants": {
+    "statePollutionForbidden": true,
+    "productionPointerMutationForbidden": true,
+    "formalChapterSaveForbidden": true,
+    "traceArchiveRequired": true,
+    "scratchNarrativeStateCommitAllowed": true
+  },
+  "traceArchivePath": "runs/run-001/traces/chapter-002-quality-trace.json",
+  "recordedToolResults": [
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    },
+    {
+      "toolName": "novel_generate_chapter",
+      "responseHash": "942c1ec84f1243226989875045ea60a7e681ac5c36aa2e99c015952d2ef58dbc",
+      "response": {
+        "model": "gemini-3.1-pro-preview",
+        "text": "叶尘踏进外门石阶，残破玉简在袖中一烫。他没有停步。"
+      }
+    }
+  ]
+}

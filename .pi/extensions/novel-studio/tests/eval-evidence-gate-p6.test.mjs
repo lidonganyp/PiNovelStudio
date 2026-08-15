@@ -5,11 +5,12 @@
  *  - eval-fixture-capture：合法 workspace+manifest 冻结落盘 / 行为身份缺失 fail-closed /
  *    workspace 不存在 / 前章 NarrativeState 缺失 / 只读性；
  *  - eval-evidence-gate：证据缺失 → insufficient / manifest 无效 / release 不匹配 → rejected /
- *    deterministic 失败 → rejected / R3 无 matrix → insufficient / matrix pass+pass^3=1 → approved /
- *    R1 deterministic-only → approved / 强制级别策略；
+ *    deterministic 失败 → rejected / R3 无 matrix → insufficient /
+ *    两字段伪造 matrix → MATRIX_INVALID / 完整四臂矩阵 recompute pass → approved /
+ *    R1 deterministic-only → approved / R0-R3 生产晋级全部 mandatory；
  *  - CLI：eval-capture 成功冻结 / eval-gate 证据通过 exit 0、缺失 exit 1 /
  *    promote active_prod R3 → EVAL_EVIDENCE_REQUIRED exit 5 /
- *    promote active_prod R1 无证据 → advisory 警告不阻断。
+ *    promote active_prod R1 无证据 → 同样强制阻断 exit 5。
  *
  * 治理边界验证：eval-gate 绝不修改 production pointer。
  */
@@ -42,12 +43,18 @@ import {
   evaluateEvalEvidenceGate,
   writeEvalPendingReviewReport,
   resolveEvalEvidenceEnforcement,
+  evaluateReplayCliSuccess,
 } from "../dist-test/v2/governance/eval-evidence-gate.js";
 import { captureEvalFixture } from "../dist-test/v2/core/eval-fixture-capture.js";
 import {
   computeEvalFixtureHash,
   parseEvalFixtureV1,
 } from "../dist-test/v2/core/eval-fixture-contract.js";
+import {
+  generateMatrixReportFromReplayRuns,
+  writeMatrixReport,
+  computeMatrixReportHash,
+} from "../dist-test/v2/core/eval-replay-matrix.js";
 
 // ============================================================================
 // helpers
@@ -129,79 +136,101 @@ function makeWorkspace(projectRoot, workspaceId, opts = {}) {
   return ws;
 }
 
-/** 构造合法 eval run root（stub replay，1 样本全过）。 */
+/** 构造合法 eval run root（stub replay；默认 1 样本全过）。 */
 function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
-  const runRoot = join(root, "eval-run");
-  const fixtureId = opts.fixtureId ?? "fixture.p6-001";
-  const sampleDir = join(runRoot, "samples", fixtureId);
-  const tracesDir = join(sampleDir, "traces");
-  mkdirSync(tracesDir, { recursive: true });
+  const runRoot = opts.runRoot ?? join(root, opts.runDirName ?? "eval-run");
+  const fixtureIdBase = opts.fixtureId ?? "fixture.p6-001";
+  const sampleCount = opts.sampleCount ?? 1;
+  const runId = opts.runId ?? "run-p6-001";
+  const samples = [];
+  let firstFixtureHash = "";
 
-  // fixture（与 runRoot 内归档副本）
-  const fixture = {
-    schemaId: "pinovel.eval-fixture",
-    schemaVersion: 1,
-    fixtureId,
-    evalProtocolVersion: "pinovel.eval-protocol/1",
-    evalOnly: true,
-    replayMode: "stub",
-    createdAt: "2026-08-15T00:00:00.000Z",
-    provenance: {
-      releaseId,
-      bundleId,
-      promptBundleHash: "0123456789abcdef",
-      toolSchemaHash: "0123456789abcdef",
-      contextCompilerHash: "0123456789abcdef",
-      budgetHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      modelVersion: "gemini-3.1-pro-preview",
-      modelRoute: "v2_rawstage2_gemini31",
-      provider: "gemini",
-      graderVersion: "deterministic-v1",
-    },
-    workspace: {
-      sourceWorkspaceId: "ws-src",
-      config: {},
-      characterProfiles: {},
-      historicalChapters: [],
-    },
-    chapterSeed: {
-      chapterNumber: 1,
-      chapterId: "chapter-001",
-      chapterTitle: "第一章",
-      intent: {},
-      seedSource: "test",
-    },
-    priorNarrativeState: null,
-    modelPolicy: {
-      requestTimeoutMs: 60000,
-      totalTimeoutMs: 600000,
-      maxModelCalls: 40,
-      maxRecoveryModelCalls: 4,
-    },
-    expectedInvariants: {
-      statePollutionForbidden: true,
-      productionPointerMutationForbidden: true,
-      formalChapterSaveForbidden: true,
-      traceArchiveRequired: true,
-      scratchNarrativeStateCommitAllowed: true,
-    },
-    traceArchivePath: "traces/chapter-001-quality-trace.json",
-  };
-  const fixtureHash = computeEvalFixtureHash(fixture);
-  writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
-  writeFileSync(
-    join(tracesDir, "chapter-001-quality-trace.json"),
-    JSON.stringify({ stageResults: [], recoveryAttempts: [] }),
-  );
-  writeFileSync(
-    join(sampleDir, "state-projection.json"),
-    JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
-  );
+  for (let i = 0; i < sampleCount; i += 1) {
+    const fixtureId = sampleCount === 1 ? fixtureIdBase : `${fixtureIdBase}.${i + 1}`;
+    const sampleDir = join(runRoot, "samples", fixtureId);
+    const tracesDir = join(sampleDir, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+
+    const fixture = {
+      schemaId: "pinovel.eval-fixture",
+      schemaVersion: 1,
+      fixtureId,
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      evalOnly: true,
+      replayMode: "stub",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      provenance: {
+        releaseId,
+        bundleId,
+        promptBundleHash: "0123456789abcdef",
+        toolSchemaHash: "0123456789abcdef",
+        contextCompilerHash: "0123456789abcdef",
+        budgetHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        modelVersion: "gemini-3.1-pro-preview",
+        modelRoute: "v2_rawstage2_gemini31",
+        provider: "gemini",
+        graderVersion: "deterministic-v1",
+      },
+      workspace: {
+        sourceWorkspaceId: "ws-src",
+        config: {},
+        characterProfiles: {},
+        historicalChapters: [],
+      },
+      chapterSeed: {
+        chapterNumber: 1,
+        chapterId: "chapter-001",
+        chapterTitle: "第一章",
+        intent: {},
+        seedSource: "test",
+      },
+      priorNarrativeState: null,
+      modelPolicy: {
+        requestTimeoutMs: 60000,
+        totalTimeoutMs: 600000,
+        maxModelCalls: 40,
+        maxRecoveryModelCalls: 4,
+      },
+      expectedInvariants: {
+        statePollutionForbidden: true,
+        productionPointerMutationForbidden: true,
+        formalChapterSaveForbidden: true,
+        traceArchiveRequired: true,
+        scratchNarrativeStateCommitAllowed: true,
+      },
+      traceArchivePath: "traces/chapter-001-quality-trace.json",
+    };
+    const fixtureHash = computeEvalFixtureHash(fixture);
+    if (i === 0) firstFixtureHash = fixtureHash;
+    writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
+    writeFileSync(
+      join(tracesDir, "chapter-001-quality-trace.json"),
+      JSON.stringify({ stageResults: [], recoveryAttempts: [] }),
+    );
+    writeFileSync(
+      join(sampleDir, "state-projection.json"),
+      JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
+    );
+    samples.push({
+      fixtureId,
+      fixtureHash,
+      replayMode: "stub",
+      scratchWorkspaceId: `eval-stub-x-${i + 1}`,
+      status: "completed",
+      failureAttribution: null,
+      failureEnvelopes: [],
+      traceArchived: true,
+      traceArchivePath: tracesDir,
+      isolationViolations: [],
+      modelCalls: 0,
+      durationMs: 500 + i,
+    });
+  }
 
   const manifest = {
     schemaId: "pinovel.eval-replay-run-manifest",
     schemaVersion: 1,
-    runId: "run-p6-001",
+    runId,
     evalProtocolVersion: "pinovel.eval-protocol/1",
     replayMode: "stub",
     releaseId,
@@ -209,26 +238,11 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
     runRoot,
     startedAt: "2026-08-15T00:00:00.000Z",
     finishedAt: "2026-08-15T00:01:00.000Z",
-    samples: [
-      {
-        fixtureId,
-        fixtureHash,
-        replayMode: "stub",
-        scratchWorkspaceId: "eval-stub-x",
-        status: "completed",
-        failureAttribution: null,
-        failureEnvelopes: [],
-        traceArchived: true,
-        traceArchivePath: tracesDir,
-        isolationViolations: [],
-        modelCalls: 0,
-        durationMs: 500,
-      },
-    ],
+    samples,
     summary: {
-      totalSamples: 1,
-      countedSamples: 1,
-      completed: 1,
+      totalSamples: sampleCount,
+      countedSamples: sampleCount,
+      completed: sampleCount,
       failed: 0,
       skipped: 0,
       traceRetentionRate: 1,
@@ -236,7 +250,30 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
     },
   };
   writeFileSync(join(runRoot, "manifest.json"), JSON.stringify(manifest, null, 2));
-  return { runRoot, fixtureHash };
+  return { runRoot, fixtureHash: firstFixtureHash };
+}
+
+function writeGeneratedPassingMatrix(evalRunRoot, releaseId, bundleId, opts = {}) {
+  const armIds = ["baseline", "candidate", "raw_direct", "recovery"];
+  const armRunRoots = {};
+  for (const armId of armIds) {
+    const { runRoot } = makeEvalRunRoot(evalRunRoot, releaseId, bundleId, {
+      runDirName: join("arms", armId),
+      fixtureId: `fixture.${armId}`,
+      sampleCount: 3,
+      runId: `run-${armId}`,
+    });
+    armRunRoots[armId] = runRoot;
+  }
+  const report = generateMatrixReportFromReplayRuns({
+    candidateReleaseId: releaseId,
+    candidateBundleId: bundleId,
+    baselineReleaseId: opts.baselineReleaseId ?? releaseId,
+    armRunRoots,
+    codeCommit: opts.codeCommit ?? "deadbeefcafebabe0123456789abcdef01234567",
+  });
+  writeMatrixReport(evalRunRoot, report);
+  return report;
 }
 
 /**
@@ -539,11 +576,10 @@ test("gate: deterministic 失败（trace 缺失）→ rejected", () => {
   }
 });
 
-test("gate: R3 无 matrix → insufficient；matrix pass+pass^3=1 → approved", () => {
+test("gate: R3 无 matrix → insufficient；两字段伪造 → MATRIX_INVALID；生成四臂矩阵 → approved", () => {
   const root = makeTempRoot();
   try {
     const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-r3", "bundle-r3");
-    // R3 无 matrix 报告
     const missing = evaluateEvalEvidenceGate({
       releaseId: "rel-r3",
       bundleId: "bundle-r3",
@@ -553,11 +589,26 @@ test("gate: R3 无 matrix → insufficient；matrix pass+pass^3=1 → approved",
     assert.equal(missing.verdict, "insufficient");
     assert.equal(missing.code, "EVAL_EVIDENCE_MATRIX_MISSING");
 
-    // 写入 matrix 报告：verdict=pass + pass^3=1
     writeFileSync(
       join(evalRunRoot, "matrix-report.json"),
       JSON.stringify({ verdict: "pass", candidatePassPow3: 1 }),
     );
+    const forged = evaluateEvalEvidenceGate({
+      releaseId: "rel-r3",
+      bundleId: "bundle-r3",
+      changeClass: "R3",
+      evalRunRoot,
+    });
+    assert.equal(forged.verdict, "rejected");
+    assert.equal(forged.code, "EVAL_EVIDENCE_MATRIX_INVALID");
+
+    const generated = writeGeneratedPassingMatrix(evalRunRoot, "rel-r3", "bundle-r3");
+    assert.equal(generated.schemaId, "pinovel.eval-replay-matrix");
+    assert.equal(generated.verdict, "pass");
+    assert.equal(generated.candidatePassPow3, 1);
+    assert.match(generated.reportHash, /^[0-9a-f]{64}$/);
+    assert.equal(generated.arms.length, 4);
+
     const ok = evaluateEvalEvidenceGate({
       releaseId: "rel-r3",
       bundleId: "bundle-r3",
@@ -565,44 +616,81 @@ test("gate: R3 无 matrix → insufficient；matrix pass+pass^3=1 → approved",
       evalRunRoot,
     });
     assert.equal(ok.verdict, "approved", ok.reason);
+    assert.equal(ok.evidence.matrixRecomputed, true);
 
-    // verdict=reject → rejected
-    writeFileSync(
-      join(evalRunRoot, "matrix-report.json"),
-      JSON.stringify({ verdict: "reject", candidatePassPow3: 1 }),
-    );
-    const rejected = evaluateEvalEvidenceGate({
+    const tampered = JSON.parse(readFileSync(join(evalRunRoot, "matrix-report.json"), "utf-8"));
+    tampered.arms.find((a) => a.armId === "candidate").perSamplePass = [true, false, true];
+    tampered.verdict = "pass";
+    tampered.candidatePassPow3 = 1;
+    tampered.reportHash = computeMatrixReportHash(tampered);
+    writeFileSync(join(evalRunRoot, "matrix-report.json"), JSON.stringify(tampered, null, 2));
+    const recomputedReject = evaluateEvalEvidenceGate({
       releaseId: "rel-r3",
       bundleId: "bundle-r3",
       changeClass: "R3",
       evalRunRoot,
     });
-    assert.equal(rejected.verdict, "rejected");
-    assert.equal(rejected.code, "EVAL_EVIDENCE_MATRIX_REJECTED");
-
-    // pass^3 < 1 → rejected
-    writeFileSync(
-      join(evalRunRoot, "matrix-report.json"),
-      JSON.stringify({ verdict: "pass", candidatePassPow3: 0 }),
+    assert.equal(recomputedReject.verdict, "rejected");
+    assert.ok(
+      recomputedReject.code === "EVAL_EVIDENCE_MATRIX_REJECTED" ||
+        recomputedReject.code === "EVAL_EVIDENCE_PASS_POW3_UNSATISFIED",
+      recomputedReject.code,
     );
-    const pow3 = evaluateEvalEvidenceGate({
-      releaseId: "rel-r3",
-      bundleId: "bundle-r3",
-      changeClass: "R3",
-      evalRunRoot,
-    });
-    assert.equal(pow3.verdict, "rejected");
-    assert.equal(pow3.code, "EVAL_EVIDENCE_PASS_POW3_UNSATISFIED");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("gate: 强制级别策略 — R3 mandatory，R0/R1/R2 advisory", () => {
+test("gate: 强制级别策略 — R0/R1/R2/R3 全部 mandatory", () => {
   assert.equal(resolveEvalEvidenceEnforcement("R3"), "mandatory");
-  assert.equal(resolveEvalEvidenceEnforcement("R2"), "advisory");
-  assert.equal(resolveEvalEvidenceEnforcement("R1"), "advisory");
-  assert.equal(resolveEvalEvidenceEnforcement("R0"), "advisory");
+  assert.equal(resolveEvalEvidenceEnforcement("R2"), "mandatory");
+  assert.equal(resolveEvalEvidenceEnforcement("R1"), "mandatory");
+  assert.equal(resolveEvalEvidenceEnforcement("R0"), "mandatory");
+});
+
+test("gate: 回放 CLI 成功判定必须包含 grader + P6，不能只看 completed/isolation", () => {
+  const weak = evaluateReplayCliSuccess({
+    allCompleted: true,
+    isolationViolationCount: 0,
+    traceRetentionRate: 1,
+    unclassifiedCount: 0,
+    gradePassed: false,
+    evalGateVerdict: "approved",
+  });
+  assert.equal(weak.ok, false);
+  assert.ok(weak.reasons.some((r) => r.includes("grader")));
+
+  const noGate = evaluateReplayCliSuccess({
+    allCompleted: true,
+    isolationViolationCount: 0,
+    traceRetentionRate: 1,
+    unclassifiedCount: 0,
+    gradePassed: true,
+    evalGateVerdict: "insufficient",
+  });
+  assert.equal(noGate.ok, false);
+  assert.ok(noGate.reasons.some((r) => /eval.?gate|P6|evidence/i.test(r)));
+
+  const unclassified = evaluateReplayCliSuccess({
+    allCompleted: true,
+    isolationViolationCount: 0,
+    traceRetentionRate: 1,
+    unclassifiedCount: 1,
+    gradePassed: true,
+    evalGateVerdict: "approved",
+  });
+  assert.equal(unclassified.ok, false);
+
+  const ok = evaluateReplayCliSuccess({
+    allCompleted: true,
+    isolationViolationCount: 0,
+    traceRetentionRate: 1,
+    unclassifiedCount: 0,
+    gradePassed: true,
+    evalGateVerdict: "approved",
+  });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.reasons, []);
 });
 
 test("gate: 待审批报告落盘（不执行状态迁移）", () => {
@@ -787,7 +875,7 @@ test("CLI promote: R3 active_prod 缺 eval 证据 → EVAL_EVIDENCE_REQUIRED exi
   }
 });
 
-test("CLI promote: R1 active_prod 无 eval 证据 → advisory 警告但不阻断", () => {
+test("CLI promote: R1 active_prod 无 eval 证据 → EVAL_EVIDENCE_REQUIRED exit 5", () => {
   const root = makeTempRoot();
   try {
     const releasesDir = join(root, "releases");
@@ -816,8 +904,10 @@ test("CLI promote: R1 active_prod 无 eval 证据 → advisory 警告但不阻�
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
-    assert.equal(result.code, 0, `stderr: ${result.stderr}`);
-    assert.match(result.stderr + result.stdout, /EVAL_EVIDENCE_ADVISORY/);
+    assert.equal(result.code, 5, `stderr: ${result.stderr}`);
+    assert.match(result.stderr, /EVAL_EVIDENCE_REQUIRED/);
+    const store = createReleasePointerStore({ configDir: root });
+    assert.equal(store.readActive("production"), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
