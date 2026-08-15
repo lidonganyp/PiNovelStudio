@@ -537,6 +537,39 @@ test("治理模型适配器在直接调用时也会清除消息正文中的英�
   }
 });
 
+test("json_object 模式在中文化之后仍向 OpenAI 发送字面量 json", async () => {
+  process.env.NOVELOS_JUDGE_API_KEY = "测试密钥";
+  process.env.NOVELOS_JUDGE_BASE_URL = "https://example.test/v1";
+  process.env.NOVELOS_JUDGE_MODEL = "测试模型";
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body ?? "{}")));
+    return new Response(JSON.stringify({
+      model: "测试模型",
+      choices: [{ message: { content: "{}" } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  const messages = [{ role: "user", content: "请以 json 对象返回结论。" }];
+  await callOpenAIChatCompletions(messages, { responseFormat: "json_object" });
+  await createOpenAIChatCompletionsFn({
+    apiKey: "测试密钥",
+    apiBaseUrl: "https://example.test/v1",
+    modelId: "测试模型",
+  })(messages, { responseFormat: "json_object" });
+
+  assert.equal(requests.length, 2);
+  for (const [index, request] of requests.entries()) {
+    assert.deepEqual(request.response_format, { type: "json_object" });
+    const joined = request.messages.map((message) => message.content).join("\n");
+    assert.match(
+      joined,
+      /\bjson\b/i,
+      `json_object 第 ${index + 1} 次请求在中文化后丢失字面量 json：${joined}`,
+    );
+  }
+});
+
 test("中文化视图清除英文时严格保持原文字符长度", () => {
   const source = "控制台显示 ARC SECOND STAGE，警报未停。";
   const localized = localizeLlmText(source);

@@ -449,6 +449,27 @@ export function createRealGpt56SolChapterProxyApprovalCaller(
 // ============================================================================
 
 /**
+ * OpenAI json_object 要求消息里出现字面量 json。中文化会把 json 译成中文，
+ * 所以必须在 localize 之后再注入协议 token。
+ */
+function prepareChatCompletionsMessages(
+  messages: Array<{ role: string; content: string }>,
+  responseFormat?: "json_object" | "json_schema",
+): Array<{ role: string; content: string }> {
+  const localized = localizeLlmMessages(messages);
+  if (responseFormat !== "json_object") return localized;
+  if (localized.some((message) => /\bjson\b/i.test(message.content))) return localized;
+  if (localized.length === 0) {
+    return [{ role: "user", content: "json" }];
+  }
+  return localized.map((message, index) =>
+    index === localized.length - 1
+      ? { ...message, content: `${message.content}\njson` }
+      : message,
+  );
+}
+
+/**
  * 内置 OpenAI Chat Completions fetch 适配器（切片3 新增）。
  *
  * 生产路径用：从 NOVELOS_JUDGE_API_KEY / NOVELOS_JUDGE_BASE_URL / NOVELOS_JUDGE_MODEL
@@ -483,7 +504,7 @@ export async function callOpenAIChatCompletions(
   const url = `${apiBaseUrl.replace(/\/+$/, "")}/chat/completions`;
   const body: Record<string, unknown> = {
     model: modelId,
-    messages: localizeLlmMessages(messages),
+    messages: prepareChatCompletionsMessages(messages, options?.responseFormat),
     temperature: 0,
   };
   if (options?.responseFormat === "json_object") {
@@ -661,7 +682,7 @@ export function createOpenAIChatCompletionsFn(options: {
   ): Promise<Gpt56SolCallResult> => {
     const requestBody: Record<string, unknown> = {
       model: modelId,
-      messages: localizeLlmMessages(messages),
+      messages: prepareChatCompletionsMessages(messages, callOpts?.responseFormat),
       temperature: 0,
     };
     if (callOpts?.responseFormat === "json_object") {
