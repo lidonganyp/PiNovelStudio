@@ -28,9 +28,19 @@
 import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
 
-import { collectEnvironmentFingerprint, computeFingerprintHash, verifyEnvironmentFingerprint, isGitBinaryAvailable } from "../dist-test/v2/governance/environment-fingerprint.js";
+import {
+  collectDefaultEnvironmentFingerprint,
+  computeFingerprintHash,
+  verifyEnvironmentFingerprint,
+  isGitBinaryAvailable,
+  assertCaptureFingerprintPreconditions,
+  persistEnvironmentFingerprint,
+  loadPersistedEnvironmentFingerprint,
+  diffBehavioralFingerprintFields,
+  extractBehavioralFingerprintFields,
+  formatFingerprintDiff,
+} from "../dist-test/v2/governance/environment-fingerprint.js";
 import { captureDefaultBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
 import { createEvolutionReleaseRegistry } from "../dist-test/v2/governance/evolution-release-registry.js";
 import { createReleasePointerStore } from "../dist-test/v2/governance/release-pointer-store.js";
@@ -127,22 +137,7 @@ function configDir() {
 // ============================================================================
 
 /** 计算 CreativeConstitution hash（CORE-WRITING-PRINCIPLES.md + WORLDBUILDING-CANON.md）。 */
-function constitutionHash() {
-  const projectExt = join(projectRoot(), ".pi", "extensions", "novel-studio");
-  const candidates = [
-    join(projectExt, "CORE-WRITING-PRINCIPLES.md"),
-    join(projectExt, "WORLDBUILDING-CANON.md"),
-  ];
-  const hashes = [];
-  for (const p of candidates) {
-    if (existsSync(p)) {
-      hashes.push(createHash("sha256").update(readFileSync(p, "utf-8"), "utf-8").digest("hex"));
-    }
-  }
-  return hashes.length > 0 ? createHash("sha256").update(hashes.join("\n"), "utf-8").digest("hex") : "";
-}
-
-/** 采集当前环境指纹（1A 默认配置）。 */
+/** 采集当前环境指纹（与 G6 / production_like 共用默认规格）。 */
 function captureFingerprint() {
   // FP-GIT-1（rel-prod-110 事故修复）：git 二进制不可用时 getGitHead 静默退化为空串，
   // 退化指纹会被冻结进 manifest，且 verify 在同样缺 git 的会话中产生假阳性 YES
@@ -155,37 +150,7 @@ function captureFingerprint() {
     console.error("  请将 git 加入会话 PATH 后重试（如 PowerShell: $env:Path = \"C:\\Program Files\\Git\\cmd;$env:Path\"）。");
     process.exit(9);
   }
-  const fp = collectEnvironmentFingerprint({
-    projectRoot: projectRoot(),
-    modelRoutingPath: "config/model-routing.json",
-    promptBundlePaths: [],
-    toolSchemaPaths: [],
-    runtimeFilePaths: [
-      ".pi/extensions/novel-studio/index.ts",
-      ".pi/extensions/novel-studio/tsconfig.prod.json",
-      ".pi/extensions/novel-studio/tsconfig.eval.json",
-      ".pi/extensions/novel-studio/tsconfig.test.json",
-    ],
-    buildArtifactPaths: [
-      ".pi/extensions/novel-studio/dist/index.js",
-    ],
-    buildArtifactDirs: [
-      ".pi/extensions/novel-studio/dist",
-    ],
-    activeStrategyIds: [],
-    constitutionHash: constitutionHash(),
-    datasetHash: "",
-    evalProtocolHash: "",
-    seed: 0,
-    budgetMaxCalls: 10,
-    timeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS ?? 300000),
-    fallbackPolicy: "hard_block",
-    generationModel: "gemini-3.1-pro-preview",
-    judgeModel: "gpt5.6-sol",
-    proxyApprovalModel: "gpt5.6-sol",
-    envSwitchNames: ["V2_FORCE_STUB", "NOVEL_TEST_TOOLS", "NOVEL_DEBUG_TOOLS", "PINOVEL_UNIFIED_PIPELINE", "PINOVEL_DISABLE_FALLBACK"],
-    secretEnvNames: ["GLM_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY", "CLAUDE_API_KEY", "GEMINI_API_KEY", "GPT_API_KEY", "ARK_API_KEY", "ERNIE_API_KEY"],
-  });
+  const fp = collectDefaultEnvironmentFingerprint(projectRoot());
   // FP-GIT-1 第二道守卫：git 可用但 projectRoot 不是 git 仓库时 codeCommit 仍为空，
   // 同样拒绝（生产指纹必须绑定 git commit 身份）。
   if (!fp.codeCommit) {
@@ -212,6 +177,14 @@ function cmdCapture(args) {
   }
 
   const fp = captureFingerprint();
+  const precheck = assertCaptureFingerprintPreconditions(fp);
+  if (!precheck.ok) {
+    console.error("[evolution:capture] 错误：fingerprint 一致性预检失败：");
+    for (const reason of precheck.reasons) {
+      console.error(`  - ${reason}`);
+    }
+    process.exit(8);
+  }
   const fingerprintHash = computeFingerprintHash(fp);
 
   // DG-2：采集生产级行为快照（8 个组件 hash + bundleId），写入 manifest 行为身份字段。
@@ -256,6 +229,7 @@ function cmdCapture(args) {
 
   const registry = createEvolutionReleaseRegistry({ releasesDir: releasesDir() });
   registry.writeManifest(validation.manifest);
+  persistEnvironmentFingerprint(join(releasesDir(), releaseId), fp);
   registry.recordStateEvent({
     eventId: `evt-${releaseId}-create`,
     releaseId,
@@ -507,6 +481,10 @@ function cmdVerify(args) {
 
   const recorded = manifest.environmentFingerprint;
   const reproducible = recorded === currentHash;
+  const persisted = loadPersistedEnvironmentFingerprint(join(releasesDir(), releaseId));
+  const diffs = persisted
+    ? diffBehavioralFingerprintFields(persisted, extractBehavioralFingerprintFields(currentFp))
+    : [];
 
   console.log(`=== Evolution Release Verify ===`);
   console.log(`  releaseId           : ${releaseId}`);
@@ -516,12 +494,14 @@ function cmdVerify(args) {
   console.log(`  codeCommit (recorded in manifest context): ${currentFp.codeCommit}`);
   console.log(`  worktreeDirty       : ${currentFp.worktreeDirty}`);
   console.log(`  reproducible        : ${reproducible ? "✓ YES" : "✗ NO"}`);
+  if (diffs.length > 0) {
+    console.log(formatFingerprintDiff(diffs));
+  }
 
   if (!reproducible) {
     console.log("");
     console.log("  ⚠ 指纹不一致：当前环境与 release 冻结时不同。");
-    console.log("    可能原因：代码变更、worktree dirty、配置改动、模型路由变更、环境开关变化。");
-    console.log("    如需晋级，请重新 capture 新 release；如需复现，请 checkout 对应 commit 并恢复配置。");
+    console.log("    必须先对齐密钥/开关/构建产物/工作树，再重新 capture。");
     process.exit(4);
   }
 }

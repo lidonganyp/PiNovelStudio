@@ -30,7 +30,7 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve, relative, sep, isAbsolute, join } from "node:path";
 
 // ============================================================================
@@ -159,6 +159,89 @@ export interface CollectEnvironmentFingerprintInput {
   secretEnvNames: string[];
   /** 测试用：绕过真实 Git 调用 */
   mockGit?: MockGit;
+}
+
+/** capture / G6 / production_like 共用的默认指纹规格。 */
+export const DEFAULT_RELEASE_FINGERPRINT_SPEC = {
+  modelRoutingPath: "config/model-routing.json",
+  promptBundlePaths: [] as string[],
+  toolSchemaPaths: [] as string[],
+  runtimeFilePaths: [
+    ".pi/extensions/novel-studio/index.ts",
+    ".pi/extensions/novel-studio/tsconfig.prod.json",
+    ".pi/extensions/novel-studio/tsconfig.eval.json",
+    ".pi/extensions/novel-studio/tsconfig.test.json",
+  ],
+  buildArtifactPaths: [".pi/extensions/novel-studio/dist/index.js"],
+  buildArtifactDirs: [".pi/extensions/novel-studio/dist"],
+  envSwitchNames: [
+    "V2_FORCE_STUB",
+    "NOVEL_TEST_TOOLS",
+    "NOVEL_DEBUG_TOOLS",
+    "PINOVEL_UNIFIED_PIPELINE",
+    "PINOVEL_DISABLE_FALLBACK",
+    "PINOVEL_EVAL_REPLAY_TRANSPORT",
+    "PINOVEL_EVAL_RECORDED_RESULTS_PATH",
+    "PINOVEL_EVAL_SYNTHETIC_FAULTS",
+    "PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH",
+  ],
+  secretEnvNames: [
+    "GLM_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "QWEN_API_KEY",
+    "CLAUDE_API_KEY",
+    "GEMINI_API_KEY",
+    "GPT_API_KEY",
+    "ARK_API_KEY",
+    "ERNIE_API_KEY",
+  ],
+  generationModel: "gemini-3.1-pro-preview",
+  judgeModel: "gpt5.6-sol",
+  proxyApprovalModel: "gpt5.6-sol",
+  seed: 0,
+  budgetMaxCalls: 10,
+  fallbackPolicy: "hard_block",
+} as const;
+
+const REPLAY_TRANSPORT_SWITCHES = [
+  "PINOVEL_EVAL_REPLAY_TRANSPORT",
+  "PINOVEL_EVAL_RECORDED_RESULTS_PATH",
+  "PINOVEL_EVAL_SYNTHETIC_FAULTS",
+  "PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH",
+] as const;
+
+export interface BehavioralFingerprintFields {
+  codeCommit: string;
+  worktreeDirty: boolean;
+  runtimeFilesHash: string;
+  buildArtifactHash: string;
+  modelRoutingHash: string;
+  promptBundleHash: string;
+  toolSchemaHash: string;
+  generationModel: string;
+  judgeModel: string;
+  proxyApprovalModel: string;
+  activeStrategyIds: string[];
+  constitutionHash: string;
+  datasetHash: string;
+  evalProtocolHash: string;
+  seed: number;
+  budgetMaxCalls: number;
+  timeoutMs: number;
+  fallbackPolicy: string;
+  envSwitches: Array<{ name: string; set: boolean }>;
+  secretEnvStates: Array<{ name: string; set: boolean }>;
+}
+
+export interface FingerprintFieldDiff {
+  field: string;
+  recorded: string;
+  actual: string;
+}
+
+export interface CaptureFingerprintPrecheck {
+  ok: boolean;
+  reasons: string[];
 }
 
 // ============================================================================
@@ -429,8 +512,32 @@ export function collectEnvironmentFingerprint(
  * 注意：runtimeFileList 不直接计入 hash（其聚合 runtimeFilesHash 已计入），
  * 避免清单顺序影响 hash。
  */
-export function computeFingerprintHash(fp: EnvironmentFingerprint): string {
-  const behavioralFields = {
+export function extractBehavioralFingerprintFields(
+  fp: Pick<
+    EnvironmentFingerprint,
+    | "codeCommit"
+    | "worktreeDirty"
+    | "runtimeFilesHash"
+    | "buildArtifactHash"
+    | "modelRoutingHash"
+    | "promptBundleHash"
+    | "toolSchemaHash"
+    | "generationModel"
+    | "judgeModel"
+    | "proxyApprovalModel"
+    | "activeStrategyIds"
+    | "constitutionHash"
+    | "datasetHash"
+    | "evalProtocolHash"
+    | "seed"
+    | "budgetMaxCalls"
+    | "timeoutMs"
+    | "fallbackPolicy"
+    | "envSwitches"
+    | "secretEnvStates"
+  >,
+): BehavioralFingerprintFields {
+  return {
     codeCommit: fp.codeCommit,
     worktreeDirty: fp.worktreeDirty,
     runtimeFilesHash: fp.runtimeFilesHash,
@@ -449,13 +556,228 @@ export function computeFingerprintHash(fp: EnvironmentFingerprint): string {
     budgetMaxCalls: fp.budgetMaxCalls,
     timeoutMs: fp.timeoutMs,
     fallbackPolicy: fp.fallbackPolicy,
-    envSwitches: [...fp.envSwitches].sort((a, b) => a.name.localeCompare(b.name)),
-    // 秘密：只取 name + set，不含 fingerprint（轮换不改变行为）
-    secretEnvStates: fp.secretEnvStates
-      .map((s) => ({ name: s.name, set: s.set }))
+    envSwitches: [...fp.envSwitches]
+      .map((item) => ({ name: item.name, set: item.set }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    secretEnvStates: [...fp.secretEnvStates]
+      .map((item) => ({ name: item.name, set: item.set }))
       .sort((a, b) => a.name.localeCompare(b.name)),
   };
-  return sha256(canonicalize(behavioralFields));
+}
+
+export function computeFingerprintHash(fp: EnvironmentFingerprint): string {
+  return sha256(canonicalize(extractBehavioralFingerprintFields(fp)));
+}
+
+export function computeConstitutionHash(projectRoot: string): string {
+  const extRoot = join(projectRoot, ".pi", "extensions", "novel-studio");
+  const candidates = [
+    join(extRoot, "CORE-WRITING-PRINCIPLES.md"),
+    join(extRoot, "WORLDBUILDING-CANON.md"),
+  ];
+  const hashes: string[] = [];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      hashes.push(sha256(readFileSync(p, "utf-8")));
+    }
+  }
+  return hashes.length > 0 ? sha256(hashes.join("\n")) : "";
+}
+
+export function collectDefaultEnvironmentFingerprint(
+  projectRoot: string,
+  mockGit?: MockGit,
+): EnvironmentFingerprint {
+  const spec = DEFAULT_RELEASE_FINGERPRINT_SPEC;
+  return collectEnvironmentFingerprint({
+    projectRoot,
+    modelRoutingPath: spec.modelRoutingPath,
+    promptBundlePaths: [...spec.promptBundlePaths],
+    toolSchemaPaths: [...spec.toolSchemaPaths],
+    runtimeFilePaths: [...spec.runtimeFilePaths],
+    buildArtifactPaths: [...spec.buildArtifactPaths],
+    buildArtifactDirs: [...spec.buildArtifactDirs],
+    activeStrategyIds: [],
+    constitutionHash: computeConstitutionHash(projectRoot),
+    datasetHash: "",
+    evalProtocolHash: "",
+    seed: spec.seed,
+    budgetMaxCalls: spec.budgetMaxCalls,
+    timeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS ?? 300000),
+    fallbackPolicy: spec.fallbackPolicy,
+    generationModel: spec.generationModel,
+    judgeModel: spec.judgeModel,
+    proxyApprovalModel: spec.proxyApprovalModel,
+    envSwitchNames: [...spec.envSwitchNames],
+    secretEnvNames: [...spec.secretEnvNames],
+    mockGit,
+  });
+}
+
+export function diffBehavioralFingerprintFields(
+  recorded: Partial<BehavioralFingerprintFields>,
+  actual: Partial<BehavioralFingerprintFields>,
+): FingerprintFieldDiff[] {
+  const left = normalizeComparableFields(recorded);
+  const right = normalizeComparableFields(actual);
+  const diffs: FingerprintFieldDiff[] = [];
+  const scalarKeys: Array<keyof BehavioralFingerprintFields> = [
+    "codeCommit",
+    "worktreeDirty",
+    "runtimeFilesHash",
+    "buildArtifactHash",
+    "modelRoutingHash",
+    "promptBundleHash",
+    "toolSchemaHash",
+    "generationModel",
+    "judgeModel",
+    "proxyApprovalModel",
+    "constitutionHash",
+    "datasetHash",
+    "evalProtocolHash",
+    "seed",
+    "budgetMaxCalls",
+    "timeoutMs",
+    "fallbackPolicy",
+  ];
+  for (const key of scalarKeys) {
+    const recordedValue = stringifyField(left[key]);
+    const actualValue = stringifyField(right[key]);
+    if (recordedValue !== actualValue) {
+      diffs.push({ field: key, recorded: recordedValue, actual: actualValue });
+    }
+  }
+  const recordedIds = (left.activeStrategyIds ?? []).join(",");
+  const actualIds = (right.activeStrategyIds ?? []).join(",");
+  if (recordedIds !== actualIds) {
+    diffs.push({ field: "activeStrategyIds", recorded: recordedIds, actual: actualIds });
+  }
+  diffs.push(...diffNamedFlags("envSwitches", left.envSwitches ?? [], right.envSwitches ?? []));
+  diffs.push(...diffNamedFlags("secretEnvStates", left.secretEnvStates ?? [], right.secretEnvStates ?? []));
+  return diffs;
+}
+
+export function formatFingerprintDiff(diffs: FingerprintFieldDiff[]): string {
+  if (diffs.length === 0) return "字段差异：无";
+  return [
+    "字段差异：",
+    ...diffs.map((diff) => `  ${diff.field}: recorded=${diff.recorded} actual=${diff.actual}`),
+  ].join("\n");
+}
+
+export function formatCurrentFingerprintSummary(
+  fp: Pick<EnvironmentFingerprint, "codeCommit" | "worktreeDirty" | "envSwitches" | "secretEnvStates" | "generationModel" | "timeoutMs">,
+): string {
+  const setSwitches = fp.envSwitches.filter((item) => item.set).map((item) => item.name);
+  const setSecrets = fp.secretEnvStates.filter((item) => item.set).map((item) => item.name);
+  return [
+    `current.codeCommit=${fp.codeCommit || "(empty)"}`,
+    `current.worktreeDirty=${fp.worktreeDirty}`,
+    `current.generationModel=${fp.generationModel}`,
+    `current.timeoutMs=${fp.timeoutMs}`,
+    `current.envSwitches.set=${setSwitches.join(",") || "(none)"}`,
+    `current.secretEnvStates.set=${setSecrets.join(",") || "(none)"}`,
+  ].join(" ");
+}
+
+export function explainFingerprintMismatch(
+  recordedHash: string,
+  currentHash: string,
+  diffs: FingerprintFieldDiff[],
+  currentSummary?: string,
+): string {
+  const header =
+    `environment fingerprint mismatch：recorded=${recordedHash.slice(0, 16)}…, current=${currentHash.slice(0, 16)}…`;
+  if (diffs.length === 0) {
+    return (
+      `${header}（无落盘字段快照，无法列出 recorded/actual 字段差；需重新 capture 并写入 environment-fingerprint.json）` +
+      (currentSummary ? `\n${currentSummary}` : "")
+    );
+  }
+  return `${header}\n${formatFingerprintDiff(diffs)}`;
+}
+
+export function assertCaptureFingerprintPreconditions(
+  fp: Pick<EnvironmentFingerprint, "worktreeDirty" | "envSwitches">,
+): CaptureFingerprintPrecheck {
+  const reasons: string[] = [];
+  if (fp.worktreeDirty) {
+    reasons.push("worktreeDirty=true：捕获前工作树必须干净");
+  }
+  for (const name of REPLAY_TRANSPORT_SWITCHES) {
+    if (fp.envSwitches.some((item) => item.name === name && item.set)) {
+      reasons.push(`${name} 已设置：capture 不得在 replay 传输环境下采集`);
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+export function persistEnvironmentFingerprint(
+  releaseDir: string,
+  fp: EnvironmentFingerprint,
+): string {
+  const payload = {
+    schemaId: ENVIRONMENT_FINGERPRINT_SCHEMA_ID,
+    schemaVersion: ENVIRONMENT_FINGERPRINT_SCHEMA_VERSION,
+    fingerprintHash: fp.fingerprintHash,
+    collectedAt: fp.collectedAt,
+    ...extractBehavioralFingerprintFields(fp),
+  };
+  const target = join(releaseDir, "environment-fingerprint.json");
+  writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  return target;
+}
+
+export function loadPersistedEnvironmentFingerprint(
+  releaseDir: string,
+): (BehavioralFingerprintFields & { fingerprintHash?: string }) | null {
+  const target = join(releaseDir, "environment-fingerprint.json");
+  if (!existsSync(target)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(target, "utf-8")) as BehavioralFingerprintFields & {
+      fingerprintHash?: string;
+    };
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeComparableFields(
+  fp: Partial<BehavioralFingerprintFields>,
+): Partial<BehavioralFingerprintFields> {
+  return {
+    ...fp,
+    envSwitches: (fp.envSwitches ?? []).map((item) => ({ name: item.name, set: item.set })),
+    secretEnvStates: (fp.secretEnvStates ?? []).map((item) => ({ name: item.name, set: item.set })),
+    activeStrategyIds: [...(fp.activeStrategyIds ?? [])].sort(),
+  };
+}
+
+function stringifyField(value: unknown): string {
+  if (value === undefined) return "(missing)";
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+function diffNamedFlags(
+  prefix: string,
+  recorded: Array<{ name: string; set: boolean }>,
+  actual: Array<{ name: string; set: boolean }>,
+): FingerprintFieldDiff[] {
+  const diffs: FingerprintFieldDiff[] = [];
+  const names = new Set([...recorded.map((item) => item.name), ...actual.map((item) => item.name)]);
+  for (const name of [...names].sort()) {
+    const left = recorded.find((item) => item.name === name);
+    const right = actual.find((item) => item.name === name);
+    const recordedValue = left ? String(left.set) : "(missing)";
+    const actualValue = right ? String(right.set) : "(missing)";
+    if (recordedValue !== actualValue) {
+      diffs.push({ field: `${prefix}.${name}`, recorded: recordedValue, actual: actualValue });
+    }
+  }
+  return diffs;
 }
 
 /** 递归规范化对象：按 key 排序，保证字段顺序不影响 hash。 */

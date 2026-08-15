@@ -27,8 +27,7 @@
  */
 
 import { basename, dirname, join, resolve, isAbsolute } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 
 import { createReleasePointerStore } from "./release-pointer-store.js";
 import { createEvolutionReleaseRegistry } from "./evolution-release-registry.js";
@@ -42,8 +41,15 @@ import {
   verifyCanaryResultArtifacts,
 } from "./canary-promotion-gate.js";
 import {
-  collectEnvironmentFingerprint,
+  collectDefaultEnvironmentFingerprint,
+  computeConstitutionHash as computeConstitutionHashFromFingerprint,
   computeFingerprintHash,
+  DEFAULT_RELEASE_FINGERPRINT_SPEC,
+  diffBehavioralFingerprintFields,
+  explainFingerprintMismatch,
+  extractBehavioralFingerprintFields,
+  formatCurrentFingerprintSummary,
+  loadPersistedEnvironmentFingerprint,
 } from "./environment-fingerprint.js";
 import {
   validateBundleIdConsistency,
@@ -142,58 +148,6 @@ export type ReleaseGateResult = ReleaseGateOkResult | ReleaseGateBlockedResult;
 //
 // 任何对此默认配置的修改必须同步 evolution-cli.mjs。
 
-const DEFAULT_MODEL_ROUTING_PATH = "config/model-routing.json";
-
-const DEFAULT_RUNTIME_FILE_PATHS = [
-  ".pi/extensions/novel-studio/index.ts",
-  ".pi/extensions/novel-studio/tsconfig.prod.json",
-  ".pi/extensions/novel-studio/tsconfig.eval.json",
-  ".pi/extensions/novel-studio/tsconfig.test.json",
-];
-
-const DEFAULT_BUILD_ARTIFACT_PATHS = [
-  ".pi/extensions/novel-studio/dist/index.js",
-];
-
-/**
- * 构建产物目录：递归收集 dist/ 下所有 .js 纳入 buildArtifactHash。
- * 保证任一生产源码变化（如 v2/core/final-state-commit.ts → final-state-commit.js）
- * 都改变 environment fingerprint（与 behavior-snapshot.ts 的 runtimeFingerprint 覆盖一致）。
- * 必须与 scripts/evolution-cli.mjs captureFingerprint() 的 buildArtifactDirs 保持一致。
- */
-const DEFAULT_BUILD_ARTIFACT_DIRS = [
-  ".pi/extensions/novel-studio/dist",
-];
-
-const DEFAULT_ENV_SWITCH_NAMES = [
-  "V2_FORCE_STUB",
-  "NOVEL_TEST_TOOLS",
-  "NOVEL_DEBUG_TOOLS",
-  "PINOVEL_UNIFIED_PIPELINE",
-  "PINOVEL_DISABLE_FALLBACK",
-  // F4-4：eval 回放传输 env 属确定性测试开关；生产环境若误设，
-  // 会以预录/合成结果冒充真实模型输出，release gate 必须拦截。
-  "PINOVEL_EVAL_REPLAY_TRANSPORT",
-  "PINOVEL_EVAL_RECORDED_RESULTS_PATH",
-  "PINOVEL_EVAL_SYNTHETIC_FAULTS",
-  "PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH",
-];
-
-const DEFAULT_SECRET_ENV_NAMES = [
-  "GLM_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "QWEN_API_KEY",
-  "CLAUDE_API_KEY",
-  "GEMINI_API_KEY",
-  "GPT_API_KEY",
-  "ARK_API_KEY",
-  "ERNIE_API_KEY",
-];
-
-const DEFAULT_GENERATION_MODEL = "gemini-3.1-pro-preview";
-const DEFAULT_JUDGE_MODEL = "gpt5.6-sol";
-const DEFAULT_PROXY_APPROVAL_MODEL = "gpt5.6-sol";
-
 /**
  * 默认评测协议版本（与 scripts/evolution-cli.mjs 的 DEFAULT_EVAL_PROTOCOL_VERSION 一致）。
  * 仅当 manifest 未捕获 evalProtocolVersion 时兜底使用；manifest 已捕获时以 manifest 为准。
@@ -201,58 +155,18 @@ const DEFAULT_PROXY_APPROVAL_MODEL = "gpt5.6-sol";
 const DEFAULT_EVAL_PROTOCOL_VERSION = "2026-08-01";
 
 /**
- * 计算 CreativeConstitution hash（CORE-WRITING-PRINCIPLES.md + WORLDBUILDING-CANON.md）。
- * 与 evolution-cli.mjs constitutionHash() 一致。
- * CONCURRENCY-WAVE4：导出供 commit-stale-guard 在提交边界做 constitution_changed 检测。
+ * 计算 CreativeConstitution hash。实现已收敛到 environment-fingerprint.ts。
  */
 export function computeConstitutionHash(projectRoot: string): string {
-  const extRoot = join(projectRoot, ".pi", "extensions", "novel-studio");
-  const candidates = [
-    join(extRoot, "CORE-WRITING-PRINCIPLES.md"),
-    join(extRoot, "WORLDBUILDING-CANON.md"),
-  ];
-  const hashes: string[] = [];
-  for (const p of candidates) {
-    if (existsSync(p)) {
-      hashes.push(createHash("sha256").update(readFileSync(p, "utf-8"), "utf-8").digest("hex"));
-    }
-  }
-  return hashes.length > 0
-    ? createHash("sha256").update(hashes.join("\n"), "utf-8").digest("hex")
-    : "";
+  return computeConstitutionHashFromFingerprint(projectRoot);
 }
 
 /**
  * 采集当前环境默认指纹并返回 fingerprintHash。
- *
- * 生产入口（runUnifiedPipeline）在未注入 currentFingerprintHash 时调用此函数。
- * 配置与 evolution-cli.mjs captureFingerprint() 完全一致，保证 CLI 冻结的 release
- * 与门禁验证的 hash 可比较。
+ * 与 CLI capture / production_like 共用 collectDefaultEnvironmentFingerprint。
  */
 export function captureDefaultEnvironmentFingerprint(projectRoot: string): string {
-  const fp = collectEnvironmentFingerprint({
-    projectRoot,
-    modelRoutingPath: DEFAULT_MODEL_ROUTING_PATH,
-    promptBundlePaths: [],
-    toolSchemaPaths: [],
-    runtimeFilePaths: DEFAULT_RUNTIME_FILE_PATHS,
-    buildArtifactPaths: DEFAULT_BUILD_ARTIFACT_PATHS,
-    buildArtifactDirs: DEFAULT_BUILD_ARTIFACT_DIRS,
-    activeStrategyIds: [],
-    constitutionHash: computeConstitutionHash(projectRoot),
-    datasetHash: "",
-    evalProtocolHash: "",
-    seed: 0,
-    budgetMaxCalls: 10,
-    timeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS ?? 300000),
-    fallbackPolicy: "hard_block",
-    generationModel: DEFAULT_GENERATION_MODEL,
-    judgeModel: DEFAULT_JUDGE_MODEL,
-    proxyApprovalModel: DEFAULT_PROXY_APPROVAL_MODEL,
-    envSwitchNames: DEFAULT_ENV_SWITCH_NAMES,
-    secretEnvNames: DEFAULT_SECRET_ENV_NAMES,
-  });
-  return computeFingerprintHash(fp);
+  return computeFingerprintHash(collectDefaultEnvironmentFingerprint(projectRoot));
 }
 
 // ============================================================================
@@ -583,9 +497,15 @@ export function evaluateProductionReleaseGate(
   }
 
   // 6. 指纹对比
-  const currentHash =
-    input.currentFingerprintHash ?? captureDefaultEnvironmentFingerprint(input.projectRoot);
+  const currentFp = collectDefaultEnvironmentFingerprint(input.projectRoot);
+  const currentHash = input.currentFingerprintHash ?? computeFingerprintHash(currentFp);
   if (manifest.environmentFingerprint !== currentHash) {
+    const persisted = loadPersistedEnvironmentFingerprint(
+      join(evolutionRoot, "releases", manifest.releaseId),
+    );
+    const diffs = persisted
+      ? diffBehavioralFingerprintFields(persisted, extractBehavioralFingerprintFields(currentFp))
+      : [];
     return {
       ok: false,
       devMode: false,
@@ -593,8 +513,13 @@ export function evaluateProductionReleaseGate(
         stage: "g6_release_gate",
         severity: "preflight",
         reason:
-          `environment fingerprint mismatch：recorded=${manifest.environmentFingerprint.slice(0, 16)}…, current=${currentHash.slice(0, 16)}…` +
-          `（代码/配置/模型路由/构建产物等行为资产发生变化；需重新 capture release 并完成审批晋级流程）`,
+          explainFingerprintMismatch(
+            manifest.environmentFingerprint,
+            currentHash,
+            diffs,
+            formatCurrentFingerprintSummary(currentFp),
+          ) +
+          "（需在同一干净提交与同一环境下重新 capture，不得只比较短哈希）",
         recoverable: false,
         degradedTo: "hard_block",
       },
@@ -617,7 +542,7 @@ export function evaluateProductionReleaseGate(
     }
     const snapshot = captureDefaultBehaviorSnapshot(
       input.projectRoot,
-      behaviorIdentity.modelVersion ?? DEFAULT_GENERATION_MODEL,
+      behaviorIdentity.modelVersion ?? DEFAULT_RELEASE_FINGERPRINT_SPEC.generationModel,
       behaviorIdentity.evalProtocolVersion ?? DEFAULT_EVAL_PROTOCOL_VERSION,
     );
     const comparison = compareManifestComponentHashes(manifest, snapshot);

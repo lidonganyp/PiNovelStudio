@@ -50,6 +50,7 @@ import {
 } from "../dist/utils/llm-language-guard.js";
 
 const LATIN_LETTER = /[A-Za-z]/;
+const REQUIRED_JSON_OBJECT_TOKEN = /\bjson\b/gi;
 const originalFetch = globalThis.fetch;
 const originalJudgeEnv = {
   key: process.env.NOVELOS_JUDGE_API_KEY,
@@ -64,6 +65,23 @@ function assertNoEnglish(label, ...texts) {
     match,
     null,
     `${label} 含英文字母 ${match?.[0] ?? ""}：${joined.slice(Math.max(0, (match?.index ?? 0) - 40), (match?.index ?? 0) + 80)}`,
+  );
+}
+
+/** json_object 只允许协议必需的独立词 json；其余英文仍必须被清除。 */
+function assertNoEnglishExceptRequiredJson(label, ...texts) {
+  const joined = texts.filter((value) => typeof value === "string").join("\n");
+  assert.match(
+    joined,
+    /\bjson\b/i,
+    `${label} 缺少 json_object 必需的字面量 json：${joined.slice(0, 200)}`,
+  );
+  const remainder = joined.replace(REQUIRED_JSON_OBJECT_TOKEN, "");
+  const match = remainder.match(LATIN_LETTER);
+  assert.equal(
+    match,
+    null,
+    `${label} 含非必要英文字母 ${match?.[0] ?? ""}：${remainder.slice(Math.max(0, (match?.index ?? 0) - 40), (match?.index ?? 0) + 80)}`,
   );
 }
 
@@ -325,9 +343,9 @@ test("发布代理审批实际网络载荷只含中文协议", async () => {
 
   assert.equal(requests.length, 2);
   for (const [index, request] of requests.entries()) {
-    for (const message of request.messages) {
-      assertNoEnglish(`发布代理审批第 ${index + 1} 次 ${message.role} 消息`, message.content);
-    }
+    assert.deepEqual(request.response_format, { type: "json_object" });
+    const joined = request.messages.map((message) => message.content).join("\n");
+    assertNoEnglishExceptRequiredJson(`发布代理审批第 ${index + 1} 次载荷`, joined);
   }
 });
 
@@ -537,7 +555,7 @@ test("治理模型适配器在直接调用时也会清除消息正文中的英�
   }
 });
 
-test("json_object 模式在中文化之后仍向 OpenAI 发送字面量 json", async () => {
+test("json_object 模式只保留必要的字面量 json，其他英文仍被清除", async () => {
   process.env.NOVELOS_JUDGE_API_KEY = "测试密钥";
   process.env.NOVELOS_JUDGE_BASE_URL = "https://example.test/v1";
   process.env.NOVELOS_JUDGE_MODEL = "测试模型";
@@ -550,23 +568,21 @@ test("json_object 模式在中文化之后仍向 OpenAI 发送字面量 json", a
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
 
-  const messages = [{ role: "user", content: "请以 json 对象返回结论。" }];
-  await callOpenAIChatCompletions(messages, { responseFormat: "json_object" });
+  const chineseOnly = [{ role: "user", content: "请以结构化对象返回结论。" }];
+  const withOtherEnglish = [{ role: "user", content: "Return winner and evidenceExcerpt." }];
+  await callOpenAIChatCompletions(chineseOnly, { responseFormat: "json_object" });
   await createOpenAIChatCompletionsFn({
     apiKey: "测试密钥",
     apiBaseUrl: "https://example.test/v1",
     modelId: "测试模型",
-  })(messages, { responseFormat: "json_object" });
+  })(withOtherEnglish, { responseFormat: "json_object" });
 
   assert.equal(requests.length, 2);
   for (const [index, request] of requests.entries()) {
     assert.deepEqual(request.response_format, { type: "json_object" });
     const joined = request.messages.map((message) => message.content).join("\n");
-    assert.match(
-      joined,
-      /\bjson\b/i,
-      `json_object 第 ${index + 1} 次请求在中文化后丢失字面量 json：${joined}`,
-    );
+    assertNoEnglishExceptRequiredJson(`json_object 第 ${index + 1} 次载荷`, joined);
+    assert.doesNotMatch(joined, /winner|evidenceExcerpt/i);
   }
 });
 
