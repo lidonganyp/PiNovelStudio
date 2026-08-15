@@ -287,12 +287,12 @@ export function resolveModelRouteInvokeArgs(
 /**
  * EVAL-REPLAY-ACCEPTANCE-LOOP F1：production_like 的生产 release gate 前置验证。
  *
- * 在 Runner 层以主仓真实治理状态（active_prod pointer + manifest + 审批 +
- * 环境指纹）evaluateProductionReleaseGate，并要求 gate 通过且 active release
- * 与 fixture provenance 同源（releaseId 一致 + bundleId 一致）。
+ * 在 Runner 层校验 fixture provenance 指向的候选 release（身份 + 指纹 +
+ * capabilityPackageSetHash），不要求该 release 已经是 active_prod，也不要求
+ * 审批已完成：证据先于指针切换。
  *
- * production_like 子进程不再设置 PINOVEL_DEV_MODE。本前置检查确认
- * 源仓真实 G6 可通过，并给出子进程必须写入 trace 的期望身份。
+ * production_like 子进程不再设置 PINOVEL_DEV_MODE。子进程通过
+ * PINOVEL_EVAL_ONLY + PINOVEL_EVAL_RELEASE_ID 走同一套候选门禁。
  */
 export function verifyProductionLikeReleaseGate(
   projectRoot: string,
@@ -308,17 +308,21 @@ export function verifyProductionLikeReleaseGate(
   const savedDevMode = process.env.PINOVEL_DEV_MODE;
   delete process.env.PINOVEL_DEV_MODE;
   try {
-    const gate = evaluateProductionReleaseGate({ projectRoot });
+    const gate = evaluateProductionReleaseGate({
+      projectRoot,
+      targetReleaseId: fixture.provenance.releaseId,
+      requireActiveApproval: false,
+    });
     if (!gate.ok) {
       return {
         ok: false,
-        reason: `主仓 production release gate 阻断：${gate.failureEnvelope?.reason ?? "unknown"}`,
+        reason: `production_like 候选 release gate 阻断：${gate.failureEnvelope?.reason ?? "unknown"}`,
       };
     }
     if (gate.releaseId !== fixture.provenance.releaseId) {
       return {
         ok: false,
-        reason: `active_prod release=${gate.releaseId} 与 fixture provenance releaseId=${fixture.provenance.releaseId} 不匹配（production_like 回放只能回放当前 active 生产 release）`,
+        reason: `gate release=${gate.releaseId} 与 fixture provenance releaseId=${fixture.provenance.releaseId} 不匹配`,
       };
     }
     const gateBundleId = gate.manifest?.bundleId ?? null;
@@ -828,9 +832,8 @@ export async function runFullPipelineReplay(
       modelRouteArgs = routeArgs.args;
     }
 
-    // EVAL-REPLAY-ACCEPTANCE-LOOP F1：production_like 必须先通过主仓真实
-    // production release gate（active_prod + 审批 + 环境指纹 + 行为身份），
-    // 且 active release 与 fixture provenance 同源；失败 → fail-closed 跳过。
+    // EVAL-REPLAY-ACCEPTANCE-LOOP F1：production_like 必须先通过候选 release
+    // 身份/指纹/capabilityPackageSetHash 门禁；不要求已经是 active_prod。
     if (fixture.replayMode === "production_like") {
       const gateCheck = verifyProductionLikeReleaseGate(projectRoot, fixture);
       if (!gateCheck.ok) {

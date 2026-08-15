@@ -1966,10 +1966,68 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
 
     const arm = matrix.deriveArmMetricsFromReplayManifest(manifest, "candidate", { runRoot });
     assert.equal(arm.tokenCost, 12072, `tokenCost 应从 traces 汇总，实际 ${arm.tokenCost}`);
-    assert.equal(arm.userEditDistance, null);
+    assert.equal(arm.userEditDistance, null, "无用户改稿证据时必须是 null，不得编造");
     assert.equal(arm.firstAttemptSuccessRate, 18 / 20);
     assert.equal(arm.recoveredSuccessRate, 1);
     assert.equal(arm.longTailFailures, 1);
+  });
+
+  it("deriveArmMetrics 有用户改稿证据时才写 userEditDistance，并取样本均值", () => {
+    const manifest = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-user-edit",
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "production_like",
+      releaseId: "rel-prod-110",
+      bundleId: "bundle-20260815",
+      runRoot: tmpMatrix,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      finishedAt: "2026-08-15T00:01:00.000Z",
+      samples: [
+        {
+          fixtureId: "fixture.edit.1",
+          fixtureHash: HEX64("edit-1"),
+          replayMode: "production_like",
+          scratchWorkspaceId: "eval-edit-1",
+          status: "completed",
+          failureAttribution: null,
+          failureEnvelopes: [],
+          traceArchived: true,
+          traceArchivePath: join(tmpMatrix, "missing"),
+          isolationViolations: [],
+          modelCalls: 1,
+          userEditDistance: 0.2,
+          durationMs: 400,
+        },
+        {
+          fixtureId: "fixture.edit.2",
+          fixtureHash: HEX64("edit-2"),
+          replayMode: "production_like",
+          scratchWorkspaceId: "eval-edit-2",
+          status: "completed",
+          failureAttribution: null,
+          failureEnvelopes: [],
+          traceArchived: true,
+          traceArchivePath: join(tmpMatrix, "missing"),
+          isolationViolations: [],
+          modelCalls: 1,
+          userEditDistance: 0.6,
+          durationMs: 400,
+        },
+      ],
+      summary: {
+        totalSamples: 2,
+        countedSamples: 2,
+        completed: 2,
+        failed: 0,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    };
+    const arm = matrix.deriveArmMetricsFromReplayManifest(manifest, "candidate");
+    assert.equal(arm.userEditDistance, 0.4);
   });
 });
 

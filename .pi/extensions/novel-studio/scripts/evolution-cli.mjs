@@ -218,6 +218,7 @@ function cmdCapture(args) {
     recoveryPolicyHash: snapshot.recoveryPolicyHash,
     knowledgeSnapshotHash: snapshot.knowledgeSnapshotHash,
     runtimeFingerprint: snapshot.runtimeFingerprint,
+    capabilityPackageSetHash: snapshot.capabilityPackageSetHash,
     evalProtocolVersion: snapshot.evalProtocolVersion,
   };
 

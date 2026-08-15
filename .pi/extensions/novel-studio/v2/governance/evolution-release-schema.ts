@@ -323,6 +323,7 @@ export function validateManifest(input: unknown): ManifestValidationResult {
     "recoveryPolicyHash",
     "knowledgeSnapshotHash",
     "runtimeFingerprint",
+    "capabilityPackageSetHash",
     "evalProtocolVersion",
   ];
   for (const field of optionalStringFields) {

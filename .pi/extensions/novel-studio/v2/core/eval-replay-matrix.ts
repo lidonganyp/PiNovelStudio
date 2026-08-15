@@ -523,7 +523,17 @@ export function deriveArmMetricsFromReplayManifest(
     coverage: manifest.summary.traceRetentionRate,
     completeness: total === 0 ? 0 : completed / total,
     continuity: manifest.summary.isolationViolationCount === 0 ? 1 : 0,
-    userEditDistance: null,
+    userEditDistance: (() => {
+      const edits = counted
+        .map((sample) =>
+          typeof sample.userEditDistance === "number" ? sample.userEditDistance : null,
+        )
+        .filter((value): value is number => value !== null);
+      if (edits.length === 0) {
+        return null;
+      }
+      return edits.reduce((sum, value) => sum + value, 0) / edits.length;
+    })(),
     modelCalls: manifest.samples.reduce((sum, sample) => sum + sample.modelCalls, 0),
     tokenCost,
     firstAttemptSuccessRate: counted.length === 0 ? 0 : firstAttemptOk / counted.length,

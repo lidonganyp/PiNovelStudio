@@ -854,6 +854,8 @@ export interface ReplayRunSampleEntry {
   tokenCost?: number;
   /** 从真实 quality-trace 汇总的恢复尝试次数。 */
   recoveryAttemptCount?: number;
+  /** 用户编辑距离（有用户改稿证据时写入；无证据不得编造）。 */
+  userEditDistance?: number | null;
   /** production_like：从真实 trace 提取的生产身份。 */
   releaseIdentity?: {
     devMode: boolean;

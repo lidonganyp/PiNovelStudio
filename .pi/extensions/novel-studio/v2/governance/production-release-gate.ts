@@ -54,6 +54,7 @@ import {
 import {
   validateBundleIdConsistency,
   compareManifestComponentHashes,
+  BEHAVIOR_COMPONENT_FIELDS,
 } from "./behavior-bundle.js";
 import { captureDefaultBehaviorSnapshot } from "./behavior-snapshot.js";
 import type { EvolutionReleaseManifest } from "./evolution-release-types.js";
@@ -87,6 +88,17 @@ export interface ReleaseGateInput {
   workspacePath?: string;
   /** workspace 根目录；默认 {projectRoot}/workspaces，用事件中的 workspaceId 定位 canary。 */
   workspacesRoot?: string;
+  /**
+   * 指定要校验的 release（production_like 候选验收）。
+   * 设置后不读 active production pointer，也不要求 status=active_prod。
+   * 真实生产入口不得传此字段。
+   */
+  targetReleaseId?: string;
+  /**
+   * 是否要求 active_prod + 真实审批。默认 true。
+   * production_like 候选验收传 false：证据先于审批与指针切换。
+   */
+  requireActiveApproval?: boolean;
 }
 
 export interface ReleaseGateOkResult {
@@ -312,9 +324,10 @@ function nullBehaviorIdentityTrace(): BehaviorIdentityTrace {
  *
  * 决策顺序：
  *   1. PINOVEL_DEV_MODE=1 → bypass（ok, devMode=true, 全部字段 null）
- *   2. 读 active production pointer；不存在 → blocked
+ *   2. 若 targetReleaseId 已设：加载该 manifest，跳过 pointer/active_prod；
+ *      requireActiveApproval!==false 时仍校验审批。否则读 active production pointer。
  *   3. 加载 manifest；不存在 → blocked
- *   4. status !== "active_prod" → blocked（未审批 release 不得生产运行）
+ *   4. 非候选模式且 status !== "active_prod" → blocked（未审批 release 不得生产运行）
  *   5. approvalRef 为空 → blocked（P0 第一层：active_prod 必须绑定非空 approvalRef）
  *   5b. 加载并验证 approvalRef 对应的真实审批 artifact → blocked（P0 第二层：
  *       artifact 不存在 / approvalId 不匹配 / releaseId 不匹配 / finalVerdict≠APPROVE_DEV /
@@ -347,26 +360,60 @@ export function evaluateProductionReleaseGate(
     releasesDir: join(evolutionRoot, "releases"),
   });
 
-  // 2. 读 active production pointer
-  const pointer = store.readActive("production");
-  if (pointer === null) {
-    return {
-      ok: false,
-      devMode: false,
-      failureEnvelope: {
-        stage: "g6_release_gate",
-        severity: "preflight",
-        reason:
-          "no active production release set；生产运行需先由 user 角色切换 active production pointer 到 status=active_prod 的 release，或设置 PINOVEL_DEV_MODE=1 进入非生产开发模式",
-        recoverable: false,
-        degradedTo: "hard_block",
-      },
-    };
+  const targetReleaseId = input.targetReleaseId?.trim() || "";
+  const candidateEval = targetReleaseId.length > 0;
+  const requireActiveApproval = candidateEval
+    ? input.requireActiveApproval === true
+    : input.requireActiveApproval !== false;
+
+  // 2-3. 候选验收加载指定 release；否则读 active production pointer。
+  let manifest: EvolutionReleaseManifest;
+  if (candidateEval) {
+    const loaded = registry.loadManifest(targetReleaseId);
+    if (loaded === null) {
+      return releaseGateBlocked(
+        `target release "${targetReleaseId}" manifest 不存在` +
+          `（production_like 候选必须先 capture；不得回退到 active_prod）`,
+      );
+    }
+    manifest = loaded;
+  } else {
+    const pointer = store.readActive("production");
+    if (pointer === null) {
+      return {
+        ok: false,
+        devMode: false,
+        failureEnvelope: {
+          stage: "g6_release_gate",
+          severity: "preflight",
+          reason:
+            "no active production release set；生产运行需先由 user 角色切换 active production pointer 到 status=active_prod 的 release，或设置 PINOVEL_DEV_MODE=1 进入非生产开发模式",
+          recoverable: false,
+          degradedTo: "hard_block",
+        },
+      };
+    }
+    const loaded = registry.loadManifest(pointer.releaseId);
+    if (loaded === null) {
+      return {
+        ok: false,
+        devMode: false,
+        failureEnvelope: {
+          stage: "g6_release_gate",
+          severity: "preflight",
+          reason:
+            `active production pointer 指向的 release "${pointer.releaseId}" manifest 不存在` +
+            `（pointer 引用了未注册的 releaseId；需先 capture 该 release 或切换 pointer 到已注册 release）`,
+          recoverable: false,
+          degradedTo: "hard_block",
+        },
+      };
+    }
+    manifest = loaded;
   }
 
-  // 3. 加载 manifest
-  const manifest = registry.loadManifest(pointer.releaseId);
-  if (manifest === null) {
+  // 4. 真实生产必须是 active_prod。候选验收允许 draft/verified/…，证据先于指针切换。
+  if (!candidateEval && manifest.status !== "active_prod") {
     return {
       ok: false,
       devMode: false,
@@ -374,24 +421,7 @@ export function evaluateProductionReleaseGate(
         stage: "g6_release_gate",
         severity: "preflight",
         reason:
-          `active production pointer 指向的 release "${pointer.releaseId}" manifest 不存在` +
-          `（pointer 引用了未注册的 releaseId；需先 capture 该 release 或切换 pointer 到已注册 release）`,
-        recoverable: false,
-        degradedTo: "hard_block",
-      },
-    };
-  }
-
-  // 4. 状态必须是 active_prod
-  if (manifest.status !== "active_prod") {
-    return {
-      ok: false,
-      devMode: false,
-      failureEnvelope: {
-        stage: "g6_release_gate",
-        severity: "preflight",
-        reason:
-          `release "${pointer.releaseId}" status="${manifest.status}"，必须是 active_prod 才能生产运行` +
+          `release "${manifest.releaseId}" status="${manifest.status}"，必须是 active_prod 才能生产运行` +
           `（未审批/未晋级的 release 不得进入生产；需通过代理审批 + 用户授权完成晋级流程）`,
         recoverable: false,
         degradedTo: "hard_block",
@@ -402,7 +432,10 @@ export function evaluateProductionReleaseGate(
   // 5. P0 审批绑定守护（第一层）：active_prod 必须绑定非空 approvalRef。
   // 未审批 release 不得生产运行（计划 §4 / §11）。approvalRef=null/"" 视同未审批，
   // 阻断未审批 release 经 transitionStatus 缺陷或外部写入进入生产门禁。
-  if (manifest.approvalRef === null || manifest.approvalRef.length === 0) {
+  if (
+    requireActiveApproval &&
+    (manifest.approvalRef === null || manifest.approvalRef.length === 0)
+  ) {
     return {
       ok: false,
       devMode: false,
@@ -410,7 +443,7 @@ export function evaluateProductionReleaseGate(
         stage: "g6_release_gate",
         severity: "preflight",
         reason:
-          `release "${pointer.releaseId}" status=active_prod 但 approvalRef 为空` +
+          `release "${manifest.releaseId}" status=active_prod 但 approvalRef 为空` +
           `（未审批 release 不得生产运行；需通过 gpt5.6-sol 代理审批 + 用户授权完成晋级流程后绑定 approvalRef）`,
         recoverable: false,
         degradedTo: "hard_block",
@@ -418,13 +451,12 @@ export function evaluateProductionReleaseGate(
     };
   }
 
-  // 5b. P0 审批 artifact 真实性守护（第二层）：加载并验证 approvalRef 对应的真实 artifact。
-  // 仅检查非空字符串不够（用户复现 approvalRef="fake-does-not-exist" 仍通过门禁）。
-  // 必须加载 {evolutionRoot}/releases/{releaseId}/approvals/{approvalRef}.json，
-  // 验证 approvalId / releaseId / finalVerdict=APPROVE_DEV / releaseManifestHash 双向绑定（计划 §6.4 / §11）。
+  // 5b. P0 审批 artifact 真实性守护（第二层）。候选验收（requireActiveApproval=false）跳过。
+  if (requireActiveApproval) {
+  const approvalRef = manifest.approvalRef ?? "";
   const approvalsDir = join(evolutionRoot, "releases", manifest.releaseId, "approvals");
   const approvalRegistry = createProxyApprovalRegistry({ approvalsDir });
-  const approvalArtifact = approvalRegistry.loadArtifact(manifest.approvalRef);
+  const approvalArtifact = approvalRegistry.loadArtifact(approvalRef);
   if (approvalArtifact === null) {
     return {
       ok: false,
@@ -433,7 +465,7 @@ export function evaluateProductionReleaseGate(
         stage: "g6_release_gate",
         severity: "preflight",
         reason:
-          `release "${pointer.releaseId}" approvalRef="${manifest.approvalRef}" 对应的审批 artifact 不存在` +
+          `release "${manifest.releaseId}" approvalRef="${manifest.approvalRef}" 对应的审批 artifact 不存在` +
           `（approvalRef 不得为伪造字符串；需通过 gpt5.6-sol 代理审批生成真实 artifact 并绑定）`,
         recoverable: false,
         degradedTo: "hard_block",
@@ -516,6 +548,7 @@ export function evaluateProductionReleaseGate(
       },
     };
   }
+  }
 
   // 6. 指纹对比
   const fingerprintRoot = resolveFingerprintRoot(input);
@@ -554,8 +587,20 @@ export function evaluateProductionReleaseGate(
   //   (b) 校验组件 hash 与当前运行环境快照一致（行为资产变化未重新 capture → hard block）
   // 旧 manifest（无 bundleId）跳过组件校验；DG-6 迁移后强制完整身份。
   const behaviorIdentity = extractBehaviorIdentityTrace(manifest);
+  if (manifest.status === "active_prod" && behaviorIdentity.bundleId === null) {
+    return releaseGateBlocked(
+      "active_prod 缺少完整行为身份（bundleId / capabilityPackageSetHash）；旧 manifest 不得作为默认生产输入",
+    );
+  }
   if (behaviorIdentity.bundleId !== null) {
-    if (!behaviorIdentity.capabilityPackageSetHash) {
+    const otherComponentFields = BEHAVIOR_COMPONENT_FIELDS.filter(
+      (field) => field !== "capabilityPackageSetHash",
+    );
+    const otherComponentsComplete = otherComponentFields.every((field) => {
+      const value = (manifest as unknown as Record<string, unknown>)[field];
+      return typeof value === "string" && value.length > 0;
+    });
+    if (otherComponentsComplete && !behaviorIdentity.capabilityPackageSetHash) {
       return releaseGateBlocked(
         "capabilityPackageSetHash missing：生产 release 必须显式冻结 CapabilityPackageSet（CPG-1.5）",
       );
@@ -639,7 +684,7 @@ export function evaluateProductionReleaseGate(
       releaseId: manifest.releaseId,
       changeClass: manifest.changeClass,
       environmentFingerprint: manifest.environmentFingerprint,
-      approvalRef: manifest.approvalRef,
+      approvalRef: manifest.approvalRef ?? "",
       workspaceId: evidenceWorkspaceId,
       trace: completionTrace,
     });
@@ -656,7 +701,7 @@ export function evaluateProductionReleaseGate(
       {
         releaseId: manifest.releaseId,
         environmentFingerprint: manifest.environmentFingerprint,
-        approvalRef: manifest.approvalRef,
+        approvalRef: manifest.approvalRef ?? "",
       },
     );
     if (!artifactVerification.ok) {

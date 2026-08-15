@@ -26,6 +26,7 @@ import {
   rmSync,
   mkdirSync,
   writeFileSync,
+  readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -168,6 +169,7 @@ function behaviorIdentityFromSnapshot(snap) {
     recoveryPolicyHash: snap.recoveryPolicyHash,
     knowledgeSnapshotHash: snap.knowledgeSnapshotHash,
     runtimeFingerprint: snap.runtimeFingerprint,
+    capabilityPackageSetHash: snap.capabilityPackageSetHash,
     evalProtocolVersion: snap.evalProtocolVersion,
   };
 }
@@ -190,6 +192,7 @@ test("DG-3: bundleId 与组件 hash 内部不一致（hash 漂移）→ blocked"
       recoveryPolicyHash: fakeHash("recovery"),
       knowledgeSnapshotHash: fakeHash("knowledge"),
       runtimeFingerprint: fakeHash("runtime"),
+      capabilityPackageSetHash: fakeHash("packages"),
       evalProtocolVersion: TEST_EVAL_PROTOCOL_VERSION,
     };
     const correctBundleId = computeBehaviorBundleId(componentHashes);
@@ -269,6 +272,7 @@ test("DG-3: bundleId 自洽但组件 hash 与当前运行快照不符 → blocke
       recoveryPolicyHash: fakeHash("frec"),
       knowledgeSnapshotHash: fakeHash("fk"),
       runtimeFingerprint: fakeHash("frun"),
+      capabilityPackageSetHash: fakeHash("fcp"),
       evalProtocolVersion: TEST_EVAL_PROTOCOL_VERSION,
     };
     const selfConsistentBundleId = computeBehaviorBundleId(fakeComponents);
@@ -359,9 +363,8 @@ test("DG-3: 旧 manifest（无 bundleId）跳过组件校验 → 仍 ok（DG-6 �
       currentFingerprintHash: fpHash,
     });
 
-    assert.equal(result.ok, true, "旧 manifest 应跳过组件校验（DG-6 迁移后强制）");
-    assert.equal(result.behaviorIdentity.bundleId, null, "旧 manifest 的 bundleId trace 应为 null");
-    assert.equal(result.behaviorIdentity.modelVersion, null);
+    assert.equal(result.ok, false, "active_prod 旧 manifest 缺少 bundleId 必须 fail-closed");
+    assert.match(result.failureEnvelope.reason, /capabilityPackageSetHash|bundleId|行为身份/);
   } finally {
     restoreDevMode(prev);
     rmSync(root, { recursive: true, force: true });
@@ -451,4 +454,90 @@ test("DG-3 integration: 生产 trace 携带 releaseId/bundleId/modelVersion 及�
     else process.env.V2_FORCE_STUB = prevStub;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ============================================================================
+// production_like 候选验收：证据先于审批，不得要求已经是 active_prod
+// ============================================================================
+
+test("production_like 候选：draft + 完整身份（含 capabilityPackageSetHash）在指纹匹配时通过，不要求 active_prod", () => {
+  const root = makeTempRoot();
+  const prev = clearDevMode();
+  try {
+    const snap = captureDefaultBehaviorSnapshot(
+      PROJECT_ROOT,
+      TEST_MODEL_VERSION,
+      TEST_EVAL_PROTOCOL_VERSION,
+    );
+    const candidateFp = "c".repeat(64);
+    const activeFp = "d".repeat(64);
+    const candidate = makeManifest("rel-prod-116", "draft", candidateFp, null, {
+      behaviorIdentity: behaviorIdentityFromSnapshot(snap),
+    });
+    const active = makeManifest("rel-prod-115", "active_prod", activeFp, "approval-115", {
+      behaviorIdentity: behaviorIdentityFromSnapshot(snap),
+    });
+    setupReleaseInRoot(root, candidate);
+    setupReleaseInRoot(root, active);
+    writeLegitApprovalArtifact(root, active);
+    setActiveProduction(root, "rel-prod-115");
+
+    const againstActive = evaluateProductionReleaseGate({
+      projectRoot: PROJECT_ROOT,
+      evolutionRoot: root,
+      currentFingerprintHash: candidateFp,
+    });
+    assert.equal(againstActive.ok, false, "默认门禁仍校验 active_prod，不得误放行候选");
+
+    const missingHash = makeManifest("rel-prod-116b", "draft", candidateFp, null, {
+      behaviorIdentity: {
+        ...behaviorIdentityFromSnapshot(snap),
+        capabilityPackageSetHash: undefined,
+      },
+    });
+    delete missingHash.capabilityPackageSetHash;
+    setupReleaseInRoot(root, missingHash);
+    const blockedMissing = evaluateProductionReleaseGate({
+      projectRoot: PROJECT_ROOT,
+      evolutionRoot: root,
+      currentFingerprintHash: candidateFp,
+      targetReleaseId: "rel-prod-116b",
+      requireActiveApproval: false,
+    });
+    assert.equal(blockedMissing.ok, false);
+    assert.match(blockedMissing.failureEnvelope.reason, /capabilityPackageSetHash missing/);
+
+    const candidateOk = evaluateProductionReleaseGate({
+      projectRoot: PROJECT_ROOT,
+      evolutionRoot: root,
+      currentFingerprintHash: candidateFp,
+      targetReleaseId: "rel-prod-116",
+      requireActiveApproval: false,
+    });
+    assert.equal(
+      candidateOk.ok,
+      true,
+      candidateOk.ok ? "" : candidateOk.failureEnvelope.reason,
+    );
+    assert.equal(candidateOk.releaseId, "rel-prod-116");
+    assert.equal(
+      candidateOk.behaviorIdentity.capabilityPackageSetHash,
+      snap.capabilityPackageSetHash,
+    );
+  } finally {
+    restoreDevMode(prev);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("evolution:capture 必须把 snapshot.capabilityPackageSetHash 写入 manifest", () => {
+  const src = readFileSync(
+    join(EXT_ROOT, "scripts", "evolution-cli.mjs"),
+    "utf-8",
+  );
+  assert.match(
+    src,
+    /capabilityPackageSetHash:\s*snapshot\.capabilityPackageSetHash/,
+    "capture 不得只算 bundleId 却漏写 capabilityPackageSetHash",
+  );
 });

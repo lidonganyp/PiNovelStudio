@@ -1688,11 +1688,19 @@ export async function runUnifiedPipeline(
   // - evalMode 已在上方 bypass（eval 模式不修改 active pointer，由调用方决定）
   // 门禁失败时返回结构化 FailureEnvelope（stage=g6_release_gate），与统一主链路
   // 其他 failureEnvelope 形状一致；stageResults.releaseGovernance 记录门禁决策。
+  const evalCandidateReleaseId =
+    process.env.PINOVEL_EVAL_ONLY === "1" &&
+    process.env.PINOVEL_DEV_MODE !== "1"
+      ? process.env.PINOVEL_EVAL_RELEASE_ID?.trim() || ""
+      : "";
   const releaseGateResult = evaluateProductionReleaseGate({
     projectRoot,
     workspacesRoot: join(projectRoot, "workspaces"),
     ...(process.env.PINOVEL_FINGERPRINT_ROOT
       ? { fingerprintRoot: process.env.PINOVEL_FINGERPRINT_ROOT }
+      : {}),
+    ...(evalCandidateReleaseId
+      ? { targetReleaseId: evalCandidateReleaseId, requireActiveApproval: false }
       : {}),
   });
   const releaseGovernanceTrace = {
