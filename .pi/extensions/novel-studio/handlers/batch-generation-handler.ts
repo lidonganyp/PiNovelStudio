@@ -11,23 +11,34 @@
  * - status：加载 BatchJobState 返回（不获取锁，不执行生成）
  * - cancel：设置 cancelRequested=true 原子保存（不主动中断运行循环）
  *
+ * CONCURRENCY-WAVE5：commandId 命中收据则幂等返回；save CAS 失败上浮
+ * concurrent_state_update，不得伪装成功。
+ *
  * BATCH-P0-01 / BATCH-P1-01
  */
 
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "node:path";
+import { atomicSave } from "../v2/core/orchestrator-commit-save.js";
 import { getProjectRoot } from "../utils/config.js";
 import {
   generateJobId,
   batchJobPath,
   loadBatchJobStore,
   saveBatchJobStore,
+  updateBatchJobControlFields,
   validateWorkspaceId,
   validateJobId,
+  validateCommandId,
+  lookupBatchCommandReceipt,
+  recordBatchCommandReceipt,
+  reconcileBatchJobAfterCrash,
   DEFAULT_MAX_CHAPTERS,
   LARGE_BATCH_MAX_CHAPTERS,
   type BatchJobState,
   type BatchChapterResult,
+  type BatchConcurrencyError,
+  type BatchCommandResultSnapshot,
 } from "../v2/core/batch-generation-job-store.js";
 // 显式 import 以确保 orchestrator / lock 模块进入生产闭包（dist/）。
 import { runBatchGeneration } from "../v2/core/batch-generation-orchestrator.js";
@@ -56,6 +67,11 @@ export interface BatchGenerationInput {
   confirmLargeBatch?: boolean;
   // action="resume"|"status"|"cancel" 必填
   jobId?: string;
+  /**
+   * CONCURRENCY-WAVE5：用户命令幂等键。
+   * resume/cancel 建议携带；start 携带时重复提交返回首次结果。
+   */
+  commandId?: string;
   // 测试注入（不公开）
   _projectRoot?: string;
   _mockGenerateChapter?: (input: {
@@ -77,6 +93,10 @@ export interface BatchGenerationResult {
   /** 暂停/失败时的诊断信息 */
   failureEnvelope?: unknown;
   summary?: import("../v2/core/batch-generation-job-store.js").BatchJobSummary;
+  /** 相同 commandId 命中首次结果 */
+  idempotent?: boolean;
+  /** CAS / 命令冲突码（不得伪装为 completed/cancelled 成功） */
+  concurrencyError?: BatchConcurrencyError;
 }
 
 // ============================================================================
@@ -106,6 +126,17 @@ export async function handleBatchGeneration(
       validateJobId(input.jobId);
     } catch (e: any) {
       return errorResult(input, projectRoot, e?.message ?? "invalid jobId", input.jobId);
+    }
+  }
+  if (input.commandId) {
+    try {
+      validateCommandId(input.commandId);
+    } catch (e: any) {
+      return errorResult(input, projectRoot, e?.message ?? "invalid commandId", input.jobId);
+    }
+    if (input.action !== "status") {
+      const replay = replayCommandIfSeen(input, projectRoot);
+      if (replay) return replay;
     }
   }
 
@@ -183,6 +214,22 @@ async function handleStart(
     return errorResult(input, projectRoot, e?.message ?? "invalid jobId");
   }
 
+  // 5b. CONCURRENCY-WAVE5：已有 job 不得用新 commandId 覆盖重建
+  const existing = loadBatchJobStore(workspaceId, jobId, projectRoot);
+  if (existing) {
+    return persistCommand(
+      input,
+      casErrorResult(
+        input,
+        projectRoot,
+        "concurrent_state_update",
+        `concurrent_state_update：jobId ${jobId} 已存在（revision=${existing.state.stateRevision ?? 0}），拒绝用新 start 覆盖`,
+        jobId,
+      ),
+      jobId,
+    );
+  }
+
   // 6. 获取 workspace 级锁（BATCH-P0-09）
   const lockResult = acquireBatchLock(workspaceId, jobId, projectRoot);
   if (!lockResult.ok) {
@@ -226,7 +273,22 @@ async function handleStart(
       chapters,
       cancelRequested: false,
     };
-    saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+    const created = saveBatchJobStore(state, workspaceId, jobId, projectRoot, {
+      event: "job_created",
+    });
+    if (!created.ok) {
+      return persistCommand(
+        input,
+        casErrorResult(
+          input,
+          projectRoot,
+          created.reason,
+          `${created.reason}：创建 BatchJobState 失败（expected=${created.expectedRevision}, disk=${created.diskRevision}）`,
+          jobId,
+        ),
+        jobId,
+      );
+    }
 
     // 8. 运行批量编排（同步阻塞直到完成/暂停/取消）
     const { state: finalState } = await runBatchGeneration({
@@ -235,7 +297,7 @@ async function handleStart(
       mockGenerateChapter: input._mockGenerateChapter,
     });
 
-    return toResult(finalState, projectRoot);
+    return persistCommand(input, toResult(finalState, projectRoot), jobId);
   } finally {
     // 9. 释放锁（无论成功/失败/暂停）— P0-FIX-5：只删自己的锁
     releaseBatchLock(workspaceId, jobId, projectRoot);
@@ -264,7 +326,7 @@ async function handleResume(
 
   // 2. 已完成的任务 resume → 幂等返回 completed（不重复调用模型）
   if (state.status === "completed") {
-    return toResult(state, projectRoot);
+    return persistCommand(input, toResult(state, projectRoot), jobId);
   }
 
   // 3. 状态校验
@@ -314,10 +376,57 @@ async function handleResume(
   }
 
   try {
+    const reconciliation = reconcileBatchJobAfterCrash(state, projectRoot);
+    writeRecoveryTrace(workspaceId, jobId, projectRoot, reconciliation);
+    if (reconciliation.decision === "blocked") {
+      return persistCommand(
+        input,
+        errorResult(input, projectRoot, reconciliation.reason, jobId),
+        jobId,
+      );
+    }
+    if (reconciliation.decision === "completed") {
+      state.status = "completed";
+      state.frontier = state.endChapter + 1;
+      state.completedChapters = reconciliation.recoveredChapters;
+      const saved = saveBatchJobStore(state, workspaceId, jobId, projectRoot, {
+        event: "crash_reconcile_completed",
+      });
+      if (!saved.ok) {
+        return persistCommand(
+          input,
+          casErrorResult(
+            input,
+            projectRoot,
+            saved.reason,
+            `${saved.reason}：崩溃恢复标记 completed 失败`,
+            jobId,
+          ),
+          jobId,
+        );
+      }
+      return persistCommand(input, toResult(state, projectRoot), jobId);
+    }
+
     // 5. 设置 running，保存（P1-FIX-6：orchestrator 会清理 failedChapter/summary）
     state.status = "running";
     state.updatedAt = new Date().toISOString();
-    saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+    const saved = saveBatchJobStore(state, workspaceId, jobId, projectRoot, {
+      event: "resume_running",
+    });
+    if (!saved.ok) {
+      return persistCommand(
+        input,
+        casErrorResult(
+          input,
+          projectRoot,
+          saved.reason,
+          `${saved.reason}：resume 写入 running 失败（expected=${saved.expectedRevision}, disk=${saved.diskRevision}）`,
+          jobId,
+        ),
+        jobId,
+      );
+    }
 
     // 6. 运行批量编排
     const { state: finalState } = await runBatchGeneration({
@@ -326,7 +435,7 @@ async function handleResume(
       mockGenerateChapter: input._mockGenerateChapter,
     });
 
-    return toResult(finalState, projectRoot);
+    return persistCommand(input, toResult(finalState, projectRoot), jobId);
   } finally {
     releaseBatchLock(workspaceId, jobId, projectRoot);
   }
@@ -371,21 +480,142 @@ function handleCancel(
   }
   const state = store.state;
 
-  // 设置 cancelRequested；paused 升级为 cancelled
-  state.cancelRequested = true;
-  if (state.status === "paused") {
-    state.status = "cancelled";
+  if (state.status === "cancelled") {
+    return persistCommand(
+      input,
+      casErrorResult(
+        input,
+        projectRoot,
+        "already_consumed",
+        `already_consumed：任务 ${jobId} 已被取消，不同 commandId 不得重复消费`,
+        jobId,
+      ),
+      jobId,
+    );
   }
-  state.updatedAt = new Date().toISOString();
-  saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+
+  const updated = updateBatchJobControlFields(
+    workspaceId,
+    jobId,
+    projectRoot,
+    (next) => {
+      next.cancelRequested = true;
+      if (next.status === "paused") {
+        next.status = "cancelled";
+      }
+    },
+  );
+  if (!updated.ok) {
+    const concurrencyError: BatchConcurrencyError =
+      updated.reason.includes("concurrent_state_update")
+        ? "concurrent_state_update"
+        : "state_file_corrupt";
+    return persistCommand(
+      input,
+      casErrorResult(input, projectRoot, concurrencyError, updated.reason, jobId),
+      jobId,
+    );
+  }
 
   // 不删除任何文件（cancel 不破坏已完成章节）
-  return toResult(state, projectRoot);
+  return persistCommand(input, toResult(updated.state, projectRoot), jobId);
 }
 
 // ============================================================================
 // 辅助函数
 // ============================================================================
+
+function replayCommandIfSeen(
+  input: BatchGenerationInput,
+  projectRoot: string,
+): BatchGenerationResult | null {
+  if (!input.commandId) return null;
+  try {
+    const seen = lookupBatchCommandReceipt(input.workspaceId, input.commandId, projectRoot);
+    if (!seen) return null;
+    return {
+      ...seen.result,
+      checkpointPath: seen.result.checkpointPath,
+      idempotent: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistCommand(
+  input: BatchGenerationInput,
+  result: BatchGenerationResult,
+  jobId: string,
+): BatchGenerationResult {
+  if (!input.commandId) return result;
+  const snapshot: BatchCommandResultSnapshot = {
+    status: result.status,
+    jobId: result.jobId || jobId,
+    currentChapter: result.currentChapter,
+    completedChapters: result.completedChapters,
+    totalChapters: result.totalChapters,
+    failedChapter: result.failedChapter,
+    checkpointPath: result.checkpointPath,
+    concurrencyError: result.concurrencyError,
+    failureEnvelope: result.failureEnvelope,
+    summary: result.summary,
+  };
+  try {
+    recordBatchCommandReceipt(
+      input.workspaceId,
+      {
+        commandId: input.commandId,
+        action: input.action,
+        jobId: result.jobId || jobId,
+        recordedAt: new Date().toISOString(),
+        result: snapshot,
+      },
+      input._projectRoot || getProjectRoot(),
+    );
+  } catch {
+    // 收据写入失败不覆盖业务结果；重复命令将无法幂等命中
+  }
+  return result;
+}
+
+function casErrorResult(
+  input: BatchGenerationInput,
+  projectRoot: string,
+  concurrencyError: BatchConcurrencyError,
+  reason: string,
+  jobId?: string,
+): BatchGenerationResult {
+  return {
+    ...errorResult(input, projectRoot, reason, jobId),
+    concurrencyError,
+  };
+}
+
+function writeRecoveryTrace(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+  reconciliation: ReturnType<typeof reconcileBatchJobAfterCrash>,
+): void {
+  try {
+    const path = join(
+      projectRoot,
+      "workspaces",
+      workspaceId,
+      "batch-jobs",
+      `${jobId}.recovery.json`,
+    );
+    atomicSave(path, JSON.stringify({
+      jobId,
+      workspaceId,
+      recordedAt: new Date().toISOString(),
+      ...reconciliation,
+    }, null, 2));
+  } catch {
+    // recovery trace 失败不得 silent degrade 业务决策；决策已返回给调用方
+  }
+}
 
 /**
  * 将 BatchJobState 映射为 BatchGenerationResult。

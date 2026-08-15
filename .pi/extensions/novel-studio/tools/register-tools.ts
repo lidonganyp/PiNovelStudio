@@ -358,6 +358,10 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             type: "string",
             description: "批量任务 ID（action='resume'/'status'/'cancel' 必填）。action='start' 时可选，未传则自动生成。",
           },
+          commandId: {
+            type: "string",
+            description: "用户命令幂等键（CONCURRENCY-WAVE5）。resume/cancel 建议必填；start 携带时重复提交返回首次结果，不重复保存或生成。",
+          },
         },
         required: ["workspaceId", "chapterId", "chapterNumber"],
       },
@@ -393,6 +397,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         stopOnFailure?: boolean;
         confirmLargeBatch?: boolean;
         jobId?: string;
+        commandId?: string;
         _projectRoot?: string;
         _mockGenerateChapter?: (input: any) => Promise<any>;
       }) {

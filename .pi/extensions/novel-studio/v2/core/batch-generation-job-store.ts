@@ -186,6 +186,10 @@ export interface BatchJobState {
    * resume 产生新 ownerRunId；两个 resume 不能同时接管同一任务。
    */
   ownerRunId?: string | null;
+  /**
+   * 批量任务级统一预算账本。跨章累计；下一章启动前必须先 admit。
+   */
+  budgetLedger?: import("./budget-types.js").BudgetLedger;
 }
 
 // ============================================================================
@@ -229,6 +233,7 @@ export class BatchGenerationJobStore {
       stateRevision: initial?.stateRevision ?? 0,
       lastEventId: initial?.lastEventId ?? null,
       ownerRunId: initial?.ownerRunId ?? null,
+      budgetLedger: initial?.budgetLedger,
     };
   }
 
@@ -492,4 +497,178 @@ export function generateJobId(): string {
   const ts = Date.now();
   const rand = Math.floor(Math.random() * 1e6).toString(36).padStart(4, "0");
   return `batch-${ts}-${rand}`;
+}
+
+// ============================================================================
+// CONCURRENCY-WAVE5：workspace 级 commandId 收据账本
+// ============================================================================
+
+const COMMAND_LEDGER_FILE = "command-receipts.json";
+const SAFE_COMMAND_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
+
+export type BatchConcurrencyError =
+  | "concurrent_state_update"
+  | "state_file_corrupt"
+  | "already_consumed"
+  | "stale_revision";
+
+export interface BatchCommandResultSnapshot {
+  status: BatchJobState["status"] | "error";
+  jobId: string;
+  currentChapter: number | null;
+  completedChapters: number;
+  totalChapters: number;
+  failedChapter: number | null;
+  checkpointPath: string;
+  concurrencyError?: BatchConcurrencyError;
+  failureEnvelope?: unknown;
+  summary?: BatchJobSummary;
+}
+
+export interface BatchCommandReceipt {
+  commandId: string;
+  action: string;
+  jobId: string;
+  recordedAt: string;
+  result: BatchCommandResultSnapshot;
+}
+
+interface BatchCommandLedger {
+  schemaVersion: 1;
+  receipts: Record<string, BatchCommandReceipt>;
+}
+
+export function validateCommandId(commandId: string): void {
+  if (!SAFE_COMMAND_ID_RE.test(commandId)) {
+    throw new Error(`Invalid commandId: ${commandId}`);
+  }
+}
+
+function commandLedgerPath(workspaceId: string, projectRoot: string): string {
+  validateWorkspaceId(workspaceId);
+  return join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR, COMMAND_LEDGER_FILE);
+}
+
+function emptyCommandLedger(): BatchCommandLedger {
+  return { schemaVersion: 1, receipts: {} };
+}
+
+function readCommandLedger(workspaceId: string, projectRoot: string): BatchCommandLedger {
+  const path = commandLedgerPath(workspaceId, projectRoot);
+  if (!existsSync(path)) return emptyCommandLedger();
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as BatchCommandLedger;
+    if (!raw || typeof raw !== "object" || !raw.receipts) return emptyCommandLedger();
+    return { schemaVersion: 1, receipts: { ...raw.receipts } };
+  } catch {
+    return emptyCommandLedger();
+  }
+}
+
+/** 查找 workspace 内已记录的 commandId。未命中返回 null。 */
+export function lookupBatchCommandReceipt(
+  workspaceId: string,
+  commandId: string,
+  projectRoot: string,
+): BatchCommandReceipt | null {
+  validateWorkspaceId(workspaceId);
+  validateCommandId(commandId);
+  const entry = readCommandLedger(workspaceId, projectRoot).receipts[commandId];
+  return entry ?? null;
+}
+
+/**
+ * 原子记录 commandId 首次结果。相同 commandId 已存在时不覆盖，返回已有收据。
+ */
+export function recordBatchCommandReceipt(
+  workspaceId: string,
+  receipt: BatchCommandReceipt,
+  projectRoot: string,
+): { ok: true; receipt: BatchCommandReceipt; created: boolean } {
+  validateWorkspaceId(workspaceId);
+  validateCommandId(receipt.commandId);
+  const stateDir = join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR);
+  if (!existsSync(stateDir)) {
+    try { mkdirSync(stateDir, { recursive: true }); } catch { /* 已存在 */ }
+  }
+  const path = commandLedgerPath(workspaceId, projectRoot);
+  const guardPath = join(stateDir, "command-receipts.cas-lock");
+  return withExclusiveGuard(guardPath, () => {
+    const ledger = readCommandLedger(workspaceId, projectRoot);
+    const existing = ledger.receipts[receipt.commandId];
+    if (existing) {
+      return { ok: true as const, receipt: existing, created: false };
+    }
+    const next: BatchCommandLedger = {
+      schemaVersion: 1,
+      receipts: {
+        ...ledger.receipts,
+        [receipt.commandId]: receipt,
+      },
+    };
+    atomicSave(path, JSON.stringify(next, null, 2));
+    return { ok: true as const, receipt, created: true };
+  });
+}
+
+export type BatchRecoveryDecision =
+  | "completed"
+  | "retry"
+  | "checkpoint"
+  | "blocked";
+
+export interface BatchCrashReconciliation {
+  decision: BatchRecoveryDecision;
+  reason: string;
+  recoveredChapters: number[];
+  incompleteChapter: number | null;
+}
+
+/**
+ * 崩溃恢复分类：按章节文件 + NarrativeState 双校验决定 completed / retry / checkpoint / blocked。
+ * 锁存在不代表提交成功；文件存在但无 finalText 锚点不得当作已完成。
+ */
+export function reconcileBatchJobAfterCrash(
+  state: BatchJobState,
+  projectRoot: string,
+): BatchCrashReconciliation {
+  const recoveredChapters: number[] = [];
+  let incompleteChapter: number | null = null;
+  for (let n = state.startChapter; n <= state.endChapter; n++) {
+    if (isChapterAlreadyCompleted(state.workspaceId, n, projectRoot)) {
+      recoveredChapters.push(n);
+      continue;
+    }
+    if (incompleteChapter === null) incompleteChapter = n;
+  }
+  if (state.checkpointChapter != null) {
+    return {
+      decision: "checkpoint",
+      reason: `checkpoint_pending：第 ${state.checkpointChapter} 章待确认，frontier 不得越过`,
+      recoveredChapters,
+      incompleteChapter: state.checkpointChapter,
+    };
+  }
+  if (incompleteChapter === null) {
+    return {
+      decision: "completed",
+      reason: "所有章节均有正文 + NarrativeState 提交证据",
+      recoveredChapters,
+      incompleteChapter: null,
+    };
+  }
+  if (state.status === "cancelled" || state.status === "error") {
+    return {
+      decision: "blocked",
+      reason: `任务状态为 ${state.status}，崩溃恢复不得自动继续`,
+      recoveredChapters,
+      incompleteChapter,
+    };
+  }
+  return {
+    decision: "retry",
+    reason: `第 ${incompleteChapter} 章缺少完整提交证据，应从该章重试`,
+    recoveredChapters,
+    incompleteChapter,
+  };
 }
