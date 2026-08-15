@@ -32,7 +32,7 @@ import {
   saveBatchJobStore,
   isChapterAlreadyCompleted,
 } from "./batch-generation-job-store.js";
-import { renewBatchLock, LOCK_TIMEOUT_MS } from "./batch-generation-lock.js";
+import { renewBatchLock, readBatchLock, LOCK_TIMEOUT_MS } from "./batch-generation-lock.js";
 
 // ============================================================================
 // 类型
@@ -47,6 +47,12 @@ export interface BatchOrchestratorInput {
   state: BatchJobState;
   /** 项目根目录 */
   projectRoot: string;
+  /**
+   * CONCURRENCY-WAVE1/2：当前持有的批量锁身份（handler acquire 后传入）。
+   * 编排器据此做锁归属校验与心跳续租；锁丢失/被接管时 fail-closed 停止，
+   * 不无限假装持锁继续推进 frontier。
+   */
+  lock?: { lockId: string; ownerRunId: string };
   /** 测试用 mock：注入替代 handleGenerateChapter 的函数 */
   mockGenerateChapter?: (input: {
     workspaceId: string;
@@ -79,24 +85,163 @@ const LOCK_HEARTBEAT_INTERVAL_MS = Math.floor(LOCK_TIMEOUT_MS / 3);
 /**
  * 启动锁心跳：在章节执行期间定时续租锁。
  *
- * 返回 stop 函数——章节调用结束后必须调用以清除定时器。
- * 心跳续租失败不阻断主链路（锁过期由 acquireBatchLock 僵死锁恢复处理）。
+ * CONCURRENCY-WAVE1：续租返回结构化结果；失败（锁丢失/被接管/损坏）记录到
+ * heartbeatFailure，编排循环在每章边界检查——锁丢失即 fail-closed 停止，
+ * 不无限假装持锁。
+ *
+ * 返回 { stop, getFailure }——章节调用结束后必须调用 stop 清除定时器。
  */
 function startLockHeartbeat(
   workspaceId: string,
   jobId: string,
   projectRoot: string,
-): () => void {
+  lockId?: string,
+): { stop: () => void; getFailure: () => { code: string; reason: string; at: string } | null } {
+  let heartbeatFailure: { code: string; reason: string; at: string } | null = null;
   const timer = setInterval(() => {
     try {
-      renewBatchLock(workspaceId, jobId, projectRoot);
-    } catch {
-      // 心跳续租失败不阻断主链路
+      const res = renewBatchLock(workspaceId, jobId, projectRoot, lockId);
+      if (!res.ok && heartbeatFailure === null) {
+        heartbeatFailure = {
+          code: res.code,
+          reason: res.reason,
+          at: new Date().toISOString(),
+        };
+      }
+    } catch (e: any) {
+      if (heartbeatFailure === null) {
+        heartbeatFailure = {
+          code: "heartbeat_infra_error",
+          reason: e?.message ?? String(e),
+          at: new Date().toISOString(),
+        };
+      }
     }
   }, LOCK_HEARTBEAT_INTERVAL_MS);
   // unref 让定时器不阻止进程退出
   if (typeof timer.unref === "function") timer.unref();
-  return () => clearInterval(timer);
+  return {
+    stop: () => clearInterval(timer),
+    getFailure: () => heartbeatFailure,
+  };
+}
+
+// ============================================================================
+// CONCURRENCY-WAVE2：CAS 保存与冲突处理
+// ============================================================================
+
+/**
+ * 把磁盘上的事实性字段合并进本地 state（CAS 冲突恢复用）。
+ * - cancelRequested：或合并（外部 cancel 不得被覆盖丢弃）
+ * - completedChapters：并集（磁盘已确认完成的事实不回退）
+ * - frontier：取 max（不回退已推进边界）
+ * - chapters：磁盘上非 pending 的槽位结果优先于本地 pending
+ * - stateRevision/lastEventId/ownerRunId：以磁盘为准（下一轮 CAS 基线）
+ */
+function mergeDiskStateIntoLocal(local: BatchJobState, disk: BatchJobState): void {
+  local.cancelRequested = local.cancelRequested || disk.cancelRequested;
+  for (const ch of disk.completedChapters) {
+    if (!local.completedChapters.includes(ch)) local.completedChapters.push(ch);
+  }
+  local.frontier = Math.max(local.frontier, disk.frontier);
+  for (let i = 0; i < disk.chapters.length && i < local.chapters.length; i++) {
+    const d = disk.chapters[i];
+    const l = local.chapters[i];
+    if (d && d.status !== "pending" && (!l || l.status === "pending")) {
+      local.chapters[i] = d;
+    }
+  }
+  local.stateRevision = disk.stateRevision;
+  local.lastEventId = disk.lastEventId;
+}
+
+/**
+ * CAS 保存 + 冲突显式化：
+ * - 保存成功 → "ok"
+ * - concurrent_state_update → 重读磁盘合并事实后用磁盘 revision 重试一次；
+ *   二次仍冲突 → 状态置 error + concurrent_state_update envelope → "blocked"
+ *   （不盲目覆盖重试，磁盘状态保留）
+ * - state_file_corrupt → 直接 "blocked"（fail-closed）
+ *
+ * blocked 时调用方必须停止推进（break），不得继续生成/提交。
+ */
+function saveStateCas(
+  state: BatchJobState,
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+  event: string,
+): "ok" | "blocked" {
+  const res = saveBatchJobStore(state, workspaceId, jobId, projectRoot, { event });
+  if (res.ok) return "ok";
+  if (res.reason === "state_file_corrupt") {
+    state.status = "error";
+    state.interruptReason = "state_file_corrupt";
+    (state as BatchJobState & { failureEnvelope?: unknown }).failureEnvelope = {
+      stage: "batch_state_save",
+      gate: "state_store",
+      severity: "fatal",
+      reason: `BatchJobState 文件损坏（${jobId}）。fail-closed：请人工检查 batch-jobs/${jobId}.json。`,
+      recoverable: false,
+    };
+    return "blocked";
+  }
+  // concurrent_state_update → 重读磁盘事实，合并后以磁盘 revision 重试一次
+  const diskStore = loadBatchJobStore(workspaceId, jobId, projectRoot);
+  if (diskStore) {
+    mergeDiskStateIntoLocal(state, diskStore.state);
+    const retry = saveBatchJobStore(state, workspaceId, jobId, projectRoot, { event: `${event}-merged` });
+    if (retry.ok) return "ok";
+    state.status = "error";
+    state.interruptReason = "concurrent_state_update";
+    (state as BatchJobState & { failureEnvelope?: unknown }).failureEnvelope = {
+      stage: "batch_state_save",
+      gate: "state_store",
+      severity: "fatal",
+      reason: `concurrent_state_update：合并磁盘事实（revision=${retry.ok ? "" : retry.diskRevision}）后二次保存仍冲突。两个进程正在更新同一 BatchJobState；已停止，磁盘状态保留。`,
+      recoverable: false,
+      expectedRevision: retry.ok ? undefined : retry.expectedRevision,
+      diskRevision: retry.ok ? undefined : retry.diskRevision,
+    };
+    return "blocked";
+  }
+  state.status = "error";
+  state.interruptReason = "state_file_corrupt";
+  (state as BatchJobState & { failureEnvelope?: unknown }).failureEnvelope = {
+    stage: "batch_state_save",
+    gate: "state_store",
+    severity: "fatal",
+    reason: `concurrent_state_update 后无法重读 ${jobId} 状态文件（可能损坏）。fail-closed 停止。`,
+    recoverable: false,
+  };
+  return "blocked";
+}
+
+/**
+ * CONCURRENCY-WAVE1：锁归属校验。
+ * 返回 null=锁仍归当前 run 持有；否则返回结构化失败（锁丢失/被接管）。
+ */
+function verifyLockOwnership(
+  workspaceId: string,
+  projectRoot: string,
+  lock: { lockId: string; ownerRunId: string } | undefined,
+  heartbeatFailure: { code: string; reason: string; at: string } | null,
+): { code: string; reason: string } | null {
+  if (heartbeatFailure) {
+    return { code: "lock_heartbeat_failed", reason: `锁心跳失败（${heartbeatFailure.code}）：${heartbeatFailure.reason}` };
+  }
+  if (!lock) return null; // 未提供锁身份（测试路径）→ 跳过校验
+  const current = readBatchLock(workspaceId, projectRoot);
+  if (!current) {
+    return { code: "lock_missing", reason: `workspace ${workspaceId} 批量锁已不存在（被释放或接管），当前 run 失去提交权` };
+  }
+  if (current.lockId !== lock.lockId || current.ownerRunId !== lock.ownerRunId) {
+    return {
+      code: "lock_taken_over",
+      reason: `workspace ${workspaceId} 批量锁已被接管（磁盘 lockId=${current.lockId}, ownerRunId=${current.ownerRunId}；期望 ${lock.lockId}/${lock.ownerRunId}）`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -183,13 +328,31 @@ export async function runBatchGeneration(
   state.summary = undefined;
 
   while (state.frontier <= state.endChapter) {
+    // 0. CONCURRENCY-WAVE1：锁归属校验——锁丢失/被接管 → fail-closed 停止
+    const lockIssue = verifyLockOwnership(workspaceId, projectRoot, input.lock, null);
+    if (lockIssue) {
+      state.status = "error";
+      state.interruptReason = lockIssue.code;
+      state.updatedAt = new Date().toISOString();
+      (state as BatchJobState & { failureEnvelope?: unknown }).failureEnvelope = {
+        stage: "batch_lock",
+        gate: "workspace_lock",
+        severity: "fatal",
+        reason: `${lockIssue.reason}。已停止，不得在失去提交权后继续推进 frontier。`,
+        code: lockIssue.code,
+        recoverable: false,
+      };
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, `lock_${lockIssue.code}`) === "blocked") break;
+      break;
+    }
+
     // 1. 重新加载 state 检查 cancelRequested（cancel action 可能在外部设置）
     const fresh = loadBatchJobStore(workspaceId, jobId, projectRoot);
     if (fresh?.state.cancelRequested) {
       state.status = "cancelled";
       state.cancelRequested = true;
       state.updatedAt = new Date().toISOString();
-      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, "cancel_detected") === "blocked") break;
       break;
     }
 
@@ -200,7 +363,7 @@ export async function runBatchGeneration(
       }
       state.frontier++;
       state.updatedAt = new Date().toISOString();
-      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, `idempotent_skip_ch${state.frontier - 1}`) === "blocked") break;
       continue;
     }
 
@@ -214,17 +377,18 @@ export async function runBatchGeneration(
     };
     state.chapters[slotIndex] = chapterResult;
     state.updatedAt = new Date().toISOString();
-    saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+    if (saveStateCas(state, workspaceId, jobId, projectRoot, `chapter_running_${state.frontier}`) === "blocked") break;
 
     // 4. 调用统一主链路（mock 或 handleGenerateChapter）
     // P0-B：章节执行期间启动锁心跳，防止单章超过 30 分钟锁过期被抢占
+    // CONCURRENCY-WAVE1：心跳失败被结构化记录并在章节边界 fail-closed
     const chapterInput = {
       workspaceId,
       chapterId: String(state.frontier),
       chapterNumber: state.frontier,
       _projectRoot: projectRoot,
     };
-    const stopHeartbeat = startLockHeartbeat(workspaceId, jobId, projectRoot);
+    const heartbeat = startLockHeartbeat(workspaceId, jobId, projectRoot, input.lock?.lockId);
     let result: any;
     let chapterSucceeded = false;
     try {
@@ -247,8 +411,9 @@ export async function runBatchGeneration(
         },
       };
     } finally {
-      stopHeartbeat();
+      heartbeat.stop();
     }
+    const heartbeatFailure = heartbeat.getFailure();
 
     // 5. P0-FIX-4 + P1-C：先从磁盘合并最新 cancelRequested
     //    章节执行期间 cancel action 可能被外部设置到磁盘。
@@ -270,7 +435,37 @@ export async function runBatchGeneration(
       state.frontier,
       projectRoot,
     );
+    // AUTONOMY-P5：proxy approval pending / checkpoint 不得视为“已正式提交”
+    // 不得推进 frontier，也不得消耗正式 chapter.save 授权。
+    const commitSaveReason = result?.stageResults?.commitAndSave?.reason;
+    const pendingCheckpoint =
+      result?.status === "ok" &&
+      !chapterFileExists &&
+      (
+        commitSaveReason === "proxy_approval_pending" ||
+        (result?.stageResults?.commitAndSave?.skipped === true &&
+          typeof commitSaveReason === "string" &&
+          String(commitSaveReason).includes("proxy_approval")) ||
+        (result?.chapterFilePath == null &&
+          result?.stageResults?.proxyApproval?.shouldSkipCommit === true)
+      );
+    const blockedStatus = result?.status === "blocked";
     chapterSucceeded = result?.status === "ok" && chapterFileExists && stateCommitOk;
+
+    // 每章独立 authorization scope（批量不得共享无限期 save 授权）
+    chapterResult.authorizationScope = {
+      workspaceId,
+      chapterId: String(state.frontier),
+      batchJobId: jobId,
+      approvalId: result?.stageResults?.proxyApproval?.approvalId,
+      revision: result?.stageResults?.proxyApproval?.savedAt,
+      artifactHash: result?.stageResults?.proxyApproval?.artifactHash,
+    };
+
+    // 扣减批量初稿预算（无论成功/checkpoint/失败，只要发起过生成）
+    if (typeof state.remainingDraftBudget === "number" && state.remainingDraftBudget > 0) {
+      state.remainingDraftBudget -= 1;
+    }
 
     // 7. 记录本章提交结果（P1-C：cancelRequested 已合并，save 不会覆盖 cancel 标志）
     //    先记录完成/失败，再检查 cancel——防止 cancel 漏记已提交章节
@@ -290,13 +485,36 @@ export async function runBatchGeneration(
       }
       state.frontier++;
       state.updatedAt = new Date().toISOString();
-      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, `chapter_completed_${state.frontier - 1}`) === "blocked") break;
       // P0-FIX-5: 长任务续租锁 — 每章完成后延长 expiresAt，避免 100 章任务超过 30 分钟被误判过期
-      renewBatchLock(workspaceId, jobId, projectRoot);
+      renewBatchLock(workspaceId, jobId, projectRoot, input.lock?.lockId);
+    } else if (pendingCheckpoint || blockedStatus) {
+      // 7a2. AUTONOMY-P5：checkpoint / blocked → 停止后续章节，不推进 frontier
+      chapterResult.status = pendingCheckpoint ? "checkpoint" : "failed";
+      chapterResult.completedAt = new Date().toISOString();
+      chapterResult.interruptReason = pendingCheckpoint
+        ? "checkpoint_pending"
+        : "chapter_blocked";
+      chapterResult.failureEnvelope = result?.failureEnvelope ?? {
+        stage: "batch_chapter",
+        severity: pendingCheckpoint ? "recoverable" : "hard",
+        gate: pendingCheckpoint ? "approval" : "autonomy",
+        reason: pendingCheckpoint
+          ? `chapter ${state.frontier} 进入 checkpoint/pending，等待逐章用户确认后才能继续`
+          : `chapter ${state.frontier} blocked；批量停止，不得越过未确认章节`,
+        recoverable: pendingCheckpoint,
+      };
+      state.failedChapter = state.frontier;
+      state.checkpointChapter = pendingCheckpoint ? state.frontier : state.checkpointChapter;
+      state.interruptReason = pendingCheckpoint ? "checkpoint_pending" : "chapter_blocked";
+      state.updatedAt = new Date().toISOString();
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, `chapter_interrupt_${state.frontier}`) === "blocked") break;
+      chapterSucceeded = false;
     } else {
       // 7b. 失败：记录失败结果（但不立即设置 status 或 break——先检查 cancel）
       chapterResult.status = "failed";
       chapterResult.completedAt = new Date().toISOString();
+      chapterResult.interruptReason = "chapter_failed";
       chapterResult.failureEnvelope = result?.failureEnvelope ?? {
         stage: "batch_chapter",
         severity: "error",
@@ -304,8 +522,31 @@ export async function runBatchGeneration(
         recoverable: false,
       };
       state.failedChapter = state.frontier;
+      state.interruptReason = "chapter_failed";
       state.updatedAt = new Date().toISOString();
-      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, `chapter_failed_${state.frontier}`) === "blocked") break;
+    }
+
+    // 7c. CONCURRENCY-WAVE1：章节执行期间心跳失败 → 锁已丢失/被接管，
+    //     fail-closed 停止任务（不无限假装持锁推进 frontier）
+    if (input.lock && heartbeatFailure) {
+      chapterResult.status = "failed";
+      chapterResult.interruptReason = "lock_lost";
+      chapterResult.failureEnvelope = {
+        stage: "batch_lock",
+        gate: "workspace_lock",
+        severity: "fatal",
+        code: "lock_heartbeat_failed",
+        reason: `章节执行期间锁心跳失败（${heartbeatFailure.code}）：${heartbeatFailure.reason}。任务停止；恢复依据磁盘 stateRevision 与 commit 事实，不以锁状态判定提交成败。`,
+        recoverable: false,
+        heartbeatFailureAt: heartbeatFailure.at,
+      };
+      state.failedChapter = state.frontier;
+      state.interruptReason = "lock_lost";
+      state.status = "error";
+      state.updatedAt = new Date().toISOString();
+      saveStateCas(state, workspaceId, jobId, projectRoot, "lock_heartbeat_failed");
+      break;
     }
 
     // 8. P0-FIX-4 + P1-C：章节结果已记录后，检查 cancel
@@ -313,7 +554,7 @@ export async function runBatchGeneration(
     if (state.cancelRequested) {
       state.status = "cancelled";
       state.updatedAt = new Date().toISOString();
-      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, "cancel_confirmed") === "blocked") break;
       break;
     }
 
@@ -321,7 +562,7 @@ export async function runBatchGeneration(
     if (!chapterSucceeded) {
       state.status = state.stopOnFailure ? "paused" : "error";
       state.updatedAt = new Date().toISOString();
-      saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, `batch_stopped_${state.frontier}`) === "blocked") break;
       break;
     }
   }
@@ -334,7 +575,7 @@ export async function runBatchGeneration(
   // 始终重算，防止 resume 后旧的 failed/summary 数据陈旧
   state.summary = buildSummary(state);
   state.updatedAt = new Date().toISOString();
-  saveBatchJobStore(state, workspaceId, jobId, projectRoot);
+  saveStateCas(state, workspaceId, jobId, projectRoot, `batch_final_${state.status}`);
 
   // BATCH-P1-02：写入批量 summary trace 文件
   writeBatchSummaryTrace(state, projectRoot);

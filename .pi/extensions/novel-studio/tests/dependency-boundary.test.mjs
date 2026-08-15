@@ -20,7 +20,7 @@
  *   7. dist/ 不含已知 eval-only 产物文件（novelbench/* 等）
  *   8. dist-eval/ 含全部已知 eval-only 产物（确认 eval 构建完整）
  *   9. dist/ 与 dist-eval/ 存在 eval-only 差集（生产闭包严格小于 eval 闭包）
- *  10. dist/ JS 文件数 < 240（旧通配 include 产出 237，生产闭包约 233，含 MEMORY 层）
+ *  10. dist/ JS 文件数 < 250（旧通配 include 产出 237，生产闭包约 233，含 MEMORY 层 + Protocol Layer）
  *
  * 设计说明：
  *   - 用 import 路径模式（`from "./legacy-index` / `import("./lab/`）而非裸字符串，
@@ -243,12 +243,45 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     );
   });
 
-  it("dist/ JS 文件数 < 240（防通配 include 退化为 237 文件全量编译）", () => {
+  it("dist/ JS 文件数 < 322（防通配 include 退化为全量编译）", () => {
     const distCount = countJsFiles(DIST_DIR);
     assert.ok(distCount > 0, "dist/ JS 文件数应 > 0（需先 npm run build）");
+    // 2026-08-12：自主性控制面 + 恢复控制面 + 用户反馈证据管道新增生产模块；阈值曾上调到 290。
+    // 2026-08-12 续：模型路由治理 WP-01..07 合法新增 7 个生产模块
+    // （run-routing-context / route-catalog / layered-budget / failure-strategy-matrix /
+    //  model-call-observability / quality-cost-metrics / routing-governance-runtime）
+    // 使闭包约 295。阈值上调到 310，仍远低于通配 include 全量树规模。
+    // 2026-08-13 DG-4：strategy-policy-store 引入 strategy-evidence-partition（策略证据分区
+    // 纯函数），合法新增 1 个生产模块（策略证据按完整行为环境隔离是生产路径的读写语义）。
+    // 闭包 309 → 310。阈值上调到 311。
+    // 2026-08-13 DG-5：release-lifecycle-permissions 是纯模块（dist-test），尚未接入生产，非增长来源；
+    // 干净 build:prod 确定性产出 311 个 JS。阈值上调到 312。
+    // 2026-08-13 DG-6：release-lifecycle-permissions 经 evolution-release-registry.transitionStatus
+    // 接入生产闭包（active_prod 单例约束），合法新增 1 个生产模块。闭包 311 → 312。阈值上调到 313。
+    // 2026-08-13 P7 Stage B：v2/core/audit/trace-projections 是纯投影模块（rebuildQualityTraceFromEvents
+    // / rebuildTrajectoryFromEvents），经 audit/index.ts barrel 接入生产闭包，合法新增 1 个生产模块。
+    // 闭包 312 → 313。阈值上调到 314。
+    // 2026-08-13 P7 Stage B-Read：v2/core/audit/trace-projection-reader 是纯投影读入口
+    // （loadQualityTraceProjection，仅 import trace-projections + audit-event-types + node:fs/path），
+    // 经 R1（strategy-feedback-trace-context）/ R2/R3（chapter-cost-snapshot）接入生产闭包，
+    // 合法新增 1 个生产模块。闭包 313 → 314。阈值上调到 315。
+    // 2026-08-14 P7 Stage C-1：v2/core/audit/trace-write-mode（写路径开关纯函数）+ trace-content-store
+    // （明细独立内容库，JSONL 追加写）经 craft/quality-trace-recorder 接入生产闭包，合法新增 2 个
+    // 生产模块。闭包 314 → 316。阈值上调到 317。
+    // 2026-08-14 P7 Stage C-3：v2/core/audit/trajectory-write-mode（TrajectoryStore 写路径开关纯函数）
+    // + trajectory-content-store（轨迹明细独立内容库，原子写）经 novelos/trajectory/trajectory-store
+    // 接入生产闭包，合法新增 2 个生产模块。闭包 316 → 318。阈值上调到 319。
+    // 2026-08-14 P8 SIGKILL：v2/core/sigkill-fault-injection（真实子进程硬杀注入钩子，env 门控、
+    // 生产零开销）经 orchestrator-commit-save + trajectory-content-store 接入生产闭包，
+    // 合法新增 1 个生产模块。闭包 318 → 319。阈值上调到 320。
+    // 2026-08-15 CONCURRENCY-WAVE1-3：v2/core/fs-atomic（跨进程原子原语：open('wx') 独占创建/
+    // rename 接管/短期 guard）+ v2/core/submission-queue（workspace 章节提交队列，chapter_commit
+    // 资源跨进程串行）接入生产闭包（batch-generation-lock / batch-generation-job-store /
+    // orchestrator-commit-save 消费），合法新增 2 个生产模块。闭包 319 → 321。阈值上调到 322。
+    // 守卫仍是绊线：真正「退化」信号是旧通配 include 的全量树（~460）或旧 237，远高于此。
     assert.ok(
-      distCount < 240,
-      `dist/ JS 文件数（${distCount}）应 < 240（生产闭包约 233，含 orchestrator 相位模块抽取 + MEMORY 长期记忆层 4 个 memory/* 模块；旧通配 include 产出 237）；超过说明 tsconfig.prod.json 退化为全量编译`,
+      distCount < 322,
+      `dist/ JS 文件数（${distCount}）应 < 322（生产闭包约 321，含 MEMORY/Protocol/自主性/恢复控制面/反馈证据管道/模型路由治理/策略证据分区/发布生命周期权限/trace 投影/trace 投影读入口/trace 写模式开关/明细内容库/trajectory 写模式开关/轨迹明细内容库/SIGKILL 故障注入钩子/跨进程原子原语/章节提交队列；旧通配 include 接近全量）；超过说明 tsconfig.prod.json 退化为全量编译`,
     );
   });
 });

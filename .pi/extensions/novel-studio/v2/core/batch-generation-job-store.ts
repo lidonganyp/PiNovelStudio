@@ -1,5 +1,5 @@
 /**
- * BatchGenerationJobStore — 批量章节生成任务状态持久化
+ * BatchGenerationJobStore — 批量章节生成任务状态持久化（Wave 2：revision/CAS）
  *
  * 持久化批量任务状态（BatchJobState）、章节结果、checkpoint、原子保存。
  * 模式蓝本：v2/learning/strategy-policy-store.ts
@@ -8,16 +8,26 @@
  *
  * 设计原则：
  * - 原子保存（tmp → rename，复用 orchestrator-commit-save.ts:atomicSave）
+ * - CONCURRENCY-WAVE2：compare-and-swap 保存。每个 BatchJobState 携带
+ *   stateRevision（磁盘单调递增）、lastEventId（最近状态转移事件）、
+ *   ownerRunId（当前持锁 run）。saveBatchJobStore 在 per-job CAS guard
+ *   （{jobId}.cas-lock，'wx' 原子创建 + 僵死接管）内执行
+ *   "读磁盘 revision → 与期望比较 → 写入 revision+1"。
+ *   磁盘 revision 不等于期望时返回 concurrent_state_update，保留磁盘状态，
+ *   不做覆盖重试。保存成功会把新 revision 回写到调用方的 state 对象，
+ *   使"load → 原地修改 → save"链式 CAS 自动成立（乐观并发控制）。
  * - 幂等性双校验：章节文件存在 AND narrative-state-store.json 含 finalText-anchored entry
  * - 重复 resume 不得重复提交已完成章节
  * - 进程中断后从最后一个已提交章节恢复
  *
- * BATCH-P0-02 / BATCH-P0-06 / BATCH-P0-08
+ * BATCH-P0-02 / BATCH-P0-06 / BATCH-P0-08 / CONCURRENCY-WAVE2
  */
 
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, mkdirSync } from "fs";
+import { randomUUID } from "node:crypto";
 import { join } from "path";
 import { atomicSave } from "./orchestrator-commit-save.js";
+import { withExclusiveGuard } from "./fs-atomic.js";
 
 // ============================================================================
 // 常量
@@ -80,7 +90,7 @@ export interface BatchChapterResult {
   /** 章节 ID（与 chapterNumber 一致：String(chapterNumber)） */
   chapterId: string;
   /** 章节状态 */
-  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  status: "pending" | "running" | "completed" | "failed" | "skipped" | "checkpoint";
   /** 开始时间 ISO timestamp */
   startedAt?: string;
   /** 完成时间 ISO timestamp */
@@ -97,6 +107,20 @@ export interface BatchChapterResult {
   chapterFilePath?: string;
   /** traces/{chapterId}-quality-trace.json 路径 */
   tracePath?: string;
+  /**
+   * AUTONOMY-P5：本章独立授权 scope / checkpoint 绑定。
+   * 批量任务不能获得无限期 chapter.save 授权；每章独立确认。
+   */
+  authorizationScope?: {
+    workspaceId: string;
+    chapterId: string;
+    batchJobId: string;
+    artifactHash?: string;
+    approvalId?: string;
+    revision?: string;
+  };
+  /** 中断原因（checkpoint / blocked / failed） */
+  interruptReason?: string;
 }
 
 export interface BatchJobSummary {
@@ -133,6 +157,35 @@ export interface BatchJobState {
   cancelRequested: boolean;
   /** summary（任务完成或暂停时填充） */
   summary?: BatchJobSummary;
+  /**
+   * AUTONOMY-P5：批量生成剩余预算（可生成初稿/checkpoint 的章节数）。
+   * 不包含无限期 chapter.save 授权。
+   */
+  remainingDraftBudget?: number;
+  /**
+   * AUTONOMY-P5：中断原因（checkpoint_pending / blocked / failed / cancelled）。
+   * 进程重启只能从 checkpoint 恢复，不能自动推断用户批准。
+   */
+  interruptReason?: string;
+  /**
+   * AUTONOMY-P5：暂停在 checkpoint 的章节号（未确认，不得推进 frontier）。
+   */
+  checkpointChapter?: number | null;
+  /**
+   * CONCURRENCY-WAVE2：状态修订号（磁盘单调递增）。
+   * 保存时作为 CAS 期望值；成功后回写新值。缺省视为 0（legacy 状态文件）。
+   */
+  stateRevision?: number;
+  /**
+   * CONCURRENCY-WAVE2：最近一次状态转移事件 ID（evt-{rev}-{event}-{uuid8}）。
+   * 崩溃恢复时按事件事实判断状态，而不是按文件存在推断。
+   */
+  lastEventId?: string | null;
+  /**
+   * CONCURRENCY-WAVE2：当前持有该任务的 run 实例 ID（与批量锁 ownerRunId 同源）。
+   * resume 产生新 ownerRunId；两个 resume 不能同时接管同一任务。
+   */
+  ownerRunId?: string | null;
 }
 
 // ============================================================================
@@ -165,6 +218,17 @@ export class BatchGenerationJobStore {
       chapters: initial?.chapters ?? [],
       cancelRequested: initial?.cancelRequested ?? false,
       summary: initial?.summary,
+      remainingDraftBudget:
+        initial?.remainingDraftBudget ??
+        Math.max(
+          0,
+          (initial?.endChapter ?? 1) - (initial?.startChapter ?? 1) + 1,
+        ),
+      interruptReason: initial?.interruptReason,
+      checkpointChapter: initial?.checkpointChapter ?? null,
+      stateRevision: initial?.stateRevision ?? 0,
+      lastEventId: initial?.lastEventId ?? null,
+      ownerRunId: initial?.ownerRunId ?? null,
     };
   }
 
@@ -232,7 +296,43 @@ export function loadBatchJobStore(
 }
 
 /**
- * 原子保存批量任务状态。
+ * CONCURRENCY-WAVE2：CAS 保存结果。
+ * - ok=true：写入成功，stateRevision 为新修订号
+ * - ok=false + concurrent_state_update：磁盘修订号与期望不符（他方已写入），
+ *   磁盘状态被保留，调用方不得盲目覆盖重试
+ * - ok=false + state_file_corrupt：磁盘状态文件损坏，fail-closed 拒绝覆盖
+ */
+export type SaveBatchJobResult =
+  | { ok: true; stateRevision: number; lastEventId: string }
+  | {
+      ok: false;
+      reason: "concurrent_state_update" | "state_file_corrupt";
+      diskRevision: number;
+      expectedRevision: number;
+    };
+
+export interface SaveBatchJobOptions {
+  /**
+   * 显式期望修订号。缺省使用 state.stateRevision（乐观并发：
+   * 调用方的内存副本必须基于磁盘最新版本——load 出来的对象天然满足）。
+   */
+  expectedRevision?: number;
+  /** 状态转移标签（写入 lastEventId，如 "chapter_completed:5" / "cancel_requested"） */
+  event?: string;
+}
+
+/**
+ * 原子保存批量任务状态（CONCURRENCY-WAVE2：compare-and-swap）。
+ *
+ * 在 per-job CAS guard（{jobId}.cas-lock）内执行：
+ *   读磁盘 revision → 与期望比较 → 写入 revision+1（含 lastEventId）
+ *
+ * - 磁盘不存在（首次创建）：以期望值为基线写入期望+1；
+ * - 磁盘 revision === 期望：写入 期望+1，并把新 revision/lastEventId 回写到
+ *   调用方传入的 state 对象（使连续 save 链式 CAS 成立）；
+ * - 磁盘 revision !== 期望：返回 concurrent_state_update，磁盘不动；
+ * - 磁盘损坏：返回 state_file_corrupt（fail-closed，不覆盖）。
+ *
  * 接受 Store 实例或裸 BatchJobState。
  */
 export function saveBatchJobStore(
@@ -240,10 +340,103 @@ export function saveBatchJobStore(
   workspaceId: string,
   jobId: string,
   projectRoot: string,
-): void {
-  const state = store instanceof BatchGenerationJobStore ? store.toJSON() : store;
+  options?: SaveBatchJobOptions,
+): SaveBatchJobResult {
+  validateWorkspaceId(workspaceId);
+  validateJobId(jobId);
+  const isStore = store instanceof BatchGenerationJobStore;
+  const state = isStore ? store.toJSON() : store;
   const path = batchJobPath(workspaceId, jobId, projectRoot);
-  atomicSave(path, JSON.stringify(state, null, 2));
+  const stateDir = join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR);
+  if (!existsSync(stateDir)) {
+    try { mkdirSync(stateDir, { recursive: true }); } catch { /* 已存在 */ }
+  }
+  const casLockPath = join(stateDir, `${jobId}.cas-lock`);
+  const expectedRevision = options?.expectedRevision ?? state.stateRevision ?? 0;
+
+  return withExclusiveGuard<SaveBatchJobResult>(casLockPath, () => {
+    let diskRevision = 0;
+    const diskExists = existsSync(path);
+    if (diskExists) {
+      try {
+        const raw = JSON.parse(readFileSync(path, "utf-8"));
+        diskRevision = Number(raw?.stateRevision ?? 0) || 0;
+      } catch {
+        return {
+          ok: false,
+          reason: "state_file_corrupt",
+          diskRevision: -1,
+          expectedRevision,
+        };
+      }
+    }
+    if (diskExists && diskRevision !== expectedRevision) {
+      return {
+        ok: false,
+        reason: "concurrent_state_update",
+        diskRevision,
+        expectedRevision,
+      };
+    }
+    const newRevision = (diskExists ? diskRevision : expectedRevision) + 1;
+    const eventTag = options?.event ? `${options.event}-` : "";
+    const lastEventId = `evt-${newRevision}-${eventTag}${randomUUID().slice(0, 8)}`;
+    const next: BatchJobState = {
+      ...state,
+      stateRevision: newRevision,
+      lastEventId,
+      updatedAt: new Date().toISOString(),
+    };
+    atomicSave(path, JSON.stringify(next, null, 2));
+    // 回写新 revision 到调用方对象：连续 "load → modify → save" 链式 CAS 自动成立
+    if (isStore) {
+      (store as BatchGenerationJobStore).syncFromState(next);
+    } else {
+      const mutable = store as BatchJobState;
+      mutable.stateRevision = newRevision;
+      mutable.lastEventId = lastEventId;
+      mutable.updatedAt = next.updatedAt;
+    }
+    return { ok: true, stateRevision: newRevision, lastEventId };
+  });
+}
+
+/**
+ * CONCURRENCY-WAVE2：控制字段原子更新（reload → mutate → CAS save → 冲突重试）。
+ *
+ * 供 cancel 等外部控制操作使用：与编排器的状态保存并发时，CAS 冲突
+ * 通过"重读磁盘最新事实 → 重新施加变更"解决，而不是覆盖他方写入。
+ * 重试耗尽返回结构化失败（不静默丢弃控制请求）。
+ */
+export function updateBatchJobControlFields(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+  mutator: (state: BatchJobState) => void,
+  maxAttempts: number = 3,
+): { ok: true; state: BatchJobState } | { ok: false; reason: string } {
+  validateWorkspaceId(workspaceId);
+  validateJobId(jobId);
+  let lastConflict: SaveBatchJobResult | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const loaded = loadBatchJobStore(workspaceId, jobId, projectRoot);
+    if (!loaded) {
+      return { ok: false, reason: `jobId ${jobId} 不存在` };
+    }
+    const state = loaded.state;
+    mutator(state);
+    const res = saveBatchJobStore(state, workspaceId, jobId, projectRoot, {
+      expectedRevision: state.stateRevision ?? 0,
+    });
+    if (res.ok) {
+      return { ok: true, state };
+    }
+    lastConflict = res;
+  }
+  return {
+    ok: false,
+    reason: `concurrent_state_update：控制字段更新在 ${maxAttempts} 次重试后仍冲突（last=${lastConflict && !lastConflict.ok ? lastConflict.reason : "unknown"}），请重试`,
+  };
 }
 
 /**

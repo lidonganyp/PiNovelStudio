@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { describe, it, before, after } from "node:test";
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -161,10 +162,13 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
       saveBatchJobStore(state, wsId, jobId, PROJECT_ROOT);
 
       // 2. 写一个死锁（PID=999999 不存在），模拟崩溃后残留的锁
+      //    CONCURRENCY-WAVE1：僵尸锁判定要求 hostId=本机（同主机才可探测 PID；
+      //    跨主机/未知主机保守视为存活，等租约过期）
       const lockPath = batchLockPath(wsId, PROJECT_ROOT);
       const deadLock = {
         workspaceId: wsId,
         jobId,
+        hostId: hostname(), // 本机残留锁，PID 可探测
         pid: 999999, // 不存在的 PID
         acquiredAt: new Date(Date.now() - 60000).toISOString(),
         expiresAt: new Date(Date.now() + 60000).toISOString(),
@@ -591,10 +595,13 @@ describe("BATCH P0/P1 FIX：路径穿越 / 崩溃恢复 / 取消覆盖 / 锁续�
       createBatchWorkspace(wsId);
 
       // 写一个僵死锁（PID 不存在）
+      // CONCURRENCY-WAVE1：接管判定要求 hostId=本机（同主机 + PID 死亡 →
+      // zombie_owner_dead 可接管；跨主机未过期保守拒绝）
       const lockPath = batchLockPath(wsId, PROJECT_ROOT);
       const staleLock = {
         workspaceId: wsId,
         jobId: "batch-stale-001",
+        hostId: hostname(), // 本机僵死锁
         pid: 999999,
         acquiredAt: new Date(Date.now() - 60000).toISOString(),
         expiresAt: new Date(Date.now() + 60000).toISOString(),
