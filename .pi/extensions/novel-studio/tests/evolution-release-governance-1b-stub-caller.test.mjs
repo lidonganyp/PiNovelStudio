@@ -184,6 +184,40 @@ test("stubCaller: 不调用真实模型（无网络/API）", async () => {
 // executeProxyApproval: 完整编排
 // ============================================================================
 
+test("executeProxyApproval: 审批包泄漏 rel-prod 身份时在 caller.call 前阻断", async () => {
+  const dir = makeTempDir();
+  let called = false;
+  try {
+    const registry = createProxyApprovalRegistry({ approvalsDir: dir });
+    const caller = {
+      identity: "stub",
+      async call() {
+        called = true;
+        throw new Error("caller.call should not run after identity leak");
+      },
+    };
+    const input = {
+      ...makePacketInput("rel-prod-112"),
+      candidateText: "候选：capture rel-prod-112，verify YES。",
+      currentApprovedText: "当前生产基线 rel-prod-111。",
+    };
+    await assert.rejects(
+      () => executeProxyApproval({
+        packetInput: input,
+        caller,
+        registry,
+        promptHash: "sha256:p",
+        modelVersion: "gpt5.6-sol-2026-07",
+        budget: { maxCalls: 2, timeoutMs: 60000 },
+      }),
+      /REVIEW_PACKET_IDENTITY_LEAK|rel-prod-112/,
+    );
+    assert.equal(called, false, "身份泄漏不得进入评审模型调用");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("executeProxyApproval: APPROVE_DEV → 写入 artifact + manifest 绑定通过", async () => {
   const dir = makeTempDir();
   try {

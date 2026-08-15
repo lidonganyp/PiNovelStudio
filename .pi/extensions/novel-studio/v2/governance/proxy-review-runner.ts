@@ -21,6 +21,10 @@ import {
   executeProxyApproval,
   REAL_PROXY_APPROVAL_PROMPT_HASH,
 } from "./proxy-approval-caller.js";
+import {
+  assertAnonymousReviewPacket,
+  buildAnonymousApprovalPacket,
+} from "./approval-packet-builder.js";
 import { computeReleasePayloadHash } from "./evolution-release-schema.js";
 import {
   assertCardAuthorizes,
@@ -115,6 +119,16 @@ export async function runStubProxyReview(
 export async function runRealProxyReview(
   options: ProxyReviewRunnerOptions & RealReviewOptions,
 ): Promise<ProxyReviewResult> {
+  const fullPacketInput = buildFullPacketInput(
+    options.evolutionRegistry,
+    options.releaseId,
+    options.packetInput,
+  );
+  assertAnonymousReviewPacket(buildAnonymousApprovalPacket(fullPacketInput), {
+    releaseId: options.releaseId,
+    uniqueVariable: fullPacketInput.uniqueVariable,
+  });
+
   const cardPath = options.authorizationCardPath;
   if (!cardPath || !existsSync(cardPath)) {
     throw new Error("REQUIRES_AUTH: real gpt5.6-sol release review requires an authorization card");
@@ -132,11 +146,6 @@ export async function runRealProxyReview(
     throw new Error(message.startsWith("REQUIRES_AUTH:") ? message : `REQUIRES_AUTH: ${message}`);
   }
 
-  const fullPacketInput = buildFullPacketInput(
-    options.evolutionRegistry,
-    options.releaseId,
-    options.packetInput,
-  );
   const caller = createRealGpt56SolReleaseProxyApprovalCallerFromEnv();
   return executeProxyApproval({
     packetInput: fullPacketInput,

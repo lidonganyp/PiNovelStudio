@@ -7,6 +7,7 @@
  * - buildAnonymousApprovalPacket：把候选侧输入转成匿名 A/B 正反顺序审批包
  * - computePacketHash：审批包规范化 hash
  * - verifyPacketAnonymity：检测包内是否泄露禁用词（候选身份/实现名称/judge 结论/开发者预期）
+ * - collectLeakedReviewIdentityTerms / assertAnonymousReviewPacket：评审前强制拦截 releaseId 泄漏
  *
  * 匿名化原则（计划 §6.1）：
  * - forward：A=候选 B=当前；reverse：A=当前 B=候选（标签互换，文本不变）
@@ -144,4 +145,34 @@ export function verifyPacketAnonymity(
     }
   }
   return { ok: leakedTerms.length === 0, leakedTerms };
+}
+
+/** Release identity tokens that must not appear in the anonymous review packet. */
+const REVIEW_IDENTITY_PATTERN = /\b(?:rel-prod-\d+|rel-phase[a-z0-9]+|rel-\d{3,})\b/gi;
+
+export function collectLeakedReviewIdentityTerms(
+  packet: AnonymousApprovalPacket,
+  options: { releaseId: string; uniqueVariable?: string },
+): string[] {
+  const packetStr = JSON.stringify(packet);
+  const leaked = new Set<string>();
+  for (const term of [options.releaseId, options.uniqueVariable]) {
+    if (term && packetStr.includes(term)) leaked.add(term);
+  }
+  for (const match of packetStr.matchAll(REVIEW_IDENTITY_PATTERN)) {
+    leaked.add(match[0]);
+  }
+  return [...leaked];
+}
+
+export function assertAnonymousReviewPacket(
+  packet: AnonymousApprovalPacket,
+  options: { releaseId: string; uniqueVariable?: string },
+): void {
+  const leakedTerms = collectLeakedReviewIdentityTerms(packet, options);
+  if (leakedTerms.length === 0) return;
+  throw new Error(
+    `REVIEW_PACKET_IDENTITY_LEAK: 审批包泄露候选身份（${leakedTerms.join(", ")}）。` +
+      "真实评审前必须匿名化，不得写入 releaseId / 实现名。",
+  );
 }

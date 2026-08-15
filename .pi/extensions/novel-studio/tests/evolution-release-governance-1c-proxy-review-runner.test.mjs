@@ -263,6 +263,27 @@ test("runStubProxyReview: 不调用真实模型（stub caller identity=stub）",
 // runRealProxyReview
 // ============================================================================
 
+test("runRealProxyReview: 评审包泄漏 releaseId 时先于授权卡/网络失败", async () => {
+  const { dir, evolutionRegistry, proxyRegistry } = makeEnv("rel-prod-112", "R1");
+  try {
+    await assert.rejects(
+      () => runRealProxyReview({
+        proxyRegistry,
+        evolutionRegistry,
+        releaseId: "rel-prod-112",
+        packetInput: {
+          ...makePacketInputBody("R1"),
+          candidateText: "候选：干净树 capture rel-prod-112。",
+          currentApprovedText: "当前生产基线 rel-prod-111。",
+        },
+      }),
+      /REVIEW_PACKET_IDENTITY_LEAK|rel-prod-112/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("runRealProxyReview: 无授权卡 → 抛错 REQUIRES_AUTH", async () => {
   const { dir, evolutionRegistry, proxyRegistry } = makeEnv("rel-006", "R2");
   try {

@@ -10,6 +10,8 @@ import {
   buildAnonymousApprovalPacket,
   computePacketHash,
   verifyPacketAnonymity,
+  collectLeakedReviewIdentityTerms,
+  assertAnonymousReviewPacket,
 } from "../dist-test/v2/governance/approval-packet-builder.js";
 import { computeReleasePayloadHash } from "../dist-test/v2/governance/evolution-release-schema.js";
 
@@ -207,4 +209,45 @@ test("verifyPacketAnonymity: 不含 releaseId / 实现名称 / judge 结论", ()
     ],
   });
   assert.equal(result.ok, true);
+});
+
+test("collectLeakedReviewIdentityTerms: 干净 packet 无身份泄漏", () => {
+  const input = makeCandidateInput();
+  const packet = buildAnonymousApprovalPacket(input);
+  assert.deepEqual(
+    collectLeakedReviewIdentityTerms(packet, {
+      releaseId: input.releaseId,
+      uniqueVariable: input.uniqueVariable,
+    }),
+    [],
+  );
+});
+
+test("collectLeakedReviewIdentityTerms: 正文写入 rel-prod-* 视为身份泄漏", () => {
+  const input = makeCandidateInput({
+    candidateText: "候选：在干净树上 capture rel-prod-112。",
+    currentApprovedText: "当前生产基线 rel-prod-111 指纹过期。",
+  });
+  const packet = buildAnonymousApprovalPacket(input);
+  const leaked = collectLeakedReviewIdentityTerms(packet, {
+    releaseId: "rel-prod-112",
+    uniqueVariable: input.uniqueVariable,
+  });
+  assert.ok(leaked.includes("rel-prod-112"));
+  assert.ok(leaked.includes("rel-prod-111"));
+});
+
+test("assertAnonymousReviewPacket: 泄漏 releaseId 时 fail-closed", () => {
+  const input = makeCandidateInput({
+    releaseId: "rel-prod-113",
+    candidateText: "请批准 rel-prod-113 替换当前生产指针。",
+  });
+  const packet = buildAnonymousApprovalPacket(input);
+  assert.throws(
+    () => assertAnonymousReviewPacket(packet, {
+      releaseId: "rel-prod-113",
+      uniqueVariable: input.uniqueVariable,
+    }),
+    /REVIEW_PACKET_IDENTITY_LEAK|rel-prod-113/,
+  );
 });

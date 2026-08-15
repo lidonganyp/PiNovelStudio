@@ -25,6 +25,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import {
+  assertAnonymousReviewPacket,
   buildAnonymousApprovalPacket,
   computePacketHash,
 } from "./approval-packet-builder.js";
@@ -347,8 +348,12 @@ export async function executeProxyApproval(
 ): Promise<ExecuteProxyApprovalResult> {
   const { packetInput, caller, registry, promptHash, modelVersion, budget } = options;
 
-  // 1. 构建匿名审批包
+  // 1. 构建匿名审批包；身份泄漏不得进入模型调用
   const packet = buildAnonymousApprovalPacket(packetInput);
+  assertAnonymousReviewPacket(packet, {
+    releaseId: packetInput.releaseId,
+    uniqueVariable: packetInput.uniqueVariable,
+  });
   const inputArtifactHash = computePacketHash(packet);
 
   // 2. caller.call
