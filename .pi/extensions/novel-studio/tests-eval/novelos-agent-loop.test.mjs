@@ -449,7 +449,8 @@ describe("NovelOS Narrative Agent Loop（ReAct 架构）", () => {
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].evidencePlan, evidencePlan);
     assert.ok(calls[0].contextCoveredFacts.includes("林默真实身份已确认"));
-    assert.equal(calls[0].trajectoryPath, trajectory.getOutputPath());
+    // P7 Stage D：coverage gate 改读完整轨迹明细路径（projection 下在 content store）。
+    assert.equal(calls[0].trajectoryPath, trajectory.getDetailOutputPath());
   });
 
   it("retries once with an explicit uncovered-fact retrieval prompt", async () => {

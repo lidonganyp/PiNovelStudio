@@ -22,6 +22,7 @@ import {
   type ReplayRunManifestV1,
   type ReplayRunSampleEntry,
 } from "./eval-fixture-contract.js";
+import { extractReplayModelCalls } from "./eval-replay-trace-stats.js";
 
 // ============================================================================
 // 类型定义
@@ -37,7 +38,8 @@ export type GraderCheckName =
   | "atomic_save"
   | "failure_envelope_completeness"
   | "recovery_bounds"
-  | "silent_degrade";
+  | "silent_degrade"
+  | "model_call_evidence";
 
 export interface GraderCheck {
   name: GraderCheckName;
@@ -422,6 +424,32 @@ export function gradeDeterministic(
       }
     }
     checks.push({ name: "recovery_bounds", passed: violations.length === 0, violations });
+  }
+
+  // 11. 模型调用必须与归档 quality-trace 的 gates[].evidence.modelCalls 一致
+  {
+    const violations: Array<{ fixtureId?: string; detail: string }> = [];
+    for (const entry of counted) {
+      const archive = loadSampleArchive(root, entry.fixtureId);
+      const collected = archive.traces.flatMap((trace) => extractReplayModelCalls(trace));
+      if (collected.length !== entry.modelCalls) {
+        violations.push({
+          fixtureId: entry.fixtureId,
+          detail:
+            `modelCalls 失真：manifest=${entry.modelCalls} trace=${collected.length}` +
+            "（必须统计 gates[].evidence.modelCalls，不得只读顶层 trace.modelCalls）",
+        });
+      }
+      const realModelReplay =
+        entry.replayMode === "production_like" || entry.replayMode === "dev_real_model";
+      if (realModelReplay && entry.status === "completed" && collected.length === 0) {
+        violations.push({
+          fixtureId: entry.fixtureId,
+          detail: `${entry.replayMode} completed 样本 modelCalls=0（真实模型回放不得用 0 次调用冒充完成）`,
+        });
+      }
+    }
+    checks.push({ name: "model_call_evidence", passed: violations.length === 0, violations });
   }
 
   const failedChecks = checks.filter((c) => !c.passed).map((c) => c.name);
