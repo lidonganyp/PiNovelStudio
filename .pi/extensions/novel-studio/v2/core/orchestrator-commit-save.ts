@@ -1086,7 +1086,7 @@ function commitAndSaveInner(
       commitIntentId,
     },
   });
-  // 磁盘账本：保证无 audit gate / 进程重启后仍幂等
+  // 磁盘账本 + 独立 receipt：写入失败不得返回整体成功
   try {
     markCommitIntentCompleted(
       workspacePath,
@@ -1094,11 +1094,41 @@ function commitAndSaveInner(
       commitIntentId,
       finalTextHash,
     );
+    const nsPath = join(workspacePath, "narrative-state-store.json");
+    let narrativeStateRevision = `ch${input.chapterNumber}`;
+    if (existsSync(nsPath)) {
+      try {
+        const ns = JSON.parse(readFileSync(nsPath, "utf-8")) as { lastCommittedChapter?: string };
+        if (ns.lastCommittedChapter) narrativeStateRevision = ns.lastCommittedChapter;
+      } catch { /* 用章节号兜底 */ }
+    }
+    const receiptId =
+      (stageResults.stateCommit as { receipt?: { receiptId?: string } } | undefined)?.receipt?.receiptId ??
+      `receipt-${input.chapterId}-${finalTextHash}`;
+    const receiptDir = join(workspacePath, "chapter-approvals");
+    if (!existsSync(receiptDir)) mkdirSync(receiptDir, { recursive: true });
+    const receiptPath = join(receiptDir, `${input.chapterId}.commit-receipt.json`);
+    const receiptTmp = `${receiptPath}.tmp`;
+    writeFileSync(receiptTmp, JSON.stringify({
+      receiptId,
+      commitIntentId,
+      artifactHash: finalTextHash,
+      chapterFileHash: finalTextHash,
+      narrativeStateRevision,
+      recordedAt: new Date().toISOString(),
+    }, null, 2), "utf-8");
+    renameSync(receiptTmp, receiptPath);
     stageResults.commitIntentLedger = { ok: true, commitIntentId };
+    stageResults.commitReceipt = { ok: true, receiptId };
   } catch (ledgerErr: unknown) {
-    // 账本写失败不回滚已成功提交（正文+状态已是事实），但暴露在 stageResults
     const msg = ledgerErr instanceof Error ? ledgerErr.message : String(ledgerErr);
     stageResults.commitIntentLedger = { ok: false, error: msg, commitIntentId };
+    return {
+      ok: false,
+      error: `commit_intent_ledger_failed：正文/状态可能已落盘，但 commit intent 或独立 receipt 未能写入（${msg}）`,
+      stateCommit: { committed, rejected, error: msg },
+      commitIntentId,
+    };
   }
   stageResults.commitIntentId = commitIntentId;
   return {

@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { describe, it, after } from "node:test";
 import { createHash } from "node:crypto";
-import { existsSync, writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -42,11 +42,14 @@ describe("CONCURRENCY-WAVE5：崩溃恢复分类", () => {
     return createHash("sha256").update(text, "utf8").digest("hex").slice(0, 12);
   }
 
-  function writeCommitFacts(workspacePath, chapterNumber, text) {
+  function writeCommitFacts(workspacePath, chapterNumber, text, opts = {}) {
     const hash = textHash(text);
     const approvals = join(workspacePath, "chapter-approvals");
     mkdirSync(approvals, { recursive: true });
+    mkdirSync(join(workspacePath, "batch-jobs"), { recursive: true });
     const chapterId = String(chapterNumber);
+    const jobId = opts.jobId ?? "batch-wave5-recovery";
+    const eventId = opts.eventId ?? "evt-1";
     writeFileSync(join(approvals, `${chapterId}.commit-intents.json`), JSON.stringify({
       schemaVersion: 1,
       entries: {
@@ -59,7 +62,22 @@ describe("CONCURRENCY-WAVE5：崩溃恢复分类", () => {
         },
       },
     }, null, 2), "utf-8");
+    if (!opts.skipReceipt) {
+      writeFileSync(join(approvals, `${chapterId}.commit-receipt.json`), JSON.stringify({
+        receiptId: `receipt-ch${chapterNumber}-${hash}`,
+        commitIntentId: `intent-ch${chapterNumber}`,
+        artifactHash: hash,
+        chapterFileHash: hash,
+        narrativeStateRevision: `ch${chapterNumber}`,
+        recordedAt: new Date().toISOString(),
+      }, null, 2), "utf-8");
+    }
     writeStateStoreEntry(workspacePath, chapterNumber, text);
+    appendFileSync(
+      join(workspacePath, "batch-jobs", `${jobId}.events.jsonl`),
+      `${JSON.stringify({ eventId, jobId, event: `chapter_completed:${chapterNumber}` })}\n`,
+      "utf-8",
+    );
   }
 
   function baseState(workspaceId, overrides = {}) {
@@ -121,6 +139,62 @@ describe("CONCURRENCY-WAVE5：崩溃恢复分类", () => {
     assert.equal(rec.incompleteChapter, 1);
   });
 
+  it("state.lastEventId 不在真实事件流中时不得标 completed", () => {
+    const ws = "batch-wave5-rec-stale-event";
+    const workspacePath = fresh(ws);
+    const text = "# 第1章\n事件流缺失\n";
+    writeFileSync(join(workspacePath, "chapters", "1.md"), text, "utf-8");
+    writeCommitFacts(workspacePath, 1, text);
+    const rec = reconcileBatchJobAfterCrash(baseState(ws, {
+      frontier: 2,
+      endChapter: 1,
+      completedChapters: [1],
+      lastEventId: "evt-not-in-stream",
+    }), PROJECT_ROOT);
+    assert.equal(rec.decision, "retry");
+    assert.equal(rec.facts?.[0]?.eventStreamVerified, false);
+  });
+
+  it("narrativeStateRevision 与本章不一致时不得标 completed", () => {
+    const ws = "batch-wave5-rec-rev-mismatch";
+    const workspacePath = fresh(ws);
+    const text = "# 第1章\nrevision 不对\n";
+    writeFileSync(join(workspacePath, "chapters", "1.md"), text, "utf-8");
+    writeCommitFacts(workspacePath, 1, text);
+    const nsPath = join(workspacePath, "narrative-state-store.json");
+    const ns = JSON.parse(readFileSync(nsPath, "utf-8"));
+    ns.lastCommittedChapter = "ch0";
+    writeFileSync(nsPath, JSON.stringify(ns, null, 2), "utf-8");
+    writeFileSync(join(workspacePath, "batch-jobs", "batch-wave5-recovery.events.jsonl"),
+      `${JSON.stringify({ eventId: "evt-1", jobId: "batch-wave5-recovery", event: "chapter_completed:1" })}\n`,
+      "utf-8");
+    const rec = reconcileBatchJobAfterCrash(baseState(ws, {
+      frontier: 2,
+      endChapter: 1,
+      completedChapters: [1],
+      lastEventId: "evt-1",
+    }), PROJECT_ROOT);
+    assert.equal(rec.decision, "retry");
+    assert.equal(rec.facts?.[0]?.narrativeStateRevisionMatches, false);
+  });
+
+  it("commit intent 不能冒充独立 receipt", () => {
+    const ws = "batch-wave5-rec-no-receipt-file";
+    const workspacePath = fresh(ws);
+    const text = "# 第1章\n只有 intent\n";
+    writeFileSync(join(workspacePath, "chapters", "1.md"), text, "utf-8");
+    writeCommitFacts(workspacePath, 1, text, { skipReceipt: true });
+    const rec = reconcileBatchJobAfterCrash(baseState(ws, {
+      frontier: 2,
+      endChapter: 1,
+      completedChapters: [1],
+      lastEventId: "evt-1",
+    }), PROJECT_ROOT);
+    assert.equal(rec.decision, "retry");
+    assert.equal(rec.facts?.[0]?.commitReceiptPresent, false);
+    assert.equal(rec.facts?.[0]?.receiptId ?? null, null);
+  });
+
   it("正文+状态但无 commit intent / receipt 时不得标 completed", () => {
     const ws = "batch-wave5-rec-no-intent";
     const workspacePath = fresh(ws);
@@ -151,7 +225,7 @@ describe("CONCURRENCY-WAVE5：崩溃恢复分类", () => {
     const workspacePath = fresh(ws);
     const text = "# 第1章\n完整事实\n";
     writeFileSync(join(workspacePath, "chapters", "1.md"), text, "utf-8");
-    writeCommitFacts(workspacePath, 1, text);
+    writeCommitFacts(workspacePath, 1, text, { eventId: "evt-9-chapter_completed" });
     const rec = reconcileBatchJobAfterCrash(baseState(ws, {
       frontier: 2,
       endChapter: 1,
@@ -163,6 +237,9 @@ describe("CONCURRENCY-WAVE5：崩溃恢复分类", () => {
     assert.equal(rec.facts?.[0]?.commitIntentCompleted, true);
     assert.equal(rec.facts?.[0]?.hashMatchesIntent, true);
     assert.equal(rec.facts?.[0]?.commitReceiptPresent, true);
+    assert.equal(rec.facts?.[0]?.eventStreamVerified, true);
+    assert.equal(rec.facts?.[0]?.narrativeStateRevisionMatches, true);
+    assert.ok(rec.facts?.[0]?.receiptId);
     assert.ok(rec.facts?.[0]?.lastEventId);
   });
 
@@ -238,12 +315,16 @@ describe("CONCURRENCY-WAVE5：崩溃恢复分类", () => {
       _mockGenerateChapter: mock,
     });
     assert.equal(start.status, "completed");
+    const jobPath = join(workspacePath, "batch-jobs", `${start.jobId}.json`);
+    const jobAfterStart = JSON.parse(readFileSync(jobPath, "utf-8"));
     for (const n of [1, 2]) {
       const chapterFile = join(workspacePath, "chapters", `${n}.md`);
       const text = readFileSync(chapterFile, "utf-8");
-      writeCommitFacts(workspacePath, n, text);
+      writeCommitFacts(workspacePath, n, text, {
+        jobId: start.jobId,
+        eventId: jobAfterStart.lastEventId,
+      });
     }
-    const jobPath = join(workspacePath, "batch-jobs", `${start.jobId}.json`);
     const raw = JSON.parse(readFileSync(jobPath, "utf-8"));
     raw.status = "running";
     writeFileSync(jobPath, JSON.stringify(raw, null, 2), "utf-8");

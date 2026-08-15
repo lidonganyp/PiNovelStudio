@@ -23,7 +23,7 @@
  * BATCH-P0-02 / BATCH-P0-06 / BATCH-P0-08 / CONCURRENCY-WAVE2
  */
 
-import { readFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "path";
 import { atomicSave } from "./orchestrator-commit-save.js";
@@ -393,6 +393,13 @@ export function saveBatchJobStore(
       updatedAt: new Date().toISOString(),
     };
     atomicSave(path, JSON.stringify(next, null, 2));
+    appendBatchJobEvent(workspaceId, jobId, projectRoot, {
+      eventId: lastEventId,
+      jobId,
+      event: options?.event ?? "state_saved",
+      stateRevision: newRevision,
+      recordedAt: next.updatedAt,
+    });
     // 回写新 revision 到调用方对象：连续 "load → modify → save" 链式 CAS 自动成立
     if (isStore) {
       (store as BatchGenerationJobStore).syncFromState(next);
@@ -625,18 +632,38 @@ export type BatchRecoveryDecision =
   | "checkpoint"
   | "blocked";
 
+export interface BatchJobEventRecord {
+  eventId: string;
+  jobId: string;
+  event: string;
+  stateRevision?: number;
+  recordedAt?: string;
+}
+
+export interface ChapterCommitReceiptRecord {
+  receiptId: string;
+  commitIntentId: string;
+  artifactHash: string;
+  chapterFileHash: string;
+  narrativeStateRevision: string;
+  recordedAt: string;
+}
+
 export interface ChapterCommitFacts {
   chapterNumber: number;
   lastEventId: string | null;
+  eventStreamVerified: boolean;
   chapterFilePresent: boolean;
   chapterFileHash: string | null;
   narrativeStateAnchored: boolean;
   narrativeStateRevision: string | null;
+  narrativeStateRevisionMatches: boolean;
   commitIntentId: string | null;
   commitIntentCompleted: boolean;
   commitIntentHash: string | null;
   hashMatchesIntent: boolean;
   commitReceiptPresent: boolean;
+  receiptId: string | null;
 }
 
 export interface BatchCrashReconciliation {
@@ -645,6 +672,69 @@ export interface BatchCrashReconciliation {
   recoveredChapters: number[];
   incompleteChapter: number | null;
   facts: ChapterCommitFacts[];
+}
+
+export function batchJobEventsPath(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+): string {
+  validateWorkspaceId(workspaceId);
+  validateJobId(jobId);
+  return join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR, `${jobId}.events.jsonl`);
+}
+
+export function appendBatchJobEvent(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+  record: BatchJobEventRecord,
+): void {
+  const dir = join(projectRoot, "workspaces", workspaceId, BATCH_JOBS_DIR);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  appendFileSync(batchJobEventsPath(workspaceId, jobId, projectRoot), `${JSON.stringify(record)}\n`, "utf-8");
+}
+
+export function loadBatchJobEventStream(
+  workspaceId: string,
+  jobId: string,
+  projectRoot: string,
+): BatchJobEventRecord[] {
+  const path = batchJobEventsPath(workspaceId, jobId, projectRoot);
+  if (!existsSync(path)) return [];
+  try {
+    return readFileSync(path, "utf-8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as BatchJobEventRecord)
+      .filter((e) => e && typeof e.eventId === "string");
+  } catch {
+    return [];
+  }
+}
+
+export function chapterCommitReceiptPath(workspacePath: string, chapterNumber: number): string | null {
+  const ids = [String(chapterNumber), `ch${chapterNumber}`];
+  for (const chapterId of ids) {
+    const path = join(workspacePath, "chapter-approvals", `${chapterId}.commit-receipt.json`);
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
+export function loadChapterCommitReceipt(
+  workspacePath: string,
+  chapterNumber: number,
+): ChapterCommitReceiptRecord | null {
+  const path = chapterCommitReceiptPath(workspacePath, chapterNumber);
+  if (!path) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as ChapterCommitReceiptRecord;
+    if (!raw?.receiptId || !raw.artifactHash) return null;
+    return raw;
+  } catch {
+    return null;
+  }
 }
 
 function hashChapterText(text: string): string {
@@ -691,7 +781,7 @@ export function inspectChapterCommitFacts(
   workspaceId: string,
   chapterNumber: number,
   projectRoot: string,
-  lastEventId: string | null = null,
+  options: { jobId?: string | null; lastEventIdHint?: string | null } = {},
 ): ChapterCommitFacts {
   validateWorkspaceId(workspaceId);
   const workspacePath = join(projectRoot, "workspaces", workspaceId);
@@ -709,22 +799,45 @@ export function inspectChapterCommitFacts(
       narrativeStateRevision = ns.lastCommittedChapter ?? null;
     } catch { /* ignore */ }
   }
+  const revNum = Number(String(narrativeStateRevision ?? "").replace(/\D/g, "") || 0);
+  const narrativeStateRevisionMatches = revNum >= chapterNumber;
   const intent = loadCompletedCommitIntent(workspacePath, chapterNumber);
   const hashMatchesIntent = Boolean(
     chapterFileHash && intent?.artifactHash && chapterFileHash === intent.artifactHash,
   );
+  const receipt = loadChapterCommitReceipt(workspacePath, chapterNumber);
+  const receiptHashOk = Boolean(
+    receipt?.receiptId &&
+    receipt.artifactHash &&
+    chapterFileHash &&
+    receipt.artifactHash === chapterFileHash,
+  );
+  const receiptIntentOk = !intent || !receipt?.commitIntentId || receipt.commitIntentId === intent.commitIntentId;
+  const commitReceiptPresent = Boolean(receipt && receiptHashOk && receiptIntentOk);
+  let eventStreamVerified = false;
+  let lastEventId: string | null = null;
+  if (options.jobId) {
+    const stream = loadBatchJobEventStream(workspaceId, options.jobId, projectRoot);
+    const hint = options.lastEventIdHint ?? null;
+    const hit = hint ? stream.find((e) => e.eventId === hint) : stream.at(-1);
+    eventStreamVerified = Boolean(hit);
+    lastEventId = hit?.eventId ?? null;
+  }
   return {
     chapterNumber,
     lastEventId,
+    eventStreamVerified,
     chapterFilePresent: Boolean(chapterFile),
     chapterFileHash,
     narrativeStateAnchored: anchored,
     narrativeStateRevision,
+    narrativeStateRevisionMatches,
     commitIntentId: intent?.commitIntentId ?? null,
     commitIntentCompleted: Boolean(intent),
     commitIntentHash: intent?.artifactHash ?? null,
     hashMatchesIntent,
-    commitReceiptPresent: Boolean(intent && hashMatchesIntent),
+    commitReceiptPresent,
+    receiptId: commitReceiptPresent ? receipt?.receiptId ?? null : null,
   };
 }
 
@@ -732,9 +845,12 @@ function chapterFactsComplete(facts: ChapterCommitFacts): boolean {
   return (
     facts.chapterFilePresent &&
     facts.narrativeStateAnchored &&
+    facts.narrativeStateRevisionMatches &&
     facts.commitIntentCompleted &&
     facts.hashMatchesIntent &&
     facts.commitReceiptPresent &&
+    Boolean(facts.receiptId) &&
+    facts.eventStreamVerified &&
     Boolean(facts.lastEventId)
   );
 }
@@ -756,7 +872,7 @@ export function reconcileBatchJobAfterCrash(
       state.workspaceId,
       n,
       projectRoot,
-      state.lastEventId ?? null,
+      { jobId: state.jobId, lastEventIdHint: state.lastEventId ?? null },
     );
     facts.push(chapterFacts);
     if (chapterFactsComplete(chapterFacts)) {
