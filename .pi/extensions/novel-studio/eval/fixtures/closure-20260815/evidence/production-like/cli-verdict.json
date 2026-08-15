@@ -1,8 +1,6 @@
 {
-  "ok": false,
-  "reasons": [
-    "未分类失败 1（要求 0）"
-  ],
+  "ok": true,
+  "reasons": [],
   "grade": {
     "passed": true,
     "failedChecks": []
@@ -12,8 +10,8 @@
     "code": "EVAL_EVIDENCE_APPROVED",
     "reason": "确定性 Grader 通过（R0/R1 deterministic-only 证据完整，可进入人工审批）"
   },
-  "releaseId": "rel-prod-114",
+  "releaseId": "rel-prod-115",
   "bundleId": "a76eda83d0a231ba95b2e3e65e400e82259b980c6d7d9f38c5c75be22d2cdfc7",
   "changeClass": "R1",
-  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives\\closure-production-like-ae7d047c"
+  "runPath": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives\\closure-production-like-115b"
 }

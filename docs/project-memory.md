@@ -15,7 +15,7 @@
 - OpenAI `json_object` 需消息含字面量 `json`；中文化会吃掉该词。已在 HTTP 适配层 localize 之后注入，提交为 `02dc97c`
 - 干净树重跑：`recorded` / `synthetic` PASS（runId `closure-*-c4a2c0e`，P6 approved）；`production_like` 读到 `rel-prod-111` 后 fingerprint mismatch（`a43509f0…` vs `7b48cb05…`），零模型调用
 - 唯一 `active_prod` 仍是 **rel-prod-111**
-- **当前标记**：`rel-prod-114` 已是 active_prod（`ae7d047`，fpHash `18bdc225…`，匿名评审正反序 APPROVE_DEV）。recorded/synthetic P6 已通过。`production_like` 已越过指针/指纹门禁，但生成误锁 `nb4_generate_glm`，模型链路未跑通
+- **当前标记**：唯一 active_prod=`rel-prod-115`（`f8e0040`）。`eeaf704` 修复回放误选仓库根 invoke 脚本后，`production_like` 已走 Gemini 生产路由并 PASS（`v2_rawstage2_gemini31` + `v2_amplified_gemini31`，completed=1，isolation=0，P6 approved）
 - HOLD 根因（不得再换号重试）：112/113 评审包把 `rel-prod-111/112` 和提交号写进正文，破坏匿名；中文化后变成 `未戊丑-巳未辰丁-112`，正反序冲突。包还把「替换现行有效生产指针」和「production_like 仍 fail-closed」绑在一起问，forward 暂缓是正确结论
 - 下一未阻断工作包：Wave 3B 动态工具信任消费；Wave 3C hash/trace 单一化收口；Wave 7 旧路径删除需人工正收益决策
 - 下一审批工作包：先冻结最终源码提交，用匿名评审包（只比路径解析这一唯一变量，不声称生产等价）重新 capture/评审；获批准并切换指针后再跑 `production_like`，证据必须绑定该最终 commit。禁止对同一基线再开 `rel-prod-114`

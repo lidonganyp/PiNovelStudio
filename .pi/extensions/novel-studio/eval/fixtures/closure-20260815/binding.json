@@ -1,8 +1,9 @@
 {
-  "releaseId": "rel-prod-114",
+  "releaseId": "rel-prod-115",
   "bundleId": "a76eda83d0a231ba95b2e3e65e400e82259b980c6d7d9f38c5c75be22d2cdfc7",
-  "codeCommit": "ae7d0471a4aea15c6b8790348b7a91f3f67d780a",
-  "environmentFingerprint": "18bdc22505c346d0343b0228dc5252c9f00f0c0b48c2d6318c9d2638e0bad745",
-  "generatedAt": "2026-08-15T12:18:00.000Z",
-  "note": "代码提交 ae7d047。干净树 D:\\\\CODE\\\\pns-holdfix-ae7d047 capture/verify YES。匿名评审包正反序均为 APPROVE_DEV（reviewTransport=network），active_prod 已切换为 rel-prod-114。recorded/synthetic P6 APPROVED。production_like 已通过生产门禁与隔离（fingerprint 18bdc225 一致、isolation=0、traceRetentionRate=1），但生成调用锁到 nb4_generate_glm 并被 thinking.disabled 拒绝，CLI 因未分类失败未过。不得把本 binding 写成 production_like 模型链路已跑通。"
+  "codeCommit": "f8e0040e9135a7e23adb94bc55b3b8f91e53bbb4",
+  "evalFixCommit": "eeaf704",
+  "environmentFingerprint": "9c4229acc4a9c4936b5aace692092e094f7ca9ca11518a5f1b4d02921a93d6fb",
+  "generatedAt": "2026-08-15T13:44:22.123Z",
+  "note": "active_prod=rel-prod-115。production_like 已用 Gemini 生产路由跑通：v2_rawstage2_gemini31 + v2_amplified_gemini31，completed=1，isolation=0，traceRetentionRate=1，P6 EVAL_EVIDENCE_APPROVED。eeaf704 修复了回放误选仓库根 invoke 脚本从而锁 GLM 的问题；该修复不改变 115 的生产指纹。"
 }
