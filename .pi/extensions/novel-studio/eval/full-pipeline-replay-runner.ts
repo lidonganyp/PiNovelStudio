@@ -65,6 +65,7 @@ import {
   type AttributionSummary,
   type FailureAttributionResult,
 } from "../v2/core/eval-failure-attribution.js";
+import { evaluateProductionReleaseGate } from "../v2/governance/production-release-gate.js";
 
 // ============================================================================
 // 类型定义
@@ -144,6 +145,101 @@ export interface FullPipelineReplayRunReport {
 // 内部工具
 // ============================================================================
 
+/**
+ * EVAL-REPLAY-ACCEPTANCE-LOOP F1：fixture 生产路由 → invoke 脚本参数映射。
+ *
+ * production_like / dev_real_model 回放必须消费 fixture.provenance.modelRoute，
+ * 不得让调用脚本回退到开发缺省（GLM 锁）：
+ *  - Gemini 生产路由（v2_rawstage2_gemini31 / v2_amplified_gemini31）→ 不传
+ *    路由参数（modelTestRoute=undefined 即生产默认 Gemini 主链路）；
+ *  - Claude 显式生产路由（v2_rawstage2 / v2_amplified）→ --writer-model=claude；
+ *  - eval 锁路由（unified-entry resolveModelTestRouteLock 已知 alias）→
+ *    --model-test-route=<alias>；
+ *  - 其他 → fail-closed（未知路由不得静默回退）。
+ */
+export function resolveModelRouteInvokeArgs(
+  fixture: EvalFixtureV1,
+): { ok: true; args: string[] } | { ok: false; reason: string } {
+  const route = fixture.provenance.modelRoute;
+  if (
+    route === "v2_rawstage2_gemini31" ||
+    route === "v2_amplified_gemini31"
+  ) {
+    return { ok: true, args: [] };
+  }
+  if (route === "v2_rawstage2" || route === "v2_amplified") {
+    return { ok: true, args: ["--writer-model=claude"] };
+  }
+  const EVAL_LOCK_ROUTES = new Set([
+    "glm",
+    "doubao",
+    "gpt56",
+    "claude48",
+    "fable5",
+    "grok45",
+    "gemini31",
+    "deepseek",
+  ]);
+  if (EVAL_LOCK_ROUTES.has(route)) {
+    return { ok: true, args: [`--model-test-route=${route}`] };
+  }
+  return {
+    ok: false,
+    reason: `fixture ${fixture.fixtureId} 声明未知生产路由 modelRoute="${route}"；已知：v2_rawstage2_gemini31 / v2_amplified_gemini31 / v2_rawstage2 / v2_amplified / eval 锁路由（${[...EVAL_LOCK_ROUTES].join("|")}）`,
+  };
+}
+
+/**
+ * EVAL-REPLAY-ACCEPTANCE-LOOP F1：production_like 的生产 release gate 前置验证。
+ *
+ * 在 Runner 层以主仓真实治理状态（active_prod pointer + manifest + 审批 +
+ * 环境指纹）evaluateProductionReleaseGate，并要求 gate 通过且 active release
+ * 与 fixture provenance 同源（releaseId 一致 + bundleId 一致）。
+ *
+ * 子进程 PINOVEL_DEV_MODE=1 bypass 仅因 scratch 隔离根没有主仓治理面
+ * （在 scratch 内伪造治理数据不可接受）；生产等价性由本前置检查承担，
+ * 证据以 isolation violation / failure envelope 形式进入 run manifest。
+ */
+export function verifyProductionLikeReleaseGate(
+  projectRoot: string,
+  fixture: EvalFixtureV1,
+): { ok: true; releaseId: string; bundleId: string | null } | { ok: false; reason: string } {
+  const savedDevMode = process.env.PINOVEL_DEV_MODE;
+  delete process.env.PINOVEL_DEV_MODE;
+  try {
+    const gate = evaluateProductionReleaseGate({ projectRoot });
+    if (!gate.ok) {
+      return {
+        ok: false,
+        reason: `主仓 production release gate 阻断：${gate.failureEnvelope?.reason ?? "unknown"}`,
+      };
+    }
+    if (gate.releaseId !== fixture.provenance.releaseId) {
+      return {
+        ok: false,
+        reason: `active_prod release=${gate.releaseId} 与 fixture provenance releaseId=${fixture.provenance.releaseId} 不匹配（production_like 回放只能回放当前 active 生产 release）`,
+      };
+    }
+    const gateBundleId = gate.manifest?.bundleId ?? null;
+    const fixtureBundleId = fixture.provenance.bundleId ?? null;
+    if (
+      gateBundleId !== null &&
+      fixtureBundleId !== null &&
+      gateBundleId !== fixtureBundleId
+    ) {
+      return {
+        ok: false,
+        reason: `active_prod bundleId=${gateBundleId} 与 fixture provenance bundleId=${fixtureBundleId} 不匹配（行为身份漂移，需重新采集 fixture）`,
+      };
+    }
+    return { ok: true, releaseId: gate.releaseId, bundleId: gateBundleId };
+  } finally {
+    if (savedDevMode !== undefined) {
+      process.env.PINOVEL_DEV_MODE = savedDevMode;
+    }
+  }
+}
+
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(value, null, 2), "utf-8");
@@ -194,6 +290,13 @@ function materializeWorkspace(
   if (fixture.workspace.skeleton) {
     writeJson(join(seriesPath, "skeleton.json"), fixture.workspace.skeleton);
   }
+  // 风格档案物化：统一主链路 preflight 要求 styles/profile.json 存在
+  //（模型调用前 hard block），回放快照内联档案物化到 scratch workspace。
+  if (fixture.workspace.styleProfile) {
+    const stylesDir = join(workspacePath, "styles");
+    mkdirSync(stylesDir, { recursive: true });
+    writeJson(join(stylesDir, "profile.json"), fixture.workspace.styleProfile);
+  }
   writeJson(
     join(seriesPath, "narrative-state.json"),
     fixture.priorNarrativeState ?? {
@@ -205,6 +308,16 @@ function materializeWorkspace(
       createdAt: new Date().toISOString(),
     },
   );
+
+  // F4-2：冻结 ChapterSeed 物化。loadChapterSeed 优先消费 series/chapter-seed-frozen.json
+  //（身份匹配时原样返回，仅重写 workspaceId），保证回放种子确定性；
+  // 缺省时回退 buildChapterSeed 推导路径（非冻结回放）。
+  if (fixture.chapterSeed.frozenFullSeed) {
+    writeJson(
+      join(seriesPath, "chapter-seed-frozen.json"),
+      fixture.chapterSeed.frozenFullSeed,
+    );
+  }
 
   for (const chapter of fixture.workspace.historicalChapters) {
     const chapterDir = join(chaptersPath, `chapter-${chapter.chapterId}`);
@@ -543,6 +656,105 @@ export async function runFullPipelineReplay(
       continue;
     }
 
+    // EVAL-REPLAY-ACCEPTANCE-LOOP F1：真实模型回放必须消费 fixture 声明的
+    // modelRoute（fail-closed：未知路由不得静默回退到开发缺省 GLM 锁）。
+    const isRealModelReplay =
+      fixture.replayMode === "dev_real_model" || fixture.replayMode === "production_like";
+    let modelRouteArgs: string[] = [];
+    if (isRealModelReplay) {
+      const routeArgs = resolveModelRouteInvokeArgs(fixture);
+      if (!routeArgs.ok) {
+        const gateViolation: IsolationViolation = {
+          kind: "model_route_unresolved",
+          detail: routeArgs.reason,
+        };
+        const attribution = classifyFailureAttribution({
+          stage: "replay-isolation",
+          gate: "model_route_resolution",
+          reason: routeArgs.reason,
+          perspective: "replay",
+        });
+        const entry: ReplayRunSampleEntry = {
+          fixtureId: fixture.fixtureId,
+          fixtureHash,
+          replayMode: fixture.replayMode,
+          scratchWorkspaceId: "(not-created)",
+          status: "skipped_isolation_violation",
+          failureAttribution: attribution.attribution,
+          failureEnvelopes: [
+            {
+              stage: "replay-isolation",
+              gate: "model_route_resolution",
+              severity: "preflight",
+              reason: routeArgs.reason,
+            },
+          ],
+          traceArchived: false,
+          traceArchivePath: null,
+          isolationViolations: [gateViolation],
+          modelCalls: 0,
+          durationMs: 0,
+        };
+        samples.push({
+          entry,
+          sampleArchivePath: null,
+          attribution,
+          invoke: null,
+          isolationViolations: [gateViolation],
+        });
+        continue;
+      }
+      modelRouteArgs = routeArgs.args;
+    }
+
+    // EVAL-REPLAY-ACCEPTANCE-LOOP F1：production_like 必须先通过主仓真实
+    // production release gate（active_prod + 审批 + 环境指纹 + 行为身份），
+    // 且 active release 与 fixture provenance 同源；失败 → fail-closed 跳过。
+    if (fixture.replayMode === "production_like") {
+      const gateCheck = verifyProductionLikeReleaseGate(projectRoot, fixture);
+      if (!gateCheck.ok) {
+        const gateViolation: IsolationViolation = {
+          kind: "production_release_gate_mismatch",
+          detail: gateCheck.reason,
+        };
+        const attribution = classifyFailureAttribution({
+          stage: "replay-isolation",
+          gate: "production_release_gate",
+          reason: gateCheck.reason,
+          perspective: "replay",
+        });
+        const entry: ReplayRunSampleEntry = {
+          fixtureId: fixture.fixtureId,
+          fixtureHash,
+          replayMode: fixture.replayMode,
+          scratchWorkspaceId: "(not-created)",
+          status: "skipped_isolation_violation",
+          failureAttribution: attribution.attribution,
+          failureEnvelopes: [
+            {
+              stage: "replay-isolation",
+              gate: "production_release_gate",
+              severity: "preflight",
+              reason: gateCheck.reason,
+            },
+          ],
+          traceArchived: false,
+          traceArchivePath: null,
+          isolationViolations: [gateViolation],
+          modelCalls: 0,
+          durationMs: 0,
+        };
+        samples.push({
+          entry,
+          sampleArchivePath: null,
+          attribution,
+          invoke: null,
+          isolationViolations: [gateViolation],
+        });
+        continue;
+      }
+    }
+
     // scratch 创建 + 项目骨架物化 + workspace 物化
     const lease = createScratchWorkspace({
       projectRoot,
@@ -552,12 +764,28 @@ export async function runFullPipelineReplay(
     const isRealModel = fixture.replayMode === "dev_real_model" || fixture.replayMode === "production_like";
     materializeScratchProjectSkeleton(lease.scratchRoot, {
       projectRoot,
-      copyModelRouting: isRealModel,
+      // 模型路由配置在所有回放模式都必须存在：统一主链路的路由解析发生在
+      // 传输替换之前，stub/recorded/synthetic 模式若缺 config/model-routing.json
+      // 会在第一次路由解析处 fatal（pipeline_exception）。路由配置不含 API
+      // 凭据，可安全进入 scratch；.env 仍仅真实模型模式复制。
+      copyModelRouting: true,
       copyDotEnv: isRealModel,
     });
     const materializeResult = materializeWorkspace(lease, fixture);
 
     const invokeEnv = buildReplayIsolationEnv(fixture, process.env, lease.scratchRoot);
+    // F4-4：确定性回放传输 env 接线。recorded 结果 / synthetic 故障计划物化到
+    // scratch 隔离根（不进主仓），unified-entry 按 PINOVEL_EVAL_REPLAY_TRANSPORT
+    // 声明 fail-closed 消费（传输 env 丢失 -> 抛错，不静默回退 stub/网络）。
+    if (fixture.replayMode === "recorded") {
+      const recordedResultsPath = join(lease.scratchRoot, "eval-recorded-results.json");
+      writeJson(recordedResultsPath, fixture.recordedToolResults ?? []);
+      invokeEnv.PINOVEL_EVAL_RECORDED_RESULTS_PATH = recordedResultsPath;
+    } else if (fixture.replayMode === "synthetic") {
+      const syntheticFaultsPath = join(lease.scratchRoot, "eval-synthetic-faults.json");
+      writeJson(syntheticFaultsPath, fixture.syntheticFaultPlan ?? []);
+      invokeEnv.PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH = syntheticFaultsPath;
+    }
     const mockAgent =
       options.mockAgent ?? (fixture.replayMode === "stub" || fixture.replayMode === "synthetic");
     const resultPath = join(
@@ -576,6 +804,9 @@ export async function runFullPipelineReplay(
         String(fixture.chapterSeed.chapterNumber),
         ...(mockAgent ? ["mock"] : []),
         `--project-root=${lease.scratchRoot}`,
+        // F1：真实模型回放显式消费 fixture 声明的生产路由（Gemini 生产默认
+        // → 无参数；Claude 显式 → --writer-model；eval 锁 → --model-test-route）。
+        ...modelRouteArgs,
       ],
       cwd: projectRoot,
       workspaceId: lease.workspaceId,

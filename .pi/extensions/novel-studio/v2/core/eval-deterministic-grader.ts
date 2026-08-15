@@ -107,6 +107,85 @@ function sha256(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
+/** F3 fail-closed：损坏 manifest 的 runId 安全提取（不得因取值抛错）。 */
+function safeRunIdOf(manifest: unknown): string {
+  if (typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)) {
+    const runId = (manifest as Record<string, unknown>).runId;
+    if (typeof runId === "string" && runId.trim().length > 0) {
+      return runId;
+    }
+  }
+  return "(invalid-manifest)";
+}
+
+/**
+ * F3 fail-closed：致命 manifest 形状检测。
+ *
+ * 损坏 manifest（如 samples: null / summary 缺失 / 样本条目非对象）必须
+ * 返回结构化失败报告，不得在后续检查中抛 TypeError。
+ * 返回 null 表示形状可安全枚举（语义问题仍由各 check 报告）。
+ */
+function fatalManifestShapeReason(
+  manifest: unknown,
+  options: { requireRunRootField?: boolean } = {},
+): string | null {
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+    return "manifest 不是 JSON 对象";
+  }
+  const m = manifest as Record<string, unknown>;
+  if (!Array.isArray(m.samples)) {
+    return "/samples 必须为数组（当前无法枚举样本）";
+  }
+  for (const field of ["runId", "releaseId", "bundleId"] as const) {
+    if (typeof m[field] !== "string" || (m[field] as string).trim().length === 0) {
+      return `manifest 缺少必要字段 ${field}`;
+    }
+  }
+  if (options.requireRunRootField === true && typeof m.runRoot !== "string") {
+    return "manifest 缺少 runRoot 字符串字段（未显式传入 runRoot 时必须存在）";
+  }
+  if (
+    typeof m.summary !== "object" ||
+    m.summary === null ||
+    Array.isArray(m.summary) ||
+    typeof (m.summary as Record<string, unknown>).isolationViolationCount !== "number"
+  ) {
+    return "manifest.summary 缺失或 isolationViolationCount 非数字";
+  }
+  for (const entry of m.samples) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return "manifest.samples 包含非对象条目";
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e.fixtureId !== "string" || e.fixtureId.trim().length === 0) {
+      return "manifest.samples 条目缺少 fixtureId";
+    }
+    if (!Array.isArray(e.isolationViolations) || !Array.isArray(e.failureEnvelopes)) {
+      return `样本 ${e.fixtureId} 缺少 isolationViolations/failureEnvelopes 数组`;
+    }
+  }
+  return null;
+}
+
+/** F3 fail-closed：致命形状 → 仅含 manifest_schema 的结构化失败报告。 */
+function buildFatalShapeReport(runId: string, reason: string): DeterministicGradeReport {
+  return {
+    schemaId: "pinovel.eval-deterministic-grade",
+    schemaVersion: 1,
+    runId,
+    gradedAt: new Date().toISOString(),
+    checks: [
+      {
+        name: "manifest_schema",
+        passed: false,
+        violations: [{ detail: `manifest 形状损坏（fail-closed）：${reason}` }],
+      },
+    ],
+    passed: false,
+    failedChecks: ["manifest_schema"],
+  };
+}
+
 // ============================================================================
 // 主入口
 // ============================================================================
@@ -121,6 +200,14 @@ export function gradeDeterministic(
   manifest: ReplayRunManifestV1,
   runRoot?: string,
 ): DeterministicGradeReport {
+  // F3 fail-closed：损坏 manifest（形状不可枚举）→ 结构化失败，不抛 TypeError。
+  const fatalReason = fatalManifestShapeReason(
+    manifest,
+    { requireRunRootField: runRoot === undefined },
+  );
+  if (fatalReason !== null) {
+    return buildFatalShapeReport(safeRunIdOf(manifest), fatalReason);
+  }
   const root = runRoot ?? manifest.runRoot;
   const checks: GraderCheck[] = [];
 
@@ -349,7 +436,7 @@ export function gradeDeterministic(
   };
 }
 
-/** 便捷入口：从归档根读取 manifest.json 并评分。 */
+/** 便捷入口：从归档根读取 manifest.json 并评分（F3：损坏内容 fail-closed）。 */
 export function gradeDeterministicFromRunRoot(runRoot: string): DeterministicGradeReport {
   const manifestRaw = readJsonFile(join(runRoot, "manifest.json"));
   if (manifestRaw === null) {
@@ -368,6 +455,11 @@ export function gradeDeterministicFromRunRoot(runRoot: string): DeterministicGra
       passed: false,
       failedChecks: ["manifest_schema"],
     };
+  }
+  // F3：先做致命形状检测，损坏 manifest 直接结构化失败（不抛 TypeError）。
+  const fatalReason = fatalManifestShapeReason(manifestRaw);
+  if (fatalReason !== null) {
+    return buildFatalShapeReport(safeRunIdOf(manifestRaw), fatalReason);
   }
   const manifest = manifestRaw as unknown as ReplayRunManifestV1;
   return gradeDeterministic(manifest, runRoot);

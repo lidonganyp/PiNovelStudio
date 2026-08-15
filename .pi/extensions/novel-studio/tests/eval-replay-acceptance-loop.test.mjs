@@ -6,7 +6,8 @@
  *  - P1 eval-replay-isolation：隔离字段 fail-closed、scratch 生命周期、生产面污染检测；
  *  - P4 eval-failure-attribution：确定性归因、未分类检测、稳定性；
  *  - P3 eval-replay-matrix：pass@k / pass^k、四臂完整性、verdict 规则；
- *  - P5 eval-deterministic-grader：合成 runRoot 评分（全过 / 违规检出）。
+ *  - P5 eval-deterministic-grader：合成 runRoot 评分（全过 / 违规检出）；
+ *  - F4 recorded/synthetic 传输适配器 + 冻结 ChapterSeed 注入 + 隔离 env 传输标记。
  *
  * 运行方式：
  *   node --import ./tests/setup-test-env.mjs --test tests/eval-replay-acceptance-loop.test.mjs
@@ -14,6 +15,7 @@
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import {
   existsSync,
@@ -42,6 +44,12 @@ const matrix = await import(
 );
 const grader = await import(
   `file://${join(evalDist, "v2", "core", "eval-deterministic-grader.js")}`
+);
+const modelAdapter = await import(
+  `file://${join(evalDist, "v2", "adapters", "legacy-model-route-adapter.js")}`
+);
+const workspaceAdapter = await import(
+  `file://${join(evalDist, "v2", "adapters", "legacy-workspace-adapter.js")}`
 );
 
 // ============================================================================
@@ -385,7 +393,9 @@ describe("P1 eval-replay-isolation：scratch workspace 与生产面", () => {
       fixture,
       scratchParentDir: join(tmpRoot, "scratch"),
     });
-    assert.match(lease.workspaceId, /^eval-stub-fixture\.smoke-001-run-/);
+    // sanitizeScratchToken 白名单与工具侧 workspaceId 校验对齐（禁 "."）：
+    // fixture.smoke-001 -> eval-stub-fixture-smoke-001-run-xxx
+    assert.match(lease.workspaceId, /^eval-stub-fixture-smoke-001-run-/);
     assert.ok(existsSync(lease.markerPath), "scratch marker 必须存在");
     assert.ok(lease.workspacePath.startsWith(lease.scratchRoot));
 
@@ -592,17 +602,17 @@ describe("P3 eval-replay-matrix：pass@k / pass^k 计算", () => {
 describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
   const buildArm = (armId, overrides = {}) => ({
     armId,
+    runId: `run-${armId}`,
     sampleCount: 3,
     perSamplePass: [true, true, true],
     factHardErrors: 0,
-    unclassifiedFailures: 0,
-    avgCoverage: 0.9,
-    avgCompleteness: 0.9,
-    continuityViolations: 0,
-    avgUserEditDistance: 0.1,
+    failureClassificationCompleteness: 1,
+    coverage: 0.9,
+    completeness: 0.9,
+    continuity: 0.95,
+    userEditDistance: 0.1,
     modelCalls: 30,
-    totalTokens: 90_000,
-    totalCostUsd: 1.2,
+    tokenCost: 90_000,
     firstAttemptSuccessRate: 1,
     recoveredSuccessRate: 1,
     p50LatencyMs: 5_000,
@@ -611,16 +621,18 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
     ...overrides,
   });
 
+  const buildFourArms = (overrides = {}) => [
+    buildArm("baseline", overrides.baseline),
+    buildArm("candidate", overrides.candidate),
+    buildArm("raw_direct", overrides.raw_direct),
+    buildArm("recovery", overrides.recovery),
+  ];
+
   it("四臂缺失检测", () => {
     const missing = matrix.validateMatrixArmCompleteness([buildArm("baseline")]);
     assert.equal(missing.complete, false);
     assert.deepEqual(missing.missing, ["candidate", "raw_direct", "recovery"]);
-    const full = matrix.validateMatrixArmCompleteness([
-      buildArm("baseline"),
-      buildArm("candidate"),
-      buildArm("raw_direct"),
-      buildArm("recovery"),
-    ]);
+    const full = matrix.validateMatrixArmCompleteness(buildFourArms());
     assert.equal(full.complete, true);
   });
 
@@ -629,7 +641,7 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
       candidateReleaseId: "rel-prod-110",
       candidateBundleId: "bundle-b",
       baselineReleaseId: "rel-prod-109",
-      arms: [buildArm("baseline"), buildArm("candidate")],
+      arms: buildFourArms(),
       zeroTolerance: {
         ...matrix.EMPTY_ZERO_TOLERANCE,
         statePollution: 1,
@@ -644,36 +656,114 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
       candidateReleaseId: "rel-prod-110",
       candidateBundleId: "bundle-b",
       baselineReleaseId: "rel-prod-109",
-      arms: [buildArm("baseline")],
+      arms: [buildArm("baseline"), buildArm("raw_direct"), buildArm("recovery")],
     });
     assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("candidate")));
   });
 
-  it("candidate 成功率退化超阈值 → reject；正常 → pass", () => {
+  it("F2：四臂不完整（仅 baseline + candidate）→ reject（不再放行）", () => {
+    const report = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: [buildArm("baseline"), buildArm("candidate")],
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("四臂不完整")));
+    assert.ok(report.verdictReasons.some((r) => r.includes("raw_direct")));
+  });
+
+  it("F2：四臂齐全但 candidate pass^3 < 1 → reject", () => {
+    const report = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({ candidate: { perSamplePass: [true, false, true] } }),
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("pass^3")));
+    assert.equal(report.candidatePassAt3, 1); // 能力估计仍记录
+    assert.equal(report.candidatePassPow3, 0); // 连续组未全过
+  });
+
+  it("F2：candidate 样本不足（pass^3 = null）→ reject", () => {
+    const report = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({
+        candidate: { sampleCount: 2, perSamplePass: [true, true] },
+      }),
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("样本不足")));
+  });
+
+  it("F2：任意臂 factHardErrors > 0 → reject", () => {
+    const report = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({ recovery: { factHardErrors: 2 } }),
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("事实硬错")));
+  });
+
+  it("F2：任意臂失败分类完整率 < 1 → reject", () => {
+    const report = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({
+        candidate: { failureClassificationCompleteness: 0.8 },
+      }),
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("未分类失败")));
+  });
+
+  it("F2：任意臂 coverage/completeness/continuity 低于阈值 → reject", () => {
+    const lowCoverage = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({ baseline: { coverage: 0.5 } }),
+    });
+    assert.equal(lowCoverage.verdict, "reject");
+    assert.ok(lowCoverage.verdictReasons.some((r) => r.includes("coverage")));
+
+    const lowContinuity = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({ candidate: { continuity: 0.3 } }),
+    });
+    assert.equal(lowContinuity.verdict, "reject");
+    assert.ok(lowContinuity.verdictReasons.some((r) => r.includes("continuity")));
+  });
+
+  it("candidate 成功率退化超阈值 → reject；四臂全过 + pass^3=1 → pass", () => {
     const degraded = matrix.compareMatrixArms({
       candidateReleaseId: "rel-prod-110",
       candidateBundleId: "bundle-b",
       baselineReleaseId: "rel-prod-109",
-      arms: [
-        buildArm("baseline", { firstAttemptSuccessRate: 1 }),
-        buildArm("candidate", { firstAttemptSuccessRate: 0.7 }),
-      ],
+      arms: buildFourArms({ candidate: { firstAttemptSuccessRate: 0.7 } }),
       maxSuccessRateRegression: 0,
     });
     assert.equal(degraded.verdict, "reject");
+    assert.ok(degraded.verdictReasons.some((r) => r.includes("首次成功率退化")));
 
     const ok = matrix.compareMatrixArms({
       candidateReleaseId: "rel-prod-110",
       candidateBundleId: "bundle-b",
       baselineReleaseId: "rel-prod-109",
-      arms: [
-        buildArm("baseline"),
-        buildArm("candidate", { perSamplePass: [true, false, true] }),
-      ],
+      arms: buildFourArms(),
     });
     assert.equal(ok.verdict, "pass");
-    assert.equal(ok.candidatePassAt3, 1); // n=3,k=3,c=2 → 1（任一组合含通过）
-    assert.equal(ok.candidatePassPow3, 0); // 连续组未全过
+    assert.deepEqual(ok.verdictReasons, []);
+    assert.equal(ok.candidatePassPow3, 1);
   });
 
   it("人工盲评只存档、不影响 verdict", () => {
@@ -681,7 +771,7 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
       candidateReleaseId: "rel-prod-110",
       candidateBundleId: "bundle-b",
       baselineReleaseId: "rel-prod-109",
-      arms: [buildArm("baseline"), buildArm("candidate")],
+      arms: buildFourArms(),
       humanBlindPreference: {
         blindPackId: "blind-001",
         totalVotes: 10,
@@ -831,5 +921,493 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
     );
     assert.equal(report.passed, false);
     assert.equal(report.runId, "(missing-manifest)");
+  });
+
+  it("F3：samples: null 的损坏 manifest → 结构化失败（不抛 TypeError）", () => {
+    const fixture = buildValidFixture({ fixtureId: "fixture.corrupt-003" });
+    const corrupt = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-corrupt-003",
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "stub",
+      releaseId: fixture.provenance.releaseId,
+      bundleId: fixture.provenance.bundleId,
+      runRoot: tmpRun,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      finishedAt: "2026-08-15T00:01:00.000Z",
+      samples: null,
+      summary: null,
+    };
+    let report;
+    assert.doesNotThrow(() => {
+      report = grader.gradeDeterministic(corrupt, tmpRun);
+    });
+    assert.equal(report.passed, false);
+    assert.equal(report.runId, "run-corrupt-003");
+    assert.deepEqual(report.failedChecks, ["manifest_schema"]);
+    assert.ok(
+      report.checks[0].violations[0].detail.includes("samples"),
+      `违规明细应指向 samples：${report.checks[0].violations[0].detail}`,
+    );
+  });
+
+  it("F3：非对象 manifest 与 summary 缺失 → 结构化失败（不抛 TypeError）", () => {
+    let notObject;
+    assert.doesNotThrow(() => {
+      notObject = grader.gradeDeterministic("not-an-object");
+    });
+    assert.equal(notObject.passed, false);
+    assert.equal(notObject.runId, "(invalid-manifest)");
+    assert.deepEqual(notObject.failedChecks, ["manifest_schema"]);
+
+    let nullManifest;
+    assert.doesNotThrow(() => {
+      nullManifest = grader.gradeDeterministic(null, tmpRun);
+    });
+    assert.equal(nullManifest.passed, false);
+    assert.deepEqual(nullManifest.failedChecks, ["manifest_schema"]);
+
+    // runRoot 未显式传入且 manifest 无 runRoot 字段 → fail-closed
+    const noRunRoot = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-corrupt-004",
+      releaseId: "rel-x",
+      bundleId: "bundle-x",
+      samples: [],
+      summary: { isolationViolationCount: 0 },
+    };
+    let missingRunRoot;
+    assert.doesNotThrow(() => {
+      missingRunRoot = grader.gradeDeterministic(noRunRoot);
+    });
+    assert.equal(missingRunRoot.passed, false);
+    assert.ok(missingRunRoot.checks[0].violations[0].detail.includes("runRoot"));
+  });
+
+  it("F3：gradeDeterministicFromRunRoot 读取损坏 manifest.json → 结构化失败", () => {
+    const corruptRoot = join(tmpRun, "corrupt-run-root");
+    mkdirSync(corruptRoot, { recursive: true });
+    writeFileSync(
+      join(corruptRoot, "manifest.json"),
+      JSON.stringify({ runId: "run-corrupt-005", samples: null, summary: null }),
+    );
+    let report;
+    assert.doesNotThrow(() => {
+      report = grader.gradeDeterministicFromRunRoot(corruptRoot);
+    });
+    assert.equal(report.passed, false);
+    assert.equal(report.runId, "run-corrupt-005");
+    assert.deepEqual(report.failedChecks, ["manifest_schema"]);
+  });
+});
+
+// ============================================================================
+// F4：recorded/synthetic 回放传输 + 冻结 ChapterSeed 注入（离线回放闭环）
+// ============================================================================
+
+describe("F4-1 契约：frozenFullSeed / syntheticFaultPlan / recorded 模式强制", () => {
+  it("合法 recorded fixture（含 response + 匹配 responseHash）通过校验", () => {
+    // canonical 形式：扁平对象键已按字母序（model < text），JSON.stringify 即 canonical 串
+    const canonical = '{"model":"test-model","text":"预录正文内容"}';
+    const responseHash = createHash("sha256").update(canonical, "utf-8").digest("hex");
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        replayMode: "recorded",
+        recordedToolResults: [
+          {
+            toolName: "novel_generate_chapter",
+            responseHash,
+            response: { model: "test-model", text: "预录正文内容" },
+          },
+        ],
+      }),
+    );
+    assert.equal(result.valid, true, `errors: ${JSON.stringify(result.errors)}`);
+  });
+
+  it("recorded 模式缺 recordedToolResults -> recorded_mode_requires_responses", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({ replayMode: "recorded" }),
+    );
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((e) => e.rule === "recorded_mode_requires_responses"));
+  });
+
+  it("recorded 模式 hash-only 条目（无 response）-> recorded_response_payload_required", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        replayMode: "recorded",
+        recordedToolResults: [
+          { toolName: "novel_generate_chapter", responseHash: HEX64("hashonly") },
+        ],
+      }),
+    );
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((e) => e.rule === "recorded_response_payload_required"));
+  });
+
+  it("stub 模式携带 syntheticFaultPlan -> synthetic_plan_mode_mismatch", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({ syntheticFaultPlan: [{ fault: "timeout", atCall: 1 }] }),
+    );
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((e) => e.rule === "synthetic_plan_mode_mismatch"));
+  });
+
+  it("合法 synthetic fixture 通过校验", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        replayMode: "synthetic",
+        syntheticFaultPlan: [
+          { fault: "schema_error", atCall: 2, message: "第二次调用注入截断 JSON" },
+        ],
+      }),
+    );
+    assert.equal(result.valid, true, `errors: ${JSON.stringify(result.errors)}`);
+  });
+
+  it("synthetic 非法 fault 种类 -> invalid_fault_kind", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        replayMode: "synthetic",
+        syntheticFaultPlan: [{ fault: "nuclear_meltdown" }],
+      }),
+    );
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((e) => e.rule === "invalid_fault_kind"));
+  });
+
+  it("synthetic atCall=0 -> invalid（必须为 >=1 整数）", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        replayMode: "synthetic",
+        syntheticFaultPlan: [{ fault: "timeout", atCall: 0 }],
+      }),
+    );
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.errors.some(
+        (e) => e.field === "/syntheticFaultPlan/0/atCall" && e.rule === "invalid",
+      ),
+    );
+  });
+
+  it("frozenFullSeed chapterId 身份不匹配 -> identity_mismatch", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        chapterSeed: {
+          chapterNumber: 2,
+          chapterId: "chapter-002",
+          chapterTitle: "第二章",
+          intent: { chapterFunction: "escalation" },
+          seedSource: "series/outline",
+          frozenFullSeed: {
+            workspaceId: "ws-src",
+            chapterNumber: 2,
+            chapterId: "chapter-999",
+            intent: { chapterFunction: "escalation" },
+            seedSource: "frozen",
+          },
+        },
+      }),
+    );
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.errors.some(
+        (e) => e.rule === "identity_mismatch" && e.field.includes("frozenFullSeed"),
+      ),
+    );
+  });
+
+  it("frozenFullSeed 非对象 -> invalid", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        chapterSeed: {
+          chapterNumber: 2,
+          chapterId: "chapter-002",
+          chapterTitle: "第二章",
+          intent: { chapterFunction: "escalation" },
+          seedSource: "series/outline",
+          frozenFullSeed: "not-an-object",
+        },
+      }),
+    );
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.errors.some((e) => e.field === "/chapterSeed/frozenFullSeed" && e.rule === "invalid"),
+    );
+  });
+
+  it("合法 frozenFullSeed（身份一致）通过校验", () => {
+    const result = fixtureContract.validateEvalFixtureV1(
+      buildValidFixture({
+        chapterSeed: {
+          chapterNumber: 2,
+          chapterId: "chapter-002",
+          chapterTitle: "第二章",
+          intent: { chapterFunction: "escalation" },
+          seedSource: "series/outline",
+          frozenFullSeed: {
+            workspaceId: "ws-src",
+            chapterNumber: 2,
+            chapterId: "chapter-002",
+            intent: { chapterFunction: "escalation" },
+            seedSource: "frozen",
+          },
+        },
+      }),
+    );
+    assert.equal(result.valid, true, `errors: ${JSON.stringify(result.errors)}`);
+  });
+});
+
+describe("F4-3 传输适配器：recorded / synthetic fail-closed 行为", () => {
+  const MODEL_INPUT = {
+    route: "v2_rawstage2_gemini31",
+    kind: "raw_chapter",
+    timeoutMs: 30_000,
+  };
+  const recordedResponse = { model: "test-model", text: "预录正文内容" };
+  const recordedCanonical = '{"model":"test-model","text":"预录正文内容"}';
+  const recordedHash = createHash("sha256").update(recordedCanonical, "utf-8").digest("hex");
+
+  it("recorded：合法条目按预录 payload 回放（hash 一致 + text 原样）", async () => {
+    const fn = modelAdapter.createRecordedModelGenerateFn([
+      {
+        toolName: "novel_generate_chapter",
+        responseHash: recordedHash,
+        response: recordedResponse,
+      },
+    ]);
+    const out = await fn(MODEL_INPUT);
+    assert.equal(out.text, "预录正文内容");
+    assert.equal(out.model, "test-model");
+    assert.equal(out.route, "v2_rawstage2_gemini31");
+  });
+
+  it("recorded：responseHash 不一致 -> 抛错拒绝回放", async () => {
+    const fn = modelAdapter.createRecordedModelGenerateFn([
+      {
+        toolName: "novel_generate_chapter",
+        responseHash: "a".repeat(64),
+        response: recordedResponse,
+      },
+    ]);
+    await assert.rejects(() => fn(MODEL_INPUT), /responseHash 不一致/);
+  });
+
+  it("recorded：预录序列耗尽 -> 抛错（不静默回退 stub/网络）", async () => {
+    const fn = modelAdapter.createRecordedModelGenerateFn([]);
+    await assert.rejects(() => fn(MODEL_INPUT), /预录序列耗尽/);
+  });
+
+  it("recorded：条目缺 response -> 抛错", async () => {
+    const fn = modelAdapter.createRecordedModelGenerateFn([{ responseHash: recordedHash }]);
+    await assert.rejects(() => fn(MODEL_INPUT), /response 必须为对象/);
+  });
+
+  it("synthetic：schema_error -> 截断 JSON 文本（可触发 parser retry）", async () => {
+    const fn = modelAdapter.createSyntheticModelGenerateFn([{ fault: "schema_error" }]);
+    const out = await fn(MODEL_INPUT);
+    assert.ok(out.text.startsWith("{"), "schema_error 文本应为 JSON 开头");
+    assert.ok(!out.text.endsWith("}"), "schema_error 文本应为截断 JSON");
+  });
+
+  it("synthetic：empty_output -> 空文本", async () => {
+    const fn = modelAdapter.createSyntheticModelGenerateFn([{ fault: "empty_output" }]);
+    const out = await fn(MODEL_INPUT);
+    assert.equal(out.text, "");
+  });
+
+  it("synthetic：timeout -> 立即 reject（不等待真实超时）", async () => {
+    const fn = modelAdapter.createSyntheticModelGenerateFn([{ fault: "timeout" }]);
+    await assert.rejects(() => fn(MODEL_INPUT), /超时/);
+  });
+
+  it("synthetic：provider_error -> reject 含 429 证据", async () => {
+    const fn = modelAdapter.createSyntheticModelGenerateFn([{ fault: "provider_error" }]);
+    await assert.rejects(() => fn(MODEL_INPUT), /429/);
+  });
+
+  it("synthetic：atCall=2 定点注入（第 1 次正常 stub，第 2 次故障）", async () => {
+    const fn = modelAdapter.createSyntheticModelGenerateFn([{ fault: "empty_output", atCall: 2 }]);
+    const first = await fn(MODEL_INPUT);
+    assert.ok(typeof first.text === "string" && first.text.length > 0, "第 1 次调用应正常");
+    const second = await fn(MODEL_INPUT);
+    assert.equal(second.text, "", "第 2 次调用应注入 empty_output");
+  });
+
+  it("synthetic：未知 fault 种类 -> 构造即抛", () => {
+    assert.throws(
+      () => modelAdapter.createSyntheticModelGenerateFn([{ fault: "no_such_fault" }]),
+      /未知 fault 种类/,
+    );
+  });
+
+  it("loadRecordedEntriesFromPath：不存在 / 非法 JSON / 空数组 -> fail-closed", () => {
+    const tmpDir = join(__dirname, ".tmp-f4-transport");
+    rmSync(tmpDir, { recursive: true, force: true });
+    mkdirSync(tmpDir, { recursive: true });
+    try {
+      assert.throws(
+        () => modelAdapter.loadRecordedEntriesFromPath(join(tmpDir, "missing.json")),
+        /无法读取/,
+      );
+      const badJsonPath = join(tmpDir, "bad.json");
+      writeFileSync(badJsonPath, "not-json");
+      assert.throws(
+        () => modelAdapter.loadRecordedEntriesFromPath(badJsonPath),
+        /不是合法 JSON/,
+      );
+      const emptyPath = join(tmpDir, "empty.json");
+      writeFileSync(emptyPath, "[]");
+      assert.throws(
+        () => modelAdapter.loadRecordedEntriesFromPath(emptyPath),
+        /必须是非空数组/,
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createEvalReplayModelGenerateFnFromEnv：无传输 env -> null；recorded/synthetic env -> 对应传输", async () => {
+    const saved = { ...process.env };
+    const TRANSPORT_ENV_KEYS = [
+      "PINOVEL_EVAL_RECORDED_RESULTS_PATH",
+      "PINOVEL_EVAL_SYNTHETIC_FAULTS",
+      "PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH",
+    ];
+    for (const key of TRANSPORT_ENV_KEYS) delete process.env[key];
+    try {
+      assert.equal(modelAdapter.createEvalReplayModelGenerateFnFromEnv(), null);
+
+      const tmpDir = join(__dirname, ".tmp-f4-env");
+      rmSync(tmpDir, { recursive: true, force: true });
+      mkdirSync(tmpDir, { recursive: true });
+      try {
+        const resultsPath = join(tmpDir, "results.json");
+        writeFileSync(
+          resultsPath,
+          JSON.stringify([
+            {
+              toolName: "novel_generate_chapter",
+              responseHash: recordedHash,
+              response: recordedResponse,
+            },
+          ]),
+        );
+        process.env.PINOVEL_EVAL_RECORDED_RESULTS_PATH = resultsPath;
+        const recordedFn = modelAdapter.createEvalReplayModelGenerateFnFromEnv();
+        assert.ok(typeof recordedFn === "function", "recorded env 应产生传输函数");
+        const out = await recordedFn(MODEL_INPUT);
+        assert.equal(out.text, "预录正文内容");
+
+        delete process.env.PINOVEL_EVAL_RECORDED_RESULTS_PATH;
+        process.env.PINOVEL_EVAL_SYNTHETIC_FAULTS = JSON.stringify([{ fault: "timeout" }]);
+        const syntheticFn = modelAdapter.createEvalReplayModelGenerateFnFromEnv();
+        assert.ok(typeof syntheticFn === "function", "synthetic env 应产生传输函数");
+        await assert.rejects(() => syntheticFn(MODEL_INPUT), /超时/);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      for (const key of TRANSPORT_ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  });
+});
+
+describe("F4-2 冻结 ChapterSeed：loadChapterSeed 优先消费冻结注入", () => {
+  const tmpWs = join(__dirname, ".tmp-f4-frozen-ws");
+
+  before(() => {
+    rmSync(tmpWs, { recursive: true, force: true });
+    mkdirSync(join(tmpWs, "series"), { recursive: true });
+    // 兜底 config：身份不匹配回退推导路径时 loadWorkspaceConfig 有可用输入
+    writeFileSync(
+      join(tmpWs, "config.json"),
+      JSON.stringify({ novelName: "回放测试", genre: "xianxia" }, null, 2),
+    );
+    writeFileSync(
+      join(tmpWs, "series", workspaceAdapter.FROZEN_CHAPTER_SEED_FILENAME),
+      JSON.stringify({
+        workspaceId: "ws-source-original",
+        chapterNumber: 2,
+        chapterId: "chapter-002",
+        chapterTitle: "冻结标题",
+        intent: { chapterFunction: "payoff", notes: "frozen" },
+        seedSource: "frozen",
+      }),
+    );
+  });
+
+  after(() => {
+    rmSync(tmpWs, { recursive: true, force: true });
+  });
+
+  it("身份匹配 -> 原样返回冻结 seed（仅重写 workspaceId）+ 消费 warning", () => {
+    const bundle = {
+      workspaceId: "eval-scratch-xyz",
+      workspacePath: tmpWs,
+      projectRoot: join(tmpWs, ".."),
+      config: { novelName: "回放测试" },
+    };
+    const result = workspaceAdapter.loadChapterSeed(bundle, 2, "chapter-002");
+    assert.ok(result.seed, "冻结 seed 必须非空");
+    assert.equal(result.seed.chapterTitle, "冻结标题");
+    assert.equal(result.seed.chapterId, "chapter-002");
+    assert.equal(result.seed.workspaceId, "eval-scratch-xyz", "workspaceId 必须重写为 scratch 身份");
+    assert.equal(result.seed.intent.notes, "frozen", "冻结字段必须原样保留");
+    assert.ok(result.warnings.some((w) => w.includes("冻结")));
+  });
+
+  it("身份不匹配 -> 回退推导路径 + 身份不匹配 warning（不抛错）", () => {
+    const bundle = {
+      workspaceId: "eval-scratch-xyz",
+      workspacePath: tmpWs,
+      projectRoot: join(tmpWs, ".."),
+      config: { novelName: "回放测试" },
+    };
+    let result;
+    assert.doesNotThrow(() => {
+      result = workspaceAdapter.loadChapterSeed(bundle, 3, "chapter-003");
+    });
+    assert.ok(
+      result.warnings.some((w) => w.includes("身份不匹配")),
+      `warnings 应含身份不匹配提示：${JSON.stringify(result.warnings)}`,
+    );
+  });
+});
+
+describe("F4-4 隔离 env：确定性回放模式携带传输标记", () => {
+  it("stub/recorded/synthetic -> V2_FORCE_STUB=1 + PINOVEL_EVAL_REPLAY_TRANSPORT=mode", () => {
+    for (const mode of ["stub", "recorded", "synthetic"]) {
+      const fixture = buildValidFixture({ replayMode: mode });
+      if (mode === "recorded") {
+        fixture.recordedToolResults = [
+          {
+            toolName: "novel_generate_chapter",
+            responseHash: HEX64("envtest"),
+            response: { text: "x" },
+          },
+        ];
+      }
+      const env = isolation.buildReplayIsolationEnv(fixture);
+      assert.equal(env.V2_FORCE_STUB, "1", `${mode} 模式必须兜底 V2_FORCE_STUB=1`);
+      assert.equal(env.PINOVEL_EVAL_REPLAY_TRANSPORT, mode, `${mode} 模式必须声明传输`);
+    }
+  });
+
+  it("dev_real_model / production_like -> 不携带确定性传输标记（走真实模型）", () => {
+    for (const mode of ["dev_real_model", "production_like"]) {
+      const fixture = buildValidFixture({ replayMode: mode });
+      const env = isolation.buildReplayIsolationEnv(fixture);
+      assert.equal(env.V2_FORCE_STUB, undefined, `${mode} 不应设置 V2_FORCE_STUB`);
+      assert.equal(env.PINOVEL_EVAL_REPLAY_TRANSPORT, undefined, `${mode} 不应声明确定性传输`);
+    }
   });
 });

@@ -19,7 +19,8 @@
  * 在 P10/P12 端到端验收时启用。
  */
 
-import { existsSync, mkdirSync, writeFileSync, statSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "fs";
+import { createHash } from "node:crypto";
 import { join } from "path";
 import type { Candidate } from "../core/types.js";
 import { loadModelRoutingSync } from "../../utils/config.js";
@@ -187,6 +188,290 @@ export function createStubModelGenerateFn(): ModelGenerateFn {
       durationMs: Date.now() - start,
     };
   };
+}
+
+// ============================================================================
+// Eval 回放传输（recorded / synthetic）- F4 离线回放与生产验收闭环
+// ============================================================================
+
+/**
+ * recorded 回放的单条预录模型结果（镜像 EvalFixtureV1.recordedToolResults 元素形状）。
+ *
+ * 字段以 unknown 声明以保持 prod 编译闭包不依赖 eval 契约模块
+ * （eval-fixture-contract.ts 属 dist-eval/dist-test 编译目标）；结构一致性
+ * 由 fixture 契约校验 + 传输运行时形状校验双重把关。
+ */
+export interface RecordedModelTransportEntry {
+  /** response 载荷的规范化 SHA-256（64 hex）；非 string 时跳过一致性校验。 */
+  responseHash?: unknown;
+  /** 预录 ModelGenerateOutput 载荷；必须是含 text: string 的对象。 */
+  response?: unknown;
+}
+
+/** synthetic 故障注入步骤（镜像 EvalFixtureV1.syntheticFaultPlan 元素形状）。 */
+export interface SyntheticFaultStepInput {
+  /** 故障种类：schema_error / empty_output / timeout / provider_error。 */
+  fault?: unknown;
+  /** 注入到第几次模型调用（1-based，缺省 1）。 */
+  atCall?: unknown;
+  /** 附加消息（进入失败证据）。 */
+  message?: unknown;
+}
+
+const SYNTHETIC_FAULT_KINDS = new Set([
+  "schema_error",
+  "empty_output",
+  "timeout",
+  "provider_error",
+]);
+
+/** schema_error 注入文本：截断的 JSON（下游 JSON.parse 必然失败，触发 retry_gate 恢复路径）。 */
+const SYNTHETIC_SCHEMA_ERROR_TEXT =
+  '{"craftPhenomena": [{"domain": "ending_and_closure", "status": "observed", "evid';
+
+/**
+ * 规范化 JSON 序列化（对象键排序），与 eval-fixture-contract.ts 的 canonicalize
+ * 规则逐字一致（undefined 标量序列化为 null；数组保序；对象键排序不去重）。
+ * 两侧规则必须同步变更，否则 recorded responseHash 校验会 fail-closed 误报。
+ */
+function canonicalizeTransportJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalizeTransportJson(item)).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const keys = Object.keys(value).sort();
+    return `{${keys
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalizeTransportJson((value as Record<string, unknown>)[key])}`,
+      )
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function isPlainTokenUsage(value: unknown): value is { in: number; out: number } {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.in === "number" && typeof record.out === "number";
+}
+
+/**
+ * F4-3：recorded 回放传输。按调用序消费预录结果，逐条校验 responseHash 一致性；
+ * 序列耗尽 / 载荷形状非法 / hash 不一致均 fail-closed 抛错（不静默降级到真实模型）。
+ *
+ * durationMs 使用预录值（缺省 0），不读墙钟--保证回放行为确定性。
+ */
+export function createRecordedModelGenerateFn(
+  entries: readonly RecordedModelTransportEntry[],
+): ModelGenerateFn {
+  let callIndex = 0;
+  return async (input: ModelGenerateInput): Promise<ModelGenerateOutput> => {
+    callIndex += 1;
+    const entry = entries[callIndex - 1];
+    if (typeof entry !== "object" || entry === null) {
+      throw new Error(
+        `[recorded-fail-closed] 预录序列耗尽：第 ${callIndex} 次模型调用（route=${input.route}，kind=${input.kind}）无 recordedToolResults 条目（共预录 ${entries.length} 条）`,
+      );
+    }
+    const response = entry.response;
+    if (typeof response !== "object" || response === null || Array.isArray(response)) {
+      throw new Error(
+        `[recorded-fail-closed] recordedToolResults[${callIndex - 1}].response 必须为对象载荷（hash-only 条目无法回放）`,
+      );
+    }
+    if (typeof entry.responseHash === "string" && entry.responseHash.length > 0) {
+      const actualHash = createHash("sha256")
+        .update(canonicalizeTransportJson(response), "utf-8")
+        .digest("hex");
+      if (actualHash !== entry.responseHash) {
+        throw new Error(
+          `[recorded-fail-closed] recordedToolResults[${callIndex - 1}].responseHash 不一致：期望 ${entry.responseHash}，实际 ${actualHash}`,
+        );
+      }
+    }
+    const payload = response as Record<string, unknown>;
+    if (typeof payload.text !== "string") {
+      throw new Error(
+        `[recorded-fail-closed] recordedToolResults[${callIndex - 1}].response.text 必须为 string`,
+      );
+    }
+    return {
+      text: payload.text,
+      model: typeof payload.model === "string" ? payload.model : stubRouteToModel(input.route),
+      route: typeof payload.route === "string" ? payload.route : input.route,
+      provider:
+        typeof payload.provider === "string"
+          ? payload.provider
+          : deriveProviderFromRoute(input.route),
+      tokenUsage:
+        payload.tokenUsage === "unknown" || isPlainTokenUsage(payload.tokenUsage)
+          ? (payload.tokenUsage as ModelGenerateOutput["tokenUsage"])
+          : undefined,
+      durationMs:
+        typeof payload.durationMs === "number" && Number.isFinite(payload.durationMs)
+          ? payload.durationMs
+          : 0,
+      finishReason: typeof payload.finishReason === "string" ? payload.finishReason : undefined,
+    };
+  };
+}
+
+/** 从 JSON 文件加载 recorded 条目（fail-closed：读失败/解析失败/形状非法抛错）。 */
+export function loadRecordedEntriesFromPath(resultsPath: string): RecordedModelTransportEntry[] {
+  let raw: string;
+  try {
+    raw = readFileSync(resultsPath, "utf-8");
+  } catch (error) {
+    throw new Error(
+      `[recorded-fail-closed] 无法读取 PINOVEL_EVAL_RECORDED_RESULTS_PATH=${resultsPath}：${String(error)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `[recorded-fail-closed] recorded 结果文件不是合法 JSON：${resultsPath}：${String(error)}`,
+    );
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error(
+      `[recorded-fail-closed] recorded 结果文件必须是非空数组（recorded 模式至少预录 1 条模型结果）：${resultsPath}`,
+    );
+  }
+  for (let i = 0; i < parsed.length; i += 1) {
+    if (typeof parsed[i] !== "object" || parsed[i] === null) {
+      throw new Error(`[recorded-fail-closed] recorded 结果文件第 ${i} 项不是对象：${resultsPath}`);
+    }
+  }
+  return parsed as RecordedModelTransportEntry[];
+}
+
+/**
+ * F4-3：synthetic 故障注入传输。命中 atCall 的调用注入确定性故障
+ * （schema_error 返回截断 JSON / empty_output 返回空文本 / timeout 与
+ * provider_error 立即 reject），未命中的调用回落 stub 文本。
+ *
+ * - 同一 atCall 出现多个步骤时首条生效（计划有序，行为确定）；
+ * - 故障 reject 不等待真实超时--回放确定性优先，故障事实由错误消息承载，
+ *   下游按消息语义进入 timeout/provider_error 分类与 bounded recovery。
+ */
+export function createSyntheticModelGenerateFn(
+  plan: readonly SyntheticFaultStepInput[],
+): ModelGenerateFn {
+  const faultByCall = new Map<number, { fault: string; message: string }>();
+  for (const step of plan) {
+    if (typeof step !== "object" || step === null) {
+      throw new Error("[synthetic-fail-closed] syntheticFaultPlan 元素必须是对象");
+    }
+    if (typeof step.fault !== "string" || !SYNTHETIC_FAULT_KINDS.has(step.fault)) {
+      throw new Error(
+        `[synthetic-fail-closed] 未知 fault 种类：${String(step.fault)}（合法值：schema_error/empty_output/timeout/provider_error）`,
+      );
+    }
+    const atCall =
+      typeof step.atCall === "number" && Number.isInteger(step.atCall) && step.atCall >= 1
+        ? step.atCall
+        : 1;
+    if (!faultByCall.has(atCall)) {
+      faultByCall.set(atCall, {
+        fault: step.fault,
+        message: typeof step.message === "string" ? step.message : "",
+      });
+    }
+  }
+  const stubFn = createStubModelGenerateFn();
+  let callIndex = 0;
+  return async (input: ModelGenerateInput): Promise<ModelGenerateOutput> => {
+    callIndex += 1;
+    const step = faultByCall.get(callIndex);
+    if (step === undefined) {
+      return stubFn(input);
+    }
+    const note = step.message ? `；${step.message}` : "";
+    if (step.fault === "schema_error") {
+      return {
+        text: SYNTHETIC_SCHEMA_ERROR_TEXT,
+        model: stubRouteToModel(input.route),
+        route: input.route,
+        provider: deriveProviderFromRoute(input.route),
+        tokenUsage: { in: 100, out: 200 },
+        durationMs: 0,
+        finishReason: "stop",
+      };
+    }
+    if (step.fault === "empty_output") {
+      return {
+        text: "",
+        model: stubRouteToModel(input.route),
+        route: input.route,
+        provider: deriveProviderFromRoute(input.route),
+        tokenUsage: { in: 100, out: 0 },
+        durationMs: 0,
+        finishReason: "stop",
+      };
+    }
+    if (step.fault === "timeout") {
+      throw new Error(
+        `[synthetic-fault] 模型请求超时：route=${input.route}，kind=${input.kind}，超过 ${String(input.timeoutMs ?? "default")}ms 后中止${note}`,
+      );
+    }
+    throw new Error(
+      `[synthetic-fault] provider 请求失败（429 Too Many Requests）：route=${input.route}，kind=${input.kind}${note}`,
+    );
+  };
+}
+
+/** 解析 synthetic 故障计划 JSON（必须是数组，fail-closed）。 */
+export function parseSyntheticFaultPlanJson(raw: string): SyntheticFaultStepInput[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `[synthetic-fail-closed] synthetic 故障计划不是合法 JSON：${String(error)}`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("[synthetic-fail-closed] synthetic 故障计划必须是数组");
+  }
+  return parsed as SyntheticFaultStepInput[];
+}
+
+/**
+ * F4-4 入口解析：按 env 构造 eval 回放传输（recorded > synthetic）。
+ * 未配置任何 eval 回放 env 时返回 null（调用方继续走 V2_FORCE_STUB / legacy 解析链）。
+ *
+ *   - PINOVEL_EVAL_RECORDED_RESULTS_PATH：recorded 预录结果 JSON 文件路径；
+ *   - PINOVEL_EVAL_SYNTHETIC_FAULTS：synthetic 故障计划内联 JSON；
+ *   - PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH：synthetic 故障计划 JSON 文件路径（内联优先）。
+ *
+ * 模式声明与传输 env 的完整性校验（防静默回退）由 unified-entry 的
+ * PINOVEL_EVAL_REPLAY_TRANSPORT fail-closed 检查承担，本函数只做纯传输解析。
+ */
+export function createEvalReplayModelGenerateFnFromEnv(): ModelGenerateFn | null {
+  const recordedPath = process.env.PINOVEL_EVAL_RECORDED_RESULTS_PATH?.trim();
+  if (recordedPath) {
+    return createRecordedModelGenerateFn(loadRecordedEntriesFromPath(recordedPath));
+  }
+  const faultsInline = process.env.PINOVEL_EVAL_SYNTHETIC_FAULTS?.trim();
+  if (faultsInline) {
+    return createSyntheticModelGenerateFn(parseSyntheticFaultPlanJson(faultsInline));
+  }
+  const faultsPath = process.env.PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH?.trim();
+  if (faultsPath) {
+    let raw: string;
+    try {
+      raw = readFileSync(faultsPath, "utf-8");
+    } catch (error) {
+      throw new Error(
+        `[synthetic-fail-closed] 无法读取 PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH=${faultsPath}：${String(error)}`,
+      );
+    }
+    return createSyntheticModelGenerateFn(parseSyntheticFaultPlanJson(raw));
+  }
+  return null;
 }
 
 function stubRouteToModel(route: string): string {

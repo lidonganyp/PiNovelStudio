@@ -72,18 +72,73 @@ export function loadWorkspace(workspaceId: string, projectRoot: string): Workspa
   return { workspaceId, workspacePath, projectRoot, config };
 }
 
+/**
+ * EVAL-REPLAY-ACCEPTANCE-LOOP F4：冻结 ChapterSeed 文件名。
+ *
+ * 该文件仅由 eval 回放 Runner 在 scratch workspace 物化
+ * （来源 fixture.chapterSeed.frozenFullSeed）；生产 workspace 不存在此文件，
+ * 行为不变。存在时 loadChapterSeed 优先返回冻结 seed（重写 workspaceId
+ * 为当前 workspace 身份），保证回放与采集时 seed 逐字段一致，
+ * 而不是从 scratch workspace 重新推导。
+ */
+export const FROZEN_CHAPTER_SEED_FILENAME = "chapter-seed-frozen.json";
+
 export function loadChapterSeed(
   bundle: WorkspaceBundle,
   chapterNumber: number,
   chapterId?: string
 ): ChapterSeedBuilderResult {
+  const effectiveChapterId = chapterId ?? String(chapterNumber);
+  const frozenPath = join(
+    bundle.workspacePath,
+    "series",
+    FROZEN_CHAPTER_SEED_FILENAME,
+  );
+  const frozen = readJsonFile<ChapterSeed>(frozenPath);
+  if (frozen && typeof frozen === "object") {
+    // 身份字段重写为当前 workspace（scratch 回放身份），其余字段原样冻结。
+    // chapterId/chapterNumber 不一致说明冻结 seed 与请求章节不匹配：
+    // 视为损坏（返回 null 走重新推导会在回放中静默漂移，不可接受）。
+    if (
+      String(frozen.chapterId) === effectiveChapterId &&
+      frozen.chapterNumber === chapterNumber
+    ) {
+      return {
+        seed: { ...frozen, workspaceId: bundle.workspaceId },
+        warnings: [
+          `loadChapterSeed 消费冻结 ChapterSeed（${FROZEN_CHAPTER_SEED_FILENAME}，eval 回放注入；非冻结推导路径）`,
+        ],
+      };
+    }
+    return buildChapterSeedWithWarning(
+      bundle,
+      chapterNumber,
+      effectiveChapterId,
+      `冻结 ChapterSeed 身份不匹配（frozen chapterId=${String(frozen.chapterId)}/chapterNumber=${frozen.chapterNumber}，请求 ${effectiveChapterId}/${chapterNumber}），已回退重新推导`,
+    );
+  }
   const options: ChapterSeedBuilderOptions = {
     workspacePath: bundle.workspacePath,
     workspaceId: bundle.workspaceId,
-    chapterId: chapterId ?? String(chapterNumber),
+    chapterId: effectiveChapterId,
     chapterNumber,
   };
   return buildChapterSeed(options);
+}
+
+function buildChapterSeedWithWarning(
+  bundle: WorkspaceBundle,
+  chapterNumber: number,
+  chapterId: string,
+  warning: string,
+): ChapterSeedBuilderResult {
+  const result = buildChapterSeed({
+    workspacePath: bundle.workspacePath,
+    workspaceId: bundle.workspaceId,
+    chapterId,
+    chapterNumber,
+  });
+  return { ...result, warnings: [...result.warnings, warning] };
 }
 
 export function loadCharacterProfiles(bundle: WorkspaceBundle): CharacterProfile[] {

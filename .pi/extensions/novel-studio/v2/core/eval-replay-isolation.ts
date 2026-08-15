@@ -30,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
   EVAL_PROTOCOL_VERSION,
@@ -53,7 +53,11 @@ export type IsolationViolationKind =
   | "formal_release"
   | "path_escape"
   | "scratch_marker_missing"
-  | "scratch_marker_mismatch";
+  | "scratch_marker_mismatch"
+  /** F1：fixture 声明未知 modelRoute（真实模型回放不得静默回退开发缺省）。 */
+  | "model_route_unresolved"
+  /** F1：production_like 前置生产 release gate 验证失败（主仓真实治理状态）。 */
+  | "production_release_gate_mismatch";
 
 export interface IsolationViolation {
   kind: IsolationViolationKind;
@@ -133,6 +137,14 @@ export interface ReplayIsolationEnv {
   PINOVEL_EVAL_BUNDLE_ID: string;
   PINOVEL_EVAL_TRACE_ARCHIVE_PATH: string;
   PINOVEL_DEV_MODE: "1";
+  /**
+   * F4-4：确定性回放传输标记（stub/recorded/synthetic 模式强制携带）。
+   * - V2_FORCE_STUB=1 兜底：确定性模式下任何传输 env 丢失都不得触网；
+   * - PINOVEL_EVAL_REPLAY_TRANSPORT 声明模式，unified-entry 据此做
+   *   fail-closed 完整性校验（防传输 env 丢失后静默回退 stub/网络）。
+   */
+  V2_FORCE_STUB?: "1";
+  PINOVEL_EVAL_REPLAY_TRANSPORT?: "stub" | "recorded" | "synthetic";
 }
 
 /**
@@ -156,19 +168,34 @@ export function buildReplayIsolationEnv(
         .join("; ")}`,
     );
   }
-  return {
+  const env: ReplayIsolationEnv & NodeJS.ProcessEnv = {
     ...base,
     PINOVEL_EVAL_ONLY: "1",
     PINOVEL_EVAL_PROTOCOL_VERSION: fixture.evalProtocolVersion,
     PINOVEL_EVAL_RELEASE_ID: fixture.provenance.releaseId,
     PINOVEL_EVAL_BUNDLE_ID: fixture.provenance.bundleId,
     PINOVEL_EVAL_TRACE_ARCHIVE_PATH: fixture.traceArchivePath,
-    // 回放子进程永远运行在非生产开发模式：G6 生产门禁不消费 scratch 内
-    // 不存在的 active-production pointer；production_like 的 release/bundle
-    // 绑定由 fixture 契约 + grader 校验承担，而不是让子进程伪装生产。
+    // F1 语义修正：回放子进程运行在 DEV_MODE（scratch 隔离根没有主仓治理面，
+    // 子进程内 release gate 无法在 scratch 复刻；伪造治理数据不可接受）。
+    // production_like 的生产 release gate 验证由 Runner 层以主仓真实治理状态
+    // 前置承担（verifyProductionLikeReleaseGate），生产模型路由等价性由
+    // invoke 脚本的 eval 隔离路由策略（PINOVEL_EVAL_ONLY=1 不缺省注入 GLM）
+    // + fixture.provenance.modelRoute 显式参数共同保证。
     PINOVEL_DEV_MODE: "1",
     ...(scratchDataRoot ? { PINOVEL_PROJECT_ROOT: scratchDataRoot } : {}),
   };
+  // F4-4：stub/recorded/synthetic 是确定性回放模式，统一携带传输标记。
+  // 传输 env 本身（recorded 结果文件 / synthetic 故障计划）由 Runner 物化
+  // 后附加到子进程 env（见 full-pipeline-replay-runner）。
+  if (
+    fixture.replayMode === "stub" ||
+    fixture.replayMode === "recorded" ||
+    fixture.replayMode === "synthetic"
+  ) {
+    env.V2_FORCE_STUB = "1";
+    env.PINOVEL_EVAL_REPLAY_TRANSPORT = fixture.replayMode;
+  }
+  return env;
 }
 
 /**
@@ -245,9 +272,12 @@ export interface CreateScratchWorkspaceOptions {
 }
 
 function sanitizeScratchToken(value: string): string {
+  // 白名单与工具侧 workspaceId 校验正则 /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/ 对齐：
+  // 不允许 "."（fixtureId 常见 "fixture.xxx" 形态会生成非法 workspaceId，
+  // 导致子进程 Preflight 拒绝）。
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "fixture";
 }
@@ -447,6 +477,30 @@ export function cleanupScratchWorkspace(lease: ScratchWorkspaceLease): void {
 // ============================================================================
 
 /**
+ * 从 startDir 起逐级向上（最多 5 级，覆盖 .pi/extensions/novel-studio 到
+ * 仓库根的层级距离）探测项目资产（config/model-routing.json、.env）。
+ *
+ * Runner 传入的 projectRoot 通常是扩展目录（.pi/extensions/novel-studio），
+ * 而路由配置与凭据位于仓库根；直接 join 会导致 existsSync 静默 false、
+ * 复制被跳过（子进程运行时 fatal：Config file not found）。
+ */
+function locateProjectAsset(startDir: string, relPath: string): string | null {
+  let dir = resolve(startDir);
+  for (let i = 0; i < 5; i++) {
+    const candidate = join(dir, relPath);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return null;
+}
+
+/**
  * 在 scratch 根物化项目骨架，使其通过 utils/config.ts 的 isProjectRoot 检查
  * （.pi/extensions/novel-studio + docs/top-tier-chinese-novel-system-development-plan.md）。
  *
@@ -455,6 +509,7 @@ export function cleanupScratchWorkspace(lease: ScratchWorkspaceLease): void {
  * 仓库根，导致隔离失效，因此标记必须先于子进程启动物化。
  *
  * copyModelRouting / copyDotEnv：真实模型回放需要路由配置与 API 凭据；
+ * 源路径经 locateProjectAsset 向上探测（扩展目录 -> 仓库根）。
  * .env 复制仅进入 scratch（临时隔离根），归档时必须由调用方排除。
  */
 export function materializeScratchProjectSkeleton(
@@ -478,16 +533,19 @@ export function materializeScratchProjectSkeleton(
   }
 
   if (source.copyModelRouting) {
-    const routingSource = join(source.projectRoot, "config", "model-routing.json");
-    if (existsSync(routingSource)) {
+    const routingSource = locateProjectAsset(
+      source.projectRoot,
+      join("config", "model-routing.json"),
+    );
+    if (routingSource) {
       const configDir = join(scratchRoot, "config");
       mkdirSync(configDir, { recursive: true });
       copyFileSync(routingSource, join(configDir, "model-routing.json"));
     }
   }
   if (source.copyDotEnv) {
-    const envSource = join(source.projectRoot, ".env");
-    if (existsSync(envSource)) {
+    const envSource = locateProjectAsset(source.projectRoot, ".env");
+    if (envSource) {
       copyFileSync(envSource, join(scratchRoot, ".env"));
     }
   }

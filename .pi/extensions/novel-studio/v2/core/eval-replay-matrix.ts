@@ -211,20 +211,36 @@ export interface CompareMatrixOptions {
   maxSuccessRateRegression?: number;
   /** 长尾失败允许的最大绝对增量。 */
   maxLongTailIncrease?: number;
+  /**
+   * 能力指标最低阈值（每臂强制）：coverage / completeness / continuity。
+   * 缺省取 DEFAULT_MIN_QUALITY_SCORE。设为更小值可放宽，但不得 > 1。
+   * 能力门槛是发布强制条件（fail-closed），不允许通过 options 关闭。
+   */
+  minCoverage?: number;
+  minCompleteness?: number;
+  minContinuity?: number;
 }
+
+/** 能力指标默认最低阈值（coverage / completeness / continuity）。 */
+export const DEFAULT_MIN_QUALITY_SCORE = 0.8;
 
 /**
  * 生成统一 A/B 矩阵比较报告。
  *
- * verdict 规则（确定性）：
+ * verdict 规则（确定性，任一命中 → reject）：
  *  1. 零容忍违规（statePollution / productionPointerMutation /
- *     factHardGateViolation / duplicateSubmission）任一 > 0 → reject；
- *  2. candidate 缺失 → reject；
- *  3. candidate 相对 baseline 的 firstAttemptSuccessRate /
- *     recoveredSuccessRate 下降超过阈值 → reject；
- *  4. candidate 长尾失败增量超过阈值 → reject；
- *  5. 其余 → pass。
+ *     factHardGateViolation / duplicateSubmission）任一 > 0；
+ *  2. 四臂不完整（baseline / candidate / raw_direct / recovery 缺一不可）；
+ *  3. 任意臂 factHardErrors > 0（事实硬错零容忍）；
+ *  4. 任意臂 failureClassificationCompleteness < 1（存在未分类失败）；
+ *  5. 任意臂 coverage / completeness / continuity 低于最低阈值；
+ *  6. candidate pass^3 !== 1（发布关键路径要求连续 3 次全通过；
+ *     样本不足 → null 同样拒绝）；
+ *  7. candidate 相对 baseline 的 firstAttemptSuccessRate /
+ *     recoveredSuccessRate 下降超过阈值；
+ *  8. candidate 长尾失败增量超过阈值。
  * 文学偏好（humanBlindPreference）只存档，不影响 verdict。
+ * token / cost 为记录指标，不参与 verdict（成本非安全指标）。
  */
 export function compareMatrixArms(options: CompareMatrixOptions): MatrixComparisonReport {
   const reasons: string[] = [];
@@ -246,8 +262,53 @@ export function compareMatrixArms(options: CompareMatrixOptions): MatrixComparis
     reasons.push(`零容忍违规：重复提交 ${zeroTolerance.duplicateSubmission} 次`);
   }
 
-  if (candidate === null) {
-    reasons.push("矩阵缺少 candidate 臂（每次 A/B 必须包含 candidate）");
+  // -- 四臂完整性强制（EVAL-REPLAY-ACCEPTANCE-LOOP F2）-----------------------
+  const completeness = validateMatrixArmCompleteness(options.arms);
+  if (!completeness.complete) {
+    reasons.push(
+      `矩阵四臂不完整：缺少 ${completeness.missing.join(" / ")}（每次 A/B 必须包含 baseline / candidate / raw_direct / recovery）`,
+    );
+  }
+
+  // -- 逐臂零容忍与能力门槛（F2：关键指标进入拒绝逻辑）-----------------------
+  const minCoverage = options.minCoverage ?? DEFAULT_MIN_QUALITY_SCORE;
+  const minCompleteness = options.minCompleteness ?? DEFAULT_MIN_QUALITY_SCORE;
+  const minContinuity = options.minContinuity ?? DEFAULT_MIN_QUALITY_SCORE;
+  for (const arm of options.arms) {
+    if (arm.factHardErrors > 0) {
+      reasons.push(`臂 ${arm.armId} 事实硬错 ${arm.factHardErrors} 次（零容忍，必须为 0）`);
+    }
+    if (arm.failureClassificationCompleteness < 1) {
+      reasons.push(
+        `臂 ${arm.armId} 失败分类完整率 ${arm.failureClassificationCompleteness.toFixed(3)} < 1（存在未分类失败）`,
+      );
+    }
+    if (arm.coverage < minCoverage) {
+      reasons.push(`臂 ${arm.armId} coverage ${arm.coverage.toFixed(3)} < 最低阈值 ${minCoverage}`);
+    }
+    if (arm.completeness < minCompleteness) {
+      reasons.push(
+        `臂 ${arm.armId} completeness ${arm.completeness.toFixed(3)} < 最低阈值 ${minCompleteness}`,
+      );
+    }
+    if (arm.continuity < minContinuity) {
+      reasons.push(`臂 ${arm.armId} continuity ${arm.continuity.toFixed(3)} < 最低阈值 ${minContinuity}`);
+    }
+  }
+
+  // -- candidate pass^3 = 100% 强制（F2：发布关键路径门槛）--------------------
+  const candidatePassAt3 = candidate ? computePassAtK(candidate.perSamplePass, 3) : null;
+  const candidatePassPow3 = candidate ? computePassPowK(candidate.perSamplePass, 3) : null;
+  if (candidate !== null) {
+    if (candidate.perSamplePass.length < 3) {
+      reasons.push(
+        `candidate 样本数 ${candidate.perSamplePass.length} < 3（pass^3 样本不足，不得作为发布证据）`,
+      );
+    } else if (candidatePassPow3 !== 1) {
+      reasons.push(
+        `candidate pass^3 = ${candidatePassPow3?.toFixed(3)}（发布关键路径要求连续 3 次全通过 = 1.0）`,
+      );
+    }
   }
 
   const maxRegression = options.maxSuccessRateRegression ?? 0;
@@ -278,9 +339,6 @@ export function compareMatrixArms(options: CompareMatrixOptions): MatrixComparis
       );
     }
   }
-
-  const candidatePassAt3 = candidate ? computePassAtK(candidate.perSamplePass, 3) : null;
-  const candidatePassPow3 = candidate ? computePassPowK(candidate.perSamplePass, 3) : null;
 
   return {
     schemaId: "pinovel.eval-replay-matrix",

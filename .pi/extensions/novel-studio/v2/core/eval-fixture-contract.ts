@@ -106,6 +106,13 @@ export interface EvalFixtureWorkspaceSnapshotV1 {
   worldItems?: Record<string, unknown>;
   /** series/skeleton.json 快照（可选）。 */
   skeleton?: Record<string, unknown>;
+  /**
+   * 作者风格档案快照（styles/profile.json，含 editorialGuidance /
+   * characterVoiceGuidance / usagePolicy）。统一主链路要求有效风格档案
+   * 是必需输入（模型调用前 hard block），回放 fixture 必须内联快照，
+   * Runner 物化为 scratch workspace 的 styles/profile.json。
+   */
+  styleProfile?: Record<string, unknown>;
   /** 前章正文快照（第 2 章及以后必需）。 */
   historicalChapters: EvalFixtureHistoricalChapter[];
 }
@@ -118,6 +125,43 @@ export interface EvalFixtureChapterSeedV1 {
   intent: Record<string, unknown>;
   /** 种子来源说明（series/outline、ChapterSeed 生成器等）。 */
   seedSource: string;
+  /**
+   * EVAL-REPLAY-ACCEPTANCE-LOOP F4：冻结的完整 ChapterSeed 快照。
+   *
+   * 回放时 Runner 把它物化为 scratch workspace 的
+   * series/chapter-seed-frozen.json；loadChapterSeed 优先消费冻结 seed，
+   * 保证主链路 ContextCompiler 使用的 seed 与采集时逐字段一致，
+   * 而不是从 scratch workspace 重新推导（推导结果依赖文件时序，
+   * 无法保证与采集时等价）。
+   *
+   * - 内层 chapterId/chapterNumber（如携带）必须与外层一致（fail-closed）；
+   * - workspaceId 会被 Runner 重写为 scratch workspace 身份（身份字段，
+   *   不属于行为内容）；
+   * - 缺省时回放退回"从物化 workspace 重新推导"（行为兼容，不阻断）。
+   */
+  frozenFullSeed?: Record<string, unknown>;
+}
+
+/**
+ * EVAL-REPLAY-ACCEPTANCE-LOOP F4：synthetic 回放的确定性故障注入步骤。
+ *
+ * 故障注入在模型传输层（ModelGenerateFn）执行：命中 atCall 的调用
+ * 返回故障；未命中的调用走 stub 传输（不触网）。同一 plan 重复回放
+ * 注入序列完全一致（按调用序确定性）。
+ */
+export interface EvalFixtureSyntheticFaultStepV1 {
+  /**
+   * 故障类型：
+   * - schema_error    ：返回损坏的结构化输出（JSON 截断）；
+   * - empty_output    ：返回空文本；
+   * - timeout         ：以超时错误 reject（模拟 PINOVEL_MODEL_REQUEST_TIMEOUT_MS）；
+   * - provider_error  ：以 provider 429/5xx 错误 reject。
+   */
+  fault: "schema_error" | "empty_output" | "timeout" | "provider_error";
+  /** 注入到第几次模型调用（1-based；缺省 1）。 */
+  atCall?: number;
+  /** 附加消息（进入失败证据）。 */
+  message?: string;
 }
 
 /**
@@ -187,6 +231,8 @@ export interface EvalFixtureV1 {
   priorNarrativeState: Record<string, unknown> | null;
   modelPolicy: EvalFixtureModelPolicyV1;
   recordedToolResults?: EvalFixtureRecordedToolResult[];
+  /** EVAL-REPLAY-ACCEPTANCE-LOOP F4：synthetic 回放确定性故障注入计划；仅 synthetic 模式允许携带。 */
+  syntheticFaultPlan?: EvalFixtureSyntheticFaultStepV1[];
   expectedInvariants: EvalFixtureExpectedInvariantsV1;
   /** recorded 回放：原始 trace 的 SHA-256，用于确定性比对。 */
   referenceTraceHash?: string;
@@ -389,6 +435,95 @@ function validateChapterSeed(raw: unknown, errors: EvalContractError[]): void {
       message: "/chapterSeed/intent 必须为对象（ChapterIntent 快照）",
     });
   }
+  // EVAL-REPLAY-ACCEPTANCE-LOOP F4：冻结完整 ChapterSeed 校验
+  if (raw.frozenFullSeed !== undefined) {
+    if (!isPlainObject(raw.frozenFullSeed)) {
+      errors.push({
+        field: "/chapterSeed/frozenFullSeed",
+        rule: "invalid",
+        message: "/chapterSeed/frozenFullSeed 必须为对象（完整 ChapterSeed 快照）",
+      });
+    } else {
+      const frozen = raw.frozenFullSeed;
+      if (
+        typeof frozen.chapterId === "string" &&
+        typeof raw.chapterId === "string" &&
+        frozen.chapterId !== raw.chapterId
+      ) {
+        errors.push({
+          field: "/chapterSeed/frozenFullSeed/chapterId",
+          rule: "identity_mismatch",
+          message: `frozenFullSeed.chapterId="${frozen.chapterId}" 与外层 chapterSeed.chapterId="${raw.chapterId}" 不一致`,
+        });
+      }
+      if (
+        typeof frozen.chapterNumber === "number" &&
+        typeof raw.chapterNumber === "number" &&
+        frozen.chapterNumber !== raw.chapterNumber
+      ) {
+        errors.push({
+          field: "/chapterSeed/frozenFullSeed/chapterNumber",
+          rule: "identity_mismatch",
+          message: `frozenFullSeed.chapterNumber=${frozen.chapterNumber} 与外层 chapterSeed.chapterNumber=${raw.chapterNumber} 不一致`,
+        });
+      }
+    }
+  }
+}
+
+const SYNTHETIC_FAULT_KINDS: ReadonlyArray<string> = [
+  "schema_error",
+  "empty_output",
+  "timeout",
+  "provider_error",
+];
+
+function validateSyntheticFaultPlan(
+  raw: unknown,
+  errors: EvalContractError[],
+): void {
+  if (raw === undefined) {
+    return;
+  }
+  if (!Array.isArray(raw)) {
+    errors.push({
+      field: "/syntheticFaultPlan",
+      rule: "invalid",
+      message: "/syntheticFaultPlan 必须为数组",
+    });
+    return;
+  }
+  raw.forEach((entry: unknown, index: number) => {
+    const base = `/syntheticFaultPlan/${index}`;
+    if (!isPlainObject(entry)) {
+      errors.push({ field: base, rule: "invalid", message: `${base} 必须为对象` });
+      return;
+    }
+    if (typeof entry.fault !== "string" || !SYNTHETIC_FAULT_KINDS.includes(entry.fault)) {
+      errors.push({
+        field: `${base}/fault`,
+        rule: "invalid_fault_kind",
+        message: `${base}/fault 必须为 ${SYNTHETIC_FAULT_KINDS.join(" | ")} 之一`,
+      });
+    }
+    if (
+      entry.atCall !== undefined &&
+      (typeof entry.atCall !== "number" || !Number.isInteger(entry.atCall) || entry.atCall < 1)
+    ) {
+      errors.push({
+        field: `${base}/atCall`,
+        rule: "invalid",
+        message: `${base}/atCall 必须为 >=1 的整数（1-based 调用序）`,
+      });
+    }
+    if (entry.message !== undefined && typeof entry.message !== "string") {
+      errors.push({
+        field: `${base}/message`,
+        rule: "invalid",
+        message: `${base}/message 必须为字符串`,
+      });
+    }
+  });
 }
 
 function validateModelPolicy(raw: unknown, errors: EvalContractError[]): void {
@@ -588,6 +723,39 @@ export function validateEvalFixtureV1(raw: unknown): EvalFixtureValidationResult
             message: `${base}/responseHash 必须为 64 位 SHA-256 hex`,
           });
         }
+      });
+    }
+  }
+
+  validateSyntheticFaultPlan(raw.syntheticFaultPlan, errors);
+
+  // EVAL-REPLAY-ACCEPTANCE-LOOP F4：模式相关强制（fail-closed）
+  if (isReplayMode(raw.replayMode)) {
+    if (raw.replayMode === "recorded") {
+      // recorded 回放必须能服务预录响应：非空 + 每条携带 response 载荷。
+      if (!Array.isArray(raw.recordedToolResults) || raw.recordedToolResults.length === 0) {
+        errors.push({
+          field: "/recordedToolResults",
+          rule: "recorded_mode_requires_responses",
+          message: "replayMode=recorded 必须携带非空 recordedToolResults（固定历史模型结果）",
+        });
+      } else {
+        raw.recordedToolResults.forEach((entry: unknown, index: number) => {
+          if (isPlainObject(entry) && entry.response === undefined) {
+            errors.push({
+              field: `/recordedToolResults/${index}/response`,
+              rule: "recorded_response_payload_required",
+              message: `recorded 回放的 recordedToolResults[${index}].response 不得缺省（hash-only 条目无法回放）`,
+            });
+          }
+        });
+      }
+    }
+    if (raw.syntheticFaultPlan !== undefined && raw.replayMode !== "synthetic") {
+      errors.push({
+        field: "/syntheticFaultPlan",
+        rule: "synthetic_plan_mode_mismatch",
+        message: `syntheticFaultPlan 仅允许 replayMode=synthetic 携带（当前 ${raw.replayMode}）`,
       });
     }
   }

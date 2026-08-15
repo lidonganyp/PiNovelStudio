@@ -53,6 +53,7 @@ import {
 import {
   createLegacyModelGenerateFn,
   createStubModelGenerateFn,
+  createEvalReplayModelGenerateFnFromEnv,
   type ModelGenerateFn,
   type ModelGenerateInput,
 } from "../adapters/legacy-model-route-adapter.js";
@@ -1647,6 +1648,7 @@ export async function runUnifiedPipeline(
       retrievalPromptOverride,
       agenticCandidateSource: evalAgenticSource,
       controlPlane: evalControlPlane,
+      _priorBudgetLedger: input._priorBudgetLedger,
       onUpdate,
     });
     // Eval 模式不写 trace / 不保存策略信誉库 / 不提交状态（编排器 evalMode 已跳过 commitAndSave）
@@ -1813,6 +1815,30 @@ export async function runUnifiedPipeline(
   }
 
   const useStub = process.env.V2_FORCE_STUB === "1";
+  // F4-4：eval 回放传输解析（recorded > synthetic > stub > legacy）。
+  // PINOVEL_EVAL_REPLAY_TRANSPORT 是模式声明（由 buildReplayIsolationEnv 携带）：
+  // 声明了 recorded/synthetic 却缺少对应传输 env 时 fail-closed 抛错，
+  // 防止传输 env 在子进程交接中丢失后静默回退网络或 stub（污染回放证据）。
+  const declaredEvalTransport = process.env.PINOVEL_EVAL_REPLAY_TRANSPORT?.trim() || null;
+  let evalReplayTransport: ModelGenerateFn | null = null;
+  if (declaredEvalTransport === "recorded" || declaredEvalTransport === "synthetic") {
+    evalReplayTransport = createEvalReplayModelGenerateFnFromEnv();
+    if (evalReplayTransport === null) {
+      throw new Error(
+        `[eval-replay-fail-closed] PINOVEL_EVAL_REPLAY_TRANSPORT=${declaredEvalTransport} 但未提供对应传输 env（PINOVEL_EVAL_RECORDED_RESULTS_PATH / PINOVEL_EVAL_SYNTHETIC_FAULTS[_PATH]），拒绝静默回退网络或 stub`,
+      );
+    }
+  } else if (declaredEvalTransport === "stub") {
+    if (!useStub) {
+      throw new Error(
+        "[eval-replay-fail-closed] PINOVEL_EVAL_REPLAY_TRANSPORT=stub 但 V2_FORCE_STUB!=1，拒绝回退真实模型",
+      );
+    }
+  } else if (declaredEvalTransport !== null) {
+    throw new Error(
+      `[eval-replay-fail-closed] 未知 PINOVEL_EVAL_REPLAY_TRANSPORT=${declaredEvalTransport}（合法值：stub/recorded/synthetic）`,
+    );
+  }
   const testRouteLock = resolveModelTestRouteLock(modelTestRoute);
   const writerRouteLock = testRouteLock ? null : resolveWriterModelRouteLock(writerModel);
   // WP-01：任务级路由一次解析并冻结（与 writer/test lock 对齐，不另建第二套路由）。
@@ -1846,7 +1872,7 @@ export async function runUnifiedPipeline(
     forbiddenResources: ["legacy:stage0-8", "public:capability-escalation"],
     generationLock: generationModelLock,
     judgeLock: judgeModelLock,
-    modelTransport: useStub ? "stub" : "network",
+    modelTransport: evalReplayTransport || useStub ? "stub" : "network",
     enforceModelLocks: true,
   });
   const stateReadDecision = controlPlane.policy.authorize(
@@ -2003,9 +2029,13 @@ export async function runUnifiedPipeline(
   // REAL-QUALITY-1-PREFLIGHT：useStub 只看 V2_FORCE_STUB（去掉 modelTestRoute===undefined 条件），
   // 使 modelTestRoute=glm 时也能用 stub 测试（不调用真实模型）。
   // 真实生成走 createLegacyModelGenerateFn（动态 import fallback-manager）。
-  const baseModelGenerate: ModelGenerateFn = useStub
-    ? createStubModelGenerateFn()
-    : createLegacyModelGenerateFn();
+  // F4-4：解析链 recorded -> synthetic -> stub (V2_FORCE_STUB) -> legacy 真实模型；
+  // recorded/synthetic 的传输 env 完整性已在管线入口 fail-closed 校验（见 useStub 附近）。
+  const baseModelGenerate: ModelGenerateFn = evalReplayTransport
+    ? evalReplayTransport
+    : useStub
+      ? createStubModelGenerateFn()
+      : createLegacyModelGenerateFn();
 
   // REAL-QUALITY-1-PREFLIGHT：单次路由锁定（modelTestRoute=glm）— 双轨分锁
   // 把生成调用（raw + editorial candidate）锁定到 nb4_generate_glm，
@@ -2188,6 +2218,7 @@ export async function runUnifiedPipeline(
     // 仅已准入 active 策略参与 Thompson Sampling；candidate 不受随机阈值过滤。
     // 不影响模型调用本身（路由锁定由 modelTestRoute 控制）。
     seed: input.seed,
+    _priorBudgetLedger: input._priorBudgetLedger,
     previewOnly,
     fullPipelinePreview: effectiveFullPipelinePreview,
     qualityExperiment,
