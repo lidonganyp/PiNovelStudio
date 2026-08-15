@@ -54,8 +54,9 @@ import {
   captureDefaultEnvironmentFingerprint,
 } from "../dist-test/v2/governance/production-release-gate.js";
 import {
-  collectEnvironmentFingerprint,
+  collectDefaultEnvironmentFingerprint,
   computeFingerprintHash,
+  DEFAULT_RELEASE_FINGERPRINT_SPEC,
 } from "../dist-test/v2/governance/environment-fingerprint.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -604,48 +605,13 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元�
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, "model-routing.json"), '{"_version":"test"}\n', "utf-8");
 
-    const expectedFingerprint = collectEnvironmentFingerprint({
-      projectRoot,
-      modelRoutingPath: "config/model-routing.json",
-      promptBundlePaths: [],
-      toolSchemaPaths: [],
-      runtimeFilePaths: [
-        ".pi/extensions/novel-studio/index.ts",
-        ".pi/extensions/novel-studio/tsconfig.prod.json",
-        ".pi/extensions/novel-studio/tsconfig.eval.json",
-        ".pi/extensions/novel-studio/tsconfig.test.json",
-      ],
-      buildArtifactPaths: [".pi/extensions/novel-studio/dist/index.js"],
-      activeStrategyIds: [],
-      constitutionHash: "",
-      datasetHash: "",
-      evalProtocolHash: "",
-      seed: 0,
-      budgetMaxCalls: 10,
-      timeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS ?? 300000),
-      fallbackPolicy: "hard_block",
-      generationModel: "gemini-3.1-pro-preview",
-      judgeModel: "gpt5.6-sol",
-      proxyApprovalModel: "gpt5.6-sol",
-      envSwitchNames: [
-        "V2_FORCE_STUB",
-        "NOVEL_TEST_TOOLS",
-        "NOVEL_DEBUG_TOOLS",
-        "PINOVEL_UNIFIED_PIPELINE",
-        "PINOVEL_DISABLE_FALLBACK",
-      ],
-      secretEnvNames: [
-        "GLM_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "QWEN_API_KEY",
-        "CLAUDE_API_KEY",
-        "GEMINI_API_KEY",
-        "GPT_API_KEY",
-        "ARK_API_KEY",
-        "ERNIE_API_KEY",
-      ],
-    });
-
+    const expectedFingerprint = collectDefaultEnvironmentFingerprint(projectRoot);
+    assert.equal(expectedFingerprint.generationModel, "gemini-3.1-pro-preview");
+    assert.equal(DEFAULT_RELEASE_FINGERPRINT_SPEC.modelRoutingPath, "config/model-routing.json");
+    assert.ok(
+      DEFAULT_RELEASE_FINGERPRINT_SPEC.envSwitchNames.includes("PINOVEL_EVAL_REPLAY_TRANSPORT"),
+      "默认规格必须包含 eval 传输开关，不能再回退到旧的内联短名单",
+    );
     assert.equal(
       captureDefaultEnvironmentFingerprint(projectRoot),
       computeFingerprintHash(expectedFingerprint),
@@ -658,10 +624,12 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元�
 
 test("evolution CLI: capture 与生产门禁使用同一当前路由真相源", () => {
   const cliSource = readFileSync(join(EXT_ROOT, "scripts", "evolution-cli.mjs"), "utf-8");
-  assert.match(cliSource, /modelRoutingPath:\s*["']config\/model-routing\.json["']/);
-  assert.match(cliSource, /generationModel:\s*["']gemini-3\.1-pro-preview["']/);
+  const specSource = readFileSync(join(EXT_ROOT, "v2", "governance", "environment-fingerprint.ts"), "utf-8");
+  assert.match(cliSource, /collectDefaultEnvironmentFingerprint/);
+  assert.match(specSource, /modelRoutingPath:\s*["']config\/model-routing\.json["']/);
+  assert.match(specSource, /generationModel:\s*["']gemini-3\.1-pro-preview["']/);
   assert.doesNotMatch(
-    cliSource,
+    specSource,
     /modelRoutingPath:\s*["']\.pi\/extensions\/novel-studio\/config\/model-routing\.json["']/,
   );
 });
