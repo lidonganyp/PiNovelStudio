@@ -1,14 +1,18 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-15（发布治理核验收口：旧基线重新激活路径禁用；rel-prod-109 元数据收敛；回放证据与可复现性未决）
+**快照日期**：2026-08-15（发布治理核验收口完成：rel-prod-110 唯一 active_prod、干净树可复现、真实回放证据落地）
 **代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
 
 ## GOVERNANCE-CLOSEOUT：发布治理核验收口（2026-08-15）
 
-**状态：治理代码/测试层收口；生产元数据已收敛至 rel-prod-109；「生产交付完成」不成立——真实回放证据与可复现性两项 P1 未决。**
+**状态：五项核验全部关闭——P0/P1 代码项已修复提交（19473a7）；可复现性 forward-fix 已完成（rel-prod-110 唯一 active_prod，干净树 verify YES）；真实生产回放证据已落地（xinmo ch23 严格 prod 路径）。**
 
-外部核验（2026-08-15）判定开发侧「生产交付完成」声明不成立，5 项 P0/P1 全部属实；本轮修复其中两项确定性代码项，其余如实保留为未决。
+外部核验（2026-08-15）判定开发侧「生产交付完成」声明不成立，5 项 P0/P1 全部属实。第一轮修复两项确定性代码项（commit 19473a7）；第二轮完成可复现性 forward-fix 与真实回放（2026-08-15 同日）：
+
+- **P1-4 forward-fix（已关闭）**：新建 rel-prod-110 于干净 worktree@`7100a83` capture（`worktreeDirty=false`，fpHash `808378f4…`，bundleId `351c14d2…`）→ `proxy-review --real`（gpt5.6-sol，reviewTransport=network，APPROVE_DEV，canPromote=true，artifact `approval-rel-prod-110-1786757272118-7e3165db`）→ promote 链 active_dev→candidate_prod→active_prod（hold 109 后晋级，单一基线迁移收敛）。唯一 `active_prod` = **rel-prod-110**；rel-prod-109 → held（仅审计读取）。干净树 `evolution:verify` → **reproducible ✓ YES**（recorded == current == `808378f4…`）。
+- **P1-3 真实生产回放（已关闭）**：Gemini 3.1 配额恢复后，在干净树 `D:\CODE\pns-verify110`（workspace 副本 xinmo）以**严格 prod 路径**（`PINOVEL_DEV_MODE` unset）运行 `phase9-production-acceptance.mjs xinmo 23`：Preflight→Agentic→FactGuard→风格优化→StoryPreservation→漂移重试→复检→commitAndSave 全链 status=ok、无 silent degrade；3 次 Gemini LLM 调用 ok（初稿 58.7s + 优化 52.6s + 漂移重试 44.2s）；trace `23-quality-trace.json` gate `releaseGovernance.releaseId=rel-prod-110`、environmentFingerprint=`808378f4…` 与 manifest 一致（生产指纹门真实校验通过）；narrative-state ch22→ch23。一条 attempt 级 `agentic_fact_guard/hard_block` envelope（首轮初稿死角色幻觉「铁山倒下的背」）经同阶段重写恢复——bounded recovery 生效证据，最终稿干净。证据归档 `reports/rel-prod-110-replay/`（trace + acceptance report + ch23 正文）。
+- **复验工件可直接重放**：`D:\CODE\pns-verify109`（@7c531cb，rel-prod-109 不可复现证据，fpHash `e2e2046f…` ≠ `53ff62dd…`）与 `D:\CODE\pns-verify110`（@7100a83，rel-prod-110 复现 YES）均已补齐 dist-test + registry 副本 + `.env`，worktree 内直接 `node scripts/evolution-cli.mjs verify --release-id <id>` 即可复现结论；不再依赖主树。
 
 已修复：
 

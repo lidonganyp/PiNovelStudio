@@ -195,6 +195,9 @@ reports/*
 # AGENTIC-EVIDENCE-MERGE-1：真实 9 章 replay 报告 + 三条 auditable trace 归档（retrieval/coverage/recovery），需纳入版本控制
 !reports/agentic-evidence-merge-real/
 !reports/agentic-evidence-merge-real/**
+# REL-PROD-110-REPLAY：P1-3 真实生产回放证据（xinmo ch23 严格 prod 路径 trace + acceptance report + 正文），需纳入版本控制
+!reports/rel-prod-110-replay/
+!reports/rel-prod-110-replay/**
 
 # =============================================================================
 # IDE 配置 (仅保留最小必要)
