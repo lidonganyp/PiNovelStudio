@@ -332,10 +332,12 @@ export function evaluateProductionLikeEvidence(
   const requiredIdentity: Array<[string, string | null]> = [
     ["releaseId", input.identity.releaseId],
     ["environmentFingerprint", input.identity.environmentFingerprint],
-    ["approvalRef", input.identity.approvalRef],
     ["bundleId", input.identity.bundleId],
     ["modelVersion", input.identity.modelVersion],
   ];
+  if (input.expectedRelease.approvalRef) {
+    requiredIdentity.push(["approvalRef", input.identity.approvalRef]);
+  }
   for (const [field, value] of requiredIdentity) {
     if (!value || value.trim().length === 0) {
       reasons.push(`生产身份缺失：${field}`);

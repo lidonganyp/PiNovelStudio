@@ -139,3 +139,36 @@ test("identity: releaseGovernance.devMode=true 必须被生产等价检查拒绝
   assert.ok(check.reasons.some((r) => r.includes("devMode")));
   assert.ok(check.reasons.some((r) => r.includes("modelCalls")));
 });
+
+test("identity: 候选 draft 无 approvalRef 时不得要求审批", () => {
+  const check = evaluateProductionLikeEvidence({
+    modelCalls: 2,
+    stats: {
+      modelCalls: 2,
+      tokenIn: 1,
+      tokenOut: 1,
+      tokenCost: 2,
+      recoveryAttempts: 0,
+      byProvider: { gemini31: 2 },
+      byRequestedRoute: { v2_rawstage2_gemini31: 1, v2_amplified_gemini31: 1 },
+      unauthorizedCrossModelCount: 0,
+    },
+    identity: {
+      devMode: false,
+      releaseId: "rel-prod-118",
+      environmentFingerprint: "fp",
+      approvalRef: null,
+      bundleId: "bundle",
+      modelVersion: "gemini-3.1-pro-preview",
+    },
+    expectedRelease: {
+      releaseId: "rel-prod-118",
+      environmentFingerprint: "fp",
+      approvalRef: "",
+      bundleId: "bundle",
+      modelVersion: "gemini-3.1-pro-preview",
+    },
+    modelRoute: "v2_rawstage2_gemini31",
+  });
+  assert.equal(check.ok, true, JSON.stringify(check.reasons));
+});
