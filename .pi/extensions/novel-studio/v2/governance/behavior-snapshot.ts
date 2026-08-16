@@ -30,6 +30,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, relative, sep, isAbsolute, join } from "node:path";
 import { computeBehaviorBundleId } from "./behavior-bundle.js";
+import { canonicalize } from "./evolution-release-schema.js";
 
 // ============================================================================
 // Schema 常量
@@ -144,6 +145,8 @@ export interface RuntimeDataSnapshot {
   recoveryPolicyHash: string;
   knowledgeSnapshotHash: string;
   runtimeFingerprint: string;
+  /** 冻结能力包集合 hash；当前仓库无包时为规范空集。 */
+  capabilityPackageSetHash: string;
   evalProtocolVersion: string;
   /** 组件明细（含文件清单，供审计与 verify） */
   components: SnapshotComponent[];
@@ -175,6 +178,16 @@ export interface SnapshotCaptureInput {
 // ============================================================================
 // 辅助
 // ============================================================================
+
+function computeEmptyCapabilityPackageSetHash(): string {
+  return sha256(
+    canonicalize({
+      schemaVersion: "capability-package-set-v1",
+      packages: [],
+      payloadHashes: [],
+    }),
+  );
+}
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf-8").digest("hex");
@@ -358,6 +371,7 @@ export function captureBehaviorSnapshot(input: SnapshotCaptureInput): RuntimeDat
     recoveryPolicyHash,
     knowledgeSnapshotHash,
     runtimeFingerprint,
+    capabilityPackageSetHash: computeEmptyCapabilityPackageSetHash(),
     evalProtocolVersion,
     components,
     runtimeVersions,
