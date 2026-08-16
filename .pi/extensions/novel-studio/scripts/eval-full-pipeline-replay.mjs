@@ -17,7 +17,7 @@
  *         --scratch-parent <dir>   scratch 父目录（默认 .pi/eval-scratch）
  *         --release-id <id>        P6 目标 release（默认取 fixture provenance）
  *         --bundle-id <id>         P6 目标 bundle（默认取 fixture provenance）
- *         --change-class <Rx>      P6 变更级别（默认 R1，R2/R3 强制四臂矩阵）
+ *         --change-class <Rx>      P6 变更级别（默认 R1；R0-R3 一律强制四臂矩阵 + pass^3=1）
  *         --code-commit <sha>      写入矩阵绑定
  *         --arm <id>=<runRoot>     矩阵臂（baseline|candidate|raw_direct|recovery）
  *

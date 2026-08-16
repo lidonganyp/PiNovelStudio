@@ -18,8 +18,9 @@
  *  2. release/bundle 绑定与目标 release 一致（防串证据）；
  *  3. Deterministic Grader（P5）通过全部检查（含 model_call_evidence）；
  *  4. 隔离违规 = 0（P1 生产面零污染）；
- *  5. R2/R3 额外要求 matrix-report：必须带 schema/四臂/hash/release-bundle 绑定，
+ *  5. R0-R3 一律要求 matrix-report：必须带 schema/四臂/hash/release-bundle 绑定，
  *     P6 重新计算 verdict 与 pass^3，不信任落盘的两个字段。
+ *     发布关键路径 pass^3 必须 = 1；R1 不得以 deterministic-only 绕过四臂。
  */
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -84,9 +85,17 @@ export interface EvalEvidenceGateResult {
   gradeReport: DeterministicGradeReport | null;
 }
 
-/** R2/R3 要求 matrix 证据；R0/R1 deterministic-only。 */
+/**
+ * 生产验收闭环：R0-R3 发布关键路径一律要求四臂矩阵 + pass^3=1。
+ * 不得按 changeClass 降级为 deterministic-only。
+ */
 export function matrixEvidenceRequired(changeClass: ChangeClass): boolean {
-  return changeClass === "R2" || changeClass === "R3";
+  return (
+    changeClass === "R0" ||
+    changeClass === "R1" ||
+    changeClass === "R2" ||
+    changeClass === "R3"
+  );
 }
 
 // ============================================================================
@@ -233,7 +242,7 @@ export function evaluateEvalEvidenceGate(
     };
   }
 
-  // -- 5. R2/R3 matrix 证据：schema + 四臂 + hash + 重新计算 -----------------
+  // -- 5. R0-R3 matrix 证据：schema + 四臂 + hash + 重新计算 -----------------
   if (matrixEvidenceRequired(input.changeClass)) {
     const rawMatrix = readMatrixReportRaw(input.evalRunRoot);
     evidence.matrixReportFound = rawMatrix !== null && !(isPlainParseError(rawMatrix));
@@ -304,9 +313,7 @@ export function evaluateEvalEvidenceGate(
   return {
     verdict: "approved",
     code: "EVAL_EVIDENCE_APPROVED",
-    reason: matrixEvidenceRequired(input.changeClass)
-      ? "确定性 Grader 通过 + A/B 矩阵 pass + pass^3=1（证据完整，可进入人工审批）"
-      : "确定性 Grader 通过（R0/R1 deterministic-only 证据完整，可进入人工审批）",
+    reason: "确定性 Grader 通过 + 四臂矩阵 pass + pass^3=1（证据完整，可进入人工审批）",
     evidence,
     gradeReport: grade,
   };
@@ -377,7 +384,7 @@ export type EvalEvidenceEnforcement = "mandatory" | "advisory";
  * eval evidence 强制级别：
  *  生产晋级（active_prod）对 R0-R3 全部 mandatory。
  *  Eval → Replay → Review → Release 不可绕过；未提供 evalRunRoot 即阻断。
- *  R0/R1 仍为 deterministic-only（不强制四臂矩阵）；R2/R3 额外强制矩阵。
+ *  R0-R3 一律强制四臂矩阵 + pass^3=1；不得以确定性 grader 单独批准发布。
  */
 export function resolveEvalEvidenceEnforcement(
   _changeClass: ChangeClass,

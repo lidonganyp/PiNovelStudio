@@ -23,7 +23,8 @@
 - 失败样本: `fixture.closure-candidate-like-003`
   - 首次：FactGuard `封印`
   - 重试 `closure-candidate-like-120-s3`：`story_preservation` 骨架漂移，归因仍为 `unclassified`
-- isolation=0，P6 对已完成样本仍给出 `EVAL_EVIDENCE_APPROVED`（R1 deterministic-only）
+- isolation=0；当时 P6 按 R1 deterministic-only 给出 `EVAL_EVIDENCE_APPROVED`
+- 2026-08-16 门禁收口后：R0-R3 一律要求四臂 + pass^3=1，本 run 无 matrix-report，**不得再作为晋级依据**
 
 ## production_like（晋级依据）
 
@@ -38,8 +39,8 @@
 
 ## 四臂矩阵
 
-- changeClass=`R1`，eval-gate 不要求四臂
 - 仓库与 120 归档仍无 baseline / candidate / raw_direct / recovery 四臂报告
+- 现门禁：R0-R3 一律 `EVAL_EVIDENCE_MATRIX_MISSING` 直至补齐四臂且 pass^3=1
 
 ## 未做
 

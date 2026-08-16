@@ -7,7 +7,7 @@
  *  - eval-evidence-gate：证据缺失 → insufficient / manifest 无效 / release 不匹配 → rejected /
  *    deterministic 失败 → rejected / R3 无 matrix → insufficient /
  *    两字段伪造 matrix → MATRIX_INVALID / 完整四臂矩阵 recompute pass → approved /
- *    R1 deterministic-only → approved / R0-R3 生产晋级全部 mandatory；
+ *    R0/R1 无四臂 → EVAL_EVIDENCE_MATRIX_MISSING / R0-R3 生产晋级全部 mandatory；
  *  - CLI：eval-capture 成功冻结 / eval-gate 证据通过 exit 0、缺失 exit 1 /
  *    promote active_prod R3 → EVAL_EVIDENCE_REQUIRED exit 5 /
  *    promote active_prod R1 无证据 → 同样强制阻断 exit 5。
@@ -44,6 +44,7 @@ import {
   writeEvalPendingReviewReport,
   resolveEvalEvidenceEnforcement,
   evaluateReplayCliSuccess,
+  matrixEvidenceRequired,
 } from "../dist-test/v2/governance/eval-evidence-gate.js";
 import { captureEvalFixture } from "../dist-test/v2/core/eval-fixture-capture.js";
 import {
@@ -515,7 +516,7 @@ test("gate: evalRunRoot 缺失 → insufficient (EVAL_EVIDENCE_MISSING)", () => 
   assert.equal(gate.code, "EVAL_EVIDENCE_MISSING");
 });
 
-test("gate: 合法 stub run（R1 deterministic-only）→ approved", () => {
+test("gate: 合法 stub run 但 R1 无四臂 → EVAL_EVIDENCE_MATRIX_MISSING", () => {
   const root = makeTempRoot();
   try {
     const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-ok", "bundle-ok");
@@ -525,9 +526,10 @@ test("gate: 合法 stub run（R1 deterministic-only）→ approved", () => {
       changeClass: "R1",
       evalRunRoot,
     });
-    assert.equal(gate.verdict, "approved", gate.reason);
-    assert.equal(gate.code, "EVAL_EVIDENCE_APPROVED");
+    assert.equal(gate.verdict, "insufficient", gate.reason);
+    assert.equal(gate.code, "EVAL_EVIDENCE_MATRIX_MISSING");
     assert.equal(gate.evidence.deterministicGradePassed, true);
+    assert.equal(gate.evidence.matrixReportFound, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -669,11 +671,53 @@ test("gate: R3 无 matrix → insufficient；两字段伪造 → MATRIX_INVALID�
   }
 });
 
-test("gate: 强制级别策略 — R0/R1/R2/R3 全部 mandatory", () => {
+test("gate: R0/R1 无四臂 → MATRIX_MISSING；完整四臂 + pass^3=1 → approved", () => {
+  const root = makeTempRoot();
+  try {
+    for (const changeClass of ["R0", "R1"]) {
+      const { runRoot: evalRunRoot } = makeEvalRunRoot(
+        root,
+        `rel-${changeClass.toLowerCase()}`,
+        `bundle-${changeClass.toLowerCase()}`,
+        { runDirName: `eval-${changeClass}` },
+      );
+      const missing = evaluateEvalEvidenceGate({
+        releaseId: `rel-${changeClass.toLowerCase()}`,
+        bundleId: `bundle-${changeClass.toLowerCase()}`,
+        changeClass,
+        evalRunRoot,
+      });
+      assert.equal(missing.verdict, "insufficient", changeClass);
+      assert.equal(missing.code, "EVAL_EVIDENCE_MATRIX_MISSING", changeClass);
+
+      writeGeneratedPassingMatrix(
+        evalRunRoot,
+        `rel-${changeClass.toLowerCase()}`,
+        `bundle-${changeClass.toLowerCase()}`,
+      );
+      const ok = evaluateEvalEvidenceGate({
+        releaseId: `rel-${changeClass.toLowerCase()}`,
+        bundleId: `bundle-${changeClass.toLowerCase()}`,
+        changeClass,
+        evalRunRoot,
+      });
+      assert.equal(ok.verdict, "approved", `${changeClass}: ${ok.reason}`);
+      assert.equal(ok.evidence.matrixRecomputed, true);
+      assert.equal(ok.evidence.candidatePassPow3, 1);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: 强制级别策略 — R0/R1/R2/R3 全部 mandatory 且一律要求四臂", () => {
   assert.equal(resolveEvalEvidenceEnforcement("R3"), "mandatory");
   assert.equal(resolveEvalEvidenceEnforcement("R2"), "mandatory");
   assert.equal(resolveEvalEvidenceEnforcement("R1"), "mandatory");
   assert.equal(resolveEvalEvidenceEnforcement("R0"), "mandatory");
+  for (const changeClass of ["R0", "R1", "R2", "R3"]) {
+    assert.equal(matrixEvidenceRequired(changeClass), true, changeClass);
+  }
 });
 
 test("gate: 回放 CLI 成功判定必须包含 grader + P6，不能只看 completed/isolation", () => {
@@ -808,6 +852,7 @@ test("gate: 待审批报告落盘（不执行状态迁移）", () => {
   const root = makeTempRoot();
   try {
     const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-rep", "bundle-rep");
+    writeGeneratedPassingMatrix(evalRunRoot, "rel-rep", "bundle-rep");
     const gate = evaluateEvalEvidenceGate({
       releaseId: "rel-rep",
       bundleId: "bundle-rep",
@@ -887,6 +932,7 @@ test("CLI eval-gate: 证据通过 → exit 0 + 待审批报告；缺失 → exit
     const registry = createEvolutionReleaseRegistry({ releasesDir });
     registry.writeManifest(makeManifest("rel-gate-001", "candidate_prod", { approvalRef: "apr-1" }));
     const { runRoot } = makeEvalRunRoot(root, "rel-gate-001", "bundle-test-001");
+    writeGeneratedPassingMatrix(runRoot, "rel-gate-001", "bundle-test-001");
 
     // 通过
     const ok = runCli(

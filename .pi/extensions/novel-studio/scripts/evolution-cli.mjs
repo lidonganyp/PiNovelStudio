@@ -86,6 +86,7 @@ import {
   evaluateEvalEvidenceGate,
   writeEvalPendingReviewReport,
   resolveEvalEvidenceEnforcement,
+  matrixEvidenceRequired,
 } from "../dist-test/v2/governance/eval-evidence-gate.js";
 import { captureEvalFixture } from "../dist-test/v2/core/eval-fixture-capture.js";
 
@@ -1142,7 +1143,7 @@ function cmdPromote(args) {
   if (target === "active_prod") {
     // EVAL-REPLAY-ACCEPTANCE-LOOP P6：生产晋级前评估离线回放证据。
     //  R0-R3 全部 mandatory：未提供 --eval-evidence-root / PINOVEL_EVAL_EVIDENCE_ROOT
-    //  或 gate 未 approved → exit 5。R0/R1 为 deterministic-only；R2/R3 另强制四臂矩阵。
+    //  或 gate 未 approved → exit 5。R0-R3 一律强制四臂矩阵 + pass^3=1。
     {
       const evalRunRoot =
         args["eval-evidence-root"] || process.env.PINOVEL_EVAL_EVIDENCE_ROOT || null;
@@ -2218,7 +2219,7 @@ function cmdEvalGate(args) {
   if (gate.evidence.failedChecks.length > 0) {
     console.log(`  failedChecks    : ${gate.evidence.failedChecks.join(", ")}`);
   }
-  if (matrixRequiredFor(manifest.changeClass)) {
+  if (matrixEvidenceRequired(manifest.changeClass)) {
     console.log(`  matrix          : ${gate.evidence.matrixReportFound ? `verdict=${gate.evidence.matrixVerdict}, pass^3=${gate.evidence.candidatePassPow3}` : "(missing)"}`);
   }
   console.log(`  pending report  : ${reportPath}`);
@@ -2257,10 +2258,6 @@ function cmdEvalGate(args) {
   }
 
   process.exit(1);
-}
-
-function matrixRequiredFor(changeClass) {
-  return changeClass === "R2" || changeClass === "R3";
 }
 
 /**
@@ -2395,7 +2392,7 @@ function printHelp() {
                 --status 查看历史；--authorize 写入 workspace 级授权；
                 --complete 校验并追加真实 canary 完成证据
   eval-capture  P6：从真实 workspace 只读冻结 EvalFixture（provenance 同源 release manifest）
-  eval-gate     P6：评估离线回放证据（确定性 Grader + R2/R3 矩阵 pass^3）；
+  eval-gate     P6：评估离线回放证据（确定性 Grader + R0-R3 四臂矩阵 pass^3）；
                 生成 eval-pending-review.json 待审批报告，绝不自动切 pointer；
                 verdict != approved 退出码 1；--hold-on-reject 执行 G5 hold
 

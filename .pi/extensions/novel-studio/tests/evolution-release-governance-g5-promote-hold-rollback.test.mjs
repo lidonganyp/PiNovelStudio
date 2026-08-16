@@ -251,27 +251,25 @@ function writePassingEvalEvidence(root, releaseId, changeClass = "R1") {
   const bundleId = "bundle-g5-001";
   const evalRunRoot = join(root, `eval-evidence-${releaseId}`);
   makeEvalRunRoot(evalRunRoot, releaseId, bundleId);
-  if (changeClass === "R2" || changeClass === "R3") {
-    const armIds = ["baseline", "candidate", "raw_direct", "recovery"];
-    const armRunRoots = {};
-    for (const armId of armIds) {
-      armRunRoots[armId] = makeEvalRunRoot(join(evalRunRoot, "arms", armId), releaseId, bundleId, {
-        fixtureId: `fixture.${armId}`,
-        sampleCount: 3,
-        runId: `run-${armId}`,
-      });
-    }
-    writeMatrixReport(
-      evalRunRoot,
-      generateMatrixReportFromReplayRuns({
-        candidateReleaseId: releaseId,
-        candidateBundleId: bundleId,
-        baselineReleaseId: releaseId,
-        armRunRoots,
-        codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
-      }),
-    );
+  const armIds = ["baseline", "candidate", "raw_direct", "recovery"];
+  const armRunRoots = {};
+  for (const armId of armIds) {
+    armRunRoots[armId] = makeEvalRunRoot(join(evalRunRoot, "arms", armId), releaseId, bundleId, {
+      fixtureId: `fixture.${armId}`,
+      sampleCount: 3,
+      runId: `run-${armId}`,
+    });
   }
+  writeMatrixReport(
+    evalRunRoot,
+    generateMatrixReportFromReplayRuns({
+      candidateReleaseId: releaseId,
+      candidateBundleId: bundleId,
+      baselineReleaseId: releaseId,
+      armRunRoots,
+      codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+    }),
+  );
   return ["--eval-evidence-root", evalRunRoot];
 }
 
