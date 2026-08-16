@@ -294,7 +294,10 @@ export function captureEvalFixture(
     ({} as Record<string, unknown>);
   const outline = readTextIfExists(join(workspacePath, "series", "outline.md"));
   const characterProfiles = collectCharacterProfiles(workspacePath);
-  const includeContent = options.replayMode === "recorded" || options.replayMode === "production_like";
+  const includeContent =
+    options.replayMode === "recorded" ||
+    options.replayMode === "production_like" ||
+    options.replayMode === "candidate_like";
   const historicalChapters = collectHistoricalChapters(
     workspacePath,
     options.chapterNumber,
@@ -374,7 +377,9 @@ export function captureEvalFixture(
     expectedInvariants: {
       statePollutionForbidden: true,
       productionPointerMutationForbidden: true,
-      formalChapterSaveForbidden: options.replayMode !== "production_like",
+      formalChapterSaveForbidden:
+        options.replayMode !== "production_like" &&
+        options.replayMode !== "candidate_like",
       traceArchiveRequired: true,
       scratchNarrativeStateCommitAllowed: true,
     },

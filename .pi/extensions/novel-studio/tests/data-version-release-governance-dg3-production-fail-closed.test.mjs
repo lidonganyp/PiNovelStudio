@@ -347,7 +347,7 @@ test("DG-3: 完整行为身份与真实快照一致 → ok + behaviorIdentity �
 // 4. 旧 manifest（无行为身份）向后兼容 → 跳过组件校验
 // ============================================================================
 
-test("DG-3: 旧 manifest（无 bundleId）跳过组件校验 → 仍 ok（DG-6 迁移前向后兼容）", () => {
+test("DG-3: 旧 active_prod manifest（无 bundleId）fail-closed，不得作为默认生产输入", () => {
   const root = makeTempRoot();
   const prev = clearDevMode();
   try {
@@ -457,10 +457,10 @@ test("DG-3 integration: 生产 trace 携带 releaseId/bundleId/modelVersion 及�
 });
 
 // ============================================================================
-// production_like 候选验收：证据先于审批，不得要求已经是 active_prod
+// candidate_like：审批前回放。不得弱化 production_like（requireActiveApproval=true）。
 // ============================================================================
 
-test("production_like 候选：draft + 完整身份（含 capabilityPackageSetHash）在指纹匹配时通过，不要求 active_prod", () => {
+test("candidate_like：draft + 完整身份（含 capabilityPackageSetHash）在指纹匹配时通过，不要求 active_prod", () => {
   const root = makeTempRoot();
   const prev = clearDevMode();
   try {

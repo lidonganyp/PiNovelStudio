@@ -47,6 +47,7 @@ import {
   evaluateProductionReleaseGate,
   captureDefaultEnvironmentFingerprint,
 } from "../dist-test/v2/governance/production-release-gate.js";
+import { captureDefaultBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "..", "..", "..", "..");
@@ -244,7 +245,22 @@ test("P0-lifecycle-2: evaluated → runStubProxyReview → approved_dev → acti
     const evolutionRegistry = createEvolutionReleaseRegistry({ releasesDir });
     const proxyRegistry = createProxyApprovalRegistry({ approvalsDir });
 
-    const evaluatedManifest = makeManifest(releaseId, "evaluated", fpHash);
+    const snap = captureDefaultBehaviorSnapshot(PROJECT_ROOT, "gemini-3.1-pro-preview", "2026-08-01");
+    const evaluatedManifest = {
+      ...makeManifest(releaseId, "evaluated", fpHash),
+      bundleId: snap.bundleId,
+      modelVersion: snap.modelVersion,
+      promptBundleHash: snap.promptBundleHash,
+      modelRoutingHash: snap.modelRoutingHash,
+      toolSchemaHash: snap.toolSchemaHash,
+      contextCompilerHash: snap.contextCompilerHash,
+      qualityPolicyHash: snap.qualityPolicyHash,
+      recoveryPolicyHash: snap.recoveryPolicyHash,
+      knowledgeSnapshotHash: snap.knowledgeSnapshotHash,
+      runtimeFingerprint: snap.runtimeFingerprint,
+      capabilityPackageSetHash: snap.capabilityPackageSetHash,
+      evalProtocolVersion: snap.evalProtocolVersion,
+    };
     // writeManifest 对 draft/candidate 可用；对 evaluated 需直接写入（frozen 后状态）
     mkdirSync(join(releasesDir, releaseId), { recursive: true });
     writeFileSync(
