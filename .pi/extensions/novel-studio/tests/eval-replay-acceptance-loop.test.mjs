@@ -1127,6 +1127,273 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
     }
   });
 
+  function writeForgedIndependentRawSample(runRoot, opts = {}) {
+    const fixtureId = opts.fixtureId ?? "fixture.forged-raw";
+    const sampleDir = join(runRoot, "samples", fixtureId);
+    const tracesDir = join(sampleDir, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    const fixture = buildValidFixture({
+      fixtureId,
+      replayMode: "production_like",
+      matrixArm: "raw_direct",
+    });
+    writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
+    writeFileSync(
+      join(tracesDir, "chapter-001-quality-trace.json"),
+      JSON.stringify({
+        schemaId: "pinovel.independent-raw-quality-trace",
+        matrixArm: "raw_direct",
+        evalMode: "B0",
+        gates: [{
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: opts.modelCalls ?? [
+              { requestedRoute: "v2_rawstage2_gemini31", kind: "raw_direct" },
+            ],
+          },
+        }],
+      }),
+    );
+    if (opts.invocation !== undefined && opts.invocation !== null) {
+      writeFileSync(join(sampleDir, "invocation.json"), JSON.stringify(opts.invocation, null, 2));
+    }
+    return { fixture, fixtureHash: fixtureContract.computeEvalFixtureHash(fixture) };
+  }
+
+  it("伪造 matrixArm/evalMode/schemaId 但 invocation 不是 --eval-layer=B0 → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-forged-raw-no-b0");
+    try {
+      writeForgedIndependentRawSample(tmp, {
+        invocation: {
+          command: { args: ["--project-root=scratch"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: null,
+          },
+        },
+      });
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unknown",
+      );
+      const report = matrix.compareMatrixArms({
+        candidateReleaseId: "rel-prod-110",
+        candidateBundleId: "bundle-b",
+        baselineReleaseId: "rel-prod-109",
+        arms: buildFourArms({
+          raw_direct: {
+            pipelineKind: matrix.inferArmPipelineKind({
+              replayMode: "production_like",
+              runRoot: tmp,
+            }),
+            replayMode: "production_like",
+          },
+        }),
+      });
+      assert.equal(report.verdict, "reject");
+      assert.ok(report.verdictReasons.some((r) => r.includes("raw_direct")));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("伪造 B0 证据字段但 command.args 没有 --eval-layer=B0 → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-forged-raw-evidence-only");
+    try {
+      writeForgedIndependentRawSample(tmp, {
+        invocation: {
+          command: { args: ["--project-root=scratch"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+        },
+      });
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unknown",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("B0 invocation + raw + literary_judge → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-forged-raw-judge");
+    try {
+      writeForgedIndependentRawSample(tmp, {
+        modelCalls: [
+          { requestedRoute: "v2_rawstage2_gemini31", kind: "raw_direct" },
+          { requestedRoute: "v2_literary_judge", kind: "literary_judge" },
+        ],
+        invocation: {
+          command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+        },
+      });
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unknown",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("B0 invocation + raw + verifier → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-forged-raw-verifier");
+    try {
+      writeForgedIndependentRawSample(tmp, {
+        modelCalls: [
+          { requestedRoute: "v2_rawstage2_gemini31", kind: "raw_direct" },
+          { requestedRoute: "narrative_verifier", kind: "verifier" },
+        ],
+        invocation: {
+          command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+        },
+      });
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unknown",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("B0 invocation + raw + 未知路由 → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-forged-raw-unknown");
+    try {
+      writeForgedIndependentRawSample(tmp, {
+        modelCalls: [
+          { requestedRoute: "v2_rawstage2_gemini31", kind: "raw_direct" },
+          { requestedRoute: "custom_mystery_route" },
+        ],
+        invocation: {
+          command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+        },
+      });
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unknown",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("伪造 matrixArm/evalMode/schemaId + B0 invocation，但模型调用不是 raw route → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-forged-raw-amplified");
+    try {
+      writeForgedIndependentRawSample(tmp, {
+        modelCalls: [
+          { requestedRoute: "v2_rawstage2_gemini31", kind: "agentic_raw" },
+          { requestedRoute: "v2_amplified_gemini31", kind: "author_style_optimization" },
+        ],
+        invocation: {
+          command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+        },
+      });
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unified_full",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("invocation --eval-layer=B0 + 仅裸写路由 → independent_raw（不靠 trace 自证）", () => {
+    const tmp = join(__dirname, ".tmp-eval-bound-raw");
+    try {
+      writeForgedIndependentRawSample(tmp, {
+        invocation: {
+          command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+        },
+      });
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "independent_raw",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("B0 invocation + 裸写路由但 fixture hash 与 manifest 不一致 → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-forged-raw-hash");
+    try {
+      const { fixture } = writeForgedIndependentRawSample(tmp, {
+        invocation: {
+          command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+        },
+      });
+      writeFileSync(
+        join(tmp, "manifest.json"),
+        JSON.stringify({
+          schemaId: "pinovel.eval-replay-run-manifest",
+          samples: [{
+            fixtureId: fixture.fixtureId,
+            fixtureHash: "0".repeat(64),
+          }],
+        }),
+      );
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unknown",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("baseline/candidate/raw_direct 使用 stub → reject（不得构造生产验收证据）", () => {
     const report = matrix.compareMatrixArms({
       candidateReleaseId: "rel-prod-110",
@@ -2074,6 +2341,22 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
         join(sampleDir, "state-projection.json"),
         JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
       );
+      if (armId.startsWith("raw") || armId.includes("raw-")) {
+        writeFileSync(
+          join(sampleDir, "invocation.json"),
+          JSON.stringify({
+            command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+            transportEvidence: {
+              transport: null,
+              forceStub: false,
+              evalOnly: true,
+              mockAgent: false,
+              evalLayer: "B0",
+            },
+            result: { exitCode: 0 },
+          }),
+        );
+      }
       samples.push({
         fixtureId,
         fixtureHash,

@@ -187,8 +187,16 @@ describe("P1-3 extractSelectedStrategyIds", () => {
 // 6. handleStrategyFeedback 自然语言路径（端到端）
 // ============================================================================
 
+const COMPLETE_LINEAGE = {
+  orchestratorRunId: "run-nl-1",
+  candidateId: "cand-nl-1",
+  strategyBundleId: "bundle:guidance_reduction",
+  exposureId: "exp-nl-1",
+  promptBundleId: "prompt:author_style:default",
+};
+
 describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
-  it("提供 naturalLanguageFeedback + modelVersion（省略 action/strategyId）自动记录 choice outcome", async () => {
+  it("提供 naturalLanguageFeedback + 完整血缘 自动记录 choice outcome 并写 ledger", async () => {
     const { dir, workspaceId } = makeTempProject();
     try {
       const result = await handleStrategyFeedback({
@@ -196,6 +204,8 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
         modelVersion: "gemini-3.1-pro-preview",
         naturalLanguageFeedback: "太啰嗦了，指导太多",
         sourceChapter: "ch17",
+        ...COMPLETE_LINEAGE,
+        strategyBundleId: "bundle:guidance_reduction",
         _projectRoot: dir,
       });
 
@@ -207,6 +217,8 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
       assert.equal(result.action, "choice");
       assert.equal(result.strategyId, "guidance_reduction");
       assert.ok(result.result?.recorded, "应记录 outcome");
+      assert.equal(result.lineageAudit?.complete, true);
+      assert.ok((result.lineageAudit?.ledgerAppended ?? 0) >= 1);
 
       // 验证策略信誉库已写入
       const store = readStrategyPolicy(dir, workspaceId);
@@ -222,7 +234,7 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
     }
   });
 
-  it("负向情感 '角色不像，语气不对' 自动记录 edit outcome（loss）", async () => {
+  it("缺完整血缘的自然语言反馈不得污染策略信誉", async () => {
     const { dir, workspaceId } = makeTempProject();
     try {
       const result = await handleStrategyFeedback({
@@ -234,16 +246,15 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
       });
 
       assert.equal(result.compiledFeedback.strategyId, "voice_emphasis");
-      assert.equal(result.compiledFeedback.sentiment, "positive");
-      // voice_emphasis 正向 → choice（策略生效 = win）
       assert.equal(result.action, "choice");
-      assert.ok(result.result?.recorded);
+      assert.equal(result.result?.recorded, false);
+      assert.equal(result.lineageAudit?.complete, false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("负向 guidance_reduction '太短了，细节太少' 自动记录 edit outcome（loss）", async () => {
+  it("完整血缘 + 负向 guidance_reduction 自动记录 edit outcome（loss）", async () => {
     const { dir, workspaceId } = makeTempProject();
     try {
       const result = await handleStrategyFeedback({
@@ -251,6 +262,8 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
         modelVersion: "gemini-3.1-pro-preview",
         naturalLanguageFeedback: "太短了，细节太少",
         sourceChapter: "ch19",
+        ...COMPLETE_LINEAGE,
+        strategyBundleId: "bundle:guidance_reduction",
         _projectRoot: dir,
       });
 
@@ -306,7 +319,7 @@ describe("P1-3 handler：无法映射的自然语言反馈不记录 outcome", ()
 // ============================================================================
 
 describe("P1-3 handler：显式 action 路径向后兼容", () => {
-  it("显式 action=choice + strategyId 仍正常工作", async () => {
+  it("显式 action=choice + strategyId + 完整血缘 仍正常工作", async () => {
     const { dir, workspaceId } = makeTempProject();
     try {
       const result = await handleStrategyFeedback({
@@ -317,6 +330,11 @@ describe("P1-3 handler：显式 action 路径向后兼容", () => {
         sourceChapter: "ch21",
         chosen: "editorial",
         opportunityType: "author_style",
+        orchestratorRunId: "run-explicit-21",
+        candidateId: "cand-explicit-21",
+        strategyBundleId: "bundle:voice_emphasis",
+        exposureId: "exp-explicit-21",
+        promptBundleId: "prompt:author_style:default",
         _projectRoot: dir,
       });
 
@@ -324,6 +342,7 @@ describe("P1-3 handler：显式 action 路径向后兼容", () => {
       assert.equal(result.action, "choice");
       assert.equal(result.strategyId, "voice_emphasis");
       assert.ok(result.result?.recorded);
+      assert.equal(result.lineageAudit?.complete, true);
       // 未提供 naturalLanguageFeedback → compiledFeedback 不存在
       assert.equal(result.compiledFeedback, undefined);
       assert.equal(result.naturalLanguageFeedbackAccepted, false);

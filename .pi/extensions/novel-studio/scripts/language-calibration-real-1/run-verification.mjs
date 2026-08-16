@@ -43,7 +43,12 @@ const SCRIPT_DIR = __dirname;
 const EXT_ROOT = join(SCRIPT_DIR, "..", "..");
 const REPO_ROOT = join(EXT_ROOT, "..", "..", "..");
 const XINMO_CHAPTERS = join(REPO_ROOT, "workspaces", "xinmo", "chapters");
+const XINMO_CHAPTER_FIXTURES = join(EXT_ROOT, "tests", "fixtures", "xinmo-chapters");
 const XINMO_CONFIG = join(REPO_ROOT, "workspaces", "xinmo", "config.json");
+const XINMO_CONFIG_FIXTURE = join(EXT_ROOT, "tests", "fixtures", "xinmo-minimal-config.json");
+const DEFAULT_CHAPTERS_DIR = existsSync(join(XINMO_CHAPTER_FIXTURES, "chapter-01.md"))
+  ? XINMO_CHAPTER_FIXTURES
+  : XINMO_CHAPTERS;
 const REPORT_DIR = join(REPO_ROOT, "reports", "language-calibration-real-1");
 const REPORT_PATH = join(REPORT_DIR, "verification-report.md");
 const RAW_MANIFEST_PATH = join(SCRIPT_DIR, "raw-manifest.json");
@@ -79,7 +84,7 @@ const CHAPTER_SPANS = {
 // ============================================================================
 
 function parseArgs(argv) {
-  const args = { stub: true, auth: false, chaptersDir: XINMO_CHAPTERS };
+  const args = { stub: true, auth: false, chaptersDir: DEFAULT_CHAPTERS_DIR };
   const cliArgs = argv.slice(2);
   for (let index = 0; index < cliArgs.length; index += 1) {
     const arg = cliArgs[index];
@@ -169,10 +174,11 @@ function loadAndValidateRawManifest(chapters) {
  * 从 config.json 加载完整列表匹配真实生产 FactGuard 调用方式，避免误报。
  */
 function loadCharacterNames() {
-  if (!existsSync(XINMO_CONFIG)) {
+  const configPath = existsSync(XINMO_CONFIG) ? XINMO_CONFIG : XINMO_CONFIG_FIXTURE;
+  if (!existsSync(configPath)) {
     throw new Error(`xinmo config.json 缺失：${XINMO_CONFIG}`);
   }
-  const config = JSON.parse(readFileSync(XINMO_CONFIG, "utf-8"));
+  const config = JSON.parse(readFileSync(configPath, "utf-8"));
   const characters = Array.isArray(config.characters) ? config.characters : [];
   const names = [];
   for (const c of characters) {

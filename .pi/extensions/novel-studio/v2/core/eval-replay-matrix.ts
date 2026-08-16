@@ -21,7 +21,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import {
   REAL_MODEL_REPLAY_MODES,
+  computeEvalFixtureHash,
   validateReplayRunManifestV1,
+  type EvalFixtureV1,
   type ReplayMode,
   type ReplayRunManifestV1,
 } from "./eval-fixture-contract.js";
@@ -114,13 +116,20 @@ export type MatrixPipelineKind =
   | "unknown";
 
 const AMPLIFIED_ROUTE_RE = /amplified|author_style|style_optimization/i;
-const RAW_ROUTE_RE = /rawstage2|raw_direct|one[_-]?shot|^v2_raw(?!_amplified)/i;
+const FORBIDDEN_INDEPENDENT_RAW_KIND_RE =
+  /judge|verifier|amplified|author_style|style_optimization|calibration/i;
 
-function collectArmRouteTokens(runRoot: string | null): string[] {
+/** B0 独立裸写允许的语义路由；judge / verifier / 未知路由不得混入。 */
+const INDEPENDENT_RAW_ALLOWED_ROUTES = new Set([
+  "v2_rawstage2",
+  "v2_rawstage2_gemini31",
+]);
+
+function collectArmModelCalls(runRoot: string | null): ReturnType<typeof extractReplayModelCalls> {
   if (!runRoot) return [];
   const samplesDir = join(runRoot, "samples");
   if (!existsSync(samplesDir)) return [];
-  const tokens: string[] = [];
+  const calls: ReturnType<typeof extractReplayModelCalls> = [];
   for (const fixtureId of readdirSync(samplesDir)) {
     const tracesDir = join(samplesDir, fixtureId, "traces");
     if (!existsSync(tracesDir)) continue;
@@ -128,65 +137,116 @@ function collectArmRouteTokens(runRoot: string | null): string[] {
       if (!name.endsWith(".json") || name.includes("evidence-report")) continue;
       try {
         const trace = JSON.parse(readFileSync(join(tracesDir, name), "utf-8")) as unknown;
-        for (const call of extractReplayModelCalls(trace)) {
-          if (call.requestedRoute) tokens.push(call.requestedRoute);
-          if (call.route) tokens.push(call.route);
-          if (call.kind) tokens.push(call.kind);
-        }
+        calls.push(...extractReplayModelCalls(trace));
       } catch {
         // 损坏 trace 不编造路径身份
       }
     }
   }
-  return tokens;
+  return calls;
 }
 
-function collectDeclaredIndependentRaw(runRoot: string | null): boolean {
-  if (!runRoot) return false;
-  const samplesDir = join(runRoot, "samples");
-  if (!existsSync(samplesDir)) return false;
-  for (const fixtureId of readdirSync(samplesDir)) {
-    const fixturePath = join(samplesDir, fixtureId, "fixture.json");
-    if (existsSync(fixturePath)) {
-      try {
-        const fixture = JSON.parse(readFileSync(fixturePath, "utf-8")) as {
-          matrixArm?: string;
-        };
-        if (fixture.matrixArm === "raw_direct") return true;
-      } catch {
-        // ignore
-      }
-    }
-    const tracesDir = join(samplesDir, fixtureId, "traces");
-    if (!existsSync(tracesDir)) continue;
-    for (const name of readdirSync(tracesDir)) {
-      if (!name.endsWith(".json") || name.includes("evidence-report")) continue;
-      try {
-        const trace = JSON.parse(readFileSync(join(tracesDir, name), "utf-8")) as {
-          schemaId?: string;
-          matrixArm?: string;
-          evalMode?: string;
-        };
-        if (
-          trace.matrixArm === "raw_direct" ||
-          trace.evalMode === "B0" ||
-          trace.schemaId === "pinovel.independent-raw-quality-trace"
-        ) {
-          return true;
-        }
-      } catch {
-        // ignore
-      }
-    }
+function callRouteToken(call: { requestedRoute?: string; route?: string }): string | null {
+  if (typeof call.requestedRoute === "string" && call.requestedRoute.length > 0) {
+    return call.requestedRoute;
   }
-  return false;
+  if (typeof call.route === "string" && call.route.length > 0) {
+    return call.route;
+  }
+  return null;
+}
+
+function isAmplifiedModelCall(call: {
+  requestedRoute?: string;
+  route?: string;
+  kind?: string;
+}): boolean {
+  const route = callRouteToken(call) ?? "";
+  const kind = typeof call.kind === "string" ? call.kind : "";
+  return AMPLIFIED_ROUTE_RE.test(route) || AMPLIFIED_ROUTE_RE.test(kind);
+}
+
+function isAllowedIndependentRawCall(call: {
+  requestedRoute?: string;
+  route?: string;
+  kind?: string;
+}): boolean {
+  const route = callRouteToken(call);
+  if (!route || !INDEPENDENT_RAW_ALLOWED_ROUTES.has(route)) return false;
+  if (typeof call.kind === "string" && FORBIDDEN_INDEPENDENT_RAW_KIND_RE.test(call.kind)) {
+    return false;
+  }
+  return true;
+}
+
+function invocationProvesIndependentRaw(invocation: unknown): boolean {
+  if (!isPlainObject(invocation)) return false;
+  const command = invocation.command;
+  const args = isPlainObject(command) && Array.isArray(command.args)
+    ? command.args.filter((item): item is string => typeof item === "string")
+    : [];
+  const argLayer = args.find((arg) => arg.startsWith("--eval-layer="))?.slice("--eval-layer=".length) ?? null;
+  const evidence = isPlainObject(invocation.transportEvidence) ? invocation.transportEvidence : null;
+  const evidenceLayer = evidence && typeof evidence.evalLayer === "string" ? evidence.evalLayer : null;
+  return argLayer === "B0" && evidenceLayer === "B0";
 }
 
 /**
- * 从 replayMode + 归档身份 + modelCalls 推断臂路径。
+ * independent_raw 必须以 runner 归档的 invocation 为准。
+ * trace/fixture 上的 matrixArm、evalMode、schemaId 可被回放入口自行写入，不得单独定身份。
+ */
+function collectIndependentRawInvocationProof(runRoot: string | null): boolean {
+  if (!runRoot) return false;
+  const samplesDir = join(runRoot, "samples");
+  if (!existsSync(samplesDir)) return false;
+  const fixtureIds = readdirSync(samplesDir);
+  if (fixtureIds.length === 0) return false;
+  for (const fixtureId of fixtureIds) {
+    const invocationPath = join(samplesDir, fixtureId, "invocation.json");
+    if (!existsSync(invocationPath)) return false;
+    try {
+      const invocation = JSON.parse(readFileSync(invocationPath, "utf-8")) as unknown;
+      if (!invocationProvesIndependentRaw(invocation)) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function collectFixtureHashBinding(runRoot: string | null): boolean {
+  if (!runRoot) return false;
+  const manifestPath = join(runRoot, "manifest.json");
+  if (!existsSync(manifestPath)) return true;
+  try {
+    const raw = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      samples?: Array<{ fixtureId?: string; fixtureHash?: string }>;
+    };
+    if (!Array.isArray(raw.samples) || raw.samples.length === 0) return false;
+    for (const sample of raw.samples) {
+      if (typeof sample.fixtureId !== "string" || typeof sample.fixtureHash !== "string") {
+        return false;
+      }
+      const fixturePath = join(runRoot, "samples", sample.fixtureId, "fixture.json");
+      if (!existsSync(fixturePath)) return false;
+      const fixture = JSON.parse(readFileSync(fixturePath, "utf-8")) as EvalFixtureV1;
+      if (computeEvalFixtureHash(fixture) !== sample.fixtureHash) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 从 replayMode + invocation + modelCalls 推断臂路径。
  * recorded / synthetic 以 manifest 为准。
- * independent_raw 必须同时具备裸写路由和显式身份（matrixArm/evalMode=B0），
- * 不得把普通 raw-only 全链路残迹误判为独立裸写。
+ * independent_raw 必须同时具备：
+ *  - invocation.command.args 含 --eval-layer=B0，且 transportEvidence.evalLayer=B0；
+ *  - 每条结构化 modelCall 的 requestedRoute/route 都属于 B0 裸写允许名单
+ *    （v2_rawstage2 / v2_rawstage2_gemini31），不得混入 judge / verifier / 未知路由；
+ *  - 若存在 manifest，fixture.json 的 hash 必须与 sample.fixtureHash 一致。
+ * 不得凭 trace 自写的 matrixArm / evalMode / schemaId 定身份。
  */
 export function inferArmPipelineKind(options: {
   replayMode?: ReplayMode | null;
@@ -194,11 +254,14 @@ export function inferArmPipelineKind(options: {
 }): MatrixPipelineKind {
   if (options.replayMode === "recorded") return "recorded_replay";
   if (options.replayMode === "synthetic") return "synthetic_recovery";
-  const tokens = collectArmRouteTokens(options.runRoot ?? null);
-  const hasAmplified = tokens.some((token) => AMPLIFIED_ROUTE_RE.test(token));
-  const hasRaw = tokens.some((token) => RAW_ROUTE_RE.test(token));
-  if (hasAmplified) return "unified_full";
-  if (hasRaw && collectDeclaredIndependentRaw(options.runRoot ?? null)) {
+  const calls = collectArmModelCalls(options.runRoot ?? null);
+  if (calls.some((call) => isAmplifiedModelCall(call))) return "unified_full";
+  if (
+    calls.length > 0 &&
+    calls.every((call) => isAllowedIndependentRawCall(call)) &&
+    collectIndependentRawInvocationProof(options.runRoot ?? null) &&
+    collectFixtureHashBinding(options.runRoot ?? null)
+  ) {
     return "independent_raw";
   }
   return "unknown";
@@ -386,7 +449,7 @@ export const DEFAULT_MIN_QUALITY_SCORE = 0.8;
  *  6. candidate pass^3 !== 1（发布关键路径要求连续 3 次全通过；
  *     样本不足 → null 同样拒绝）；
  *  6b. baseline / raw_direct 样本数 < 3（不得用 1/1 冒充三连 A/B）；
- *  6c. raw_direct 必须是 independent_raw（trace 只有裸写路由，无 amplified/风格优化）；
+ *  6c. raw_direct 必须是 independent_raw（invocation --eval-layer=B0 + 仅裸写路由）；
  *  6d. candidate 必须是 unified_full（统一主链路，不得与 raw_direct 同路径）；
  *  6e. baseline / candidate / raw_direct 必须是真实模型 replayMode
  *     （production_like / dev_real_model / candidate_like），stub 不得批准；
@@ -483,7 +546,7 @@ export function compareMatrixArms(options: CompareMatrixOptions): MatrixComparis
   }
   if (rawDirect !== null && rawDirect.pipelineKind !== "independent_raw") {
     reasons.push(
-      `raw_direct 未证明独立裸写路径（pipelineKind=${String(rawDirect.pipelineKind ?? "unknown")}；要求 trace 仅有裸写路由，不得与 candidate 同为全链路或 recorded 回放）`,
+      `raw_direct 未证明独立裸写路径（pipelineKind=${String(rawDirect.pipelineKind ?? "unknown")}；要求 invocation --eval-layer=B0 + 每条 modelCall 均为 B0 裸写路由，不得混入 judge/verifier/未知路由或凭 trace 自证）`,
     );
   }
   if (rawDirect?.replayMode === "recorded") {

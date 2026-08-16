@@ -150,7 +150,7 @@ test("批量 workspace_or_planner 缺种子时阻断，且绝不生成作者章�
   }
 });
 
-test("novel_strategy_feedback 可凭 chapterId 从成功 trace 推断模型与选中策略", async () => {
+test("novel_strategy_feedback 可凭 chapterId 从成功 trace 推断模型与选中策略，并写 ledger", async () => {
   const projectRoot = makeProjectRoot("pinovel-feedback-trace-");
   const workspaceId = "feedback-trace";
   const tracesDir = join(projectRoot, "workspaces", workspaceId, "traces");
@@ -168,6 +168,13 @@ test("novel_strategy_feedback 可凭 chapterId 从成功 trace 推断模型与�
               selectedStrategyIds: ["voice_emphasis"],
               sourceChapter: "ch17",
               opportunityType: "author_style",
+              // USER-FEEDBACK-EVIDENCE-PIPELINE-1：完整血缘
+              orchestratorRunId: "run-feedback-trace-17",
+              candidateId: "cand-ed-17",
+              strategyBundleId: "bundle:voice_emphasis",
+              exposureId: "exp-feedback-17",
+              promptBundleId: "prompt:author_style:default",
+              deliveredSource: "editorial",
             },
           },
         },
@@ -189,12 +196,27 @@ test("novel_strategy_feedback 可凭 chapterId 从成功 trace 推断模型与�
     assert.equal(result.strategyId, "voice_emphasis");
     assert.equal(result.action, "choice");
     assert.equal(result.result?.recorded, true);
+    assert.equal(result.lineageAudit?.complete, true);
+    assert.ok((result.lineageAudit?.ledgerAppended ?? 0) >= 1);
 
     const store = JSON.parse(readFileSync(
       join(projectRoot, "workspaces", workspaceId, "strategy-policy.json"),
       "utf8",
     ));
     assert.ok(store.partitions?.["gemini-3.1-pro-preview"]?.voice_emphasis);
+
+    const ledgerPath = join(
+      projectRoot,
+      "workspaces",
+      workspaceId,
+      "strategy-evidence",
+      "feedback-evidence-ledger.json",
+    );
+    assert.ok(existsSync(ledgerPath), "公共反馈入口应写入 feedback-evidence-ledger.json");
+    const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    assert.ok(Array.isArray(ledger.events) && ledger.events.length >= 1);
+    assert.equal(ledger.events[0].eventType, "observation");
+    assert.equal(ledger.events[0].lineage.orchestratorRunId, "run-feedback-trace-17");
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

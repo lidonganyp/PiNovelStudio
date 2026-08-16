@@ -16,3 +16,6 @@ reports/demo-4a-prep/** binary
 
 # REVIEW-SURFACE-1-REAL-ADOPTION：冻结真实 verdict CLI show golden stdout（exact-match 回归基准）
 reports/review-surface-1-golden/** binary
+
+# LANGUAGE-CALIBRATION-REAL-1：干净检出必须用字节稳定的 xinmo 章节 fixture
+.pi/extensions/novel-studio/tests/fixtures/xinmo-chapters/** binary

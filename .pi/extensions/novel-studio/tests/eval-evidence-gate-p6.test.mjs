@@ -283,7 +283,13 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
       writeFileSync(
         join(sampleDir, "invocation.json"),
         JSON.stringify({
-          command: { args: ["--project-root=scratch"], env: "(omitted)" },
+          command: {
+            args:
+              pipelineKind === "independent_raw"
+                ? ["--project-root=scratch", "--eval-layer=B0"]
+                : ["--project-root=scratch"],
+            env: "(omitted)",
+          },
           transportEvidence: {
             transport: null,
             forceStub: false,

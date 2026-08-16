@@ -127,6 +127,7 @@ test("StrategyPolicyStore: recordOutcome win 增加 alpha，清零 consecutiveLo
     source: "judge",
     weight: 1,
     timestamp: new Date().toISOString(),
+    decisionCount: 1,
   };
   const rep = store.recordOutcome(ctx.strategyId, ctx.modelVersion, evidence);
   assert.equal(rep.alpha, WEAK_PRIOR_ALPHA + 1);
@@ -258,7 +259,7 @@ test("STRATEGY-ADMISSION-1A: schema v1 的未准入 active 不继承为生产 ac
   });
 
   const rep = legacy.getReputation("chapter_end_pressure_focus", "glm-5.2");
-  assert.equal(legacy.toJSON().schemaVersion, 2);
+  assert.equal(legacy.toJSON().schemaVersion, 3);
   assert.equal(rep.status, "candidate");
   assert.match(rep.statusReason, /admission/i);
 });
@@ -365,7 +366,7 @@ test("StrategyPolicyStore: dormant 策略在 win 后恢复 active", () => {
   assert.equal(rep.consecutiveLosses, 0);
 });
 
-test("StrategyPolicyStore: 长期低胜率 + 样本充足触发 retired", () => {
+test("StrategyPolicyStore: 长期低胜率不得自动 retired（仅 dormant / 人工退役）", () => {
   const store = createStrategyPolicyStore("ws-test");
   const ctx = makeContext();
   store.setStatus(ctx.strategyId, ctx.modelVersion, "active", "测试：策略已通过准入");
@@ -374,15 +375,15 @@ test("StrategyPolicyStore: 长期低胜率 + 样本充足触发 retired", () => 
     store.recordOutcome(ctx.strategyId, ctx.modelVersion, {
       sourceChapter: `ch${i}`, outcome: "loss", source: "judge", weight: 1, timestamp: new Date().toISOString(),
     });
-    // 每次失败后手动重置 dormant（避免在达到 retire 阈值前就 dormant 影响）
+    // 每次失败后手动重置 dormant，验证即便样本充足也不会 auto-retired
     if (store.getReputation(ctx.strategyId, ctx.modelVersion).status === "dormant") {
-      store.setStatus(ctx.strategyId, ctx.modelVersion, "active", "测试：手动恢复 active 以累积 retire 样本");
+      store.setStatus(ctx.strategyId, ctx.modelVersion, "active", "测试：手动恢复 active 以累积样本");
     }
   }
   const rep = store.getReputation(ctx.strategyId, ctx.modelVersion);
-  // 胜率 = 0 < RETIRE_MAX_WIN_RATE，样本 >= RETIRE_MIN_SAMPLES → retired
-  assert.equal(rep.status, "retired");
-  assert.ok(rep.statusReason.includes("retired"));
+  // USER-FEEDBACK-EVIDENCE-PIPELINE-1：文学负反馈不得自动 retired
+  assert.notEqual(rep.status, "retired");
+  assert.ok(rep.status === "active" || rep.status === "dormant");
 });
 
 test("StrategyPolicyStore: retired 不可逆（除非手动 setStatus）", () => {
@@ -816,7 +817,7 @@ test("UserFeedbackIngestor: 用户选择 raw 记 loss", () => {
   assert.equal(rep_beta(store), WEAK_PRIOR_BETA + WEIGHT_USER_EXPLICIT);
 });
 
-test("UserFeedbackIngestor: 用户修改 editorial 交付稿记 loss，weight=USER_MODIFICATION", () => {
+test("UserFeedbackIngestor: 用户修改 editorial 交付稿记 loss（轻度 language 为弱 loss）", () => {
   const store = createStrategyPolicyStore("ws-test");
   const ingestor = createUserFeedbackIngestor();
   const result = ingestor.ingestEdit(store, {
@@ -826,10 +827,13 @@ test("UserFeedbackIngestor: 用户修改 editorial 交付稿记 loss，weight=US
     editDistance: 0.1,
   });
   assert.equal(result.outcome, "loss");
-  assert.equal(result.weight, WEIGHT_USER_MODIFICATION);
+  assert.equal(result.recorded, true);
+  // 轻度 language：weightedEvidence 弱更新，decisionCount=1
+  assert.ok(result.weight >= 1);
+  assert.equal(result.decisionCount, 1);
 });
 
-test("UserFeedbackIngestor: 重度修改额外加权", () => {
+test("UserFeedbackIngestor: 重度修改额外加权但不增加 decisionCount", () => {
   const store = createStrategyPolicyStore("ws-test");
   const ingestor = createUserFeedbackIngestor();
   const result = ingestor.ingestEdit(store, {
@@ -839,6 +843,11 @@ test("UserFeedbackIngestor: 重度修改额外加权", () => {
     editDistance: HEAVY_EDIT_DISTANCE_THRESHOLD + 0.1, // 超过阈值
   });
   assert.equal(result.weight, WEIGHT_USER_MODIFICATION + HEAVY_EDIT_BONUS);
+  assert.equal(result.decisionCount, 1);
+  const rep = store.getReputation("reader_payoff_strengthen", "doubao-seed-2.1-pro");
+  // sampleCount = decisionCount 累加，不等于 weight
+  assert.equal(rep.sampleCount, 1);
+  assert.equal(rep.beta, WEAK_PRIOR_BETA + WEIGHT_USER_MODIFICATION + HEAVY_EDIT_BONUS);
 });
 
 test("UserFeedbackIngestor: 用户未修改不记录（避免虚假样本）", () => {

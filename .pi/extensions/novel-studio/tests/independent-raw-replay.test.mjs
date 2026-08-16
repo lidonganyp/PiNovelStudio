@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -132,6 +132,42 @@ test("runner 归档 transportEvidence，不依赖被省略的 env", async () => 
     mockAgent: false,
     evalLayer: "B0",
   });
+});
+
+test("trace 自写 matrixArm/evalMode/schemaId 不能单独定 independent_raw", async () => {
+  const matrixDist = join(process.cwd(), "dist-eval", "v2", "core", "eval-replay-matrix.js");
+  const { inferArmPipelineKind } = await import(`file://${matrixDist}`);
+  const root = mkdtempSync(join(tmpdir(), "forged-raw-identity-"));
+  try {
+    const sampleDir = join(root, "samples", "fixture.forged");
+    const tracesDir = join(sampleDir, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    writeFileSync(
+      join(tracesDir, "chapter-001-quality-trace.json"),
+      JSON.stringify({
+        schemaId: "pinovel.independent-raw-quality-trace",
+        matrixArm: "raw_direct",
+        evalMode: "B0",
+        gates: [{
+          stage: "v2_final_selected",
+          evidence: { modelCalls: [{ requestedRoute: "v2_rawstage2_gemini31" }] },
+        }],
+      }),
+    );
+    writeFileSync(
+      join(sampleDir, "invocation.json"),
+      JSON.stringify({
+        command: { args: ["--project-root=scratch"], env: "(omitted)" },
+        transportEvidence: { evalLayer: null, evalOnly: true, forceStub: false, mockAgent: false, transport: null },
+      }),
+    );
+    assert.equal(
+      inferArmPipelineKind({ replayMode: "production_like", runRoot: root }),
+      "unknown",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("full-pipeline runner：matrixArm=raw_direct 时 invoke 带 --eval-layer=B0", async () => {

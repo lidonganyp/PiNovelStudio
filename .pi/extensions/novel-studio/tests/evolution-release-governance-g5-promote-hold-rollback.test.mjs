@@ -259,6 +259,22 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
       join(sampleDir, "state-projection.json"),
       JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
     );
+    if (pipelineKind === "independent_raw") {
+      writeFileSync(
+        join(sampleDir, "invocation.json"),
+        JSON.stringify({
+          command: { args: ["--project-root=scratch", "--eval-layer=B0"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: "B0",
+          },
+          result: { exitCode: 0 },
+        }),
+      );
+    }
     samples.push({
       fixtureId,
       fixtureHash: computeEvalFixtureHash(fixture),

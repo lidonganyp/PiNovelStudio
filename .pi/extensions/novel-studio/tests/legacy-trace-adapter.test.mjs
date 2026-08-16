@@ -100,6 +100,7 @@ test("P15: V2 stage 写入 gates[]（stage 名加 v2_ 前缀）", () => {
       workspacePath: tmpDir,
       workspaceId: "ws-gates",
       chapterId: "1",
+      writeMode: "legacy",
     });
     adapter.record({
       stage: "context_compiled",
@@ -383,6 +384,7 @@ test("P15: 多次 record 后 flush 写入全部 gates", () => {
       workspacePath: tmpDir,
       workspaceId: "ws-multi",
       chapterId: "1",
+      writeMode: "legacy",
     });
     const stages = [
       "context_compiled",
@@ -445,6 +447,7 @@ test("P15: candidate_compared gate 记录 winner 与 confidence", () => {
       workspacePath: tmpDir,
       workspaceId: "ws-cmp",
       chapterId: "1",
+      writeMode: "legacy",
     });
     adapter.record({
       stage: "candidate_compared",
@@ -478,6 +481,7 @@ test("P15: appendExisting 默认追加到已有 trace（不清空 legacy gates�
       workspacePath: tmpDir,
       workspaceId: "ws-append",
       chapterId: "1",
+      writeMode: "legacy",
     });
     adapter1.record({ stage: "context_compiled", timestamp: new Date().toISOString() });
     adapter1.flush();
@@ -486,6 +490,7 @@ test("P15: appendExisting 默认追加到已有 trace（不清空 legacy gates�
       workspacePath: tmpDir,
       workspaceId: "ws-append",
       chapterId: "1",
+      writeMode: "legacy",
     });
     adapter2.record({ stage: "candidate_generated", timestamp: new Date().toISOString() });
     adapter2.flush();
@@ -550,6 +555,7 @@ test("Layer 2: editorial_plan_planned stage 映射到 v2_editorial_plan_planned 
       workspacePath: tmpDir,
       workspaceId: "ws-edplan",
       chapterId: "17",
+      writeMode: "legacy",
     });
     adapter.record({
       stage: "editorial_plan_planned",
@@ -612,6 +618,7 @@ test("Layer 2: degraded=true 时 editorial_plan_planned gate.status=WARN", () =>
       workspacePath: tmpDir,
       workspaceId: "ws-degraded",
       chapterId: "17",
+      writeMode: "legacy",
     });
     adapter.record({
       stage: "editorial_plan_planned",
