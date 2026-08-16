@@ -66,11 +66,38 @@ function makeManifest(releaseId, status = "evaluated", changeClass = "R2") {
   };
 }
 
+function writeMatchingStateEvent(registry, releaseId, status) {
+  if (status === "draft") return;
+  const fromByTo = {
+    candidate: "draft",
+    frozen: "candidate",
+    evaluated: "frozen",
+    approved_dev: "evaluated",
+    active_dev: "approved_dev",
+    candidate_prod: "active_dev",
+    active_prod: "candidate_prod",
+    held: "evaluated",
+    rejected: "evaluated",
+  };
+  const fromStatus = fromByTo[status];
+  if (!fromStatus) return;
+  registry.recordStateEvent({
+    eventId: `evt-${releaseId}-${status}`,
+    releaseId,
+    fromStatus,
+    toStatus: status,
+    reason: `test fixture arrived at ${status}`,
+    actor: "system",
+    timestamp: "2026-07-16T00:00:00.000Z",
+  });
+}
+
 function setupReleases(root, manifests) {
   const releasesDir = join(root, "releases");
   const registry = createEvolutionReleaseRegistry({ releasesDir });
   for (const m of manifests) {
     registry.writeManifest(m);
+    writeMatchingStateEvent(registry, m.releaseId, m.status);
   }
   return registry;
 }
