@@ -141,9 +141,52 @@ function collectArmRouteTokens(runRoot: string | null): string[] {
   return tokens;
 }
 
+function collectDeclaredIndependentRaw(runRoot: string | null): boolean {
+  if (!runRoot) return false;
+  const samplesDir = join(runRoot, "samples");
+  if (!existsSync(samplesDir)) return false;
+  for (const fixtureId of readdirSync(samplesDir)) {
+    const fixturePath = join(samplesDir, fixtureId, "fixture.json");
+    if (existsSync(fixturePath)) {
+      try {
+        const fixture = JSON.parse(readFileSync(fixturePath, "utf-8")) as {
+          matrixArm?: string;
+        };
+        if (fixture.matrixArm === "raw_direct") return true;
+      } catch {
+        // ignore
+      }
+    }
+    const tracesDir = join(samplesDir, fixtureId, "traces");
+    if (!existsSync(tracesDir)) continue;
+    for (const name of readdirSync(tracesDir)) {
+      if (!name.endsWith(".json") || name.includes("evidence-report")) continue;
+      try {
+        const trace = JSON.parse(readFileSync(join(tracesDir, name), "utf-8")) as {
+          schemaId?: string;
+          matrixArm?: string;
+          evalMode?: string;
+        };
+        if (
+          trace.matrixArm === "raw_direct" ||
+          trace.evalMode === "B0" ||
+          trace.schemaId === "pinovel.independent-raw-quality-trace"
+        ) {
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return false;
+}
+
 /**
- * 从 replayMode + 归档 modelCalls 推断臂路径。
- * recorded / synthetic 以 manifest 为准；其余必须看 trace 路由，不得靠自称。
+ * 从 replayMode + 归档身份 + modelCalls 推断臂路径。
+ * recorded / synthetic 以 manifest 为准。
+ * independent_raw 必须同时具备裸写路由和显式身份（matrixArm/evalMode=B0），
+ * 不得把普通 raw-only 全链路残迹误判为独立裸写。
  */
 export function inferArmPipelineKind(options: {
   replayMode?: ReplayMode | null;
@@ -155,7 +198,9 @@ export function inferArmPipelineKind(options: {
   const hasAmplified = tokens.some((token) => AMPLIFIED_ROUTE_RE.test(token));
   const hasRaw = tokens.some((token) => RAW_ROUTE_RE.test(token));
   if (hasAmplified) return "unified_full";
-  if (hasRaw) return "independent_raw";
+  if (hasRaw && collectDeclaredIndependentRaw(options.runRoot ?? null)) {
+    return "independent_raw";
+  }
   return "unknown";
 }
 

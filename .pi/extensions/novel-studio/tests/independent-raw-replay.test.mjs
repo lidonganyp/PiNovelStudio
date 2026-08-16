@@ -61,6 +61,79 @@ test("independent raw：eval-only + stub generate 写出 result 与 raw_direct t
   }
 });
 
+test("evalMode=B0 + writerModel=gemini31 请求 v2_rawstage2_gemini31", async () => {
+  const prev = process.env.PINOVEL_EVAL_ONLY;
+  process.env.PINOVEL_EVAL_ONLY = "1";
+  const requested = [];
+  try {
+    const { runUnifiedPipeline } = await import("../dist/v2/core/unified-entry.js");
+    await runUnifiedPipeline({
+      workspaceId: "eval-b0-route",
+      chapterId: "chapter-001",
+      chapterNumber: 1,
+      projectRoot: process.cwd(),
+      writerModel: "gemini31",
+      evalMode: "B0",
+      evalPrefix: "independent-raw",
+      evalIntent: {
+        chapterFunction: "",
+        readerExperience: [],
+        currentPressure: [],
+        meaningfulChoices: [],
+        promisesToAdvance: [],
+        possibleEndPressure: [],
+        relevantCharacters: [],
+        inviolableFacts: [],
+        sourceRefs: [],
+      },
+      evalContext: {
+        facts: [],
+        characterStates: [],
+        openLoops: [],
+        worldRules: [],
+        styleReferences: [],
+        sourceMap: [],
+        constitution: null,
+        longTermState: null,
+      },
+      evalModelGenerate: async (input) => {
+        requested.push(input.route);
+        return { text: "裸写", finishReason: "stop", route: input.route, requestedRoute: input.route };
+      },
+      evalPromptProfile: "generic_writer_v1",
+    });
+    assert.ok(
+      requested.includes("v2_rawstage2_gemini31"),
+      `routes=${JSON.stringify(requested)}`,
+    );
+    assert.equal(requested.includes("v2_rawstage2"), false, `未锁路由仍请求 v2_rawstage2：${JSON.stringify(requested)}`);
+  } finally {
+    if (prev === undefined) delete process.env.PINOVEL_EVAL_ONLY;
+    else process.env.PINOVEL_EVAL_ONLY = prev;
+  }
+});
+
+test("runner 归档 transportEvidence，不依赖被省略的 env", async () => {
+  const { collectReplayTransportEvidence } = await import(`file://${runnerDist}`);
+  const evidence = collectReplayTransportEvidence({
+    args: ["--eval-layer=B0"],
+    mockAgent: false,
+    env: {
+      PINOVEL_EVAL_ONLY: "1",
+      V2_FORCE_STUB: "1",
+      PINOVEL_EVAL_REPLAY_TRANSPORT: "stub",
+      GEMINI_API_KEY: "secret-must-not-be-needed",
+    },
+  });
+  assert.deepEqual(evidence, {
+    transport: "stub",
+    forceStub: true,
+    evalOnly: true,
+    mockAgent: false,
+    evalLayer: "B0",
+  });
+});
+
 test("full-pipeline runner：matrixArm=raw_direct 时 invoke 带 --eval-layer=B0", async () => {
   const { resolveInvokeGenerateChapterScript } = await import(`file://${runnerDist}`);
   assert.match(resolveInvokeGenerateChapterScript(process.cwd()), /invoke-generate-chapter/);

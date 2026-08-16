@@ -140,6 +140,9 @@ function makeWorkspace(projectRoot, workspaceId, opts = {}) {
 function pipelineTraceFor(kind) {
   if (kind === "independent_raw") {
     return {
+      schemaId: "pinovel.independent-raw-quality-trace",
+      matrixArm: "raw_direct",
+      evalMode: "B0",
       gates: [
         {
           stage: "v2_final_selected",
@@ -226,6 +229,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
       evalProtocolVersion: "pinovel.eval-protocol/1",
       evalOnly: true,
       replayMode,
+      ...(pipelineKind === "independent_raw" ? { matrixArm: "raw_direct" } : {}),
       createdAt: "2026-08-15T00:00:00.000Z",
       provenance: {
         releaseId,
@@ -280,6 +284,13 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
         join(sampleDir, "invocation.json"),
         JSON.stringify({
           command: { args: ["--project-root=scratch"], env: "(omitted)" },
+          transportEvidence: {
+            transport: null,
+            forceStub: false,
+            evalOnly: true,
+            mockAgent: false,
+            evalLayer: pipelineKind === "independent_raw" ? "B0" : null,
+          },
           result: { exitCode: 0 },
         }),
       );

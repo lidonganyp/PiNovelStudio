@@ -53,7 +53,9 @@
 - 仍不能当作“相对 115 的 3 连真实 A/B”：baseline 只有 1 个样本；raw_direct 是 candidate 正文的确定性回放，不是独立裸写
 - 门禁已收口：raw_direct 必须从 trace 路由证明 `independent_raw`（仅裸写、无 amplified）；candidate 必须是 `unified_full`；P6 始终用 runRoot manifest/trace 覆盖报告里的 replayMode/pipelineKind
 - 三关键臂必须是真实模型 replayMode，且每次调用要有 provider/model/token 计量；mock / V2_FORCE_STUB 传输不得过门
-- raw_direct 产品入口：fixture.matrixArm=raw_direct → invoke --eval-layer=B0 → runIndependentRawReplay（evalMode=B0）
+- raw_direct 产品入口：fixture.matrixArm=raw_direct → invoke --eval-layer=B0 → runIndependentRawReplay（evalMode=B0）；eval 路径现在套 writer 路由锁（gemini31 → v2_rawstage2_gemini31）
+- independent_raw 必须带 matrixArm/evalMode=B0 身份；普通 raw-only trace 不得误判
+- invocation 归档 transportEvidence（forceStub/transport/mockAgent），不再从被省略的 env 猜 stub
 
 ## CLI 口径
 

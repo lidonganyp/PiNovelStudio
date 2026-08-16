@@ -476,14 +476,25 @@ export function gradeDeterministic(
             detail: `${entry.replayMode} invocation 含 mock（真实模型臂不得走 stub 传输）`,
           });
         }
-        const env = isPlainObject(command) ? command.env : null;
-        if (isPlainObject(env)) {
-          if (env.V2_FORCE_STUB === "1" || env.PINOVEL_EVAL_REPLAY_TRANSPORT === "stub") {
-            violations.push({
-              fixtureId: entry.fixtureId,
-              detail: `${entry.replayMode} 传输是 stub（V2_FORCE_STUB / PINOVEL_EVAL_REPLAY_TRANSPORT）`,
-            });
-          }
+        const evidence = isPlainObject(invocation.transportEvidence)
+          ? invocation.transportEvidence
+          : null;
+        if (evidence === null) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `${entry.replayMode} 缺少 transportEvidence（runner 不得把传输身份省略进 env=\"(omitted)\"）`,
+          });
+        } else if (
+          evidence.forceStub === true ||
+          evidence.transport === "stub" ||
+          evidence.mockAgent === true
+        ) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail:
+              `${entry.replayMode} 传输是 stub` +
+              `（transport=${String(evidence.transport)} forceStub=${String(evidence.forceStub)} mockAgent=${String(evidence.mockAgent)}）`,
+          });
         }
       }
       for (const [index, call] of collected.entries()) {

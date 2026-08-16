@@ -33,6 +33,7 @@ import type {
   V2Output,
 } from "./types.js";
 import { createContextCompiler } from "./context-compiler.js";
+import { buildNarrativeEvidenceSnapshot } from "./narrative-evidence-snapshot.js";
 import { createChapterIntentBuilder } from "./chapter-intent-builder.js";
 import type { ChapterIntent, ChapterIntentInput } from "./chapter-intent-builder.js";
 import { UnifiedOrchestrator, type UnifiedOrchestratorOutput, type ModelCallEntry } from "./unified-orchestrator.js";
@@ -70,6 +71,19 @@ import {
   createTraceId,
 } from "./audit/index.js";
 import { productionFailureToAuditEvent } from "./failure-envelope.js";
+import {
+  collectRequiredActivationFailures,
+  createChapterConsumptionLedger,
+  recordOptionalCapabilityUnavailable,
+  resolveChapterCapabilityPackageSet,
+  planProductionCapabilityActivations,
+  requiredPackageFailure,
+  resolveRouteCapabilityKey,
+} from "./capability-package-production.js";
+import { createBudgetLedger } from "./budget-ledger.js";
+import { defaultCapabilityRegistry } from "../../novelos/protocol/capability-registry.js";
+import { NARRATIVE_TOOL_NAMES } from "../../novelos/tools/narrative-tools.js";
+import { ACTIVATE_CAPABILITY_PACKAGE_TOOL } from "../../novelos/agent/capability-package-runtime.js";
 import type { AuditEventRecorder } from "./audit/audit-event-recorder.js";
 // RUN-LIFECYCLE-P1：统一 RunAggregate 契约进入生产闭包（经 unified-entry 编译入口）
 import {
@@ -254,6 +268,8 @@ export type {
   GovernanceReports,
 } from "./routing-governance-runtime.js";
 import { compileContextSafety, createConstraintManifest } from "./context-safety.js";
+import { compileProductionContextPackage } from "./context-package-production.js";
+import type { ContextPackage } from "./trust/context-package.js";
 // EVOLUTION-RELEASE-GOVERNANCE-G6：生产入口发行治理门禁
 // 真相源：docs/evolution-release-governance-development-plan.md §Phase G6
 // 在 ContextCompiler 之前执行；未审批 release / fingerprint 不匹配 / 无 active pointer 时 hard block。
@@ -1610,6 +1626,11 @@ export async function runUnifiedPipeline(
         enableVerification,
       });
     }
+    const evalWriterLock = resolveWriterModelRouteLock(writerModel);
+    const lockedEvalGenerate = wrapModelGenerateForWriterLock(
+      evalModelGenerate,
+      evalWriterLock,
+    );
     const evalOrchestrator = new UnifiedOrchestrator();
     const evalControlPlane = buildTrustedControlPlane({
       taskId: `NOVEL-EVAL:${workspaceId}:${chapterId}`,
@@ -1617,7 +1638,13 @@ export async function runUnifiedPipeline(
       scope: ["eval unified pipeline", "stub/local model", "no persistence"],
       allowedResources: ["eval:model", "eval:context"],
       forbiddenResources: ["network:model", "workspace:commit", "chapter:save", "artifact:export"],
-      generationLock: { route: "eval", provider: "local", model: "eval" },
+      generationLock: evalWriterLock
+        ? {
+            route: evalWriterLock.rawRoute,
+            provider: evalWriterLock.provider,
+            model: evalWriterLock.model,
+          }
+        : { route: "eval", provider: "local", model: "eval" },
       judgeLock: { route: "eval", provider: "local", model: "eval" },
       modelTransport: "local",
       enforceModelLocks: false,
@@ -1640,7 +1667,7 @@ export async function runUnifiedPipeline(
       rawPromptProfile: evalPromptProfile,
       constitution: evalContext.constitution ?? null,
       characterNames: evalCharacterNames ?? [],
-      modelGenerate: evalModelGenerate,
+      modelGenerate: lockedEvalGenerate,
       arbitratorModelGenerate: evalArbitratorModelGenerate,
       timeoutMs: candidateTimeoutMs,
       evalMode,
@@ -1700,7 +1727,10 @@ export async function runUnifiedPipeline(
       ? { fingerprintRoot: process.env.PINOVEL_FINGERPRINT_ROOT }
       : {}),
     ...(evalCandidateReleaseId
-      ? { targetReleaseId: evalCandidateReleaseId, requireActiveApproval: false }
+      ? {
+          targetReleaseId: evalCandidateReleaseId,
+          requireActiveApproval: process.env.PINOVEL_EVAL_REQUIRE_ACTIVE_APPROVAL === "1",
+        }
       : {}),
   });
   const releaseGovernanceTrace = {
@@ -1915,13 +1945,21 @@ export async function runUnifiedPipeline(
   // 不写 trace，证据无法回放。现在 catch 后写早期 trace + 返回结构化 blocked。
   let compiled: ReturnType<ReturnType<typeof createContextCompiler>["compile"]>;
   let compileDiagnostics: Diagnostic[] = [];
+  let evidenceSnapshot: ReturnType<typeof buildNarrativeEvidenceSnapshot> | undefined;
   try {
     const compiler = createContextCompiler();
+    evidenceSnapshot = buildNarrativeEvidenceSnapshot({
+      workspaceId,
+      projectRoot,
+      chapterNumber,
+      releaseId: releaseGovernanceTrace?.releaseId ?? null,
+    });
     compiled = compiler.compile({
       workspaceId,
       chapterId,
       chapterNumber,
       projectRoot,
+      evidenceSnapshot,
     });
     compileDiagnostics = compiled.diagnostics ?? [];
   } catch (earlyErr) {
@@ -2036,6 +2074,111 @@ export async function runUnifiedPipeline(
     intentStateStore
   );
 
+  const frozenPackages = resolveChapterCapabilityPackageSet(projectRoot, { allowMissingInDev: true });
+  if (frozenPackages.errors.length > 0) {
+    const envelope = requiredPackageFailure(
+      `capability package set invalid: ${frozenPackages.errors.join(";")}`,
+      { errors: frozenPackages.errors, source: frozenPackages.source },
+    );
+    persistEarlyBlockedTrace(
+      projectRoot,
+      workspaceId,
+      chapterId,
+      envelope,
+      releaseGovernanceTrace,
+      effectiveFullPipelinePreview,
+      auditSession,
+    );
+    return seal({
+      status: "blocked",
+      workspaceId,
+      chapterId,
+      chapterNumber,
+      text: "",
+      candidates: [],
+      diagnostics: [],
+      failureEnvelope: envelope,
+      stageResults: {
+        unifiedPipeline: true,
+        releaseGovernance: {
+          ...releaseGovernanceTrace,
+          blocked: true,
+          reason: envelope.reason,
+        },
+      },
+    });
+  }
+  const capabilityBudgetLedger = input._priorBudgetLedger ?? createBudgetLedger();
+  const capabilityConsumptionLedger = createChapterConsumptionLedger();
+  const capabilityPlan = planProductionCapabilityActivations({
+    runId: runRouting.orchestratorRunId,
+    workspaceId,
+    chapterId,
+    releaseId: releaseGateResult.releaseId ?? "dev",
+    bundleId: releaseGateResult.behaviorIdentity.bundleId ?? "dev",
+    capabilityPackageSetHash: frozenPackages.hash,
+    routeCapabilityKey: resolveRouteCapabilityKey(runRouting),
+    packageSet: frozenPackages.set,
+    facts: {
+      chapterNumber,
+      stage: "agentic_investigation",
+      intent: { chapterFunction: intent.chapterFunction ?? "" },
+      contextMeta: {},
+      stateSummary: {},
+    },
+    stageAllowedTools: [...NARRATIVE_TOOL_NAMES, ACTIVATE_CAPABILITY_PACKAGE_TOOL],
+    releaseAllowedTools: [...NARRATIVE_TOOL_NAMES, ACTIVATE_CAPABILITY_PACKAGE_TOOL],
+    ledger: capabilityBudgetLedger,
+    capabilityRegistry: defaultCapabilityRegistry,
+    consumptionLedger: capabilityConsumptionLedger,
+    mode: evalMode === undefined ? "production" : "eval",
+  });
+  recordOptionalCapabilityUnavailable(
+    capabilityConsumptionLedger,
+    frozenPackages.set,
+    capabilityPlan.manifest,
+  );
+  const requiredActivationFailures = collectRequiredActivationFailures(
+    frozenPackages.set,
+    capabilityPlan.manifest,
+  );
+  if (requiredActivationFailures.length > 0) {
+    const envelope = requiredPackageFailure(
+      `required capability package unavailable: ${requiredActivationFailures.map((item) => `${item.packageId}:${item.decision}:${item.reasons.join(",")}`).join(";")}`,
+      { failures: requiredActivationFailures },
+    );
+    persistEarlyBlockedTrace(
+      projectRoot,
+      workspaceId,
+      chapterId,
+      envelope,
+      releaseGovernanceTrace,
+      effectiveFullPipelinePreview,
+      auditSession,
+    );
+    return seal({
+      status: "blocked",
+      workspaceId,
+      chapterId,
+      chapterNumber,
+      text: "",
+      candidates: [],
+      diagnostics: [],
+      failureEnvelope: envelope,
+      stageResults: {
+        unifiedPipeline: true,
+        releaseGovernance: {
+          ...releaseGovernanceTrace,
+          blocked: true,
+          reason: envelope.reason,
+        },
+        capabilityPackages: {
+          requiredFailures: requiredActivationFailures,
+        },
+      },
+    });
+  }
+
   // ── 3. ModelGenerateFn：真实链路或 stub ────────────────────────────────
   // REAL-QUALITY-1-PREFLIGHT：useStub 只看 V2_FORCE_STUB（去掉 modelTestRoute===undefined 条件），
   // 使 modelTestRoute=glm 时也能用 stub 测试（不调用真实模型）。
@@ -2134,6 +2277,56 @@ export async function runUnifiedPipeline(
     outputReserveTokens: Number(process.env.PINOVEL_CONTEXT_OUTPUT_RESERVE_TOKENS ?? 8192),
     safetyMarginTokens: Number(process.env.PINOVEL_CONTEXT_SAFETY_MARGIN_TOKENS ?? 4096),
   });
+  let contextPackage: ContextPackage | undefined;
+  if (contextSafety.ok) {
+    const packaged = compileProductionContextPackage({
+      safety: contextSafety,
+      snapshotId: evidenceSnapshot?.snapshotId,
+      characterNames,
+      targetWordCount,
+      fewshotSelection: acceptedChapterReferences,
+    });
+    if (!packaged.ok || !packaged.package) {
+      persistEarlyBlockedTrace(
+        projectRoot, workspaceId, chapterId,
+        {
+          stage: "context_compile",
+          gate: "context_package_validation",
+          severity: "hard_block",
+          reason: `ContextPackage 校验失败：${packaged.errors.join("; ")}`,
+          evidence: { errors: packaged.errors, snapshotId: evidenceSnapshot?.snapshotId ?? null },
+          recoverable: false,
+          userActionRequired: ["检查槽位污染、hash 或过期硬约束后重试"],
+        },
+        releaseGovernanceTrace, effectiveFullPipelinePreview, auditSession,
+      );
+      return seal({
+        status: "blocked",
+        workspaceId,
+        chapterId,
+        chapterNumber,
+        text: "",
+        candidates: [],
+        diagnostics: [],
+        failureEnvelope: {
+          stage: "context_compile",
+          gate: "context_package_validation",
+          failureClass: "blocked",
+          severity: "hard_block",
+          reason: `ContextPackage 校验失败：${packaged.errors.join("; ")}`,
+          evidence: { errors: packaged.errors, snapshotId: evidenceSnapshot?.snapshotId ?? null },
+          recoverable: false,
+          degradedTo: "hard_block",
+        },
+        stageResults: { unifiedPipeline: true, contextPackageValidation: false },
+        isPreviewRun: effectiveFullPipelinePreview,
+        selectedSource: null,
+        selectedCandidateId: "",
+        isUnderSpecified: false,
+      });
+    }
+    contextPackage = packaged.package;
+  }
   if (!stateStageDecision.allowed) {
     // P2 修复（Phase 1 整改）：control plane 能力拒绝也写 trace。
     persistEarlyBlockedTrace(
@@ -2205,13 +2398,19 @@ export async function runUnifiedPipeline(
     strategySelector,
     outcomeRecorder,
     agenticCandidateSource,
+    evidenceSnapshot,
     controlPlane,
     runRouting,
     contextSafety,
+    contextPackage,
     sceneSolution,
     craftGenes,
     promptPatternResolution: evalMode === undefined ? undefined : promptPatternResolution,
-    positiveGainPromptPatternResolution: evalMode === undefined ? promptPatternResolution : undefined,
+    capabilityActivation: capabilityPlan.manifest,
+    capabilityCatalog: capabilityPlan.catalog,
+    capabilityPackageSet: frozenPackages.set,
+    capabilityConsumptionLedger,
+    _priorBudgetLedger: capabilityPlan.ledger,
     positiveGainProductionEnabled: false,
     positiveGainCandidateLimit: boundedBestOf3 ? 2 : 1,
     // QUALITY-WINNER-SELECTION-1: raw is the baseline and unresolved-comparison
@@ -2229,7 +2428,6 @@ export async function runUnifiedPipeline(
     // 仅已准入 active 策略参与 Thompson Sampling；candidate 不受随机阈值过滤。
     // 不影响模型调用本身（路由锁定由 modelTestRoute 控制）。
     seed: input.seed,
-    _priorBudgetLedger: input._priorBudgetLedger,
     previewOnly,
     fullPipelinePreview: effectiveFullPipelinePreview,
     qualityExperiment,

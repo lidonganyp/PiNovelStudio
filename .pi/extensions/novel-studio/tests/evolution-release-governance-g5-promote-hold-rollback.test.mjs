@@ -137,6 +137,9 @@ function makeRegistry(root) {
 function g5PipelineTrace(kind) {
   if (kind === "independent_raw") {
     return {
+      schemaId: "pinovel.independent-raw-quality-trace",
+      matrixArm: "raw_direct",
+      evalMode: "B0",
       gates: [{
         stage: "v2_final_selected",
         evidence: {
@@ -204,6 +207,7 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
       evalProtocolVersion: "pinovel.eval-protocol/1",
       evalOnly: true,
       replayMode,
+      ...(pipelineKind === "independent_raw" ? { matrixArm: "raw_direct" } : {}),
       createdAt: "2026-08-16T00:00:00.000Z",
       provenance: {
         releaseId,

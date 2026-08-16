@@ -1,0 +1,345 @@
+{
+  "name": "心魔界-作者手写指纹",
+  "id": "xinmo",
+  "version": "3.0",
+  "profileRole": "workspace_author_style",
+  "extractionBasis": "第1-16章用户最终版33,213字（1,986个非空段）+ 80条修正记录 + CORE-WRITING-PRINCIPLES v1.2 + SCENE-RULE-DECISION-MATRIX v1.6",
+  "lastUpdated": "2026-07-21",
+  "note": "这是《心魔界》的作品专属作者风格真相源。统计值描述既有文本，不是生产硬门；定性指导用于 NovelOS Agentic 初稿后的整章风格优化，最终文学评价由用户完成。",
+  "referenceWorks": [
+    "心魔界-用户最终版第1-16章"
+  ],
+  "usagePolicy": {
+    "rawPrompt": "not_applicable",
+    "editorialCandidate": "full_chapter_required",
+    "fullChapterOptimization": "required",
+    "selectionAuthority": "user_feedback",
+    "statisticsRole": "diagnostic_only",
+    "note": "生产正文先经 NovelOS Agentic 检索与验证，再强制消费作者定性风格做整章优化；段长、对话占比等观察统计不得转成硬配额。系统不再调用机器文学裁判，最终由用户评价并提供修改稿。"
+  },
+  "editorialGuidance": [
+    "叙述保持第三人称有限，原则上锚定李一凡当下可感知的范围。",
+    "情绪优先通过身体反应、静默或动作呈现，不直接替人物命名。",
+    "一个动作、观察或感知通常独立承重；信息、推理或高压连续动作需要时可以自然延展。",
+    "对话以简短、克制为常态；对话后常用静默、一个动作或状态收住，不补解释性内心独白。",
+    "人物采取重要行动前，先让试探、评估或现实阻力可见，避免先声明决定再立刻执行。",
+    "克制是默认而不是律法；真正的情感顶点可以释放，但应由最合适的承担者和具体处境托住。",
+    "章末优先停在仍有叙事压力的动作、状态或静物细节上，不替人物总结意义。",
+    "道具首次出现只抓一个最有辨识度的异常属性；跨章再现时承担新的叙事功能。",
+    "汉语表达自然直接，少用翻译腔、外貌清单、三段对照式独白和刻意文言虚词。"
+  ],
+  "characterVoiceGuidance": {
+    "李一凡": [
+      "语言层级保留普通穷学生的生活感，不精英化，也不油滑贫嘴。",
+      "自责常由一个词、一个动作或短暂停顿承重；决策更像试探、评估后执行。"
+    ],
+    "李强": [
+      "语言极简，关心通过动作、物品与生活细节传递，不主动说透温情。",
+      "父亲段的情感常来自李一凡终于看见此前忽略的细节。"
+    ],
+    "墨老": [
+      "多用问句、比喻或反问引导，不直接替徒弟给出答案。",
+      "语气苍老克制，偶尔轻笑；每次出手都应保留消耗感。"
+    ],
+    "梦魇": [
+      "短句、冷硬、从不主动解释自己的原则或动机。",
+      "不对李一凡突然温和；关系变化通过行动和交换体现。"
+    ],
+    "反派": [
+      "人物的人味和现实牵挂优先于维持抽象的反派段位。",
+      "具体生活处境比标签化的狠厉、阴冷或强者气场更重要。"
+    ]
+  },
+  "statistics": {
+    "sample": {
+      "chapters": 16,
+      "finalCnChars": 33213,
+      "nonEmptyParagraphs": 1986,
+      "userCorrections": 80
+    },
+    "chapter": {
+      "averageCnChars": 2076,
+      "observedMinCnChars": 1478,
+      "observedMaxCnChars": 2908,
+      "typicalCnChars": [
+        1700,
+        2700
+      ],
+      "typicalScenes": [
+        3,
+        4
+      ],
+      "note": "观察统计，不是字数或场景数硬门。一章通常讲清1-2件事即收。"
+    },
+    "paragraph": {
+      "p25CnChars": 7,
+      "medianCnChars": 12,
+      "p75CnChars": 21,
+      "p90CnChars": 37,
+      "averageCnChars": 16.7,
+      "note": "分段过门的观察结果，不要求机械截句；战斗、信息释放和推理段允许自然加长。"
+    },
+    "dialogue": {
+      "observedRatio": 0.335,
+      "nonDialogueParagraphRatio": 0.657,
+      "note": "对话行占比是历史样本，不是生成目标或质量门槛。"
+    }
+  },
+  "macroStructure": {
+    "chapterFocus": "每章集中讲清1-2件事，不为填满字数注水。",
+    "sceneFunctionPriority": [
+      "钩子投放或回收",
+      "人物状态变化",
+      "世界观或设定推进",
+      "情绪节拍"
+    ],
+    "sceneTransition": "场景应连贯；确需明显切换时用空行或分隔线。"
+  },
+  "paragraph": {
+    "coreCraft": "分段过门",
+    "defaultUnit": "一个独立动作、观察、感知或环境变化通常独立成段。",
+    "dynamicLength": {
+      "combat": "紧张连续动作可以稍长，以维持来不及喘气的压迫感。",
+      "information": "世界观或信息集中释放时允许中长段。",
+      "reasoning": "主角连续推理时允许中长段。"
+    },
+    "avoid": [
+      "把起因、动作和结果全部压进同一段",
+      "把内心戏和外部动作压成解释性复句",
+      "为了追逐统计值机械拆段"
+    ]
+  },
+  "narrative": {
+    "povStyle": "第三人称有限",
+    "viewpointAnchor": "李一凡",
+    "povConstraint": "叙述原则上不离开李一凡的感知范围；不要用‘与此同时’或‘李一凡不知道的是’开启全知旁白。",
+    "dramaticIronyException": "可以短暂呈现主角未察觉的现象，但要明确落在‘毫无察觉’的信息差上，并在后文兑现。",
+    "emotionDistance": "身体第一人称：优先写身体反应、动作与停顿，而不是直接命名情绪。",
+    "dialogueRatio": 0.335,
+    "dialogueRatioRole": "observed_only",
+    "infoDumpStrategy": "让信息依附在行动、对话和当下观察中；必要的信息段可以集中，但不写成旁白说明书。",
+    "chapterEndPattern": "动作、悬置、留白、入睡或疑问均可轮换；最强偏好是由静物细节承担情绪的留白收束。"
+  },
+  "dialogue": {
+    "defaultStyle": "短而克制，单句或少量连续句为常态。",
+    "postDialoguePattern": "对话之后常经过静默、动作或时间缓冲，再决定是否开口。",
+    "exceptions": "真正情感顶点可让合适的配角承担较长表达，不把克制机械化。",
+    "avoid": [
+      "每句都添加‘说道’一类空泛标签",
+      "用长对话替代本应由行动或静默承担的信息",
+      "对话后追加解释人物情绪的大段内心独白"
+    ]
+  },
+  "action": {
+    "granularity": "关键时刻关注手指、关节、肌肉和身体停顿等微观动作。",
+    "decisionChain": [
+      "目标浮现",
+      "轻量试探",
+      "评估现实困难",
+      "确认决心",
+      "正式执行"
+    ],
+    "decisionChainRole": "可伸缩的因果顺序，不要求每次逐项写满。",
+    "antiPattern": "先宣布决定，再无阻力地立即执行。",
+    "emotionRule": "动作本身提供信息，不在动作后追加同义的情绪解释。"
+  },
+  "emotion": {
+    "default": "克制，以动作与静默承载。",
+    "principle": "克制是默认，不是禁止释放的律法。",
+    "releaseScale": [
+      "无释放：纯动作或静默",
+      "微量释放：一个词承重",
+      "低量释放：极简叹息或停顿",
+      "中量释放：短促语言加克制动作",
+      "高量释放：由情感顶点的承担者完成较长表达"
+    ],
+    "fatherScene": "通过‘主角才发现’承载亲情，不让父亲主动解释爱。",
+    "anchorMotifs": [
+      "手表上弦声",
+      "父亲碗里的素菜",
+      "账单与债务",
+      "医院",
+      "纸条‘别死’",
+      "白金吊坠"
+    ]
+  },
+  "chapterEnding": {
+    "preferred": "停在一个静物细节、动作或未被解释的状态上，让其承担情绪和后续压力。",
+    "allowedModes": [
+      "动作收束",
+      "悬置收束",
+      "留白收束",
+      "入睡收束",
+      "疑问收束"
+    ],
+    "avoid": [
+      "机械切换到第二视角补尾巴",
+      "用大段内心独白概括本章意义",
+      "用‘从今天起’或‘一切都会’替角色下结论"
+    ]
+  },
+  "props": {
+    "debut": "首次出现只用一个最有辨识度的异常属性锚定，不列尺寸、颜色和纹理清单。",
+    "recurrence": "跨章回扣时必须获得新的叙事功能，而不是原样复述。",
+    "motifs": {
+      "手表": "用上弦声承载父子情感变化。",
+      "鳞片": "从极简悬浮首登场逐步展示新能力。",
+      "酱菜罐": "通过跨章位置与用途变化承载家庭关系。",
+      "账单": "每次出现都推进新的债务、选择或关系信息。"
+    }
+  },
+  "language": {
+    "sentencePreference": "短句优先，但服从具体场景的自然呼吸。",
+    "chineseFeatures": [
+      "保留自然的四字结构",
+      "克制使用‘了’，避免连续完成体",
+      "使用生活化、身体化、光线或天气来源的比喻"
+    ],
+    "forbiddenPatterns": [
+      "直接情绪标签，如‘他感到恐惧’",
+      "外貌清单式描写",
+      "‘我以为A，不是A，是B，其实是C’式三段对照独白",
+      "机械双视角章末",
+      "连续多段解释性内心独白",
+      "‘他意识到，这或许意味着’一类翻译腔",
+      "为显得古雅而使用‘遂、乃、之’等虚词",
+      "预言式空钩子，如‘一切都不一样了’"
+    ],
+    "fatigueWords": {
+      "note": "下列词是作者样本中的疲劳惯性，只作软诊断，不逐字封禁。",
+      "softeners": [
+        "似乎",
+        "仿佛",
+        "隐约"
+      ],
+      "fillerAdverbs": [
+        "突然",
+        "不由的",
+        "明显"
+      ]
+    }
+  },
+  "lexicon": {
+    "specializedTerms": [
+      "心魔界",
+      "黑晶",
+      "妖晶",
+      "魂体",
+      "镇夜司",
+      "驭鬼者",
+      "异能者",
+      "炼体者",
+      "炼心者",
+      "雾隐兽",
+      "噬魂兽",
+      "四臂鬼",
+      "梦魇",
+      "墨老",
+      "兵级",
+      "将级",
+      "王级",
+      "积分",
+      "天渊",
+      "异空间"
+    ],
+    "emotionAnchorWords": [
+      "钱",
+      "债",
+      "医院",
+      "12万",
+      "父亲",
+      "手表",
+      "腿",
+      "假肢",
+      "纸条",
+      "别死",
+      "白金吊坠"
+    ]
+  },
+  "characterVoiceFingerprints": {
+    "li-yifan": {
+      "name": "李一凡",
+      "register": "普通穷学生的生活感，内敛但不软弱，偶有冷幽默而不贫嘴。",
+      "decisionMode": "试探、评估、执行。",
+      "selfBlameMode": "一个词、一个动作或短暂停顿承重。"
+    },
+    "li-qiang": {
+      "name": "李强",
+      "register": "极简短句，军人底色被生活磨钝。",
+      "emotionMode": "不说透关心，以手表、饭菜、走路姿态等细节承载。"
+    },
+    "mo-lao": {
+      "name": "墨老",
+      "register": "苍老、克制、偶尔轻笑或摇头。",
+      "teachingMode": "问句、反问和比喻引导，不直接给答案。",
+      "cost": "每次出手都消耗自身。"
+    },
+    "meng-yan": {
+      "name": "梦魇",
+      "register": "短句、冷硬、暗金双眸形成稳定外显。",
+      "boundary": "不主动解释自己，也不突然对主角温和。"
+    },
+    "antagonist": {
+      "name": "反派",
+      "register": "先是有家庭、有现实牵挂的人，再是功能性反派。",
+      "boundary": "不用抽象强者气场覆盖具体人性。"
+    }
+  },
+  "rhythmTemplates": {
+    "role": "生成与诊断参考，不要求逐项复刻。",
+    "standardNarrative": [
+      "外部动作或观察",
+      "另一个动作或观察",
+      "可选的内心感知",
+      "可选的环境或道具细节",
+      "动作结果"
+    ],
+    "tensionOrCombat": [
+      "危险信号",
+      "主角反应",
+      "危险升级",
+      "对抗动作",
+      "结果"
+    ],
+    "emotion": [
+      "触发事件",
+      "身体反应",
+      "可选静默",
+      "一个词承重或微量释放"
+    ]
+  },
+  "diagnosticSignals": [
+    {
+      "id": "paragraph_inflation",
+      "signal": "连续多个段落明显膨胀并合并多个动作。",
+      "role": "advisory"
+    },
+    {
+      "id": "dialogue_takeover",
+      "signal": "对话持续取代动作、静默和叙述承担剧情。",
+      "role": "advisory"
+    },
+    {
+      "id": "emotion_labeling",
+      "signal": "频繁出现‘他感到’或‘内心充满了’。",
+      "role": "span_evidence_candidate"
+    },
+    {
+      "id": "ending_summary",
+      "signal": "章末替人物总结意义或预言未来。",
+      "role": "span_evidence_candidate"
+    },
+    {
+      "id": "pov_drift",
+      "signal": "出现‘与此同时’或‘而在另一边’并离开有限视角。",
+      "role": "advisory"
+    }
+  ],
+  "learningLog": {
+    "version": "3.0",
+    "totalChapters": 16,
+    "totalUserCorrections": 80,
+    "nextReviewTrigger": "新增3章以上或累积5条以上新驳回",
+    "sourceProfile": "workspaces/xinmo/STYLE-PROFILE.md"
+  }
+}

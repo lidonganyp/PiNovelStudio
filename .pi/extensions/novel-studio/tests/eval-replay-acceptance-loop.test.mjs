@@ -1098,6 +1098,35 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
     assert.ok(rawCandidate.verdictReasons.some((r) => r.includes("candidate")));
   });
 
+  it("raw-only trace 无 matrixArm/evalMode=B0 → 不是 independent_raw", () => {
+    const tmp = join(__dirname, ".tmp-eval-raw-identity");
+    const tracesDir = join(tmp, "samples", "fixture.raw-only", "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    writeFileSync(
+      join(tmp, "samples", "fixture.raw-only", "fixture.json"),
+      JSON.stringify({ schemaId: "pinovel.eval-fixture", replayMode: "production_like" }),
+    );
+    writeFileSync(
+      join(tracesDir, "chapter-001-quality-trace.json"),
+      JSON.stringify({
+        gates: [{
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [{ requestedRoute: "v2_rawstage2_gemini31", kind: "agentic_raw" }],
+          },
+        }],
+      }),
+    );
+    try {
+      assert.equal(
+        matrix.inferArmPipelineKind({ replayMode: "production_like", runRoot: tmp }),
+        "unknown",
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("baseline/candidate/raw_direct 使用 stub → reject（不得构造生产验收证据）", () => {
     const report = matrix.compareMatrixArms({
       candidateReleaseId: "rel-prod-110",
@@ -1357,7 +1386,17 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
     );
     writeFileSync(
       join(sampleDir, "invocation.json"),
-      JSON.stringify({ command: { args: ["mock"], env: { V2_FORCE_STUB: "1" } }, result: { exitCode: 0 } }),
+      JSON.stringify({
+        command: { args: ["mock"], env: "(omitted)" },
+        transportEvidence: {
+          transport: "stub",
+          forceStub: true,
+          evalOnly: true,
+          mockAgent: true,
+          evalLayer: null,
+        },
+        result: { exitCode: 0 },
+      }),
     );
     const traceFile = join(tracesDir, "chapter-002-quality-trace.json");
     writeFileSync(
@@ -1949,6 +1988,9 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
   const pipelineTraceForArm = (armId) => {
     if (armId.startsWith("raw") || armId.includes("raw-")) {
       return {
+        schemaId: "pinovel.independent-raw-quality-trace",
+        matrixArm: "raw_direct",
+        evalMode: "B0",
         gates: [
           {
             stage: "v2_final_selected",
@@ -2020,6 +2062,7 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
         fixtureId,
         replayMode: "stub",
         traceArchivePath: "traces/chapter-001-quality-trace.json",
+        ...(armId.startsWith("raw") || armId.includes("raw-") ? { matrixArm: "raw_direct" } : {}),
       });
       const fixtureHash = fixtureContract.computeEvalFixtureHash(fixture);
       writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));

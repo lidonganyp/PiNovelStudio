@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -23,7 +23,9 @@ import { createEditorialStrategyRegistry } from "../dist/v2/core/editorial-strat
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = join(__filename, "..");
 const PROJECT_ROOT = join(__dirname, "..", "..", "..", "..");
-const PROFILE_PATH = join(PROJECT_ROOT, "workspaces", "xinmo", "styles", "profile.json");
+const LIVE_PROFILE_PATH = join(PROJECT_ROOT, "workspaces", "xinmo", "styles", "profile.json");
+const FIXTURE_PROFILE_PATH = join(__dirname, "fixtures", "xinmo-style-profile.json");
+const PROFILE_PATH = existsSync(LIVE_PROFILE_PATH) ? LIVE_PROFILE_PATH : FIXTURE_PROFILE_PATH;
 
 function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");

@@ -244,6 +244,32 @@ export interface FullPipelineReplayRunReport {
 // 内部工具
 // ============================================================================
 
+export interface ReplayTransportEvidence {
+  transport: string | null;
+  forceStub: boolean;
+  evalOnly: boolean;
+  mockAgent: boolean;
+  evalLayer: string | null;
+}
+
+/** 归档可审计的传输身份；不得把完整 env（含密钥）写入 invocation.json。 */
+export function collectReplayTransportEvidence(
+  command: Pick<FullPipelineInvokeCommand, "args" | "mockAgent" | "env">,
+): ReplayTransportEvidence {
+  const env = command.env ?? {};
+  const evalLayerArg = command.args.find((arg) => arg.startsWith("--eval-layer="));
+  return {
+    transport:
+      typeof env.PINOVEL_EVAL_REPLAY_TRANSPORT === "string"
+        ? env.PINOVEL_EVAL_REPLAY_TRANSPORT
+        : null,
+    forceStub: env.V2_FORCE_STUB === "1",
+    evalOnly: env.PINOVEL_EVAL_ONLY === "1",
+    mockAgent: command.mockAgent === true || command.args.includes("mock"),
+    evalLayer: evalLayerArg ? evalLayerArg.slice("--eval-layer=".length) : null,
+  };
+}
+
 /**
  * EVAL-REPLAY-ACCEPTANCE-LOOP F1：fixture 生产路由 → invoke 脚本参数映射。
  *
@@ -1040,6 +1066,7 @@ export async function runFullPipelineReplay(
     writeJson(join(sampleArchivePath, "fixture.json"), fixture);
     writeJson(join(sampleArchivePath, "invocation.json"), {
       command: { ...command, env: "(omitted)" },
+      transportEvidence: collectReplayTransportEvidence(command),
       result: invokeResult,
     });
     if (traceArchived) {
