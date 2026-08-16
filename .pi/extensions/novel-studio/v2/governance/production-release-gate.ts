@@ -593,10 +593,7 @@ export function evaluateProductionReleaseGate(
     );
   }
   if (behaviorIdentity.bundleId !== null) {
-    const otherComponentFields = BEHAVIOR_COMPONENT_FIELDS.filter(
-      (field) => field !== "capabilityPackageSetHash",
-    );
-    const otherComponentsComplete = otherComponentFields.every((field) => {
+    const otherComponentsComplete = BEHAVIOR_COMPONENT_FIELDS.every((field) => {
       const value = (manifest as unknown as Record<string, unknown>)[field];
       return typeof value === "string" && value.length > 0;
     });
