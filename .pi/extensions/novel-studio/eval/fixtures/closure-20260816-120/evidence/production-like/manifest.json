@@ -1,0 +1,119 @@
+{
+  "schemaId": "pinovel.eval-replay-run-manifest",
+  "schemaVersion": 1,
+  "runId": "closure-production-like-120",
+  "evalProtocolVersion": "pinovel.eval-protocol/1",
+  "replayMode": "production_like",
+  "releaseId": "rel-prod-120",
+  "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120",
+  "startedAt": "2026-08-16T05:55:22.892Z",
+  "finishedAt": "2026-08-16T05:59:17.043Z",
+  "samples": [
+    {
+      "fixtureId": "fixture.closure-production-like-001",
+      "fixtureHash": "82c64c9ff756db8d9526c7a123a956d19d1393eb1dd9bccc9c7d2733f628722c",
+      "replayMode": "production_like",
+      "scratchWorkspaceId": "eval-production_like-fixture-closure-production-like-001-run-QBxKJU",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120\\samples\\fixture.closure-production-like-001\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 12661,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": false,
+        "releaseId": "rel-prod-120",
+        "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+        "approvalRef": "approval-rel-prod-120-1786859687887-7a8aca3e",
+        "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+        "modelVersion": "gemini31"
+      },
+      "durationMs": 74899
+    },
+    {
+      "fixtureId": "fixture.closure-production-like-002",
+      "fixtureHash": "c34971bf20f907fca664aaac171dd47755fc7a7c62d138e37e7c9cd5f4716082",
+      "replayMode": "production_like",
+      "scratchWorkspaceId": "eval-production_like-fixture-closure-production-like-002-run-jF7nAr",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120\\samples\\fixture.closure-production-like-002\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 11454,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": false,
+        "releaseId": "rel-prod-120",
+        "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+        "approvalRef": "approval-rel-prod-120-1786859687887-7a8aca3e",
+        "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+        "modelVersion": "gemini31"
+      },
+      "durationMs": 72901
+    },
+    {
+      "fixtureId": "fixture.closure-production-like-003",
+      "fixtureHash": "6bf54b1101d677dd241cc633b2923fea65a4bc8e01e0ba3119bdf97c07f3f4cf",
+      "replayMode": "production_like",
+      "scratchWorkspaceId": "eval-production_like-fixture-closure-production-like-003-run-dyv8jE",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120\\samples\\fixture.closure-production-like-003\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 12992,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": false,
+        "releaseId": "rel-prod-120",
+        "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+        "approvalRef": "approval-rel-prod-120-1786859687887-7a8aca3e",
+        "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+        "modelVersion": "gemini31"
+      },
+      "durationMs": 80707
+    }
+  ],
+  "summary": {
+    "totalSamples": 3,
+    "countedSamples": 3,
+    "completed": 3,
+    "failed": 0,
+    "skipped": 0,
+    "traceRetentionRate": 1,
+    "isolationViolationCount": 0
+  }
+}

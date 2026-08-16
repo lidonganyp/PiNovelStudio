@@ -1,0 +1,125 @@
+{
+  "schemaId": "pinovel.eval-replay-run-manifest",
+  "schemaVersion": 1,
+  "runId": "closure-candidate-like-120",
+  "evalProtocolVersion": "pinovel.eval-protocol/1",
+  "replayMode": "candidate_like",
+  "releaseId": "rel-prod-120",
+  "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-candidate-like-120",
+  "startedAt": "2026-08-16T05:47:36.580Z",
+  "finishedAt": "2026-08-16T05:50:41.526Z",
+  "samples": [
+    {
+      "fixtureId": "fixture.closure-candidate-like-001",
+      "fixtureHash": "81aca1c605b78d88ae94fc2fcb41ae84ab2fcda04b6b0a96889898d7f6516bcf",
+      "replayMode": "candidate_like",
+      "scratchWorkspaceId": "eval-candidate_like-fixture-closure-candidate-like-001-run-WcscSs",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-candidate-like-120\\samples\\fixture.closure-candidate-like-001\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 10983,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": false,
+        "releaseId": "rel-prod-120",
+        "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+        "approvalRef": null,
+        "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+        "modelVersion": "gemini31"
+      },
+      "durationMs": 66460
+    },
+    {
+      "fixtureId": "fixture.closure-candidate-like-002",
+      "fixtureHash": "50666281bd3c94cb137b34f4d68fcbb1c492ac32c51687c7751c36f61a11a054",
+      "replayMode": "candidate_like",
+      "scratchWorkspaceId": "eval-candidate_like-fixture-closure-candidate-like-002-run-cZ16xM",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-candidate-like-120\\samples\\fixture.closure-candidate-like-002\\traces",
+      "isolationViolations": [],
+      "modelCalls": 3,
+      "modelCallsByProvider": {
+        "gemini31": 3
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 2,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 14240,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": false,
+        "releaseId": "rel-prod-120",
+        "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+        "approvalRef": null,
+        "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+        "modelVersion": "gemini31"
+      },
+      "durationMs": 83467
+    },
+    {
+      "fixtureId": "fixture.closure-candidate-like-003",
+      "fixtureHash": "0e89f1e17863dd14817dc32f7795e3c8ab647ee4d6df790fd1ad1dd0d207753e",
+      "replayMode": "candidate_like",
+      "scratchWorkspaceId": "eval-candidate_like-fixture-closure-candidate-like-003-run-NuJjXm",
+      "status": "failed",
+      "failureAttribution": "model",
+      "failureEnvelopes": [
+        {
+          "stage": "agentic_fact_guard",
+          "gate": "agentic_fact_guard",
+          "severity": "hard_block",
+          "reason": "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"封印\"（category=seal）：正文出现未授权的高影响新设定\"封印\"（category=seal），源材料中无对应术语授权"
+        }
+      ],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-candidate-like-120\\samples\\fixture.closure-candidate-like-003\\traces",
+      "isolationViolations": [],
+      "modelCalls": 1,
+      "modelCallsByProvider": {
+        "gemini31": 1
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 4823,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": false,
+        "releaseId": "rel-prod-120",
+        "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+        "approvalRef": null,
+        "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+        "modelVersion": "gemini31"
+      },
+      "durationMs": 32161
+    }
+  ],
+  "summary": {
+    "totalSamples": 3,
+    "countedSamples": 3,
+    "completed": 2,
+    "failed": 1,
+    "skipped": 0,
+    "traceRetentionRate": 1,
+    "isolationViolationCount": 0
+  }
+}

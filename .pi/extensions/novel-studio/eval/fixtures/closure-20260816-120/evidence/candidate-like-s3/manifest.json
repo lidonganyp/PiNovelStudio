@@ -1,0 +1,62 @@
+{
+  "schemaId": "pinovel.eval-replay-run-manifest",
+  "schemaVersion": 1,
+  "runId": "closure-candidate-like-120-s3",
+  "evalProtocolVersion": "pinovel.eval-protocol/1",
+  "replayMode": "candidate_like",
+  "releaseId": "rel-prod-120",
+  "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-candidate-like-120-s3",
+  "startedAt": "2026-08-16T05:51:09.237Z",
+  "finishedAt": "2026-08-16T05:53:11.060Z",
+  "samples": [
+    {
+      "fixtureId": "fixture.closure-candidate-like-003",
+      "fixtureHash": "0e89f1e17863dd14817dc32f7795e3c8ab647ee4d6df790fd1ad1dd0d207753e",
+      "replayMode": "candidate_like",
+      "scratchWorkspaceId": "eval-candidate_like-fixture-closure-candidate-like-003-run-FloNTs",
+      "status": "failed",
+      "failureAttribution": "unclassified",
+      "failureEnvelopes": [
+        {
+          "stage": "story_preservation_drift_retry_failed",
+          "gate": "story_preservation",
+          "severity": "hard_block",
+          "reason": "作者风格优化缩减指导重试仍漂移：首次（故事骨架漂移：检测到 1 个动作反转（反义词对，阈值 1）；检测到 2 个关键动作替换（关键事件被改写，阈值 1）；检测到 2 个因果顺序违规（实体覆盖：full_entities）），重试（故事骨架漂移：检测到 2 个因果顺序违规（实体覆盖：full_entities））。Agentic 初稿仅作 blocked evidence，不交付。"
+        }
+      ],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-candidate-like-120-s3\\samples\\fixture.closure-candidate-like-003\\traces",
+      "isolationViolations": [],
+      "modelCalls": 3,
+      "modelCallsByProvider": {
+        "gemini31": 3
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 2
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 20751,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": false,
+        "releaseId": "rel-prod-120",
+        "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+        "approvalRef": null,
+        "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+        "modelVersion": "gemini31"
+      },
+      "durationMs": 120736
+    }
+  ],
+  "summary": {
+    "totalSamples": 1,
+    "countedSamples": 1,
+    "completed": 0,
+    "failed": 1,
+    "skipped": 0,
+    "traceRetentionRate": 1,
+    "isolationViolationCount": 0
+  }
+}

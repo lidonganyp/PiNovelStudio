@@ -1,0 +1,35 @@
+{
+  "releaseId": "rel-prod-120",
+  "status": "approved_dev",
+  "commit": "57486b915e437015d86ef34401f29a0dfad51aa2",
+  "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+  "capabilityPackageSetHash": "e5c8b475e2f3d988cec494fcc192680b32d2d2fa70ec16f2838ed05dbafe4017",
+  "parentReleaseId": "rel-prod-115",
+  "activeProdUnchanged": "rel-prod-115",
+  "approvalRef": "approval-rel-prod-120-1786859687887-7a8aca3e",
+  "reviewTransport": "network",
+  "forwardVerdict": "APPROVE_DEV",
+  "reverseVerdict": "APPROVE_DEV",
+  "finalVerdict": "APPROVE_DEV",
+  "candidateLike": {
+    "runId": "closure-candidate-like-120",
+    "completed": "2/3",
+    "failedSample": "fixture.closure-candidate-like-003 FactGuard 封印; retry story_preservation",
+    "isolation": 0,
+    "devMode": false
+  },
+  "productionLike": {
+    "runId": "closure-production-like-120",
+    "completed": "3/3",
+    "isolation": 0,
+    "traceRetentionRate": 1,
+    "unclassified": 0,
+    "p6": "EVAL_EVIDENCE_APPROVED",
+    "devMode": false,
+    "approvalRef": "approval-rel-prod-120-1786859687887-7a8aca3e",
+    "modelCallsBySample": [2, 2, 2],
+    "routes": ["v2_rawstage2_gemini31", "v2_amplified_gemini31"]
+  },
+  "note": "Captured on clean worktree D:\\\\CODE\\\\pns-eval-120@57486b9, verify YES. Dual network APPROVE_DEV recorded. production_like 3/3 PASS and eval-gate re-verified 2026-08-16. Evidence summaries in evidence/. active_prod still rel-prod-115; no promote without user authorization."
+}
