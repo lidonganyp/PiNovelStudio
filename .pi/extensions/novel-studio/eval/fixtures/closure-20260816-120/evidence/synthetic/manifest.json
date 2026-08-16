@@ -1,0 +1,119 @@
+{
+  "schemaId": "pinovel.eval-replay-run-manifest",
+  "schemaVersion": 1,
+  "runId": "closure-synthetic-120",
+  "evalProtocolVersion": "pinovel.eval-protocol/1",
+  "replayMode": "synthetic",
+  "releaseId": "rel-prod-120",
+  "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-synthetic-120",
+  "startedAt": "2026-08-16T07:32:11.215Z",
+  "finishedAt": "2026-08-16T07:32:17.602Z",
+  "samples": [
+    {
+      "fixtureId": "fixture.closure-synthetic-120-001",
+      "fixtureHash": "bd6ed6e8b06ebbe9f31cdfcc39ffb77c20fa22ed3bdc150c26bdc389c1ed1b1e",
+      "replayMode": "synthetic",
+      "scratchWorkspaceId": "eval-synthetic-fixture-closure-synthetic-120-001-run-efLL4l",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-synthetic-120\\samples\\fixture.closure-synthetic-120-001\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 600,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": true,
+        "releaseId": null,
+        "environmentFingerprint": null,
+        "approvalRef": null,
+        "bundleId": null,
+        "modelVersion": null
+      },
+      "durationMs": 1278
+    },
+    {
+      "fixtureId": "fixture.closure-synthetic-120-002",
+      "fixtureHash": "fdc38664df5af2e988f7c73dbb4b654609fe33eec630149116c5c841d52c065d",
+      "replayMode": "synthetic",
+      "scratchWorkspaceId": "eval-synthetic-fixture-closure-synthetic-120-002-run-i6giTM",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-synthetic-120\\samples\\fixture.closure-synthetic-120-002\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 600,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": true,
+        "releaseId": null,
+        "environmentFingerprint": null,
+        "approvalRef": null,
+        "bundleId": null,
+        "modelVersion": null
+      },
+      "durationMs": 1281
+    },
+    {
+      "fixtureId": "fixture.closure-synthetic-120-003",
+      "fixtureHash": "e6e0f5bd91d102bc39ed8e5cd81a5b5682d2df5473ece1f27b9c7e574603758b",
+      "replayMode": "synthetic",
+      "scratchWorkspaceId": "eval-synthetic-fixture-closure-synthetic-120-003-run-CB8iY4",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-synthetic-120\\samples\\fixture.closure-synthetic-120-003\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 600,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": true,
+        "releaseId": null,
+        "environmentFingerprint": null,
+        "approvalRef": null,
+        "bundleId": null,
+        "modelVersion": null
+      },
+      "durationMs": 1263
+    }
+  ],
+  "summary": {
+    "totalSamples": 3,
+    "countedSamples": 3,
+    "completed": 3,
+    "failed": 0,
+    "skipped": 0,
+    "traceRetentionRate": 1,
+    "isolationViolationCount": 0
+  }
+}

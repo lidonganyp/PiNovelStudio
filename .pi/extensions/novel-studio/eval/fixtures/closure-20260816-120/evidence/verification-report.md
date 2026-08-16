@@ -41,14 +41,19 @@
 
 ## 四臂矩阵
 
-- 报告：`evidence/production-like/matrix-report.json`（hash `e918aad9…577971d1`）
+- 报告：`evidence/production-like/matrix-report.json`（hash `cc55c19e…078fc92f`）
 - 门禁重算：`verdict=pass`，`candidatePassPow3=1`
-- 臂（均为已完成真实归档，非手写两字段）：
-  - baseline：`rel-prod-115` / `closure-production-like-f8e0040c`（1/1 真实 Gemini）
+- 同一章条件（`ws-verify-01` / chapter-002）：
+  - baseline：`rel-prod-115` / `closure-production-like-f8e0040c`（1/1 真实 Gemini；**不是** 3 连）
   - candidate：`rel-prod-120` / `closure-production-like-120`（3/3 真实 Gemini，pass^3=1）
-  - raw_direct：`rel-prod-118` / `closure-recorded-118`（1/1 recorded 回放）
-  - recovery：`rel-prod-118` / `closure-synthetic-118`（1/1 synthetic 恢复路径）
-- 这不是同一夹具、同一 release 的四次独立 3 连；baseline/raw/recovery 样本量均为 1
+  - raw_direct：`rel-prod-120` / `closure-recorded-120`（3/3 recorded，回放 candidate 三份正文）
+  - recovery：`rel-prod-120` / `closure-synthetic-120`（3/3 synthetic，同夹具故障计划）
+- 仍不能当作“相对 115 的 3 连真实 A/B”：baseline 只有 1 个样本；raw_direct 是 candidate 正文的确定性回放，不是独立裸写
+
+## CLI 口径
+
+- 当前：`evidence/production-like/cli-verdict.json`（四臂 + pass^3=1）
+- 历史：`evidence/production-like/cli-verdict.pre-matrix.json`（晋级前 R1 deterministic-only，勿作现行 P6 理由）
 
 ## 生产指针
 

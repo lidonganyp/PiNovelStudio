@@ -8,7 +8,7 @@
   "matrix": {
     "reportFound": true,
     "reportPath": "evidence/production-like/matrix-report.json",
-    "reportHash": "e918aad9ae5c8ced4c5f44e628d01b24473df0a54e95418a7e463e52577971d1",
+    "reportHash": "cc55c19e9c3f7319c4172265b8485bc4ba3b827a116552ab9f712e15078fc92f",
     "candidatePassPow3": 1,
     "verdict": "pass",
     "requiredArms": [
@@ -20,8 +20,8 @@
     "availableArms": {
       "baseline": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives-115\\closure-production-like-f8e0040c",
       "candidate": "closure-production-like-120",
-      "raw_direct": "D:\\CODE\\pns-eval-archives-118\\closure-recorded-118",
-      "recovery": "D:\\CODE\\pns-eval-archives-118\\closure-synthetic-118"
+      "raw_direct": "closure-recorded-120",
+      "recovery": "closure-synthetic-120"
     },
     "missingArms": [],
     "gate": "EVAL_EVIDENCE_APPROVED"

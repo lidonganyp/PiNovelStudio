@@ -8,10 +8,12 @@
   "evalGate": {
     "verdict": "approved",
     "code": "EVAL_EVIDENCE_APPROVED",
-    "reason": "确定性 Grader 通过（R0/R1 deterministic-only 证据完整，可进入人工审批）"
+    "reason": "确定性 Grader 通过 + 四臂矩阵 pass + pass^3=1（证据完整，可进入人工审批）"
   },
   "releaseId": "rel-prod-120",
   "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
   "changeClass": "R1",
-  "runPath": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120"
+  "runPath": "D:/CODE/pns-eval-archives-120/closure-production-like-120",
+  "generatedAt": "2026-08-16T07:31:31.155Z",
+  "supersedes": "cli-verdict.pre-matrix.json"
 }

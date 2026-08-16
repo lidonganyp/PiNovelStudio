@@ -1,0 +1,119 @@
+{
+  "schemaId": "pinovel.eval-replay-run-manifest",
+  "schemaVersion": 1,
+  "runId": "closure-recorded-120",
+  "evalProtocolVersion": "pinovel.eval-protocol/1",
+  "replayMode": "recorded",
+  "releaseId": "rel-prod-120",
+  "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-recorded-120",
+  "startedAt": "2026-08-16T07:31:43.235Z",
+  "finishedAt": "2026-08-16T07:31:51.453Z",
+  "samples": [
+    {
+      "fixtureId": "fixture.closure-recorded-120-001",
+      "fixtureHash": "83fbaa7051263621f5f9898d7508949ec0c5ce1a658692890ed96a96b7c66c89",
+      "replayMode": "recorded",
+      "scratchWorkspaceId": "eval-recorded-fixture-closure-recorded-120-001-run-0UyjDx",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-recorded-120\\samples\\fixture.closure-recorded-120-001\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 0,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": true,
+        "releaseId": null,
+        "environmentFingerprint": null,
+        "approvalRef": null,
+        "bundleId": null,
+        "modelVersion": null
+      },
+      "durationMs": 1342
+    },
+    {
+      "fixtureId": "fixture.closure-recorded-120-002",
+      "fixtureHash": "cc15b5a041edaf7f76d5895f12661f6a19238945e99061c57bac5c5bf1932333",
+      "replayMode": "recorded",
+      "scratchWorkspaceId": "eval-recorded-fixture-closure-recorded-120-002-run-WvUlxd",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-recorded-120\\samples\\fixture.closure-recorded-120-002\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 0,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": true,
+        "releaseId": null,
+        "environmentFingerprint": null,
+        "approvalRef": null,
+        "bundleId": null,
+        "modelVersion": null
+      },
+      "durationMs": 1310
+    },
+    {
+      "fixtureId": "fixture.closure-recorded-120-003",
+      "fixtureHash": "6cb2868b5749a83d1ee6fe46e55c8fc8b93bc5397544d6c4cfed90cad2bcc551",
+      "replayMode": "recorded",
+      "scratchWorkspaceId": "eval-recorded-fixture-closure-recorded-120-003-run-w3VjIt",
+      "status": "completed",
+      "failureAttribution": null,
+      "failureEnvelopes": [],
+      "traceArchived": true,
+      "traceArchivePath": "D:\\CODE\\pns-eval-archives-120\\closure-recorded-120\\samples\\fixture.closure-recorded-120-003\\traces",
+      "isolationViolations": [],
+      "modelCalls": 2,
+      "modelCallsByProvider": {
+        "gemini31": 2
+      },
+      "modelCallsByRequestedRoute": {
+        "v2_rawstage2_gemini31": 1,
+        "v2_amplified_gemini31": 1
+      },
+      "unauthorizedCrossModelCount": 0,
+      "tokenCost": 0,
+      "recoveryAttemptCount": 0,
+      "releaseIdentity": {
+        "devMode": true,
+        "releaseId": null,
+        "environmentFingerprint": null,
+        "approvalRef": null,
+        "bundleId": null,
+        "modelVersion": null
+      },
+      "durationMs": 1329
+    }
+  ],
+  "summary": {
+    "totalSamples": 3,
+    "countedSamples": 3,
+    "completed": 3,
+    "failed": 0,
+    "skipped": 0,
+    "traceRetentionRate": 1,
+    "isolationViolationCount": 0
+  }
+}
