@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import {
+  REAL_MODEL_REPLAY_MODES,
   computeEvalFixtureHash,
   parseEvalFixtureV1,
   type EvalFixtureV1,
@@ -39,7 +40,8 @@ export type GraderCheckName =
   | "failure_envelope_completeness"
   | "recovery_bounds"
   | "silent_degrade"
-  | "model_call_evidence";
+  | "model_call_evidence"
+  | "real_model_binding";
 
 export interface GraderCheck {
   name: GraderCheckName;
@@ -62,6 +64,10 @@ export interface DeterministicGradeReport {
 // ============================================================================
 // 内部工具
 // ============================================================================
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function readJsonFile(path: string): Record<string, unknown> | null {
   if (!existsSync(path)) {
@@ -440,8 +446,7 @@ export function gradeDeterministic(
             "（必须统计 gates[].evidence.modelCalls，不得只读顶层 trace.modelCalls）",
         });
       }
-      const realModelReplay =
-        entry.replayMode === "production_like" || entry.replayMode === "dev_real_model";
+      const realModelReplay = REAL_MODEL_REPLAY_MODES.includes(entry.replayMode);
       if (realModelReplay && entry.status === "completed" && collected.length === 0) {
         violations.push({
           fixtureId: entry.fixtureId,
@@ -450,6 +455,70 @@ export function gradeDeterministic(
       }
     }
     checks.push({ name: "model_call_evidence", passed: violations.length === 0, violations });
+  }
+
+  // 12. 真实模型臂：传输不得是 stub/mock；每次调用必须有 provider/model/token 计量
+  {
+    const violations: Array<{ fixtureId?: string; detail: string }> = [];
+    for (const entry of counted) {
+      if (!REAL_MODEL_REPLAY_MODES.includes(entry.replayMode) || entry.status !== "completed") {
+        continue;
+      }
+      const archive = loadSampleArchive(root, entry.fixtureId);
+      const collected = archive.traces.flatMap((trace) => extractReplayModelCalls(trace));
+      const invocation = readJsonFile(join(root, "samples", entry.fixtureId, "invocation.json"));
+      if (invocation) {
+        const command = invocation.command;
+        const args = isPlainObject(command) && Array.isArray(command.args) ? command.args : [];
+        if (args.some((item) => item === "mock")) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `${entry.replayMode} invocation 含 mock（真实模型臂不得走 stub 传输）`,
+          });
+        }
+        const env = isPlainObject(command) ? command.env : null;
+        if (isPlainObject(env)) {
+          if (env.V2_FORCE_STUB === "1" || env.PINOVEL_EVAL_REPLAY_TRANSPORT === "stub") {
+            violations.push({
+              fixtureId: entry.fixtureId,
+              detail: `${entry.replayMode} 传输是 stub（V2_FORCE_STUB / PINOVEL_EVAL_REPLAY_TRANSPORT）`,
+            });
+          }
+        }
+      }
+      for (const [index, call] of collected.entries()) {
+        const route = call.requestedRoute ?? call.route;
+        const provider = call.actualProvider ?? call.provider;
+        const model = call.actualModel ?? call.model;
+        if (!route) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `调用 ${index + 1} 缺少 requestedRoute/route`,
+          });
+        }
+        if (!provider) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `调用 ${index + 1} 缺少 actualProvider/provider`,
+          });
+        }
+        if (!model) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `调用 ${index + 1} 缺少 actualModel/model`,
+          });
+        }
+        if (!(typeof call.tokenIn === "number" && call.tokenIn > 0) ||
+            !(typeof call.tokenOut === "number" && call.tokenOut > 0)) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail:
+              `调用 ${index + 1} 缺少 token 计量（tokenIn=${String(call.tokenIn)} tokenOut=${String(call.tokenOut)}）`,
+          });
+        }
+      }
+    }
+    checks.push({ name: "real_model_binding", passed: violations.length === 0, violations });
   }
 
   const failedChecks = checks.filter((c) => !c.passed).map((c) => c.name);

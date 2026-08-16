@@ -148,7 +148,11 @@ function pipelineTraceFor(kind) {
               {
                 requestedRoute: "v2_rawstage2_gemini31",
                 actualProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
+                expectedProvider: "gemini31",
+                expectedModel: "gemini-3.1-pro-preview",
                 kind: "raw_direct",
+                tokenUsage: { in: 1600, out: 2600 },
               },
             ],
           },
@@ -167,12 +171,20 @@ function pipelineTraceFor(kind) {
               {
                 requestedRoute: "v2_rawstage2_gemini31",
                 actualProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
+                expectedProvider: "gemini31",
+                expectedModel: "gemini-3.1-pro-preview",
                 kind: "agentic_raw",
+                tokenUsage: { in: 1600, out: 2600 },
               },
               {
                 requestedRoute: "v2_amplified_gemini31",
                 actualProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
+                expectedProvider: "gemini31",
+                expectedModel: "gemini-3.1-pro-preview",
                 kind: "author_style_optimization",
+                tokenUsage: { in: 1700, out: 4700 },
               },
             ],
           },
@@ -263,6 +275,15 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
       join(tracesDir, "chapter-001-quality-trace.json"),
       JSON.stringify(pipelineTraceFor(pipelineKind)),
     );
+    if (replayMode === "production_like" || replayMode === "dev_real_model" || replayMode === "candidate_like") {
+      writeFileSync(
+        join(sampleDir, "invocation.json"),
+        JSON.stringify({
+          command: { args: ["--project-root=scratch"], env: "(omitted)" },
+          result: { exitCode: 0 },
+        }),
+      );
+    }
     writeFileSync(
       join(sampleDir, "state-projection.json"),
       JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
@@ -352,9 +373,24 @@ function writeLyingProductionLikeArm(evalRunRoot, releaseId, bundleId) {
         stage: "v2_final_selected",
         evidence: {
           modelCalls: [
-            { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31" },
-            { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
-            { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
+            {
+              requestedRoute: "v2_rawstage2_gemini31",
+              actualProvider: "gemini31",
+              actualModel: "gemini-3.1-pro-preview",
+              tokenUsage: { in: 100, out: 200 },
+            },
+            {
+              requestedRoute: "v2_amplified_gemini31",
+              actualProvider: "gemini31",
+              actualModel: "gemini-3.1-pro-preview",
+              tokenUsage: { in: 100, out: 200 },
+            },
+            {
+              requestedRoute: "v2_amplified_gemini31",
+              actualProvider: "gemini31",
+              actualModel: "gemini-3.1-pro-preview",
+              tokenUsage: { in: 100, out: 200 },
+            },
           ],
         },
       },

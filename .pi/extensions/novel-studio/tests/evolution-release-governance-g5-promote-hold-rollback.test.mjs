@@ -141,7 +141,13 @@ function g5PipelineTrace(kind) {
         stage: "v2_final_selected",
         evidence: {
           modelCalls: [
-            { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31", kind: "raw_direct" },
+            {
+              requestedRoute: "v2_rawstage2_gemini31",
+              actualProvider: "gemini31",
+              actualModel: "gemini-3.1-pro-preview",
+              kind: "raw_direct",
+              tokenUsage: { in: 1600, out: 2600 },
+            },
           ],
         },
       }],
@@ -154,8 +160,20 @@ function g5PipelineTrace(kind) {
         stage: "v2_final_selected",
         evidence: {
           modelCalls: [
-            { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31", kind: "agentic_raw" },
-            { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31", kind: "author_style_optimization" },
+            {
+              requestedRoute: "v2_rawstage2_gemini31",
+              actualProvider: "gemini31",
+              actualModel: "gemini-3.1-pro-preview",
+              kind: "agentic_raw",
+              tokenUsage: { in: 1600, out: 2600 },
+            },
+            {
+              requestedRoute: "v2_amplified_gemini31",
+              actualProvider: "gemini31",
+              actualModel: "gemini-3.1-pro-preview",
+              kind: "author_style_optimization",
+              tokenUsage: { in: 1700, out: 4700 },
+            },
           ],
         },
       }],

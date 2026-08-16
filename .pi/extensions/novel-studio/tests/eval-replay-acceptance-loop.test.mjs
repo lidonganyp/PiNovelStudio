@@ -1213,7 +1213,7 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
       ),
     );
     assert.equal(report.failedChecks.length, 0);
-    assert.equal(report.checks.length, 11);
+    assert.equal(report.checks.length, 12);
   });
 
   it("trace 归档缺失 → trace_retention 违规；failed 无 envelope → silent_degrade 违规", () => {
@@ -1340,6 +1340,83 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
       check.violations.some((v) => v.detail.includes("manifest=0") && v.detail.includes("trace=2")),
       JSON.stringify(check.violations),
     );
+  });
+
+  it("production_like 有 route 但无 token/model 计量 → real_model_binding 失败", () => {
+    const fixture = buildValidFixture({
+      fixtureId: "fixture.real-model-binding-missing-tokens",
+      replayMode: "production_like",
+    });
+    const sampleDir = join(tmpRun, "samples", fixture.fixtureId);
+    const tracesDir = join(sampleDir, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
+    writeFileSync(
+      join(sampleDir, "state-projection.json"),
+      JSON.stringify({ narrativeStateHash: HEX64("state-binding") }),
+    );
+    writeFileSync(
+      join(sampleDir, "invocation.json"),
+      JSON.stringify({ command: { args: ["mock"], env: { V2_FORCE_STUB: "1" } }, result: { exitCode: 0 } }),
+    );
+    const traceFile = join(tracesDir, "chapter-002-quality-trace.json");
+    writeFileSync(
+      traceFile,
+      JSON.stringify({
+        gates: [
+          {
+            stage: "v2_final_selected",
+            evidence: {
+              modelCalls: [
+                { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31" },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    const manifest = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-real-model-binding",
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "production_like",
+      releaseId: fixture.provenance.releaseId,
+      bundleId: fixture.provenance.bundleId,
+      runRoot: tmpRun,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      finishedAt: "2026-08-15T00:01:00.000Z",
+      samples: [
+        {
+          fixtureId: fixture.fixtureId,
+          fixtureHash: fixtureContract.computeEvalFixtureHash(fixture),
+          replayMode: "production_like",
+          scratchWorkspaceId: "eval-binding",
+          status: "completed",
+          failureAttribution: null,
+          failureEnvelopes: [],
+          traceArchived: true,
+          traceArchivePath: tracesDir,
+          isolationViolations: [],
+          modelCalls: 1,
+          durationMs: 1000,
+        },
+      ],
+      summary: {
+        totalSamples: 1,
+        countedSamples: 1,
+        completed: 1,
+        failed: 0,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    };
+    const report = grader.gradeDeterministic(manifest, tmpRun);
+    assert.equal(report.passed, false);
+    assert.ok(report.failedChecks.includes("real_model_binding"), report.failedChecks.join(","));
+    const check = report.checks.find((c) => c.name === "real_model_binding");
+    assert.ok(check.violations.some((v) => v.detail.includes("mock") || v.detail.includes("token")));
   });
 
   it("gradeDeterministicFromRunRoot：manifest 缺失 → fail-closed", () => {
@@ -1880,7 +1957,9 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
                 {
                   requestedRoute: "v2_rawstage2_gemini31",
                   actualProvider: "gemini31",
+                  actualModel: "gemini-3.1-pro-preview",
                   kind: "raw_direct",
+                  tokenUsage: { in: 1600, out: 2600 },
                 },
               ],
             },
@@ -1901,12 +1980,16 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
               {
                 requestedRoute: "v2_rawstage2_gemini31",
                 actualProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
                 kind: "agentic_raw",
+                tokenUsage: { in: 1600, out: 2600 },
               },
               {
                 requestedRoute: "v2_amplified_gemini31",
                 actualProvider: "gemini31",
+                actualModel: "gemini-3.1-pro-preview",
                 kind: "author_style_optimization",
+                tokenUsage: { in: 1700, out: 4700 },
               },
             ],
           },
