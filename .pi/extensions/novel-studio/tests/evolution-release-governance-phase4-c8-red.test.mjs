@@ -424,28 +424,28 @@ test("P1: cmdProxyReview recordStateEvent 失败 → warn-only（exit 0），man
       { PINOVEL_EVOLUTION_ROOT: root },
     );
 
-    // 4. 期望：exit 0（warn-only）
-    //    RED 前：exit 1（recordStateEvent 无 try/catch，uncaught exception）
+    // 4. 损坏的 state-events 必须 fail-closed：pre-review 阻断，不得继续审批迁移
     assert.equal(
       result.code,
-      0,
-      `cmdProxyReview recordStateEvent 失败时应 warn-only exit 0，实际 exit ${result.code}，stderr=${result.stderr}`,
+      5,
+      `cmdProxyReview 遇到损坏 state-events 时应 fail-closed exit 5，实际 exit ${result.code}，stderr=${result.stderr}`,
     );
+    assert.match(result.stderr, /state-events|四方|pre-review/i);
 
-    // 5. manifest 状态应为 approved_dev（transitionStatus 已成功）
+    // 5. manifest 不得在事件账本损坏时推进
     const registry = makeRegistry(root);
     const manifest = registry.loadManifest("rel-001");
     assert.equal(
       manifest.status,
-      "approved_dev",
-      `manifest 应已迁移到 approved_dev，实际 status=${manifest.status}`,
+      "evaluated",
+      `state-events 损坏时 manifest 应停留 evaluated，实际 status=${manifest.status}`,
     );
 
-    // 6. 输出应包含 warning
-    const combinedOutput = result.stdout + result.stderr;
+    // 6. 输出必须说明是 pre-review / 账本损坏阻断
+    const combinedOutput = `${result.stdout}${result.stderr}`;
     assert.ok(
-      combinedOutput.includes("状态事件写入失败") || combinedOutput.includes("warn"),
-      `输出应包含状态事件写入失败 warning，实际 stdout=${result.stdout}，stderr=${result.stderr}`,
+      /state-events|四方|pre-review/i.test(combinedOutput),
+      `输出应说明 state-events 损坏，实际 stdout=${result.stdout}，stderr=${result.stderr}`,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -188,6 +188,7 @@ test("P1-2: error record 的 gate stage 也包含具体阶段名（gates[] 不�
       workspacePath: tmpDir,
       workspaceId: "ws-p1-2",
       chapterId: "5",
+      writeMode: "legacy",
     });
 
     adapter.record({

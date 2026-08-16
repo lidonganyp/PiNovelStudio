@@ -71,6 +71,8 @@ import {
 import {
   evaluateProductionReleaseGate,
 } from "../dist-test/v2/governance/production-release-gate.js";
+import { captureDefaultBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
+import { DEFAULT_RELEASE_FINGERPRINT_SPEC } from "../dist-test/v2/governance/environment-fingerprint.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "..", "..", "..", "..");
@@ -83,8 +85,32 @@ function makeTempRoot() {
   return mkdtempSync(join(tmpdir(), "evolution-p0-artifact-"));
 }
 
-function makeManifest(releaseId, status, fingerprintHash, approvalRef = null) {
+function attachLiveBehaviorIdentity(manifest) {
+  const snapshot = captureDefaultBehaviorSnapshot(
+    PROJECT_ROOT,
+    DEFAULT_RELEASE_FINGERPRINT_SPEC.generationModel,
+    "2026-08-01",
+  );
   return {
+    ...manifest,
+    bundleId: snapshot.bundleId,
+    modelVersion: snapshot.modelVersion,
+    evalProtocolVersion: snapshot.evalProtocolVersion,
+    promptBundleHash: snapshot.promptBundleHash,
+    modelRoutingHash: snapshot.modelRoutingHash,
+    toolSchemaHash: snapshot.toolSchemaHash,
+    contextCompilerHash: snapshot.contextCompilerHash,
+    qualityPolicyHash: snapshot.qualityPolicyHash,
+    recoveryPolicyHash: snapshot.recoveryPolicyHash,
+    knowledgeSnapshotHash: snapshot.knowledgeSnapshotHash,
+    runtimeFingerprint: snapshot.runtimeFingerprint,
+    capabilityPackageSetHash: snapshot.capabilityPackageSetHash,
+    strategyEvidencePartition: [],
+  };
+}
+
+function makeManifest(releaseId, status, fingerprintHash, approvalRef = null) {
+  return attachLiveBehaviorIdentity({
     schemaId: EVOLUTION_RELEASE_SCHEMA_ID,
     schemaVersion: EVOLUTION_RELEASE_SCHEMA_VERSION,
     releaseId,
@@ -99,7 +125,7 @@ function makeManifest(releaseId, status, fingerprintHash, approvalRef = null) {
     approvalRef,
     createdAt: "2026-07-16T00:00:00.000Z",
     activatedAt: status === "active_prod" ? "2026-07-16T00:00:00.000Z" : null,
-  };
+  });
 }
 
 function setupReleaseInRoot(root, manifest) {

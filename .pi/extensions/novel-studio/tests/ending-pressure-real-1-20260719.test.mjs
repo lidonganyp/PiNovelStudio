@@ -48,12 +48,18 @@ import { checkCandidateFactGuard } from "../dist/v2/core/orchestrator-factguard.
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..", "..", "..");
 const XINMO_CHAPTERS = join(REPO_ROOT, "workspaces", "xinmo", "chapters");
+const XINMO_CHAPTER_FIXTURES = join(import.meta.dirname, "fixtures", "xinmo-chapters");
 const XINMO_CONFIG = join(REPO_ROOT, "workspaces", "xinmo", "config.json");
+const XINMO_CONFIG_FIXTURE = join(import.meta.dirname, "fixtures", "xinmo-minimal-config.json");
 const EXPECTED_CHAPTERS = ["chapter-01.md", "chapter-05.md", "chapter-08.md", "chapter-12.md", "chapter-17.md"];
 
 function loadChapterRaw(filename) {
+  const fixturePath = join(XINMO_CHAPTER_FIXTURES, filename);
+  if (existsSync(fixturePath)) {
+    return readFileSync(fixturePath, "utf-8");
+  }
   const path = join(XINMO_CHAPTERS, filename);
-  assert.ok(existsSync(path), `真实章节缺失：${path}`);
+  assert.ok(existsSync(path), `真实章节缺失：${fixturePath}`);
   return readFileSync(path, "utf-8");
 }
 

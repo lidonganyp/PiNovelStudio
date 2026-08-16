@@ -243,7 +243,7 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     );
   });
 
-  it("dist/ JS 文件数 < 326（防通配 include 退化为全量编译）", () => {
+  it("dist/ JS 文件数 < 340（防通配 include 退化为全量编译）", () => {
     const distCount = countJsFiles(DIST_DIR);
     assert.ok(distCount > 0, "dist/ JS 文件数应 > 0（需先 npm run build）");
     // 2026-08-12：自主性控制面 + 恢复控制面 + 用户反馈证据管道新增生产模块；阈值曾上调到 290。
@@ -287,11 +287,12 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     // 合法新增 2 个生产模块。闭包 322 → 324。阈值上调到 325。
     // 2026-08-15 BG 真实成本：v2/core/unit-price-schedule（版本化单价表）经 budget-ledger
     // settle + model-call-observability 接入生产闭包，合法新增 1 个生产模块。闭包 324 → 325。
-    // 阈值上调到 326。
+    // 2026-08-16：34537d0 把 capability/evidence 生产模块纳入版本，干净闭包 334。
+    // 阈值上调到 340。
     // 守卫仍是绊线：真正「退化」信号是旧通配 include 的全量树（~460）或旧 237，远高于此。
     assert.ok(
-      distCount < 326,
-      `dist/ JS 文件数（${distCount}）应 < 326（生产闭包约 325，含 MEMORY/Protocol/自主性/恢复控制面/反馈证据管道/模型路由治理/策略证据分区/发布生命周期权限/trace 投影/trace 投影读入口/trace 写模式开关/明细内容库/trajectory 写模式开关/轨迹明细内容库/SIGKILL 故障注入钩子/跨进程原子原语/章节提交队列/提交边界 stale 检测/统一预算账本/版本化单价表；旧通配 include 接近全量）；超过说明 tsconfig.prod.json 退化为全量编译`,
+      distCount < 340,
+      `dist/ JS 文件数（${distCount}）应 < 340（生产闭包约 334，含 capability/evidence 模块；旧通配 include 接近全量）；超过说明 tsconfig.prod.json 退化为全量编译`,
     );
   });
 });

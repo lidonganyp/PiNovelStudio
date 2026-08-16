@@ -32,11 +32,60 @@ function makeTempRoot() {
   return mkdtempSync(join(tmpdir(), "evolution-launch-"));
 }
 
+function makeCleanGitProject() {
+  const dir = mkdtempSync(join(tmpdir(), "evolution-clean-git-"));
+  execFileSync("git", ["init"], { cwd: dir, encoding: "utf-8" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir, encoding: "utf-8" });
+  execFileSync("git", ["config", "user.name", "launch-test"], { cwd: dir, encoding: "utf-8" });
+  writeFileSync(join(dir, "README.md"), "clean capture root\n", "utf-8");
+  execFileSync("git", ["add", "README.md"], { cwd: dir, encoding: "utf-8" });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "init"], {
+    cwd: dir,
+    encoding: "utf-8",
+  });
+  return dir;
+}
+
+function writeMatchingStateEvent(registry, releaseId, status) {
+  if (status === "draft") return;
+  const fromByTo = {
+    candidate: "draft",
+    frozen: "candidate",
+    evaluated: "frozen",
+    approved_dev: "evaluated",
+    active_dev: "approved_dev",
+    candidate_prod: "active_dev",
+    active_prod: "candidate_prod",
+    held: "active_dev",
+    rejected: "evaluated",
+    quarantined: "evaluated",
+  };
+  const fromStatus = fromByTo[status];
+  if (!fromStatus) return;
+  registry.recordStateEvent({
+    eventId: `evt-${releaseId}-${status}`,
+    releaseId,
+    fromStatus,
+    toStatus: status,
+    reason: `test fixture arrived at ${status}`,
+    actor: "system",
+    timestamp: "2026-07-17T00:00:00.000Z",
+  });
+}
+
 function runCli(args, env = {}) {
+  const merged = { ...process.env, ...env };
+  delete merged.PINOVEL_EVAL_REPLAY_TRANSPORT;
+  delete merged.PINOVEL_EVAL_RECORDED_RESULTS_PATH;
+  delete merged.PINOVEL_EVAL_SYNTHETIC_FAULTS;
+  delete merged.PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH;
+  if (!merged.PINOVEL_PROJECT_ROOT) {
+    merged.PINOVEL_PROJECT_ROOT = cleanGitProject;
+  }
   try {
     const stdout = execFileSync("node", [CLI_PATH, ...args], {
       cwd: EXT_ROOT,
-      env: { ...process.env, ...env },
+      env: merged,
       encoding: "utf-8",
       timeout: 30_000,
     });
@@ -76,6 +125,8 @@ function writeMetadata(root, body) {
   return path;
 }
 
+const cleanGitProject = makeCleanGitProject();
+
 test("candidate and freeze commands bind metadata before an immutable freeze", () => {
   const root = makeTempRoot();
   try {
@@ -83,6 +134,7 @@ test("candidate and freeze commands bind metadata before an immutable freeze", (
     registry.writeManifest(makeManifest("rel-base", "active_prod", {
       approvalRef: "approval-base",
     }));
+    writeMatchingStateEvent(registry, "rel-base", "active_prod");
     const env = { PINOVEL_EVOLUTION_ROOT: root };
     assert.equal(runCli([
       "capture", "--release-id", "rel-next", "--parent", "rel-base", "--rollback", "rel-base",
@@ -119,10 +171,12 @@ test("freeze rejects a rollback target that is not active_prod", () => {
   try {
     const registry = createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
     registry.writeManifest(makeManifest("rel-draft", "draft"));
+    writeMatchingStateEvent(registry, "rel-draft", "draft");
     registry.writeManifest(makeManifest("rel-next", "candidate", {
       parentReleaseId: "rel-draft",
       rollbackReleaseId: "rel-draft",
     }));
+    writeMatchingStateEvent(registry, "rel-next", "candidate");
     const result = runCli(["freeze", "--release-id", "rel-next"], {
       PINOVEL_EVOLUTION_ROOT: root,
     });
@@ -169,6 +223,7 @@ test("proxy-review --real fails closed when no authorization card is supplied", 
       rollbackReleaseId: "rel-base",
       changeClass: "R2",
     }));
+    writeMatchingStateEvent(registry, "rel-real", "evaluated");
     const evalInput = join(root, "eval-input.json");
     writeFileSync(evalInput, JSON.stringify(makePacketInputBody()), "utf-8");
     const result = runCli([
@@ -192,6 +247,7 @@ test("a stub approval can activate development but cannot enter production candi
       rollbackReleaseId: "rel-base",
       changeClass: "R2",
     }));
+    writeMatchingStateEvent(registry, releaseId, "evaluated");
     const evalInput = join(root, "eval-input.json");
     writeFileSync(evalInput, JSON.stringify(makePacketInputBody()), "utf-8");
     const env = { PINOVEL_EVOLUTION_ROOT: root };
@@ -223,6 +279,7 @@ test("an authorized evaluated R2 release can start a pre-approval shadow canary"
       rollbackReleaseId: "rel-base",
       changeClass: "R2",
     }));
+    writeMatchingStateEvent(registry, releaseId, "evaluated");
     const workspace = join(root, "canary-control");
     mkdirSync(workspace, { recursive: true });
     const authPath = join(root, "canary-auth.json");
@@ -334,6 +391,7 @@ test("proxy runner rejects a packet changeClass that differs from the manifest",
       rollbackReleaseId: "rel-base",
       changeClass: "R3",
     }));
+    writeMatchingStateEvent(evolutionRegistry, releaseId, "evaluated");
     const proxyRegistry = createProxyApprovalRegistry({ approvalsDir: join(root, "approvals") });
     await assert.rejects(() => runStubProxyReview({
       proxyRegistry,
@@ -367,6 +425,7 @@ test("runRealProxyReview consumes a real card and performs bounded forward/rever
       rollbackReleaseId: "rel-base",
       changeClass: "R2",
     }));
+    writeMatchingStateEvent(evolutionRegistry, releaseId, "evaluated");
     const proxyRegistry = createProxyApprovalRegistry({ approvalsDir: join(root, "approvals") });
     const cardPath = join(root, "authorization-card.json");
     writeFileSync(cardPath, JSON.stringify({
