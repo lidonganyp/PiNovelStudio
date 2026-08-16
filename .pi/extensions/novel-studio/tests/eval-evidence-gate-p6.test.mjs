@@ -281,6 +281,34 @@ function writeGeneratedPassingMatrix(evalRunRoot, releaseId, bundleId, opts = {}
  * promote 命令在 eval gate 之前先做 approval 四元绑定校验，
  * 因此所有 promote CLI 测试必须先落盘合法 artifact。
  */
+function writeMatchingStateEvent(root, releaseId, status) {
+  const registry = createEvolutionReleaseRegistry({
+    releasesDir: join(root, "releases"),
+  });
+  const fromByTo = {
+    candidate: "draft",
+    frozen: "candidate",
+    evaluated: "frozen",
+    approved_dev: "evaluated",
+    active_dev: "approved_dev",
+    candidate_prod: "active_dev",
+    active_prod: "candidate_prod",
+  };
+  const fromStatus = fromByTo[status];
+  if (!fromStatus) {
+    throw new Error(`writeMatchingStateEvent: 未覆盖的 status=${status}`);
+  }
+  registry.recordStateEvent({
+    eventId: `evt-${releaseId}-${status}`,
+    releaseId,
+    fromStatus,
+    toStatus: status,
+    reason: `test fixture arrived at ${status}`,
+    actor: "system",
+    timestamp: "2026-08-16T00:00:00.000Z",
+  });
+}
+
 function writeStubApproval(root, releaseId, approvalId, manifest) {
   const approvalsDir = join(root, "releases", releaseId, "approvals");
   const registry = createProxyApprovalRegistry({ approvalsDir });
@@ -929,6 +957,7 @@ test("CLI promote: R3 active_prod 缺 eval 证据 → EVAL_EVIDENCE_REQUIRED exi
         changeClass: "R3",
       }),
     );
+    writeMatchingStateEvent(root, "rel-r3-001", "candidate_prod");
     writeStubApproval(
       root,
       "rel-r3-001",
@@ -969,6 +998,7 @@ test("CLI promote: R1 active_prod 无 eval 证据 → EVAL_EVIDENCE_REQUIRED exi
         changeClass: "R1",
       }),
     );
+    writeMatchingStateEvent(root, "rel-r1-001", "candidate_prod");
     writeStubApproval(
       root,
       "rel-r1-001",
@@ -1007,6 +1037,7 @@ test("CLI promote: R1 active_prod 提供非法 eval root → fail-closed exit 5"
         changeClass: "R1",
       }),
     );
+    writeMatchingStateEvent(root, "rel-r1b-001", "candidate_prod");
     writeStubApproval(
       root,
       "rel-r1b-001",

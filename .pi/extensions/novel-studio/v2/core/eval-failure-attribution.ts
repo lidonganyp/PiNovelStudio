@@ -340,6 +340,18 @@ const ATTRIBUTION_RULES: ReadonlyArray<AttributionRule> = [
       ]),
   },
   {
+    ruleId: "rule:gate=agentic_fact_guard",
+    attribution: "model",
+    match: (input, text) =>
+      input.gate === "agentic_fact_guard" ||
+      input.stage === "agentic_fact_guard" ||
+      containsAny(text, [
+        "agentic_fact_guard",
+        "unauthorized_high_impact_setting",
+        "事实硬伤",
+      ]),
+  },
+  {
     ruleId: "rule:model",
     attribution: "model",
     match: (_input, text) =>

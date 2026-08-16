@@ -102,6 +102,7 @@
 import "../v2/governance/evolution-release-types.js";
 import "../v2/governance/evolution-release-schema.js";
 import "../v2/governance/evolution-release-registry.js";
+import "../v2/governance/release-integrity.js";
 import "../v2/governance/release-pointer-store.js";
 import "../v2/governance/environment-fingerprint.js";
 

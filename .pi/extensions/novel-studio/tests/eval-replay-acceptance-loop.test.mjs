@@ -506,6 +506,46 @@ describe("P1 eval-replay-isolation：fail-closed 与 scratch 生命周期", () =
     );
   });
 
+  it("production_like 必须设置 PINOVEL_EVAL_REQUIRE_ACTIVE_APPROVAL；candidate_like 不得设置", () => {
+    const sourceRoot = join(__dirname, ".tmp-eval-approval-env");
+    mkdirSync(join(sourceRoot, "config", "evolution-release"), { recursive: true });
+    writeFileSync(
+      join(sourceRoot, "config", "evolution-release", "active-production.json"),
+      JSON.stringify({ releaseId: "rel-prod-110" }),
+      "utf-8",
+    );
+    try {
+      const productionEnv = isolation.buildReplayIsolationEnv(
+        buildValidFixture({ replayMode: "production_like" }),
+        process.env,
+        undefined,
+        { sourceProjectRoot: sourceRoot },
+      );
+      assert.equal(productionEnv.PINOVEL_EVAL_REQUIRE_ACTIVE_APPROVAL, "1");
+      assert.equal(productionEnv.PINOVEL_DEV_MODE, undefined);
+
+      const candidateEnv = isolation.buildReplayIsolationEnv(
+        buildValidFixture({ replayMode: "candidate_like" }),
+        process.env,
+        undefined,
+        { sourceProjectRoot: sourceRoot },
+      );
+      assert.equal(candidateEnv.PINOVEL_EVAL_REQUIRE_ACTIVE_APPROVAL, undefined);
+      assert.equal(candidateEnv.PINOVEL_DEV_MODE, undefined);
+      assert.ok(String(candidateEnv.PINOVEL_EVOLUTION_ROOT).includes("evolution-release"));
+    } finally {
+      rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("candidate_like 指向 rel-dev-* release → 隔离违规", () => {
+    const fixture = buildValidFixture({ replayMode: "candidate_like" });
+    fixture.provenance.releaseId = "rel-dev-999";
+    const { ok, violations } = isolation.validateReplayIsolationPrerequisites(fixture);
+    assert.equal(ok, false);
+    assert.ok(violations.some((v) => v.kind === "missing_isolation_fields"));
+  });
+
   it("assertReplayIsolationEnv：缺真实模型字段 → 违规", () => {
     const { ok, violations } = isolation.assertReplayIsolationEnv(
       { PINOVEL_EVAL_ONLY: "1", PINOVEL_EVAL_PROTOCOL_VERSION: "pinovel.eval-protocol/1" },
@@ -733,6 +773,18 @@ describe("P4 eval-failure-attribution：确定性归因", () => {
       reason: "memory_hard_conflict blocked commit",
     });
     assert.equal(r.attribution, "state_commit");
+  });
+
+  it("agentic_fact_guard / 事实硬伤 → model，不得落入 unclassified", () => {
+    const r = attribution.classifyFailureAttribution({
+      stage: "agentic_fact_guard",
+      gate: "agentic_fact_guard",
+      severity: "hard_block",
+      reason:
+        "NovelOS Agentic 初稿事实硬伤：diag:unauthorized_high_impact_setting:0: 未授权高影响新设定 \"的底层\"",
+    });
+    assert.equal(r.attribution, "model");
+    assert.equal(r.ruleId, "rule:gate=agentic_fact_guard");
   });
 
   it("空响应 → model；未知描述 → unclassified", () => {
@@ -1695,7 +1747,7 @@ describe("F4-4 隔离 env：确定性回放模式携带传输标记", () => {
     }
   });
 
-  it("dev_real_model / production_like -> 不携带确定性传输标记（走真实模型）", () => {
+  it("dev_real_model / production_like / candidate_like -> 不携带确定性传输标记（走真实模型）", () => {
     const sourceRoot = join(__dirname, ".tmp-eval-prod-like-transport");
     mkdirSync(join(sourceRoot, "config", "evolution-release"), { recursive: true });
     writeFileSync(
@@ -1704,13 +1756,13 @@ describe("F4-4 隔离 env：确定性回放模式携带传输标记", () => {
       "utf-8",
     );
     try {
-      for (const mode of ["dev_real_model", "production_like"]) {
+      for (const mode of ["dev_real_model", "production_like", "candidate_like"]) {
         const fixture = buildValidFixture({ replayMode: mode });
         const env = isolation.buildReplayIsolationEnv(
           fixture,
           process.env,
           undefined,
-          mode === "production_like" ? { sourceProjectRoot: sourceRoot } : undefined,
+          mode === "dev_real_model" ? undefined : { sourceProjectRoot: sourceRoot },
         );
         assert.equal(env.V2_FORCE_STUB, undefined, `${mode} 不应设置 V2_FORCE_STUB`);
         assert.equal(env.PINOVEL_EVAL_REPLAY_TRANSPORT, undefined, `${mode} 不应声明确定性传输`);

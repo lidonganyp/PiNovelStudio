@@ -398,6 +398,20 @@ test("回归：时间状语\"突破的关键时期\"不误报为境界跃迁", (
   );
 });
 
+test("回归：社会地位\"踏入凝气一层的底层弟子\"不误报为境界跃迁", () => {
+  // rel-prod-119 fixture.002 真实样本：升级语境紧邻「底层弟子」，
+  // REALM_SUFFIX_PATTERN 会切出「的底层」并被 UPGRADE_CONTEXT_PATTERN 误报。
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "叶尘虽然只是个刚刚踏入凝气一层的底层弟子，但多年来察言观色的本能告诉他，风雨欲来。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  const upgrades = diagnostics.filter((d) => d.category === "upgrade_result");
+  assert.equal(
+    upgrades.some((d) => d.term.includes("底层")),
+    false,
+    `"底层弟子"不得误报为境界跃迁：${JSON.stringify(upgrades)}`,
+  );
+});
+
 test("回归：排除非境界词汇后，真实未授权境界仍被检测", () => {
   // 排除"第三层/关键时期"等误报，不得削弱对真实未授权境界（如"化神境"）的检测。
   const compiled = compileImmutableFacts(buildMinimalInput());

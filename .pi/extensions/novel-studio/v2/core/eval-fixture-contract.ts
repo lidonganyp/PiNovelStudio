@@ -49,14 +49,16 @@ export const EVAL_PROTOCOL_VERSION = "pinovel.eval-protocol/1";
  *  - recorded         ：固定历史模型结果回放（确定性回归）；
  *  - synthetic        ：合成模型响应（故障注入 / 边界场景）；
  *  - dev_real_model   ：开发环境真实模型（测量随机性 / 能力）；
- *  - production_like  ：生产等价回放（release/bundle/hash 全绑定）。
+ *  - production_like  ：生产等价回放（release/bundle/hash/审批全绑定）。
+ *  - candidate_like   ：审批前回放（身份+指纹，不要求真实审批）。
  */
 export type ReplayMode =
   | "stub"
   | "recorded"
   | "synthetic"
   | "dev_real_model"
-  | "production_like";
+  | "production_like"
+  | "candidate_like";
 
 export const REPLAY_MODES: ReadonlyArray<ReplayMode> = [
   "stub",
@@ -64,12 +66,14 @@ export const REPLAY_MODES: ReadonlyArray<ReplayMode> = [
   "synthetic",
   "dev_real_model",
   "production_like",
+  "candidate_like",
 ];
 
 /** 真实模型回放模式：必须携带完整隔离字段（evalOnly/releaseId/bundleId/…）。 */
 export const REAL_MODEL_REPLAY_MODES: ReadonlyArray<ReplayMode> = [
   "dev_real_model",
   "production_like",
+  "candidate_like",
 ];
 
 export function isReplayMode(value: unknown): value is ReplayMode {

@@ -175,11 +175,24 @@ const NON_REALM_SUFFIX_PHRASES: readonly string[] = [
   "时期",
   "期间",
   "层次",
+  "层级",
   "阶层",
   "意境",
   "境地",
   "境况",
+  "底层",
+  "上层",
+  "下层",
+  "中层",
+  "表层",
+  "深层",
+  "基层",
+  "内层",
+  "外层",
 ];
+
+/** 以结构助词开头的匹配几乎不可能是境界名，例如「的底层弟子」。 */
+const REALM_PARTICLE_PREFIX = /^(?:的|地|得)/;
 
 /** 功法层数（第X层/第X重），如"第三层"，非修为境界，排除。 */
 const NUMBERED_LAYER_PATTERN = /第[一二三四五六七八九十百千万\d]+(?:层|重)$/;
@@ -192,6 +205,7 @@ const NUMBERED_LAYER_PATTERN = /第[一二三四五六七八九十百千万\d]+(
  */
 function isNonRealmSuffixPhrase(term: string): boolean {
   if (NUMBERED_LAYER_PATTERN.test(term)) return true;
+  if (REALM_PARTICLE_PREFIX.test(term)) return true;
   return NON_REALM_SUFFIX_PHRASES.some((p) => term.endsWith(p));
 }
 

@@ -110,14 +110,12 @@ export function validateReplayIsolationPrerequisites(fixture: EvalFixtureV1): {
     violations.push({ kind: "missing_isolation_fields", detail: "traceArchivePath 缺失" });
   }
 
-  if (fixture.replayMode === "production_like") {
-    // production_like 回放的 release 必须是正式 release 命名空间（rel-prod-*），
-    // dev release（rel-dev-*）不得用于生产等价回放。
+  if (fixture.replayMode === "production_like" || fixture.replayMode === "candidate_like") {
     if (!/^rel-prod-/.test(fixture.provenance.releaseId)) {
       violations.push({
         kind: "missing_isolation_fields",
         detail:
-          "production_like 回放的 releaseId 必须指向 rel-prod-* 正式 release 命名空间",
+          `${fixture.replayMode} 回放的 releaseId 必须指向 rel-prod-* 正式 release 命名空间`,
         evidence: { releaseId: fixture.provenance.releaseId },
       });
     }
@@ -146,6 +144,8 @@ export interface ReplayIsolationEnv {
   PINOVEL_EVOLUTION_ROOT?: string;
   /** production_like：指向源仓干净树，供 G6 采集与 manifest 一致的指纹。 */
   PINOVEL_FINGERPRINT_ROOT?: string;
+  /** production_like：子进程 G6 必须校验真实审批。candidate_like 不得设置。 */
+  PINOVEL_EVAL_REQUIRE_ACTIVE_APPROVAL?: "1";
   /**
    * F4-4：确定性回放传输标记（stub/recorded/synthetic 模式强制携带）。
    * - V2_FORCE_STUB=1 兜底：确定性模式下任何传输 env 丢失都不得触网；
@@ -196,16 +196,19 @@ export function buildReplayIsolationEnv(
     PINOVEL_EVAL_TRACE_ARCHIVE_PATH: fixture.traceArchivePath,
     ...(scratchDataRoot ? { PINOVEL_PROJECT_ROOT: scratchDataRoot } : {}),
   };
-  if (fixture.replayMode === "production_like") {
+  if (fixture.replayMode === "production_like" || fixture.replayMode === "candidate_like") {
     delete env.PINOVEL_DEV_MODE;
     const sourceRoot = options?.sourceProjectRoot?.trim();
     if (!sourceRoot) {
       throw new Error(
-        "production_like 隔离 env 缺少 sourceProjectRoot（fail-closed：无法传播真实生产身份）",
+        `${fixture.replayMode} 隔离 env 缺少 sourceProjectRoot（fail-closed：无法传播真实生产身份）`,
       );
     }
     env.PINOVEL_EVOLUTION_ROOT = resolveProductionEvolutionRoot(sourceRoot);
     env.PINOVEL_FINGERPRINT_ROOT = sourceRoot;
+    if (fixture.replayMode === "production_like") {
+      env.PINOVEL_EVAL_REQUIRE_ACTIVE_APPROVAL = "1";
+    }
   } else {
     // recorded / synthetic / stub / dev_real_model：scratch 没有完整治理面，
     // 仍用 DEV_MODE 避免子进程误读空治理根。production_like 不得走这条旁路。

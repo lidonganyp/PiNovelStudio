@@ -43,6 +43,11 @@ import {
 } from "../dist-test/v2/governance/evolution-release-types.js";
 import { createProxyApprovalRegistry } from "../dist-test/v2/governance/release-proxy-approval-registry.js";
 import { computeReleasePayloadHash } from "../dist-test/v2/governance/evolution-release-schema.js";
+import { computeEvalFixtureHash } from "../dist-test/v2/core/eval-fixture-contract.js";
+import {
+  generateMatrixReportFromReplayRuns,
+  writeMatrixReport,
+} from "../dist-test/v2/core/eval-replay-matrix.js";
 
 // ============================================================================
 // helpers
@@ -80,11 +85,43 @@ function makeManifest(releaseId, status, opts = {}) {
   };
 }
 
+function writeMatchingStateEvent(registry, releaseId, status) {
+  if (status === "draft") return;
+  const fromByTo = {
+    candidate: "draft",
+    frozen: "candidate",
+    evaluated: "frozen",
+    approved_dev: "evaluated",
+    active_dev: "approved_dev",
+    candidate_prod: "active_dev",
+    active_prod: "candidate_prod",
+    held: "active_dev",
+    rejected: "evaluated",
+    quarantined: "evaluated",
+    revoked: "active_dev",
+    retired: "active_prod",
+  };
+  const fromStatus = fromByTo[status];
+  if (!fromStatus) {
+    throw new Error(`writeMatchingStateEvent: 未覆盖的 status=${status}`);
+  }
+  registry.recordStateEvent({
+    eventId: `evt-${releaseId}-${status}`,
+    releaseId,
+    fromStatus,
+    toStatus: status,
+    reason: `test fixture arrived at ${status}`,
+    actor: "system",
+    timestamp: "2026-07-16T00:00:00.000Z",
+  });
+}
+
 function setupReleases(root, manifests) {
   const releasesDir = join(root, "releases");
   const registry = createEvolutionReleaseRegistry({ releasesDir });
   for (const m of manifests) {
     registry.writeManifest(m);
+    writeMatchingStateEvent(registry, m.releaseId, m.status);
   }
   return registry;
 }
@@ -95,6 +132,147 @@ function makeStore(root) {
 
 function makeRegistry(root) {
   return createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
+}
+
+function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
+  const fixtureIdBase = opts.fixtureId ?? "fixture.g5-001";
+  const sampleCount = opts.sampleCount ?? 1;
+  const runId = opts.runId ?? "run-g5-001";
+  const samples = [];
+
+  for (let i = 0; i < sampleCount; i += 1) {
+    const fixtureId = sampleCount === 1 ? fixtureIdBase : `${fixtureIdBase}.${i + 1}`;
+    const sampleDir = join(runRoot, "samples", fixtureId);
+    const tracesDir = join(sampleDir, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    const fixture = {
+      schemaId: "pinovel.eval-fixture",
+      schemaVersion: 1,
+      fixtureId,
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      evalOnly: true,
+      replayMode: "stub",
+      createdAt: "2026-08-16T00:00:00.000Z",
+      provenance: {
+        releaseId,
+        bundleId,
+        promptBundleHash: "0123456789abcdef",
+        toolSchemaHash: "0123456789abcdef",
+        contextCompilerHash: "0123456789abcdef",
+        budgetHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        modelVersion: "gemini-3.1-pro-preview",
+        modelRoute: "v2_rawstage2_gemini31",
+        provider: "gemini",
+        graderVersion: "deterministic-v1",
+      },
+      workspace: {
+        sourceWorkspaceId: "ws-src",
+        config: {},
+        characterProfiles: {},
+        historicalChapters: [],
+      },
+      chapterSeed: {
+        chapterNumber: 1,
+        chapterId: "chapter-001",
+        chapterTitle: "第一章",
+        intent: {},
+        seedSource: "test",
+      },
+      priorNarrativeState: null,
+      modelPolicy: {
+        requestTimeoutMs: 60000,
+        totalTimeoutMs: 600000,
+        maxModelCalls: 40,
+        maxRecoveryModelCalls: 4,
+      },
+      expectedInvariants: {
+        statePollutionForbidden: true,
+        productionPointerMutationForbidden: true,
+        formalChapterSaveForbidden: true,
+        traceArchiveRequired: true,
+        scratchNarrativeStateCommitAllowed: true,
+      },
+      traceArchivePath: "traces/chapter-001-quality-trace.json",
+    };
+    writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
+    writeFileSync(
+      join(tracesDir, "chapter-001-quality-trace.json"),
+      JSON.stringify({ stageResults: [], recoveryAttempts: [] }),
+    );
+    writeFileSync(
+      join(sampleDir, "state-projection.json"),
+      JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
+    );
+    samples.push({
+      fixtureId,
+      fixtureHash: computeEvalFixtureHash(fixture),
+      replayMode: "stub",
+      scratchWorkspaceId: `eval-stub-g5-${i + 1}`,
+      status: "completed",
+      failureAttribution: null,
+      failureEnvelopes: [],
+      traceArchived: true,
+      traceArchivePath: tracesDir,
+      isolationViolations: [],
+      modelCalls: 0,
+      durationMs: 500 + i,
+    });
+  }
+
+  writeFileSync(
+    join(runRoot, "manifest.json"),
+    JSON.stringify({
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId,
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "stub",
+      releaseId,
+      bundleId,
+      runRoot,
+      startedAt: "2026-08-16T00:00:00.000Z",
+      finishedAt: "2026-08-16T00:01:00.000Z",
+      samples,
+      summary: {
+        totalSamples: sampleCount,
+        countedSamples: sampleCount,
+        completed: sampleCount,
+        failed: 0,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    }, null, 2),
+  );
+  return runRoot;
+}
+
+function writePassingEvalEvidence(root, releaseId, changeClass = "R1") {
+  const bundleId = "bundle-g5-001";
+  const evalRunRoot = join(root, `eval-evidence-${releaseId}`);
+  makeEvalRunRoot(evalRunRoot, releaseId, bundleId);
+  if (changeClass === "R2" || changeClass === "R3") {
+    const armIds = ["baseline", "candidate", "raw_direct", "recovery"];
+    const armRunRoots = {};
+    for (const armId of armIds) {
+      armRunRoots[armId] = makeEvalRunRoot(join(evalRunRoot, "arms", armId), releaseId, bundleId, {
+        fixtureId: `fixture.${armId}`,
+        sampleCount: 3,
+        runId: `run-${armId}`,
+      });
+    }
+    writeMatrixReport(
+      evalRunRoot,
+      generateMatrixReportFromReplayRuns({
+        candidateReleaseId: releaseId,
+        candidateBundleId: bundleId,
+        baselineReleaseId: releaseId,
+        armRunRoots,
+        codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+      }),
+    );
+  }
+  return ["--eval-evidence-root", evalRunRoot];
 }
 
 function runCli(args, env = {}) {
@@ -451,7 +629,10 @@ test("promote: candidate_prod → active_prod 强制 actor=user（默认）切�
     writeStubApproval(root, "rel-001", "apr-001", manifestSeed);
     // 不传 --actor，CLI 应默认 user（PRODUCTION_PROMOTION 守护）
     const result = runCli(
-      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-001"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
@@ -487,7 +668,10 @@ test("promote: R2 缺少 completed canary 证据不得切 active_prod", () => {
     writeStubApproval(root, "rel-001", "apr-001", manifestSeed);
 
     const result = runCli(
-      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-001", "R2"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
 
@@ -520,6 +704,7 @@ test("promote: R2 canary_started 声明性 trace 不得切 active_prod", () => {
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
+        ...writePassingEvalEvidence(root, "rel-001", "R2"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -548,6 +733,7 @@ test("promote: R2 completed 且绑定完整的 canary trace 才允许 active_pro
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
+        ...writePassingEvalEvidence(root, "rel-001", "R2"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -582,6 +768,7 @@ test("promote: R2 canary 结果 artifact 被篡改时不得切 active_prod", () 
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
+        ...writePassingEvalEvidence(root, "rel-001", "R2"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -614,6 +801,7 @@ test("promote: R2 canary 晋级事件写失败时不得改变 manifest 或 produ
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
+        ...writePassingEvalEvidence(root, "rel-001", "R2"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -886,7 +1074,10 @@ test("rollback: production 回滚到 held 旧基线被阻断（旧 release 仅�
     writeStubApproval(root, "rel-002", "apr-002", m2);
     // promote rel-001 → active_prod（首次 prod switch，建立唯一生产基线）
     runCli(
-      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-001"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
     // DG-6 单一生产基线：晋级 rel-002 前必须先降级旧基线 rel-001（active_prod → held），
@@ -894,7 +1085,10 @@ test("rollback: production 回滚到 held 旧基线被阻断（旧 release 仅�
     runCli(["hold", "--release-id", "rel-001"], { PINOVEL_EVOLUTION_ROOT: root });
     // promote rel-002 → active_prod（第二次 prod switch，fromReleaseId=rel-001）
     runCli(
-      ["promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-002"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
 
@@ -932,14 +1126,20 @@ test("promote: 双 active_prod 晋级被单例约束阻断（真实 production p
 
     // 首次晋级 rel-001 → active_prod（成功，建立唯一生产基线）
     const first = runCli(
-      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-001"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
     assert.equal(first.code, 0, `first promote stderr: ${first.stderr}`);
 
     // 第二次晋级 rel-002 → active_prod 而不降级 rel-001：必须被 active_prod 单例约束阻断
     const second = runCli(
-      ["promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-002"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
     assert.equal(second.code, 5, `期望单例阻断 exit 5，实际 ${second.code}：${second.stderr}`);
@@ -1163,7 +1363,10 @@ test("P0-2: promote pointer 切换失败时 manifest 不被污染（原子性）
 
     // 第一次 promote 到 active_prod — 成功
     const first = runCli(
-      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-001"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
     assert.equal(first.code, 0, `first promote stderr: ${first.stderr}`);
@@ -1171,7 +1374,10 @@ test("P0-2: promote pointer 切换失败时 manifest 不被污染（原子性）
     // 第二次 promote 同一 release 到 active_prod — 非法迁移（active_prod → active_prod）
     // 应在状态校验阶段失败（exit 4），pointer 仍是第一次成功后的状态
     const second = runCli(
-      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod"],
+      [
+        "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-001-second"),
+      ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
     assert.equal(second.code, 4);

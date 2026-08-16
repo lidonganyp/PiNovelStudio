@@ -44,6 +44,10 @@ import {
 import { captureDefaultBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
 import { createEvolutionReleaseRegistry } from "../dist-test/v2/governance/evolution-release-registry.js";
 import { createReleasePointerStore } from "../dist-test/v2/governance/release-pointer-store.js";
+import {
+  assertReleaseIdAvailable,
+  assertReleaseIntegrity,
+} from "../dist-test/v2/governance/release-integrity.js";
 import { EVOLUTION_RELEASE_SCHEMA_ID, EVOLUTION_RELEASE_SCHEMA_VERSION, validateManifest, computeReleasePayloadHash } from "../dist-test/v2/governance/evolution-release-schema.js";
 import { createProxyApprovalRegistry } from "../dist-test/v2/governance/release-proxy-approval-registry.js";
 import { verifyManifestBinding } from "../dist-test/v2/governance/release-proxy-approval-schema.js";
@@ -225,6 +229,13 @@ function cmdCapture(args) {
   const validation = validateManifest(manifest);
   if (!validation.ok) {
     console.error(`[evolution:capture] manifest schema 校验失败：${validation.error.code} at ${validation.error.path} — ${validation.error.message}`);
+    process.exit(3);
+  }
+
+  try {
+    assertReleaseIdAvailable(releasesDir(), releaseId);
+  } catch (error) {
+    console.error(`[evolution:capture] 错误：${error instanceof Error ? error.message : String(error)}`);
     process.exit(3);
   }
 
@@ -803,6 +814,16 @@ async function cmdProxyReview(args) {
     );
     process.exit(4);
   }
+  try {
+    assertReleaseIntegrity({
+      evolutionRoot: evolutionRoot(),
+      releaseId,
+      stage: "pre-review",
+    });
+  } catch (error) {
+    console.error(`[evolution:proxy-review] 错误：${error instanceof Error ? error.message : String(error)}`);
+    process.exit(5);
+  }
 
   // verdict 解析：--stub-verdict 优先（forward=reverse），否则 --forward-verdict/--reverse-verdict
   let forwardVerdict;
@@ -1090,6 +1111,16 @@ function cmdPromote(args) {
     console.error(
       `[evolution:promote] 错误：晋级到 ${target} 需要 approvalRef（APPROVAL_REQUIRED）；请先运行 evolution:proxy-review 获得 APPROVE_DEV`,
     );
+    process.exit(5);
+  }
+  try {
+    assertReleaseIntegrity({
+      evolutionRoot: evolutionRoot(),
+      releaseId,
+      stage: "pre-promote",
+    });
+  } catch (error) {
+    console.error(`[evolution:promote] 错误：${error instanceof Error ? error.message : String(error)}`);
     process.exit(5);
   }
 
@@ -2252,7 +2283,14 @@ function cmdEvalCapture(args) {
     process.exit(2);
   }
   const replayMode = args["replay-mode"] || "stub";
-  const VALID_MODES = new Set(["stub", "recorded", "synthetic", "dev_real_model", "production_like"]);
+  const VALID_MODES = new Set([
+    "stub",
+    "recorded",
+    "synthetic",
+    "dev_real_model",
+    "production_like",
+    "candidate_like",
+  ]);
   if (!VALID_MODES.has(replayMode)) {
     console.error(`[evolution:eval-capture] 错误：--replay-mode 必须是 ${[...VALID_MODES].join("|")}，实际 ${replayMode}`);
     process.exit(2);

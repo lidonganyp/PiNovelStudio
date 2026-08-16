@@ -65,7 +65,11 @@ import {
   type AttributionSummary,
   type FailureAttributionResult,
 } from "../v2/core/eval-failure-attribution.js";
-import { evaluateProductionReleaseGate } from "../v2/governance/production-release-gate.js";
+import {
+  evaluateProductionReleaseGate,
+  resolveProductionEvolutionRoot,
+} from "../v2/governance/production-release-gate.js";
+import { assertReleaseIntegrity } from "../v2/governance/release-integrity.js";
 import {
   evaluateProductionLikeEvidence,
   extractReplayModelCalls,
@@ -287,16 +291,14 @@ export function resolveModelRouteInvokeArgs(
 /**
  * EVAL-REPLAY-ACCEPTANCE-LOOP F1：production_like 的生产 release gate 前置验证。
  *
- * 在 Runner 层校验 fixture provenance 指向的候选 release（身份 + 指纹 +
- * capabilityPackageSetHash），不要求该 release 已经是 active_prod，也不要求
- * 审批已完成：证据先于指针切换。
- *
- * production_like 子进程不再设置 PINOVEL_DEV_MODE。子进程通过
- * PINOVEL_EVAL_ONLY + PINOVEL_EVAL_RELEASE_ID 走同一套候选门禁。
+ * production_like：target release 必须通过四方一致性，并
+ * requireActiveApproval=true（真实审批 + 双向 APPROVE_DEV + payload hash）。
+ * 不要求已经是 active_prod。审批前回放请用 candidate_like。
  */
 export function verifyProductionLikeReleaseGate(
   projectRoot: string,
   fixture: EvalFixtureV1,
+  options?: { requireActiveApproval?: boolean },
 ): {
   ok: true;
   releaseId: string;
@@ -308,10 +310,18 @@ export function verifyProductionLikeReleaseGate(
   const savedDevMode = process.env.PINOVEL_DEV_MODE;
   delete process.env.PINOVEL_DEV_MODE;
   try {
+    const requireActiveApproval = options?.requireActiveApproval === true;
+    if (requireActiveApproval) {
+      assertReleaseIntegrity({
+        evolutionRoot: resolveProductionEvolutionRoot(projectRoot),
+        releaseId: fixture.provenance.releaseId,
+        stage: "pre-production_like",
+      });
+    }
     const gate = evaluateProductionReleaseGate({
       projectRoot,
       targetReleaseId: fixture.provenance.releaseId,
-      requireActiveApproval: false,
+      requireActiveApproval,
     });
     if (!gate.ok) {
       return {
@@ -784,7 +794,9 @@ export async function runFullPipelineReplay(
     // EVAL-REPLAY-ACCEPTANCE-LOOP F1：真实模型回放必须消费 fixture 声明的
     // modelRoute（fail-closed：未知路由不得静默回退到开发缺省 GLM 锁）。
     const isRealModelReplay =
-      fixture.replayMode === "dev_real_model" || fixture.replayMode === "production_like";
+      fixture.replayMode === "dev_real_model" ||
+      fixture.replayMode === "production_like" ||
+      fixture.replayMode === "candidate_like";
     let modelRouteArgs: string[] = [];
     if (isRealModelReplay) {
       const routeArgs = resolveModelRouteInvokeArgs(fixture);
@@ -834,8 +846,10 @@ export async function runFullPipelineReplay(
 
     // EVAL-REPLAY-ACCEPTANCE-LOOP F1：production_like 必须先通过候选 release
     // 身份/指纹/capabilityPackageSetHash 门禁；不要求已经是 active_prod。
-    if (fixture.replayMode === "production_like") {
-      const gateCheck = verifyProductionLikeReleaseGate(projectRoot, fixture);
+    if (fixture.replayMode === "production_like" || fixture.replayMode === "candidate_like") {
+      const gateCheck = verifyProductionLikeReleaseGate(projectRoot, fixture, {
+        requireActiveApproval: fixture.replayMode === "production_like",
+      });
       if (!gateCheck.ok) {
         const gateViolation: IsolationViolation = {
           kind: "production_release_gate_mismatch",
@@ -885,7 +899,10 @@ export async function runFullPipelineReplay(
       fixture,
       scratchParentDir: options.scratchParentDir,
     });
-    const isRealModel = fixture.replayMode === "dev_real_model" || fixture.replayMode === "production_like";
+    const isRealModel =
+      fixture.replayMode === "dev_real_model" ||
+      fixture.replayMode === "production_like" ||
+      fixture.replayMode === "candidate_like";
     materializeScratchProjectSkeleton(lease.scratchRoot, {
       projectRoot,
       // 模型路由配置在所有回放模式都必须存在：统一主链路的路由解析发生在

@@ -95,8 +95,8 @@ export interface ReleaseGateInput {
    */
   targetReleaseId?: string;
   /**
-   * 是否要求 active_prod + 真实审批。默认 true。
-   * production_like 候选验收传 false：证据先于审批与指针切换。
+   * 是否要求真实审批 artifact + 双向 APPROVE_DEV + payload hash。
+   * 默认 true。candidate_like 传 false；production_like 必须 true。
    */
   requireActiveApproval?: boolean;
 }
@@ -520,6 +520,14 @@ export function evaluateProductionReleaseGate(
       },
     };
   }
+  if (
+    approvalArtifact.forwardVerdict !== "APPROVE_DEV" ||
+    approvalArtifact.reverseVerdict !== "APPROVE_DEV"
+  ) {
+    return releaseGateBlocked(
+      `production requires dual APPROVE_DEV；forward=${approvalArtifact.forwardVerdict} reverse=${approvalArtifact.reverseVerdict}`,
+    );
+  }
   // releaseManifestHash 双向绑定（防 manifest 篡改或 artifact 复用到不同 manifest）。
   // 使用 computeReleasePayloadHash（排除 status/approvalRef/activatedAt 生命周期字段），
   // 保证 artifact 在 evaluated 状态生成后，迁移到 active_prod 状态仍能通过绑定验证
@@ -593,10 +601,12 @@ export function evaluateProductionReleaseGate(
     );
   }
   if (behaviorIdentity.bundleId !== null) {
-    const otherComponentsComplete = BEHAVIOR_COMPONENT_FIELDS.every((field) => {
-      const value = (manifest as unknown as Record<string, unknown>)[field];
-      return typeof value === "string" && value.length > 0;
-    });
+    const otherComponentsComplete = BEHAVIOR_COMPONENT_FIELDS
+      .filter((field) => field !== "capabilityPackageSetHash")
+      .every((field) => {
+        const value = (manifest as unknown as Record<string, unknown>)[field];
+        return typeof value === "string" && value.length > 0;
+      });
     if (otherComponentsComplete && !behaviorIdentity.capabilityPackageSetHash) {
       return releaseGateBlocked(
         "capabilityPackageSetHash missing：生产 release 必须显式冻结 CapabilityPackageSet（CPG-1.5）",
