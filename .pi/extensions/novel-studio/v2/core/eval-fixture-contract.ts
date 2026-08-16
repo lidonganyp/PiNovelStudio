@@ -227,6 +227,11 @@ export interface EvalFixtureV1 {
   /** 强制字段：字面量 true。回放输入永远不得进入正式生产统计。 */
   evalOnly: true;
   replayMode: ReplayMode;
+  /**
+   * 四臂矩阵身份。raw_direct 时 Runner 必须走独立裸写入口（B0），
+   * 不得再调用普通 novel_generate_chapter 全链路。
+   */
+  matrixArm?: "baseline" | "candidate" | "raw_direct" | "recovery";
   createdAt: string;
   provenance: EvalFixtureProvenanceV1;
   workspace: EvalFixtureWorkspaceSnapshotV1;
@@ -662,6 +667,17 @@ export function validateEvalFixtureV1(raw: unknown): EvalFixtureValidationResult
       rule: "invalid_replay_mode",
       message: `replayMode 必须为 ${REPLAY_MODES.join(" | ")} 之一`,
     });
+  }
+
+  if (raw.matrixArm !== undefined) {
+    const allowedArms = ["baseline", "candidate", "raw_direct", "recovery"];
+    if (typeof raw.matrixArm !== "string" || !allowedArms.includes(raw.matrixArm)) {
+      errors.push({
+        field: "/matrixArm",
+        rule: "invalid_matrix_arm",
+        message: `matrixArm 必须为 ${allowedArms.join(" | ")} 之一`,
+      });
+    }
   }
 
   if (typeof raw.createdAt !== "string" || Number.isNaN(Date.parse(raw.createdAt))) {

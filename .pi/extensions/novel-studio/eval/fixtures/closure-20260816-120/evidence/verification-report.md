@@ -52,6 +52,8 @@
   - recovery：`rel-prod-120` / `closure-synthetic-120`（3/3 synthetic，同夹具故障计划）
 - 仍不能当作“相对 115 的 3 连真实 A/B”：baseline 只有 1 个样本；raw_direct 是 candidate 正文的确定性回放，不是独立裸写
 - 门禁已收口：raw_direct 必须从 trace 路由证明 `independent_raw`（仅裸写、无 amplified）；candidate 必须是 `unified_full`；P6 始终用 runRoot manifest/trace 覆盖报告里的 replayMode/pipelineKind
+- 三关键臂（baseline / candidate / raw_direct）必须是真实模型 replayMode；stub + 手工 Gemini route 不得 P6 approved
+- raw_direct 产品入口：fixture.matrixArm=raw_direct → invoke --eval-layer=B0 → runIndependentRawReplay（evalMode=B0）
 
 ## CLI 口径
 

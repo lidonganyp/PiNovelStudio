@@ -325,7 +325,7 @@ function writeGeneratedPassingMatrix(evalRunRoot, releaseId, bundleId, opts = {}
       sampleCount: 3,
       runId: `run-${armId}`,
       pipelineKind: armKinds[armId],
-      replayMode: armId === "recovery" ? "synthetic" : "stub",
+      replayMode: armId === "recovery" ? "synthetic" : "production_like",
     });
     armRunRoots[armId] = runRoot;
   }
@@ -998,6 +998,50 @@ test("gate: 四臂相同 stub 全链路 → MATRIX_REJECTED（raw_direct 未证�
     assert.equal(gate.verdict, "rejected", gate.reason);
     assert.equal(gate.code, "EVAL_EVIDENCE_MATRIX_REJECTED");
     assert.match(gate.reason, /raw_direct|裸写/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: 三关键臂 stub + 手工 Gemini route → MATRIX_REJECTED", () => {
+  const root = makeTempRoot();
+  try {
+    const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-stub", "bundle-stub");
+    const armKinds = {
+      baseline: "unified_full",
+      candidate: "unified_full",
+      raw_direct: "independent_raw",
+      recovery: "synthetic_recovery",
+    };
+    const armRunRoots = {};
+    for (const armId of Object.keys(armKinds)) {
+      const { runRoot } = makeEvalRunRoot(evalRunRoot, "rel-stub", "bundle-stub", {
+        runDirName: join("arms", armId),
+        fixtureId: `fixture.${armId}`,
+        sampleCount: 3,
+        runId: `run-${armId}`,
+        pipelineKind: armKinds[armId],
+        replayMode: armId === "recovery" ? "synthetic" : "stub",
+      });
+      armRunRoots[armId] = runRoot;
+    }
+    const report = generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-stub",
+      candidateBundleId: "bundle-stub",
+      baselineReleaseId: "rel-stub",
+      armRunRoots,
+      codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+    });
+    writeMatrixReport(evalRunRoot, report);
+    const gate = evaluateEvalEvidenceGate({
+      releaseId: "rel-stub",
+      bundleId: "bundle-stub",
+      changeClass: "R1",
+      evalRunRoot,
+    });
+    assert.equal(gate.verdict, "rejected", gate.reason);
+    assert.equal(gate.code, "EVAL_EVIDENCE_MATRIX_REJECTED");
+    assert.match(gate.reason, /真实模型模式|stub/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

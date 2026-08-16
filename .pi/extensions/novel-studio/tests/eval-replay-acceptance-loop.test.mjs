@@ -901,6 +901,7 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
     p95LatencyMs: 12_000,
     longTailFailures: 0,
     pipelineKind: defaultPipelineKind[armId] ?? "unknown",
+    replayMode: armId === "recovery" ? "synthetic" : "production_like",
     ...overrides,
   });
 
@@ -1095,6 +1096,21 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
     });
     assert.equal(rawCandidate.verdict, "reject");
     assert.ok(rawCandidate.verdictReasons.some((r) => r.includes("candidate")));
+  });
+
+  it("baseline/candidate/raw_direct 使用 stub → reject（不得构造生产验收证据）", () => {
+    const report = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({
+        baseline: { replayMode: "stub" },
+        candidate: { replayMode: "stub" },
+        raw_direct: { replayMode: "stub" },
+      }),
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(report.verdictReasons.some((r) => r.includes("真实模型模式")));
   });
 
   it("人工盲评只存档、不影响 verdict", () => {
@@ -1910,7 +1926,8 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
     mkdirSync(join(runRoot, "samples"), { recursive: true });
     const samples = [];
     const manifestReplayMode =
-      opts.manifestReplayMode ?? (armId.startsWith("recovery") ? "synthetic" : "stub");
+      opts.manifestReplayMode ??
+      (armId.startsWith("recovery") ? "synthetic" : "production_like");
     for (let i = 0; i < sampleCount; i += 1) {
       const fixtureId = `fixture.${armId}.${i + 1}`;
       const sampleDir = join(runRoot, "samples", fixtureId);

@@ -29,7 +29,7 @@ const EXT_ROOT = resolve(__dirname, "..");
 function usageAndExit() {
   const usage = [
     "用法：node scripts/invoke-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber> [mock]",
-    "      --project-root=<dir> [--writer-model=<m>] [--model-test-route=<r>]",
+    "      --project-root=<dir> [--writer-model=<m>] [--model-test-route=<r>] [--eval-layer=B0]",
   ].join("\n");
   console.error(usage);
   process.exit(2);
@@ -39,6 +39,7 @@ const positional = [];
 let projectRoot = null;
 let writerModel = null;
 let modelTestRoute = null;
+let evalLayer = null;
 let mockAgent = false;
 
 for (const arg of process.argv.slice(2)) {
@@ -50,12 +51,19 @@ for (const arg of process.argv.slice(2)) {
     writerModel = arg.slice("--writer-model=".length);
   } else if (arg.startsWith("--model-test-route=")) {
     modelTestRoute = arg.slice("--model-test-route=".length);
+  } else if (arg.startsWith("--eval-layer=")) {
+    evalLayer = arg.slice("--eval-layer=".length);
   } else if (arg.startsWith("--")) {
     console.error(`[invoke-generate-chapter] 未知参数：${arg}`);
     usageAndExit();
   } else {
     positional.push(arg);
   }
+}
+
+if (evalLayer && evalLayer !== "B0") {
+  console.error(`[invoke-generate-chapter] 未知 --eval-layer=${evalLayer}（仅支持 B0）`);
+  usageAndExit();
 }
 
 const [workspaceId, chapterId, chapterNumberArg] = positional;
@@ -91,6 +99,47 @@ const tool = fakePi.tools.get("novel_generate_chapter");
 if (!tool) {
   console.error("[invoke-generate-chapter] dist/index.js 未注册 novel_generate_chapter");
   process.exit(2);
+}
+
+if (evalLayer === "B0") {
+  if (process.env.PINOVEL_EVAL_ONLY !== "1") {
+    console.error("[invoke-generate-chapter] --eval-layer=B0 仅允许 PINOVEL_EVAL_ONLY=1");
+    process.exit(2);
+  }
+  const rawMod = await import(
+    pathToFileURL(join(EXT_ROOT, "dist-eval", "eval", "independent-raw-replay.js")).href
+  );
+  let rawOut;
+  try {
+    rawOut = await rawMod.runIndependentRawReplay({
+      workspaceId,
+      chapterId,
+      chapterNumber,
+      projectRoot,
+      writerModel: writerModel === "claude" || writerModel === "gemini31" ? writerModel : undefined,
+    });
+  } catch (error) {
+    console.error(`[invoke-generate-chapter] independent raw 失败：${String(error)}`);
+    process.exit(1);
+  }
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        toolName: "independent_raw_replay",
+        workspaceId,
+        chapterId,
+        chapterNumber,
+        projectRoot,
+        isError: rawOut.result?.status !== "ok",
+        details: rawOut.result,
+        resultPath: rawOut.resultPath,
+        tracePath: rawOut.tracePath,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  process.exit(rawOut.result?.status === "ok" ? 0 : 1);
 }
 
 const params = {

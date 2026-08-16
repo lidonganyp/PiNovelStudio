@@ -15,6 +15,7 @@
     "eval/replay-case-extractor.ts",
     "eval/replay-delta-analyzer.ts",
     "eval/full-pipeline-replay-runner.ts",
+    "eval/independent-raw-replay.ts",
     "v2/core/eval-fixture-contract.ts",
     "v2/core/eval-replay-isolation.ts",
     "v2/core/eval-failure-attribution.ts",

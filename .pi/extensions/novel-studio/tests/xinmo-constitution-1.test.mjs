@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,11 +36,20 @@ const PROJECT_ROOT = join(__dirname, "..", "..", "..", "..");
 const WORKSPACE_ID = "xinmo";
 
 function loadXinmoConstitution() {
-  const path = constitutionPath(WORKSPACE_ID, PROJECT_ROOT);
+  const livePath = constitutionPath(WORKSPACE_ID, PROJECT_ROOT);
+  const fixturePath = join(__dirname, "fixtures", "xinmo-creative-constitution.json");
+  const path = existsSync(livePath) ? livePath : fixturePath;
   if (!existsSync(path)) {
     return { skipped: true, path, constitution: null };
   }
-  return { skipped: false, path, constitution: loadCreativeConstitution(WORKSPACE_ID, PROJECT_ROOT) };
+  if (path === livePath) {
+    return { skipped: false, path, constitution: loadCreativeConstitution(WORKSPACE_ID, PROJECT_ROOT) };
+  }
+  return {
+    skipped: false,
+    path,
+    constitution: JSON.parse(readFileSync(path, "utf-8")),
+  };
 }
 
 function buildSnapshot(constitution) {

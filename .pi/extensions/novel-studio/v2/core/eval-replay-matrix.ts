@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  REAL_MODEL_REPLAY_MODES,
   validateReplayRunManifestV1,
   type ReplayMode,
   type ReplayRunManifestV1,
@@ -36,6 +37,21 @@ import { gradeDeterministicFromRunRoot } from "./eval-deterministic-grader.js";
 // ============================================================================
 
 export type MatrixArmId = "baseline" | "candidate" | "raw_direct" | "recovery";
+
+/** 发布 A/B 的 baseline / candidate / raw_direct 必须是真实模型回放，不得用 stub 冒充。 */
+export const MATRIX_PROOF_REPLAY_MODES: ReadonlyArray<ReplayMode> = REAL_MODEL_REPLAY_MODES;
+
+export const MATRIX_PROOF_ARM_IDS: ReadonlyArray<MatrixArmId> = [
+  "baseline",
+  "candidate",
+  "raw_direct",
+];
+
+export function isMatrixProofReplayMode(
+  mode: ReplayMode | null | undefined,
+): boolean {
+  return typeof mode === "string" && MATRIX_PROOF_REPLAY_MODES.includes(mode);
+}
 
 export const MATRIX_ARM_IDS: ReadonlyArray<MatrixArmId> = [
   "baseline",
@@ -327,6 +343,8 @@ export const DEFAULT_MIN_QUALITY_SCORE = 0.8;
  *  6b. baseline / raw_direct 样本数 < 3（不得用 1/1 冒充三连 A/B）；
  *  6c. raw_direct 必须是 independent_raw（trace 只有裸写路由，无 amplified/风格优化）；
  *  6d. candidate 必须是 unified_full（统一主链路，不得与 raw_direct 同路径）；
+ *  6e. baseline / candidate / raw_direct 必须是真实模型 replayMode
+ *     （production_like / dev_real_model / candidate_like），stub 不得批准；
  *  7. candidate 相对 baseline 的 firstAttemptSuccessRate /
  *     recoveredSuccessRate 下降超过阈值；
  *  8. candidate 长尾失败增量超过阈值。
@@ -427,6 +445,16 @@ export function compareMatrixArms(options: CompareMatrixOptions): MatrixComparis
     reasons.push(
       "raw_direct 是 recorded 回放，不是独立裸写（不得作为相对裸模型的 A/B 证据）",
     );
+  }
+  for (const armId of MATRIX_PROOF_ARM_IDS) {
+    const arm = options.arms.find((item) => item.armId === armId) ?? null;
+    if (arm === null) continue;
+    if (!isMatrixProofReplayMode(arm.replayMode ?? null)) {
+      reasons.push(
+        `臂 ${armId} replayMode=${String(arm.replayMode ?? "unknown")} 不是真实模型模式` +
+          "（要求 production_like / dev_real_model / candidate_like，stub 不得作为生产验收证据）",
+      );
+    }
   }
 
   const maxRegression = options.maxSuccessRateRegression ?? 0;

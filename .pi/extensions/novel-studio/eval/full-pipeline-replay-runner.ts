@@ -950,6 +950,7 @@ export async function runFullPipelineReplay(
         // F1：真实模型回放显式消费 fixture 声明的生产路由（Gemini 生产默认
         // → 无参数；Claude 显式 → --writer-model；eval 锁 → --model-test-route）。
         ...modelRouteArgs,
+        ...(fixture.matrixArm === "raw_direct" ? ["--eval-layer=B0"] : []),
       ],
       cwd: projectRoot,
       workspaceId: lease.workspaceId,

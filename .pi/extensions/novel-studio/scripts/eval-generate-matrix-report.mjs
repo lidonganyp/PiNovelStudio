@@ -69,15 +69,22 @@ if (!existsSync(matrixDist)) {
 const matrix = await import(pathToFileURL(matrixDist).href);
 
 const candidateManifest = JSON.parse(readFileSync(join(args.candidateRun, "manifest.json"), "utf-8"));
+const baselineManifest = JSON.parse(readFileSync(join(args.baselineRun, "manifest.json"), "utf-8"));
 const identity = {
   releaseId: candidateManifest.releaseId ?? "",
   bundleId: candidateManifest.bundleId ?? "",
 };
+const baselineReleaseId =
+  args.baselineReleaseId || baselineManifest.releaseId || "";
+if (!baselineReleaseId) {
+  console.error("baseline releaseId 缺失：请传 --baseline-release-id 或保证 baseline manifest.releaseId 可读");
+  process.exit(2);
+}
 
 const report = matrix.generateMatrixReportFromReplayRuns({
   candidateReleaseId: args.candidateReleaseId || identity.releaseId,
   candidateBundleId: args.candidateBundleId || identity.bundleId,
-  baselineReleaseId: args.baselineReleaseId || identity.releaseId,
+  baselineReleaseId,
   armRunRoots: {
     baseline: args.baselineRun,
     candidate: args.candidateRun,

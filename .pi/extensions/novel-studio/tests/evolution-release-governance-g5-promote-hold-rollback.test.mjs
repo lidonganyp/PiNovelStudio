@@ -299,7 +299,7 @@ function writePassingEvalEvidence(root, releaseId, changeClass = "R1") {
       sampleCount: 3,
       runId: `run-${armId}`,
       pipelineKind: armKinds[armId],
-      replayMode: armId === "recovery" ? "synthetic" : "stub",
+      replayMode: armId === "recovery" ? "synthetic" : "production_like",
     });
   }
   writeMatrixReport(

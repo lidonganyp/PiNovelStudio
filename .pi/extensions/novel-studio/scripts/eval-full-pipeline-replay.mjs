@@ -79,7 +79,7 @@ function usageAndExit() {
     "用法：node scripts/eval-full-pipeline-replay.mjs --fixture <path> [--fixture <path2> ...]",
     "      node scripts/eval-full-pipeline-replay.mjs --fixtures-dir <dir>",
     "可选：--out <dir> | --run-id <id> | --timeout-ms <n> | --archive-root <dir> | --scratch-parent <dir>",
-    "      --release-id <id> | --bundle-id <id> | --change-class <Rx> | --code-commit <sha>",
+    "      --release-id <id> | --bundle-id <id> | --baseline-release-id <id> | --change-class <Rx> | --code-commit <sha>",
     "      --arm <id>=<runRoot>   id=baseline|candidate|raw_direct|recovery",
   ].join("\n");
   console.error(usage);
@@ -98,6 +98,7 @@ function parseArgs(argv) {
   let bundleId = null;
   let changeClass = "R1";
   let codeCommit = null;
+  let baselineReleaseId = null;
   const armRunRoots = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -161,6 +162,10 @@ function parseArgs(argv) {
         usageAndExit();
       }
       armRunRoots[spec.slice(0, eq)] = spec.slice(eq + 1);
+    } else if (arg === "--baseline-release-id" && i + 1 < argv.length) {
+      baselineReleaseId = argv[++i];
+    } else if (arg.startsWith("--baseline-release-id=")) {
+      baselineReleaseId = arg.slice("--baseline-release-id=".length);
     } else {
       console.error(`[eval-replay-cli] 未知参数：${arg}`);
       usageAndExit();
@@ -178,6 +183,7 @@ function parseArgs(argv) {
     bundleId,
     changeClass,
     codeCommit,
+    baselineReleaseId,
     armRunRoots,
   };
 }
@@ -301,12 +307,33 @@ if (!armRunRoots.candidate) {
 const providedArms = ["baseline", "candidate", "raw_direct", "recovery"].filter(
   (id) => typeof armRunRoots[id] === "string" && armRunRoots[id].length > 0,
 );
+function readReleaseIdFromRun(runRoot) {
+  try {
+    const manifest = JSON.parse(readFileSync(join(runRoot, "manifest.json"), "utf-8"));
+    return typeof manifest.releaseId === "string" && manifest.releaseId.trim().length > 0
+      ? manifest.releaseId
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 if (providedArms.length >= 4) {
   try {
+    const baselineReleaseId =
+      args.baselineReleaseId ||
+      readReleaseIdFromRun(armRunRoots.baseline) ||
+      "";
+    if (!baselineReleaseId) {
+      console.error(
+        "[eval-replay-cli] baseline releaseId 缺失：请传 --baseline-release-id 或保证 baseline manifest.releaseId 可读",
+      );
+      process.exit(2);
+    }
     const matrixReport = matrixMod.generateMatrixReportFromReplayRuns({
       candidateReleaseId: releaseId,
       candidateBundleId: bundleId,
-      baselineReleaseId: releaseId,
+      baselineReleaseId,
       armRunRoots,
       codeCommit: args.codeCommit,
     });
