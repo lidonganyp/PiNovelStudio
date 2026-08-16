@@ -3,9 +3,9 @@
   "schemaVersion": 1,
   "releaseId": "rel-prod-120",
   "changeClass": "R1",
-  "verdict": "approved",
-  "code": "EVAL_EVIDENCE_APPROVED",
-  "reason": "确定性 Grader 通过 + 四臂矩阵 pass + pass^3=1（证据完整，可进入人工审批）",
+  "verdict": "rejected",
+  "code": "EVAL_EVIDENCE_ARM_GRADER_FAILED",
+  "reason": "四臂确定性 Grader 未全部通过：臂 baseline grader 失败：model_call_evidence",
   "evidence": {
     "evalRunRoot": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120",
     "runManifestFound": true,
@@ -17,8 +17,11 @@
     "candidatePassPow3": 1,
     "matrixRecomputed": true,
     "isolationViolationCount": 0,
-    "traceRetentionRate": 1
+    "traceRetentionRate": 1,
+    "armGraderFailures": [
+      "臂 baseline grader 失败：model_call_evidence"
+    ]
   },
-  "generatedAt": "2026-08-16T07:33:30.092Z",
-  "nextAction": "human_review_required"
+  "generatedAt": "2026-08-16T07:46:49.380Z",
+  "nextAction": "fix_and_rerun_replay"
 }

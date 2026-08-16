@@ -33,7 +33,9 @@
 - runId: `closure-production-like-120`
 - 外部归档: `D:\CODE\pns-eval-archives-120\closure-production-like-120`
 - CLI: PASS，`ok=true`（3/3）
-- 现门禁复验（补齐四臂后）：`EVAL_EVIDENCE_APPROVED`，`matrixVerdict=pass`，`pass^3=1`
+- 现门禁复验：`REJECTED / EVAL_EVIDENCE_ARM_GRADER_FAILED`
+- 原因：baseline `closure-production-like-f8e0040c` 的确定性 grader 失败（`model_call_evidence`：manifest.modelCalls=0，trace 实际 3 次）
+- 指标层 `compareMatrixArms` 仍可能给出 `verdict=pass` / `pass^3=1`；P6 不再据此批准
 - summary: completed=3/3，failed=0，isolation=0，traceRetentionRate=1，unclassified=0
 - 每样本 2 次 Gemini 31：`v2_rawstage2_gemini31` + `v2_amplified_gemini31`
 - 每样本 `approvalRef` 均为 `approval-rel-prod-120-1786859687887-7a8aca3e`，`devMode=false`
@@ -41,8 +43,8 @@
 
 ## 四臂矩阵
 
-- 报告：`evidence/production-like/matrix-report.json`（hash `cc55c19e…078fc92f`）
-- 门禁重算：`verdict=pass`，`candidatePassPow3=1`
+- 报告：`evidence/production-like/matrix-report.json`（hash `09f3f3f1…e086a26`，生成器已因 baseline grader 标 `reject`）
+- P6：四臂 grader 全量重跑；baseline 失败 → 不得 `EVAL_EVIDENCE_APPROVED`
 - 同一章条件（`ws-verify-01` / chapter-002）：
   - baseline：`rel-prod-115` / `closure-production-like-f8e0040c`（1/1 真实 Gemini；**不是** 3 连）
   - candidate：`rel-prod-120` / `closure-production-like-120`（3/3 真实 Gemini，pass^3=1）

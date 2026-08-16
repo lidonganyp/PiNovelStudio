@@ -277,6 +277,84 @@ function writeGeneratedPassingMatrix(evalRunRoot, releaseId, bundleId, opts = {}
   return report;
 }
 
+/** production_like completed 但 manifest.modelCalls=0、trace 有 3 次调用。 */
+function writeLyingProductionLikeArm(evalRunRoot, releaseId, bundleId) {
+  const runRoot = join(evalRunRoot, "arms", "baseline-lying");
+  const fixtureId = "fixture.baseline-lying";
+  const tracesDir = join(runRoot, "samples", fixtureId, "traces");
+  mkdirSync(tracesDir, { recursive: true });
+  const fixture = JSON.parse(
+    readFileSync(join(evalRunRoot, "samples", readdirSync(join(evalRunRoot, "samples"))[0], "fixture.json"), "utf-8"),
+  );
+  fixture.fixtureId = fixtureId;
+  fixture.replayMode = "production_like";
+  writeFileSync(join(runRoot, "samples", fixtureId, "fixture.json"), JSON.stringify(fixture, null, 2));
+  writeFileSync(
+    join(tracesDir, "chapter-001-quality-trace.json"),
+    JSON.stringify({
+      gates: [
+        {
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [
+              { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31" },
+              { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
+              { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
+            ],
+          },
+        },
+      ],
+      recoveryAttempts: [],
+    }),
+  );
+  writeFileSync(
+    join(runRoot, "samples", fixtureId, "state-projection.json"),
+    JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
+  );
+  const fixtureHash = computeEvalFixtureHash(fixture);
+  writeFileSync(
+    join(runRoot, "manifest.json"),
+    JSON.stringify({
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-baseline-lying",
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "production_like",
+      releaseId,
+      bundleId,
+      runRoot,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      finishedAt: "2026-08-15T00:01:00.000Z",
+      samples: [
+        {
+          fixtureId,
+          fixtureHash,
+          replayMode: "production_like",
+          scratchWorkspaceId: "eval-lying-baseline",
+          status: "completed",
+          failureAttribution: null,
+          failureEnvelopes: [],
+          traceArchived: true,
+          traceArchivePath: tracesDir,
+          isolationViolations: [],
+          modelCalls: 0,
+          durationMs: 1000,
+        },
+      ],
+      summary: {
+        totalSamples: 1,
+        countedSamples: 1,
+        completed: 1,
+        failed: 0,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    }),
+  );
+  return runRoot;
+}
+
 /**
  * 写入合法 approval artifact（与 G5 promote 测试同构）。
  * promote 命令在 eval gate 之前先做 approval 四元绑定校验，
@@ -666,6 +744,51 @@ test("gate: R3 无 matrix → insufficient；两字段伪造 → MATRIX_INVALID�
         recomputedReject.code === "EVAL_EVIDENCE_PASS_POW3_UNSATISFIED",
       recomputedReject.code,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: baseline production_like modelCalls 与 trace 不一致 → ARM_GRADER_FAILED", () => {
+  const root = makeTempRoot();
+  try {
+    const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-arm-g", "bundle-arm-g");
+    const generated = writeGeneratedPassingMatrix(evalRunRoot, "rel-arm-g", "bundle-arm-g");
+    assert.equal(generated.verdict, "pass", generated.verdictReasons.join("；"));
+
+    const lyingRoot = writeLyingProductionLikeArm(evalRunRoot, "rel-arm-g", "bundle-arm-g");
+    const armRoots = {};
+    for (const arm of generated.arms) {
+      armRoots[arm.armId] = arm.runRoot;
+    }
+    armRoots.baseline = lyingRoot;
+    const mixed = generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-arm-g",
+      candidateBundleId: "bundle-arm-g",
+      baselineReleaseId: "rel-arm-g",
+      armRunRoots: armRoots,
+      codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+    });
+    assert.equal(mixed.verdict, "reject", "生成器必须因 baseline grader 失败而 reject");
+    assert.ok(
+      mixed.verdictReasons.some((reason) => /baseline/.test(reason) && /Grader/.test(reason)),
+      mixed.verdictReasons.join("；"),
+    );
+
+    mixed.verdict = "pass";
+    mixed.verdictReasons = [];
+    mixed.reportHash = computeMatrixReportHash(mixed);
+    writeMatrixReport(evalRunRoot, mixed);
+
+    const gate = evaluateEvalEvidenceGate({
+      releaseId: "rel-arm-g",
+      bundleId: "bundle-arm-g",
+      changeClass: "R1",
+      evalRunRoot,
+    });
+    assert.equal(gate.verdict, "rejected", gate.reason);
+    assert.equal(gate.code, "EVAL_EVIDENCE_ARM_GRADER_FAILED");
+    assert.ok(gate.evidence.armGraderFailures.some((item) => /baseline/.test(item)), gate.reason);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

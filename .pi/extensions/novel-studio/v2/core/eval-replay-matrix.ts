@@ -28,6 +28,7 @@ import {
   extractReplayRecoveryAttempts,
   summarizeReplayModelCalls,
 } from "./eval-replay-trace-stats.js";
+import { gradeDeterministicFromRunRoot } from "./eval-deterministic-grader.js";
 
 // ============================================================================
 // A/B 矩阵类型
@@ -47,6 +48,8 @@ export interface MatrixArmMetrics {
   armId: MatrixArmId;
   /** 绑定的 replay runId（证据追溯）。 */
   runId: string;
+  /** 臂归档根；P6 必须按此路径重跑确定性 grader。缺失则不得批准。 */
+  runRoot: string | null;
   /** 样本数（进入统计的样本）。 */
   sampleCount: number;
   /** 事实硬错误数（零容忍）。 */
@@ -516,6 +519,7 @@ export function deriveArmMetricsFromReplayManifest(
   return {
     armId,
     runId: manifest.runId,
+    runRoot: runRoot ?? null,
     sampleCount: counted.length,
     factHardErrors,
     failureClassificationCompleteness:
@@ -646,7 +650,14 @@ export function generateMatrixReportFromReplayRuns(
         );
       }
     }
-    arms.push(deriveArmMetricsFromReplayManifest(manifest, armId, { runRoot }));
+    const arm = deriveArmMetricsFromReplayManifest(manifest, armId, { runRoot });
+    const grade = gradeDeterministicFromRunRoot(runRoot);
+    if (!grade.passed) {
+      bindingReasons.push(
+        `臂 ${armId} 确定性 Grader 未通过：${grade.failedChecks.join(", ") || "unknown"}（runRoot=${runRoot}）`,
+      );
+    }
+    arms.push(arm);
   }
   const compared = compareMatrixArms({
     candidateReleaseId: options.candidateReleaseId,
@@ -723,6 +734,7 @@ function parseArmMetrics(raw: unknown, index: number, errors: string[]): MatrixA
   return {
     armId: raw.armId as MatrixArmId,
     runId: raw.runId,
+    runRoot: typeof raw.runRoot === "string" && raw.runRoot.trim().length > 0 ? raw.runRoot : null,
     sampleCount: raw.sampleCount as number,
     factHardErrors: raw.factHardErrors as number,
     failureClassificationCompleteness: raw.failureClassificationCompleteness as number,

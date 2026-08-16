@@ -4,11 +4,12 @@
   "candidateReleaseId": "rel-prod-120",
   "candidateBundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
   "baselineReleaseId": "rel-prod-115",
-  "createdAt": "2026-08-16T07:33:29.928Z",
+  "createdAt": "2026-08-16T07:46:49.195Z",
   "arms": [
     {
       "armId": "baseline",
       "runId": "closure-production-like-f8e0040c",
+      "runRoot": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives-115\\closure-production-like-f8e0040c",
       "sampleCount": 1,
       "factHardErrors": 0,
       "failureClassificationCompleteness": 1,
@@ -30,6 +31,7 @@
     {
       "armId": "candidate",
       "runId": "closure-production-like-120",
+      "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120",
       "sampleCount": 3,
       "factHardErrors": 0,
       "failureClassificationCompleteness": 1,
@@ -53,6 +55,7 @@
     {
       "armId": "raw_direct",
       "runId": "closure-recorded-120",
+      "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-recorded-120",
       "sampleCount": 3,
       "factHardErrors": 0,
       "failureClassificationCompleteness": 1,
@@ -76,6 +79,7 @@
     {
       "armId": "recovery",
       "runId": "closure-synthetic-120",
+      "runRoot": "D:\\CODE\\pns-eval-archives-120\\closure-synthetic-120",
       "sampleCount": 3,
       "factHardErrors": 0,
       "failureClassificationCompleteness": 1,
@@ -103,10 +107,12 @@
     "factHardGateViolation": 0,
     "duplicateSubmission": 0
   },
-  "verdict": "pass",
-  "verdictReasons": [],
+  "verdict": "reject",
+  "verdictReasons": [
+    "臂 baseline 确定性 Grader 未通过：model_call_evidence（runRoot=D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives-115\\closure-production-like-f8e0040c）"
+  ],
   "candidatePassAt3": 1,
   "candidatePassPow3": 1,
   "codeCommit": "57486b915e437015d86ef34401f29a0dfad51aa2",
-  "reportHash": "cc55c19e9c3f7319c4172265b8485bc4ba3b827a116552ab9f712e15078fc92f"
+  "reportHash": "09f3f3f19614440c181c3976951dcc69bf8326967d6e5730004c315efe086a26"
 }

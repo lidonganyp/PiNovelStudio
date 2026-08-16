@@ -36,6 +36,8 @@ import {
 import {
   parseBoundMatrixReport,
   recomputeBoundMatrixReport,
+  MATRIX_ARM_IDS,
+  type BoundMatrixReport,
 } from "../core/eval-replay-matrix.js";
 import type { ChangeClass } from "./evolution-release-types.js";
 
@@ -80,6 +82,7 @@ export interface EvalEvidenceGateResult {
     matrixRecomputed: boolean;
     isolationViolationCount: number;
     traceRetentionRate: number | null;
+    armGraderFailures: string[];
   };
   /** deterministic grade 全量报告（manifest 缺失时为 null）。 */
   gradeReport: DeterministicGradeReport | null;
@@ -110,6 +113,40 @@ function readMatrixReportRaw(evalRunRoot: string): unknown | null {
   } catch {
     return { __parseError: true };
   }
+}
+
+/**
+ * 对矩阵四臂归档重跑确定性 grader。
+ * 缺 runRoot / 路径不存在 / grader 失败一律记入 failures（fail-closed）。
+ */
+export function gradeBoundMatrixArms(report: BoundMatrixReport): {
+  ok: boolean;
+  failures: string[];
+} {
+  const failures: string[] = [];
+  const byId = new Map(report.arms.map((arm) => [arm.armId, arm]));
+  for (const armId of MATRIX_ARM_IDS) {
+    const arm = byId.get(armId);
+    if (!arm) {
+      failures.push(`臂 ${armId} 缺失`);
+      continue;
+    }
+    if (!arm.runRoot) {
+      failures.push(`臂 ${armId} 缺少 runRoot（无法重跑 grader）`);
+      continue;
+    }
+    if (!existsSync(arm.runRoot)) {
+      failures.push(`臂 ${armId} runRoot 不存在：${arm.runRoot}`);
+      continue;
+    }
+    const armGrade = gradeDeterministicFromRunRoot(arm.runRoot);
+    if (!armGrade.passed) {
+      failures.push(
+        `臂 ${armId} grader 失败：${armGrade.failedChecks.join(", ") || "unknown"}`,
+      );
+    }
+  }
+  return { ok: failures.length === 0, failures };
 }
 
 function isPlainParseError(value: unknown): boolean {
@@ -178,6 +215,7 @@ export function evaluateEvalEvidenceGate(
     matrixRecomputed: false,
     isolationViolationCount: 0,
     traceRetentionRate: null,
+    armGraderFailures: [],
   };
 
   // -- 1. eval run root 存在 ------------------------------------------------
@@ -307,13 +345,25 @@ export function evaluateEvalEvidenceGate(
         gradeReport: grade,
       };
     }
+
+    const armGrades = gradeBoundMatrixArms(parsed.report);
+    evidence.armGraderFailures = armGrades.failures;
+    if (!armGrades.ok) {
+      return {
+        verdict: "rejected",
+        code: "EVAL_EVIDENCE_ARM_GRADER_FAILED",
+        reason: `四臂确定性 Grader 未全部通过：${armGrades.failures.join("；")}`,
+        evidence,
+        gradeReport: grade,
+      };
+    }
   }
 
   // -- 全部通过 -------------------------------------------------------------
   return {
     verdict: "approved",
     code: "EVAL_EVIDENCE_APPROVED",
-    reason: "确定性 Grader 通过 + 四臂矩阵 pass + pass^3=1（证据完整，可进入人工审批）",
+    reason: "确定性 Grader 通过 + 四臂矩阵 pass + pass^3=1 + 四臂 grader 通过（证据完整，可进入人工审批）",
     evidence,
     gradeReport: grade,
   };

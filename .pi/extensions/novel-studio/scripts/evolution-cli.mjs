@@ -2221,6 +2221,9 @@ function cmdEvalGate(args) {
   }
   if (matrixEvidenceRequired(manifest.changeClass)) {
     console.log(`  matrix          : ${gate.evidence.matrixReportFound ? `verdict=${gate.evidence.matrixVerdict}, pass^3=${gate.evidence.candidatePassPow3}` : "(missing)"}`);
+    if (Array.isArray(gate.evidence.armGraderFailures) && gate.evidence.armGraderFailures.length > 0) {
+      console.log(`  armGrader       : ${gate.evidence.armGraderFailures.join("；")}`);
+    }
   }
   console.log(`  pending report  : ${reportPath}`);
 

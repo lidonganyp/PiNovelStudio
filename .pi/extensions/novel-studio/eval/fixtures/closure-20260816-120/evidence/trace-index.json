@@ -8,9 +8,9 @@
   "matrix": {
     "reportFound": true,
     "reportPath": "evidence/production-like/matrix-report.json",
-    "reportHash": "cc55c19e9c3f7319c4172265b8485bc4ba3b827a116552ab9f712e15078fc92f",
+    "reportHash": "09f3f3f19614440c181c3976951dcc69bf8326967d6e5730004c315efe086a26",
     "candidatePassPow3": 1,
-    "verdict": "pass",
+    "verdict": "reject",
     "requiredArms": [
       "baseline",
       "candidate",
@@ -24,7 +24,7 @@
       "recovery": "closure-synthetic-120"
     },
     "missingArms": [],
-    "gate": "EVAL_EVIDENCE_APPROVED"
+    "gate": "EVAL_EVIDENCE_ARM_GRADER_FAILED"
   },
   "traces": [
     {
