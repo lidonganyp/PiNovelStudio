@@ -1,0 +1,46 @@
+{
+  "schemaId": "pinovel.release-proxy-approval",
+  "schemaVersion": 1,
+  "approvalId": "approval-rel-prod-120-1786859687887-7a8aca3e",
+  "releaseId": "rel-prod-120",
+  "releaseManifestHash": "c3b59ee72be628a0754df4a2e71199c45559916f07caee64d1f7b91cc220bec1",
+  "reviewerType": "validated_human_proxy",
+  "reviewerModel": "gpt5.6-sol",
+  "reviewerModelVersion": "gpt-5.6-sol",
+  "reviewTransport": "network",
+  "promptHash": "sha256:84b0074de4ef22a9a5bfb6b3fc6a1e178dd753e415e9ff65f6eba95fcdf5baa9",
+  "inputArtifactHash": "sha256:61464deead388326a15ff8c76aca2f9e2008c5911b81d125f94a4806adb3f71e",
+  "forwardVerdict": "APPROVE_DEV",
+  "reverseVerdict": "APPROVE_DEV",
+  "finalVerdict": "APPROVE_DEV",
+  "winningSpans": [
+    "丙1",
+    "丙2",
+    "丙3",
+    "丙1",
+    "丙2",
+    "丙3"
+  ],
+  "losingSpans": [
+    "乙1",
+    "乙2",
+    "乙1",
+    "乙2"
+  ],
+  "risks": [
+    "现行生产指针缺少能力包集合哈希的问题仍然存在；后续若进入实际生产切换流程，仍需独立满足生产门禁。",
+    "旧夹具缺少必要状态事件时仍会被完整性检查提前拦截，应确保回放夹具与新分流规则配套。",
+    "开发验收时需确认既有生产证据仅保留、不删除，并验证真实双向校验没有被降级或旁路。",
+    "现行生产指针仍缺少能力包集合哈希，因此本结论仅批准进入开发，不能视为已通过生产门禁。",
+    "旧夹具缺少状态事件时仍会被完整性检查拦截，后续验证需使用满足完整性要求的生产等价证据。",
+    "需要继续确认既有生产证据被保留，且要求审批的回放路径始终具备真实双向审批记录。"
+  ],
+  "rationale": "forward=; reverse=",
+  "decidedAt": "2026-08-16T05:54:47.888Z",
+  "budgetUsed": {
+    "calls": 2,
+    "timeoutMs": 300000
+  },
+  "changeClass": "R1",
+  "r3SelfApproval": false
+}

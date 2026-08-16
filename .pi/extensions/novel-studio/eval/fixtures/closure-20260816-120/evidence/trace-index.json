@@ -1,0 +1,131 @@
+{
+  "schemaId": "pinovel.eval-trace-index",
+  "schemaVersion": 1,
+  "releaseId": "rel-prod-120",
+  "archiveRoot": "D:\\CODE\\pns-eval-archives-120",
+  "generatedAt": "2026-08-16T07:00:49.732Z",
+  "note": "Clean checkout can rehash these paths if the external archive is present. Scratch copies are excluded.",
+  "matrix": {
+    "reportFound": false,
+    "candidatePassPow3": null,
+    "requiredArms": [
+      "baseline",
+      "candidate",
+      "raw_direct",
+      "recovery"
+    ],
+    "availableArms": {
+      "candidate": "closure-production-like-120"
+    },
+    "missingArms": [
+      "baseline",
+      "raw_direct",
+      "recovery"
+    ],
+    "gate": "EVAL_EVIDENCE_MATRIX_MISSING"
+  },
+  "traces": [
+    {
+      "runId": "closure-production-like-120",
+      "relativePath": "closure-production-like-120/cli-verdict.json",
+      "bytes": 501,
+      "sha256": "868fb7c84d1b6ad3e2f809bb39098b4d3ce7e4e21ac240f94573e52c433d3eda"
+    },
+    {
+      "runId": "closure-production-like-120",
+      "relativePath": "closure-production-like-120/manifest.json",
+      "bytes": 4647,
+      "sha256": "d9f643973159924c9030e94023992067bd275265085a1c5ee1634ec609008fc9"
+    },
+    {
+      "runId": "closure-production-like-120",
+      "relativePath": "closure-production-like-120/samples/fixture.closure-production-like-001/traces/chapter-002-quality-trace.json",
+      "bytes": 6311,
+      "sha256": "8c04a7a853f1b6dfc8e0c1724ef06668fee1a738f70559e93351c0fd4517436a"
+    },
+    {
+      "runId": "closure-production-like-120",
+      "relativePath": "closure-production-like-120/samples/fixture.closure-production-like-002/traces/chapter-002-quality-trace.json",
+      "bytes": 6311,
+      "sha256": "e7655beeec61ae1eb6cf939aaf984db3917e50b7cb7acdcc68f66141fff4e6be"
+    },
+    {
+      "runId": "closure-production-like-120",
+      "relativePath": "closure-production-like-120/samples/fixture.closure-production-like-003/traces/chapter-002-quality-trace.json",
+      "bytes": 6311,
+      "sha256": "4a38a998307691763e5d7fea94c86b7ab378b51b1e073e41927809286e988b1b"
+    },
+    {
+      "runId": "closure-candidate-like-120",
+      "relativePath": "closure-candidate-like-120/cli-verdict.json",
+      "bytes": 537,
+      "sha256": "1281cc5062384d8b4c74327b8deb9434b9bd0d193ee37b8d776ec65a3a1d252d"
+    },
+    {
+      "runId": "closure-candidate-like-120",
+      "relativePath": "closure-candidate-like-120/manifest.json",
+      "bytes": 4875,
+      "sha256": "a74b27c4e2c11cf501358c24b62fa8ba60eec3dd538d946f27856876d2995d2d"
+    },
+    {
+      "runId": "closure-candidate-like-120",
+      "relativePath": "closure-candidate-like-120/samples/fixture.closure-candidate-like-001/traces/chapter-002-quality-trace.json",
+      "bytes": 6263,
+      "sha256": "450ea9561caaa6f24875919e8638ae843adacfe1bf68dd17fa3d76b4278740ba"
+    },
+    {
+      "runId": "closure-candidate-like-120",
+      "relativePath": "closure-candidate-like-120/samples/fixture.closure-candidate-like-002/traces/chapter-002-quality-trace.json",
+      "bytes": 7214,
+      "sha256": "aff73ceeff22ee3225dacf592165b692cb44569dac6863b8f8b7f1734d6c471c"
+    },
+    {
+      "runId": "closure-candidate-like-120",
+      "relativePath": "closure-candidate-like-120/samples/fixture.closure-candidate-like-003/traces/chapter-002-blocked-candidate-evidence.json",
+      "bytes": 7096,
+      "sha256": "1ec9a243541a8bddab4989d9cf0f17642fd3cd0282af5179dd0e2b8b49bbcd6e"
+    },
+    {
+      "runId": "closure-candidate-like-120",
+      "relativePath": "closure-candidate-like-120/samples/fixture.closure-candidate-like-003/traces/chapter-002-quality-evidence-report.json",
+      "bytes": 983,
+      "sha256": "a9f1bab4cdffdc6c0a6c54f6dae2c48911b168da88493ba03456e4b8d5388e9b"
+    },
+    {
+      "runId": "closure-candidate-like-120",
+      "relativePath": "closure-candidate-like-120/samples/fixture.closure-candidate-like-003/traces/chapter-002-quality-trace.json",
+      "bytes": 118686,
+      "sha256": "6ea05d8b07d91f0d6e5d2dd85cdda7fc2f05007e93dc0e75b231fecab8ab6741"
+    },
+    {
+      "runId": "closure-candidate-like-120-s3",
+      "relativePath": "closure-candidate-like-120-s3/cli-verdict.json",
+      "bytes": 579,
+      "sha256": "d78851ce3ec41c5d9b64e5898aa5fbdfb6ca2b5c41d1975a6cefc1a91c573395"
+    },
+    {
+      "runId": "closure-candidate-like-120-s3",
+      "relativePath": "closure-candidate-like-120-s3/manifest.json",
+      "bytes": 2596,
+      "sha256": "ac3166870462366d686d739f182898ce4b4f61a76fba023a995762f57ca7910e"
+    },
+    {
+      "runId": "closure-candidate-like-120-s3",
+      "relativePath": "closure-candidate-like-120-s3/samples/fixture.closure-candidate-like-003/traces/chapter-002-blocked-candidate-evidence.json",
+      "bytes": 7988,
+      "sha256": "a5f59805d8215d52b6765f4cd5e3ddfedf343796ed90730afbb377b4146638df"
+    },
+    {
+      "runId": "closure-candidate-like-120-s3",
+      "relativePath": "closure-candidate-like-120-s3/samples/fixture.closure-candidate-like-003/traces/chapter-002-quality-evidence-report.json",
+      "bytes": 983,
+      "sha256": "e9bc0ec188824206d1d3a1eb59e9fb5f3d923ddb803962e621687933640234ee"
+    },
+    {
+      "runId": "closure-candidate-like-120-s3",
+      "relativePath": "closure-candidate-like-120-s3/samples/fixture.closure-candidate-like-003/traces/chapter-002-quality-trace.json",
+      "bytes": 235983,
+      "sha256": "7d6c7bf806fef56e597b26a9679a429beedc38ac0b8aff5e5881b23ecd5a8ac5"
+    }
+  ]
+}

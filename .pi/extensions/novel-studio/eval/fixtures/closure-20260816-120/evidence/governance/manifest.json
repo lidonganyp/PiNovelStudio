@@ -1,0 +1,38 @@
+{
+  "schemaId": "pinovel.evolution-release",
+  "schemaVersion": 1,
+  "releaseId": "rel-prod-120",
+  "status": "active_prod",
+  "parentReleaseId": "rel-prod-115",
+  "rollbackReleaseId": "rel-prod-115",
+  "supersedesRef": "rel-prod-115",
+  "changeClass": "R1",
+  "claims": [
+    "release 四方一致性：capture 不得覆盖既有 releaseId，pre-review/pre-promote/pre-production_like 核对 manifest、state-events、审批 payload hash 与 pointer binding",
+    "candidate_like 与 production_like 分流：审批前回放只校验身份和指纹；production_like 必须真实双向 APPROVE_DEV",
+    "无章节生成文学行为变更：FactGuard 不再把底层弟子误判为境界跃迁，属于事实诊断修正，零文学漂移"
+  ],
+  "environmentFingerprint": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+  "artifactRefs": [
+    "commit:57486b9",
+    "file:.pi/extensions/novel-studio/v2/governance/release-integrity.ts",
+    "file:.pi/extensions/novel-studio/eval/full-pipeline-replay-runner.ts",
+    "file:.pi/extensions/novel-studio/scripts/evolution-cli.mjs",
+    "file:.pi/extensions/novel-studio/v2/core/immutable-facts-compiler.ts"
+  ],
+  "approvalRef": "approval-rel-prod-120-1786859687887-7a8aca3e",
+  "createdAt": "2026-08-16T05:42:40.010Z",
+  "activatedAt": "2026-08-16T06:53:52.294Z",
+  "bundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "modelVersion": "gemini31",
+  "promptBundleHash": "2909e82c218a208bd50ee6accdd2ba468de006feac2de5eb796cddf37bbf5f5d",
+  "modelRoutingHash": "242dd2cae395f1dbcbe3e8bd423c5a0adfc8ffa0db1ba0d09a777cb62a8070ed",
+  "toolSchemaHash": "7abe6355408c43b8ddf9a8c5df7c01f9fab0087d84616423057855ade5b26257",
+  "contextCompilerHash": "04dda57436361ccb61b6642b7b87d7115ac551d7262cf18a0de9d799bae9e380",
+  "qualityPolicyHash": "662eb61eaaa95c0b47c644b9c71866e8d6924d6c2246938b3ed2e5d9ca637544",
+  "recoveryPolicyHash": "242dd2cae395f1dbcbe3e8bd423c5a0adfc8ffa0db1ba0d09a777cb62a8070ed",
+  "knowledgeSnapshotHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "runtimeFingerprint": "fd678a027fa70cc8588056e9406ffadf91f5153cf5bad3ce68b0e366b0ac166b",
+  "capabilityPackageSetHash": "e5c8b475e2f3d988cec494fcc192680b32d2d2fa70ec16f2838ed05dbafe4017",
+  "evalProtocolVersion": "2026-08-01"
+}

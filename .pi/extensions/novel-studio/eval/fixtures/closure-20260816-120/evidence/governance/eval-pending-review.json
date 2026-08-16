@@ -1,0 +1,24 @@
+{
+  "schemaId": "pinovel.eval-pending-review",
+  "schemaVersion": 1,
+  "releaseId": "rel-prod-120",
+  "changeClass": "R1",
+  "verdict": "insufficient",
+  "code": "EVAL_EVIDENCE_MATRIX_MISSING",
+  "reason": "changeClass=R1 要求 A/B 回放矩阵证据（matrix-report.json 缺失）",
+  "evidence": {
+    "evalRunRoot": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120",
+    "runManifestFound": true,
+    "runManifestValid": true,
+    "deterministicGradePassed": true,
+    "failedChecks": [],
+    "matrixReportFound": false,
+    "matrixVerdict": null,
+    "candidatePassPow3": null,
+    "matrixRecomputed": false,
+    "isolationViolationCount": 0,
+    "traceRetentionRate": 1
+  },
+  "generatedAt": "2026-08-16T06:55:28.967Z",
+  "nextAction": "capture_eval_evidence_first"
+}

@@ -291,7 +291,10 @@ test("DG-3: bundleId 自洽但组件 hash 与当前运行快照不符 → blocke
     });
 
     assert.equal(result.ok, false, "组件 hash 与当前快照漂移应 blocked");
-    assert.match(result.failureEnvelope.reason, /component hash drift|drift/i);
+    assert.match(
+      result.failureEnvelope.reason,
+      /component hash drift|hash 漂移|漂移/i,
+    );
   } finally {
     restoreDevMode(prev);
     rmSync(root, { recursive: true, force: true });

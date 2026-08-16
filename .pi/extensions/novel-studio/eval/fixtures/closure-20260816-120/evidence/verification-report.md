@@ -15,6 +15,7 @@
 - artifact: `approval-rel-prod-120-1786859687887-7a8aca3e`
 - `forward=APPROVE_DEV` / `reverse=APPROVE_DEV` / `finalVerdict=APPROVE_DEV`
 - `reviewTransport=network`
+- 版本化副本：`evidence/governance/`（manifest、state-events、approval、fingerprint、eval-pending-review）
 
 ## candidate_like
 
@@ -22,7 +23,8 @@
 - CLI: FAIL（2/3 completed）
 - 失败样本: `fixture.closure-candidate-like-003`
   - 首次：FactGuard `封印`
-  - 重试 `closure-candidate-like-120-s3`：`story_preservation` 骨架漂移，归因仍为 `unclassified`
+  - 重试 `closure-candidate-like-120-s3`：`story_preservation` 骨架漂移；当时归档归因为 `unclassified`
+  - 代码已补 `rule:gate=story_preservation` → `model`；旧归档不会自动改写
 - isolation=0；当时 P6 按 R1 deterministic-only 给出 `EVAL_EVIDENCE_APPROVED`
 - 2026-08-16 门禁收口后：R0-R3 一律要求四臂 + pass^3=1，本 run 无 matrix-report，**不得再作为晋级依据**
 
@@ -31,7 +33,8 @@
 - runId: `closure-production-like-120`
 - 外部归档: `D:\CODE\pns-eval-archives-120\closure-production-like-120`
 - CLI: PASS，`ok=true`
-- P6: `EVAL_EVIDENCE_APPROVED`（本机 `evolution:eval-gate` 复验通过）
+- 当时 CLI/P6：`EVAL_EVIDENCE_APPROVED`（R1 deterministic-only，现已作废）
+- 现门禁复验：`INSUFFICIENT / EVAL_EVIDENCE_MATRIX_MISSING`（见 `evidence/governance/eval-pending-review.json`）
 - summary: completed=3/3，failed=0，isolation=0，traceRetentionRate=1，unclassified=0
 - 每样本 2 次 Gemini 31：`v2_rawstage2_gemini31` + `v2_amplified_gemini31`
 - 每样本 `approvalRef` 均为 `approval-rel-prod-120-1786859687887-7a8aca3e`，`devMode=false`
@@ -45,4 +48,6 @@
 ## 未做
 
 - 未执行 `evolution:promote --target active_prod`（生产指针仍为 `rel-prod-115`，需用户明确授权）
-- 未把 `D:\CODE\pns-eval-archives-120` 整包进仓库（scratch 副本过大；本目录只入库摘要）
+- 未把 `D:\CODE\pns-eval-archives-120` 整包进仓库（scratch 过大）
+- 可复核索引：`evidence/trace-index.json`（17 条质量 trace / manifest / verdict 的 SHA-256；需外部归档才能重算）
+- 活治理根仍被 `.git/info/exclude` 排除；仓库只收 `evidence/governance` 快照，不是运行时指针

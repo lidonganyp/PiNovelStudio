@@ -1,0 +1,96 @@
+{
+  "schemaId": "pinovel.environment-fingerprint",
+  "schemaVersion": 1,
+  "fingerprintHash": "bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d",
+  "collectedAt": "2026-08-16T05:42:39.415Z",
+  "codeCommit": "57486b915e437015d86ef34401f29a0dfad51aa2",
+  "worktreeDirty": false,
+  "runtimeFilesHash": "7479c3ddbe83e29e1e93b15e0a33cc23af0c253ab102969c2619926dfbb5238c",
+  "buildArtifactHash": "35965eb6b7bf3a3937e97e22c294adb0ea6d3910fdaa6abafed79b80a1d7feb3",
+  "modelRoutingHash": "e6968f2ad8c2731cad15139399312cbd67681aea6d86bf60e856679e8ca2dc6d",
+  "promptBundleHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "toolSchemaHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "generationModel": "gemini-3.1-pro-preview",
+  "judgeModel": "gpt5.6-sol",
+  "proxyApprovalModel": "gpt5.6-sol",
+  "activeStrategyIds": [],
+  "constitutionHash": "",
+  "datasetHash": "",
+  "evalProtocolHash": "",
+  "seed": 0,
+  "budgetMaxCalls": 10,
+  "timeoutMs": 300000,
+  "fallbackPolicy": "hard_block",
+  "envSwitches": [
+    {
+      "name": "NOVEL_DEBUG_TOOLS",
+      "set": false
+    },
+    {
+      "name": "NOVEL_TEST_TOOLS",
+      "set": false
+    },
+    {
+      "name": "PINOVEL_DISABLE_FALLBACK",
+      "set": false
+    },
+    {
+      "name": "PINOVEL_EVAL_RECORDED_RESULTS_PATH",
+      "set": false
+    },
+    {
+      "name": "PINOVEL_EVAL_REPLAY_TRANSPORT",
+      "set": false
+    },
+    {
+      "name": "PINOVEL_EVAL_SYNTHETIC_FAULTS",
+      "set": false
+    },
+    {
+      "name": "PINOVEL_EVAL_SYNTHETIC_FAULTS_PATH",
+      "set": false
+    },
+    {
+      "name": "PINOVEL_UNIFIED_PIPELINE",
+      "set": false
+    },
+    {
+      "name": "V2_FORCE_STUB",
+      "set": false
+    }
+  ],
+  "secretEnvStates": [
+    {
+      "name": "ARK_API_KEY",
+      "set": true
+    },
+    {
+      "name": "CLAUDE_API_KEY",
+      "set": true
+    },
+    {
+      "name": "DEEPSEEK_API_KEY",
+      "set": true
+    },
+    {
+      "name": "ERNIE_API_KEY",
+      "set": true
+    },
+    {
+      "name": "GEMINI_API_KEY",
+      "set": true
+    },
+    {
+      "name": "GLM_API_KEY",
+      "set": true
+    },
+    {
+      "name": "GPT_API_KEY",
+      "set": true
+    },
+    {
+      "name": "QWEN_API_KEY",
+      "set": true
+    }
+  ]
+}

@@ -775,6 +775,17 @@ describe("P4 eval-failure-attribution：确定性归因", () => {
     assert.equal(r.attribution, "state_commit");
   });
 
+  it("story_preservation 骨架漂移 → model，不得落入 unclassified", () => {
+    const r = attribution.classifyFailureAttribution({
+      stage: "story_preservation_drift_retry_failed",
+      gate: "story_preservation",
+      severity: "hard_block",
+      reason: "作者风格优化缩减指导重试仍漂移：故事骨架漂移：检测到 2 个因果顺序违规",
+    });
+    assert.equal(r.attribution, "model");
+    assert.equal(r.ruleId, "rule:gate=story_preservation");
+  });
+
   it("agentic_fact_guard / 事实硬伤 → model，不得落入 unclassified", () => {
     const r = attribution.classifyFailureAttribution({
       stage: "agentic_fact_guard",

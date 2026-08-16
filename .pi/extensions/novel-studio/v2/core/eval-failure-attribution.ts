@@ -340,6 +340,20 @@ const ATTRIBUTION_RULES: ReadonlyArray<AttributionRule> = [
       ]),
   },
   {
+    ruleId: "rule:gate=story_preservation",
+    attribution: "model",
+    match: (input, text) =>
+      input.gate === "story_preservation" ||
+      input.stage === "story_preservation" ||
+      input.stage === "story_preservation_drift_retry_failed" ||
+      containsAny(text, [
+        "story_preservation",
+        "story preservation",
+        "故事骨架漂移",
+        "故事保持",
+      ]),
+  },
+  {
     ruleId: "rule:gate=agentic_fact_guard",
     attribution: "model",
     match: (input, text) =>
