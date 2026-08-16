@@ -42,6 +42,7 @@ export const BEHAVIOR_COMPONENT_FIELDS = [
   "recoveryPolicyHash",
   "knowledgeSnapshotHash",
   "runtimeFingerprint",
+  "capabilityPackageSetHash",
 ] as const;
 
 export type BehaviorComponentField = (typeof BEHAVIOR_COMPONENT_FIELDS)[number];
@@ -74,6 +75,7 @@ export interface BehaviorBundleComponents {
   recoveryPolicyHash: string;
   knowledgeSnapshotHash: string;
   runtimeFingerprint: string;
+  capabilityPackageSetHash: string;
   evalProtocolVersion: string;
 }
 
@@ -125,6 +127,7 @@ export function extractBehaviorComponents(
     "recoveryPolicyHash",
     "knowledgeSnapshotHash",
     "runtimeFingerprint",
+    "capabilityPackageSetHash",
     "evalProtocolVersion",
   ];
   const components: Partial<BehaviorBundleComponents> = {};
@@ -207,7 +210,7 @@ export interface ComponentHashComparison {
 /**
  * 对比 manifest 记录的组件 hash 与当前运行环境捕获的组件 hash。
  *
- * - 逐字段比较 8 个行为组件 hash（BEHAVIOR_COMPONENT_FIELDS）。
+ * - 逐字段比较行为组件 hash（BEHAVIOR_COMPONENT_FIELDS）。
  * - manifest 侧某字段缺失/为空 → 跳过（旧 manifest 未捕获该组件，DG-6 迁移后强制）。
  * - 任一已捕获字段与当前快照不一致 → ok=false + 列出漂移字段。
  *
