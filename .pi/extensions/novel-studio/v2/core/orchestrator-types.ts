@@ -23,11 +23,13 @@ import type { StrategyOutcomeRecorder } from "../learning/strategy-outcome-recor
 import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-candidate-source.js";
 import type { NarrativeToolMode } from "../../novelos/agent/evidence-plan.js";
 import type { ContextSafetyResult } from "./context-safety.js";
+import type { ContextPackage } from "./trust/context-package.js";
 import type { TrustedControlPlane } from "./control-plane.js";
 import type { RunRoutingContext } from "./run-routing-context.js";
 import type { SceneSolutionCard } from "./scene-solution-search.js";
 import type { PortableCraftGene } from "./portable-craft-gene.js";
 import type { PromptPatternResolution } from "./prompt-pattern-library.js";
+import type { CapabilityActivationManifest, CapabilityCatalogEntry } from "./capability-package-contracts.js";
 import type { WriterPromptProfile } from "./model-prompt-adapter.js";
 import type { MethodologyDiagnosticState } from "./methodology-diagnostic-state.js";
 // P0-3 审批闭环接通（2026-07-17）：代理审批阶段类型
@@ -189,6 +191,11 @@ export interface UnifiedOrchestratorInput {
   craftGenes?: PortableCraftGene[];
   /** PROMPT-PATTERN-ADMISSION-1：入口解析后的有准入状态提示模式。 */
   promptPatternResolution?: PromptPatternResolution;
+  /** Capability Package activation issued for this chapter. */
+  capabilityActivation?: CapabilityActivationManifest;
+  capabilityCatalog?: CapabilityCatalogEntry[];
+  capabilityPackageSet?: import("./capability-package-contracts.js").CapabilityPackageSet;
+  capabilityConsumptionLedger?: import("./capability-consumption-ledger.js").CapabilityConsumptionLedger;
   /** @deprecated 固定场景候选已退出生产主链路。 */
   positiveGainPromptPatternResolution?: PromptPatternResolution;
   /** @deprecated 生产主链路忽略此字段。 */
@@ -332,6 +339,8 @@ export interface UnifiedOrchestratorInput {
    */
   runRouting?: RunRoutingContext;
   contextSafety?: ContextSafetyResult;
+  /** CEG-3.2：验证后的 ContextPackage，生产 Agentic 静态输入唯一来源。 */
+  contextPackage?: ContextPackage;
   /** 随机种子（judge 匿名化，可复现） */
   seed?: number;
   /**
@@ -367,6 +376,8 @@ export interface UnifiedOrchestratorInput {
    * 但 SOFT 检查排除 agentic 调用（kind=AGENTIC_RAW_KIND="agentic_raw"），确保 shadow 不影响 editorial 路径。
    */
   agenticCandidateSource?: AgenticRawCandidateSource;
+  /** CEG-1.6：同一 run 冻结快照，供检索与验证器校验 snapshotId。 */
+  evidenceSnapshot?: import("./narrative-evidence-snapshot.js").NarrativeEvidenceSnapshotRuntime;
   /**
    * Phase 5 受控接入：叙事工具暴露模式。
    *
@@ -576,6 +587,8 @@ export interface UnifiedFailureEnvelope {
   gate?: string;
   reason: string;
   recoverable: boolean;
+  /** 结构化阻断证据（溢出项、冲突对等），不得只留在 helper 里。 */
+  evidence?: unknown;
   /** 恢复动作（系统裁决，非模型请求） */
   recoveryAction?:
     | "user_fix"
@@ -668,6 +681,7 @@ export type HardBlockGuidance = Pick<
   | "prohibitedActions"
   | "retryPlan"
   | "blockCategory"
+  | "evidence"
 > & {
   severityOverride?: "preflight" | "recoverable" | "hard" | "fatal";
 };

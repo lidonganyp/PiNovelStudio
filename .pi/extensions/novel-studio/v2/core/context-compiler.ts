@@ -41,6 +41,7 @@ import { loadCreativeConstitution } from "./creative-constitution.js";
 import { loadStateStore } from "./final-state-commit.js";
 import { backfillAcceptedChapterState } from "./historical-state-backfill.js";
 import { retrieveNarrativeContext } from "./context-retrieval.js";
+import type { NarrativeEvidenceSnapshotRuntime } from "./narrative-evidence-snapshot.js";
 
 // ============================================================================
 // ContextCompiler 入参/出参
@@ -51,6 +52,8 @@ export interface ContextCompileInput {
   chapterId: string;
   chapterNumber: number;
   projectRoot: string;
+  /** CEG-1.3：冻结快照。传入后不再 loadStateStore / backfill。 */
+  evidenceSnapshot?: NarrativeEvidenceSnapshotRuntime;
 }
 
 export interface ContextCompileResult {
@@ -258,13 +261,16 @@ function deriveLongTermState(
   projectRoot: string,
   chapterNumber: number,
   seed: ChapterSeed,
+  evidenceSnapshot?: NarrativeEvidenceSnapshotRuntime,
 ): LongTermStateSnapshot | null {
-  backfillAcceptedChapterState({
-    workspaceId,
-    projectRoot,
-    beforeChapterNumber: chapterNumber,
-  });
-  const store = loadStateStore(workspaceId, projectRoot);
+  if (!evidenceSnapshot) {
+    backfillAcceptedChapterState({
+      workspaceId,
+      projectRoot,
+      beforeChapterNumber: chapterNumber,
+    });
+  }
+  const store = evidenceSnapshot?.narrativeState ?? loadStateStore(workspaceId, projectRoot);
   // 空状态文件视为无快照（避免向候选注入空噪音）
   // P2 闭环修复：同时检查 planned 字段——若仅有 planned 条目（无权威状态），
   // 仍需返回快照以暴露前序章节的计划意图供连续性参考。
@@ -567,7 +573,13 @@ export class ContextCompiler {
 
     // Phase 1 分层：作品宪法 + 长期状态（只读快照，缺失不阻断）
     const constitution = deriveConstitution(input.workspaceId, input.projectRoot);
-    const longTermState = deriveLongTermState(input.workspaceId, input.projectRoot, input.chapterNumber, seed);
+    const longTermState = deriveLongTermState(
+      input.workspaceId,
+      input.projectRoot,
+      input.chapterNumber,
+      seed,
+      input.evidenceSnapshot,
+    );
     if (constitution) {
       sourceMap.push({
         sourceId: "creative-constitution.json",
