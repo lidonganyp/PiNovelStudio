@@ -166,6 +166,8 @@ export interface EvolutionReleaseManifest {
   strategyEvidencePartition?: StrategyEvidencePartition[];
   /** 评测协议版本（Eval 协议变化产生新版本） */
   evalProtocolVersion?: string;
+  /** 冻结能力包集合 hash（CPG-1.4；行为组成项，变化必须改 bundleId） */
+  capabilityPackageSetHash?: string;
 }
 
 // ============================================================================
