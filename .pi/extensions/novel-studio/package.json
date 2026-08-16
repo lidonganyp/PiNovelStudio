@@ -33,6 +33,7 @@
     "evolution:proxy-review": "node scripts/evolution-cli.mjs proxy-review",
     "evolution:promote": "node scripts/evolution-cli.mjs promote",
     "evolution:hold": "node scripts/evolution-cli.mjs hold",
+    "evolution:revoke-pointer": "node scripts/evolution-cli.mjs revoke-pointer",
     "evolution:rollback": "node scripts/evolution-cli.mjs rollback",
     "evolution:health": "node scripts/evolution-cli.mjs health",
     "evolution:canary": "node scripts/evolution-cli.mjs canary",

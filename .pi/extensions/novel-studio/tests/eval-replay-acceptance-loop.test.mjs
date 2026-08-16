@@ -876,6 +876,12 @@ describe("P3 eval-replay-matrix：pass@k / pass^k 计算", () => {
 });
 
 describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
+  const defaultPipelineKind = {
+    baseline: "unified_full",
+    candidate: "unified_full",
+    raw_direct: "independent_raw",
+    recovery: "synthetic_recovery",
+  };
   const buildArm = (armId, overrides = {}) => ({
     armId,
     runId: `run-${armId}`,
@@ -894,6 +900,7 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
     p50LatencyMs: 5_000,
     p95LatencyMs: 12_000,
     longTailFailures: 0,
+    pipelineKind: defaultPipelineKind[armId] ?? "unknown",
     ...overrides,
   });
 
@@ -1040,6 +1047,54 @@ describe("P3 eval-replay-matrix：四臂完整性与 verdict", () => {
     assert.equal(ok.verdict, "pass");
     assert.deepEqual(ok.verdictReasons, []);
     assert.equal(ok.candidatePassPow3, 1);
+  });
+
+  it("baseline 1/1 或 raw_direct=recorded → reject", () => {
+    const shortBaseline = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({
+        baseline: { sampleCount: 1, perSamplePass: [true] },
+      }),
+    });
+    assert.equal(shortBaseline.verdict, "reject");
+    assert.ok(shortBaseline.verdictReasons.some((r) => r.includes("baseline") && r.includes("样本数")));
+
+    const recordedRaw = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({
+        raw_direct: { replayMode: "recorded" },
+      }),
+    });
+    assert.equal(recordedRaw.verdict, "reject");
+    assert.ok(recordedRaw.verdictReasons.some((r) => /recorded|裸写|independent_raw/.test(r)));
+  });
+
+  it("四臂相同全链路或 candidate 非 unified_full → reject", () => {
+    const sameFull = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({
+        raw_direct: { pipelineKind: "unified_full" },
+      }),
+    });
+    assert.equal(sameFull.verdict, "reject");
+    assert.ok(sameFull.verdictReasons.some((r) => r.includes("raw_direct")));
+
+    const rawCandidate = matrix.compareMatrixArms({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-b",
+      baselineReleaseId: "rel-prod-109",
+      arms: buildFourArms({
+        candidate: { pipelineKind: "independent_raw" },
+      }),
+    });
+    assert.equal(rawCandidate.verdict, "reject");
+    assert.ok(rawCandidate.verdictReasons.some((r) => r.includes("candidate")));
   });
 
   it("人工盲评只存档、不影响 verdict", () => {
@@ -1798,23 +1853,96 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
     rmSync(tmpMatrix, { recursive: true, force: true });
   });
 
-  const writeArmRun = (armId, sampleCount = 3) => {
-    const runRoot = join(tmpMatrix, armId);
+  const pipelineTraceForArm = (armId) => {
+    if (armId.startsWith("raw") || armId.includes("raw-")) {
+      return {
+        gates: [
+          {
+            stage: "v2_final_selected",
+            evidence: {
+              modelCalls: [
+                {
+                  requestedRoute: "v2_rawstage2_gemini31",
+                  actualProvider: "gemini31",
+                  kind: "raw_direct",
+                },
+              ],
+            },
+          },
+        ],
+        recoveryAttempts: [],
+      };
+    }
+    if (armId.startsWith("recovery")) {
+      return { stageResults: [], recoveryAttempts: [] };
+    }
+    return {
+      gates: [
+        {
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [
+              {
+                requestedRoute: "v2_rawstage2_gemini31",
+                actualProvider: "gemini31",
+                kind: "agentic_raw",
+              },
+              {
+                requestedRoute: "v2_amplified_gemini31",
+                actualProvider: "gemini31",
+                kind: "author_style_optimization",
+              },
+            ],
+          },
+        },
+      ],
+      recoveryAttempts: [],
+    };
+  };
+  const modelCallsForArm = (armId) => {
+    if (armId.startsWith("raw") || armId.includes("raw-")) return 1;
+    if (armId.startsWith("recovery")) return 0;
+    return 2;
+  };
+
+  const writeArmRun = (armId, sampleCount = 3, opts = {}) => {
+    const runRoot = join(tmpMatrix, `${armId}-${sampleCount}-${opts.manifestReplayMode ?? "stub"}`);
     mkdirSync(join(runRoot, "samples"), { recursive: true });
     const samples = [];
+    const manifestReplayMode =
+      opts.manifestReplayMode ?? (armId.startsWith("recovery") ? "synthetic" : "stub");
     for (let i = 0; i < sampleCount; i += 1) {
-      samples.push({
-        fixtureId: `fixture.${armId}.${i + 1}`,
-        fixtureHash: HEX64(`${armId}-${i}`),
+      const fixtureId = `fixture.${armId}.${i + 1}`;
+      const sampleDir = join(runRoot, "samples", fixtureId);
+      const tracesDir = join(sampleDir, "traces");
+      mkdirSync(tracesDir, { recursive: true });
+      const fixture = buildValidFixture({
+        fixtureId,
         replayMode: "stub",
+        traceArchivePath: "traces/chapter-001-quality-trace.json",
+      });
+      const fixtureHash = fixtureContract.computeEvalFixtureHash(fixture);
+      writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
+      writeFileSync(
+        join(tracesDir, "chapter-001-quality-trace.json"),
+        JSON.stringify(pipelineTraceForArm(armId)),
+      );
+      writeFileSync(
+        join(sampleDir, "state-projection.json"),
+        JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
+      );
+      samples.push({
+        fixtureId,
+        fixtureHash,
+        replayMode: manifestReplayMode,
         scratchWorkspaceId: `eval-${armId}-${i}`,
         status: "completed",
         failureAttribution: null,
         failureEnvelopes: [],
         traceArchived: true,
-        traceArchivePath: join(runRoot, "samples", `fixture.${armId}.${i + 1}`, "traces"),
+        traceArchivePath: tracesDir,
         isolationViolations: [],
-        modelCalls: 0,
+        modelCalls: modelCallsForArm(armId),
         durationMs: 400 + i,
       });
     }
@@ -1823,7 +1951,7 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
       schemaVersion: 1,
       runId: `run-${armId}`,
       evalProtocolVersion: "pinovel.eval-protocol/1",
-      replayMode: "stub",
+      replayMode: manifestReplayMode,
       releaseId: "rel-prod-110",
       bundleId: "bundle-20260815",
       runRoot,
@@ -1867,6 +1995,46 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
     assert.equal(report.candidatePassPow3, 1);
     assert.match(report.reportHash, /^[0-9a-f]{64}$/);
     assert.equal(report.reportHash, matrix.computeMatrixReportHash(report));
+  });
+
+  it("baseline 只有 1 个样本 → verdict=reject（不得冒充三连 A/B）", () => {
+    const report = matrix.generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-20260815",
+      baselineReleaseId: "rel-prod-109",
+      armRunRoots: {
+        baseline: writeArmRun("baseline-n1", 1),
+        candidate: writeArmRun("candidate-n3"),
+        raw_direct: writeArmRun("raw-n3"),
+        recovery: writeArmRun("recovery-n3"),
+      },
+      codeCommit: "abc1234deadbeef",
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(
+      report.verdictReasons.some((r) => r.includes("baseline") && r.includes("样本数")),
+      report.verdictReasons.join("；"),
+    );
+  });
+
+  it("raw_direct recorded 回放 → verdict=reject（不是独立裸写）", () => {
+    const report = matrix.generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-prod-110",
+      candidateBundleId: "bundle-20260815",
+      baselineReleaseId: "rel-prod-109",
+      armRunRoots: {
+        baseline: writeArmRun("baseline-rec"),
+        candidate: writeArmRun("candidate-rec"),
+        raw_direct: writeArmRun("raw-rec", 3, { manifestReplayMode: "recorded" }),
+        recovery: writeArmRun("recovery-rec"),
+      },
+      codeCommit: "abc1234deadbeef",
+    });
+    assert.equal(report.verdict, "reject");
+    assert.ok(
+      report.verdictReasons.some((r) => r.includes("recorded") && r.includes("裸写")),
+      report.verdictReasons.join("；"),
+    );
   });
 
   it("缺臂时生成器仍产出合法报告且 verdict=reject", () => {

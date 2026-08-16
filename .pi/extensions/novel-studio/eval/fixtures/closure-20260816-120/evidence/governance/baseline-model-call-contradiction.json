@@ -1,0 +1,15 @@
+{
+  "schemaId": "pinovel.eval-archive-contradiction",
+  "schemaVersion": 1,
+  "archiveId": "closure-production-like-f8e0040c",
+  "archiveRoot": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives-115\\closure-production-like-f8e0040c",
+  "immutable": true,
+  "mustNotRewriteOriginalManifest": true,
+  "manifestModelCalls": 0,
+  "traceGateModelCalls": 3,
+  "graderCheck": "model_call_evidence",
+  "graderVerdict": "reject",
+  "sampleCount": 1,
+  "cannotServeAsThreeRunBaseline": true,
+  "rawDirectIndependence": "closure-recorded-120 is recorded replay of candidate text, not independent raw"
+}

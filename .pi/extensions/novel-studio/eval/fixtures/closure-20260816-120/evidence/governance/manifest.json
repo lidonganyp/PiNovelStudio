@@ -2,7 +2,7 @@
   "schemaId": "pinovel.evolution-release",
   "schemaVersion": 1,
   "releaseId": "rel-prod-120",
-  "status": "active_prod",
+  "status": "held",
   "parentReleaseId": "rel-prod-115",
   "rollbackReleaseId": "rel-prod-115",
   "supersedesRef": "rel-prod-115",

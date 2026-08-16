@@ -15,6 +15,7 @@ export interface ReplayModelCallRecord {
   actualModel?: string;
   expectedModel?: string;
   model?: string;
+  kind?: string;
   durationMs?: number;
   ts?: number;
   tokenIn?: number;
@@ -72,6 +73,7 @@ function asCallRecord(value: unknown): ReplayModelCallRecord | null {
   const expectedModel =
     typeof value.expectedModel === "string" ? value.expectedModel : undefined;
   const model = typeof value.model === "string" ? value.model : undefined;
+  const kind = typeof value.kind === "string" ? value.kind : undefined;
   const durationMs =
     typeof value.durationMs === "number" && Number.isFinite(value.durationMs)
       ? value.durationMs
@@ -101,6 +103,7 @@ function asCallRecord(value: unknown): ReplayModelCallRecord | null {
     actualModel,
     expectedModel,
     model,
+    kind,
     durationMs,
     ts,
     tokenIn,

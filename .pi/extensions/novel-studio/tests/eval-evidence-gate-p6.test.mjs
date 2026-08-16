@@ -137,12 +137,67 @@ function makeWorkspace(projectRoot, workspaceId, opts = {}) {
   return ws;
 }
 
+function pipelineTraceFor(kind) {
+  if (kind === "independent_raw") {
+    return {
+      gates: [
+        {
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [
+              {
+                requestedRoute: "v2_rawstage2_gemini31",
+                actualProvider: "gemini31",
+                kind: "raw_direct",
+              },
+            ],
+          },
+        },
+      ],
+      recoveryAttempts: [],
+    };
+  }
+  if (kind === "unified_full") {
+    return {
+      gates: [
+        {
+          stage: "v2_final_selected",
+          evidence: {
+            modelCalls: [
+              {
+                requestedRoute: "v2_rawstage2_gemini31",
+                actualProvider: "gemini31",
+                kind: "agentic_raw",
+              },
+              {
+                requestedRoute: "v2_amplified_gemini31",
+                actualProvider: "gemini31",
+                kind: "author_style_optimization",
+              },
+            ],
+          },
+        },
+      ],
+      recoveryAttempts: [],
+    };
+  }
+  return { stageResults: [], recoveryAttempts: [] };
+}
+
+function modelCallsForPipeline(kind) {
+  if (kind === "independent_raw") return 1;
+  if (kind === "unified_full") return 2;
+  return 0;
+}
+
 /** 构造合法 eval run root（stub replay；默认 1 样本全过）。 */
 function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
   const runRoot = opts.runRoot ?? join(root, opts.runDirName ?? "eval-run");
   const fixtureIdBase = opts.fixtureId ?? "fixture.p6-001";
   const sampleCount = opts.sampleCount ?? 1;
   const runId = opts.runId ?? "run-p6-001";
+  const pipelineKind = opts.pipelineKind ?? null;
+  const replayMode = opts.replayMode ?? "stub";
   const samples = [];
   let firstFixtureHash = "";
 
@@ -158,7 +213,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
       fixtureId,
       evalProtocolVersion: "pinovel.eval-protocol/1",
       evalOnly: true,
-      replayMode: "stub",
+      replayMode,
       createdAt: "2026-08-15T00:00:00.000Z",
       provenance: {
         releaseId,
@@ -206,7 +261,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
     writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
     writeFileSync(
       join(tracesDir, "chapter-001-quality-trace.json"),
-      JSON.stringify({ stageResults: [], recoveryAttempts: [] }),
+      JSON.stringify(pipelineTraceFor(pipelineKind)),
     );
     writeFileSync(
       join(sampleDir, "state-projection.json"),
@@ -215,7 +270,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
     samples.push({
       fixtureId,
       fixtureHash,
-      replayMode: "stub",
+      replayMode,
       scratchWorkspaceId: `eval-stub-x-${i + 1}`,
       status: "completed",
       failureAttribution: null,
@@ -223,7 +278,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
       traceArchived: true,
       traceArchivePath: tracesDir,
       isolationViolations: [],
-      modelCalls: 0,
+      modelCalls: modelCallsForPipeline(pipelineKind),
       durationMs: 500 + i,
     });
   }
@@ -233,7 +288,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
     schemaVersion: 1,
     runId,
     evalProtocolVersion: "pinovel.eval-protocol/1",
-    replayMode: "stub",
+    replayMode,
     releaseId,
     bundleId,
     runRoot,
@@ -256,6 +311,12 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
 
 function writeGeneratedPassingMatrix(evalRunRoot, releaseId, bundleId, opts = {}) {
   const armIds = ["baseline", "candidate", "raw_direct", "recovery"];
+  const armKinds = {
+    baseline: "unified_full",
+    candidate: "unified_full",
+    raw_direct: "independent_raw",
+    recovery: "synthetic_recovery",
+  };
   const armRunRoots = {};
   for (const armId of armIds) {
     const { runRoot } = makeEvalRunRoot(evalRunRoot, releaseId, bundleId, {
@@ -263,6 +324,8 @@ function writeGeneratedPassingMatrix(evalRunRoot, releaseId, bundleId, opts = {}
       fixtureId: `fixture.${armId}`,
       sampleCount: 3,
       runId: `run-${armId}`,
+      pipelineKind: armKinds[armId],
+      replayMode: armId === "recovery" ? "synthetic" : "stub",
     });
     armRunRoots[armId] = runRoot;
   }
@@ -280,38 +343,51 @@ function writeGeneratedPassingMatrix(evalRunRoot, releaseId, bundleId, opts = {}
 /** production_like completed 但 manifest.modelCalls=0、trace 有 3 次调用。 */
 function writeLyingProductionLikeArm(evalRunRoot, releaseId, bundleId) {
   const runRoot = join(evalRunRoot, "arms", "baseline-lying");
-  const fixtureId = "fixture.baseline-lying";
-  const tracesDir = join(runRoot, "samples", fixtureId, "traces");
-  mkdirSync(tracesDir, { recursive: true });
-  const fixture = JSON.parse(
+  const template = JSON.parse(
     readFileSync(join(evalRunRoot, "samples", readdirSync(join(evalRunRoot, "samples"))[0], "fixture.json"), "utf-8"),
   );
-  fixture.fixtureId = fixtureId;
-  fixture.replayMode = "production_like";
-  writeFileSync(join(runRoot, "samples", fixtureId, "fixture.json"), JSON.stringify(fixture, null, 2));
-  writeFileSync(
-    join(tracesDir, "chapter-001-quality-trace.json"),
-    JSON.stringify({
-      gates: [
-        {
-          stage: "v2_final_selected",
-          evidence: {
-            modelCalls: [
-              { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31" },
-              { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
-              { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
-            ],
-          },
+  const lyingTrace = {
+    gates: [
+      {
+        stage: "v2_final_selected",
+        evidence: {
+          modelCalls: [
+            { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31" },
+            { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
+            { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31" },
+          ],
         },
-      ],
-      recoveryAttempts: [],
-    }),
-  );
-  writeFileSync(
-    join(runRoot, "samples", fixtureId, "state-projection.json"),
-    JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
-  );
-  const fixtureHash = computeEvalFixtureHash(fixture);
+      },
+    ],
+    recoveryAttempts: [],
+  };
+  const samples = [];
+  for (let i = 1; i <= 3; i += 1) {
+    const fixtureId = `fixture.baseline-lying.${i}`;
+    const tracesDir = join(runRoot, "samples", fixtureId, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    const fixture = { ...template, fixtureId, replayMode: "production_like" };
+    writeFileSync(join(runRoot, "samples", fixtureId, "fixture.json"), JSON.stringify(fixture, null, 2));
+    writeFileSync(join(tracesDir, "chapter-001-quality-trace.json"), JSON.stringify(lyingTrace));
+    writeFileSync(
+      join(runRoot, "samples", fixtureId, "state-projection.json"),
+      JSON.stringify({ narrativeStateHash: "a".repeat(64) }),
+    );
+    samples.push({
+      fixtureId,
+      fixtureHash: computeEvalFixtureHash(fixture),
+      replayMode: "production_like",
+      scratchWorkspaceId: `eval-lying-baseline-${i}`,
+      status: "completed",
+      failureAttribution: null,
+      failureEnvelopes: [],
+      traceArchived: true,
+      traceArchivePath: tracesDir,
+      isolationViolations: [],
+      modelCalls: 0,
+      durationMs: 1000,
+    });
+  }
   writeFileSync(
     join(runRoot, "manifest.json"),
     JSON.stringify({
@@ -325,26 +401,11 @@ function writeLyingProductionLikeArm(evalRunRoot, releaseId, bundleId) {
       runRoot,
       startedAt: "2026-08-15T00:00:00.000Z",
       finishedAt: "2026-08-15T00:01:00.000Z",
-      samples: [
-        {
-          fixtureId,
-          fixtureHash,
-          replayMode: "production_like",
-          scratchWorkspaceId: "eval-lying-baseline",
-          status: "completed",
-          failureAttribution: null,
-          failureEnvelopes: [],
-          traceArchived: true,
-          traceArchivePath: tracesDir,
-          isolationViolations: [],
-          modelCalls: 0,
-          durationMs: 1000,
-        },
-      ],
+      samples,
       summary: {
-        totalSamples: 1,
-        countedSamples: 1,
-        completed: 1,
+        totalSamples: 3,
+        countedSamples: 3,
+        completed: 3,
         failed: 0,
         skipped: 0,
         traceRetentionRate: 1,
@@ -828,6 +889,162 @@ test("gate: R0/R1 无四臂 → MATRIX_MISSING；完整四臂 + pass^3=1 → app
       assert.equal(ok.evidence.matrixRecomputed, true);
       assert.equal(ok.evidence.candidatePassPow3, 1);
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: baseline 1/1 或 raw_direct=recorded → MATRIX_REJECTED", () => {
+  const root = makeTempRoot();
+  try {
+    const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-ab", "bundle-ab");
+    const generated = writeGeneratedPassingMatrix(evalRunRoot, "rel-ab", "bundle-ab");
+    const armRoots = {};
+    for (const arm of generated.arms) {
+      armRoots[arm.armId] = arm.runRoot;
+    }
+    const { runRoot: shortBaseline } = makeEvalRunRoot(evalRunRoot, "rel-ab", "bundle-ab", {
+      runDirName: join("arms", "baseline-n1"),
+      fixtureId: "fixture.baseline-n1",
+      sampleCount: 1,
+      runId: "run-baseline-n1",
+    });
+    armRoots.baseline = shortBaseline;
+    const shortReport = generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-ab",
+      candidateBundleId: "bundle-ab",
+      baselineReleaseId: "rel-ab",
+      armRunRoots: armRoots,
+      codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+    });
+    writeMatrixReport(evalRunRoot, shortReport);
+    const shortGate = evaluateEvalEvidenceGate({
+      releaseId: "rel-ab",
+      bundleId: "bundle-ab",
+      changeClass: "R1",
+      evalRunRoot,
+    });
+    assert.equal(shortGate.verdict, "rejected", shortGate.reason);
+    assert.equal(shortGate.code, "EVAL_EVIDENCE_MATRIX_REJECTED");
+    assert.match(shortGate.reason, /baseline/);
+
+    const { runRoot: recordedRaw } = makeEvalRunRoot(evalRunRoot, "rel-ab", "bundle-ab", {
+      runDirName: join("arms", "raw-recorded"),
+      fixtureId: "fixture.raw-recorded",
+      sampleCount: 3,
+      runId: "run-raw-recorded",
+    });
+    const recordedManifestPath = join(recordedRaw, "manifest.json");
+    const recordedManifest = JSON.parse(readFileSync(recordedManifestPath, "utf-8"));
+    recordedManifest.replayMode = "recorded";
+    writeFileSync(recordedManifestPath, JSON.stringify(recordedManifest, null, 2));
+    const recordedRoots = {};
+    for (const arm of generated.arms) {
+      recordedRoots[arm.armId] = arm.runRoot;
+    }
+    recordedRoots.raw_direct = recordedRaw;
+    const recordedReport = generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-ab",
+      candidateBundleId: "bundle-ab",
+      baselineReleaseId: "rel-ab",
+      armRunRoots: recordedRoots,
+      codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+    });
+    writeMatrixReport(evalRunRoot, recordedReport);
+    const recordedGate = evaluateEvalEvidenceGate({
+      releaseId: "rel-ab",
+      bundleId: "bundle-ab",
+      changeClass: "R1",
+      evalRunRoot,
+    });
+    assert.equal(recordedGate.verdict, "rejected", recordedGate.reason);
+    assert.equal(recordedGate.code, "EVAL_EVIDENCE_MATRIX_REJECTED");
+    assert.match(recordedGate.reason, /recorded|裸写/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: 四臂相同 stub 全链路 → MATRIX_REJECTED（raw_direct 未证明裸写）", () => {
+  const root = makeTempRoot();
+  try {
+    const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-same", "bundle-same");
+    const armIds = ["baseline", "candidate", "raw_direct", "recovery"];
+    const armRunRoots = {};
+    for (const armId of armIds) {
+      const { runRoot } = makeEvalRunRoot(evalRunRoot, "rel-same", "bundle-same", {
+        runDirName: join("arms", armId),
+        fixtureId: `fixture.${armId}`,
+        sampleCount: 3,
+        runId: `run-${armId}`,
+        pipelineKind: "unified_full",
+      });
+      armRunRoots[armId] = runRoot;
+    }
+    const report = generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-same",
+      candidateBundleId: "bundle-same",
+      baselineReleaseId: "rel-same",
+      armRunRoots,
+      codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+    });
+    writeMatrixReport(evalRunRoot, report);
+    const gate = evaluateEvalEvidenceGate({
+      releaseId: "rel-same",
+      bundleId: "bundle-same",
+      changeClass: "R1",
+      evalRunRoot,
+    });
+    assert.equal(gate.verdict, "rejected", gate.reason);
+    assert.equal(gate.code, "EVAL_EVIDENCE_MATRIX_REJECTED");
+    assert.match(gate.reason, /raw_direct|裸写/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: 报告把 recorded 臂写成 stub/independent_raw → 仍按 manifest 拒绝", () => {
+  const root = makeTempRoot();
+  try {
+    const { runRoot: evalRunRoot } = makeEvalRunRoot(root, "rel-forge", "bundle-forge");
+    const generated = writeGeneratedPassingMatrix(evalRunRoot, "rel-forge", "bundle-forge");
+    const { runRoot: recordedRaw } = makeEvalRunRoot(evalRunRoot, "rel-forge", "bundle-forge", {
+      runDirName: join("arms", "raw-forged"),
+      fixtureId: "fixture.raw-forged",
+      sampleCount: 3,
+      runId: "run-raw-forged",
+      replayMode: "recorded",
+    });
+    const armRoots = {};
+    for (const arm of generated.arms) {
+      armRoots[arm.armId] = arm.runRoot;
+    }
+    armRoots.raw_direct = recordedRaw;
+    const mixed = generateMatrixReportFromReplayRuns({
+      candidateReleaseId: "rel-forge",
+      candidateBundleId: "bundle-forge",
+      baselineReleaseId: "rel-forge",
+      armRunRoots: armRoots,
+      codeCommit: "deadbeefcafebabe0123456789abcdef01234567",
+    });
+    const forged = JSON.parse(JSON.stringify(mixed));
+    const rawArm = forged.arms.find((arm) => arm.armId === "raw_direct");
+    rawArm.replayMode = "stub";
+    rawArm.pipelineKind = "independent_raw";
+    forged.verdict = "pass";
+    forged.verdictReasons = [];
+    forged.reportHash = computeMatrixReportHash(forged);
+    writeMatrixReport(evalRunRoot, forged);
+
+    const gate = evaluateEvalEvidenceGate({
+      releaseId: "rel-forge",
+      bundleId: "bundle-forge",
+      changeClass: "R1",
+      evalRunRoot,
+    });
+    assert.equal(gate.verdict, "rejected", gate.reason);
+    assert.equal(gate.code, "EVAL_EVIDENCE_MATRIX_REJECTED");
+    assert.match(gate.reason, /raw_direct|recorded|裸写/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

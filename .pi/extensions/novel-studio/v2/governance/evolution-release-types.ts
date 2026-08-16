@@ -223,10 +223,10 @@ export interface PointerHistoryEntry {
   kind: PointerKind;
   /** 本次操作前的 releaseId（首次切换为 null） */
   fromReleaseId: string | null;
-  /** 本次操作后的 releaseId */
+  /** 本次操作后的 releaseId；revoke 时为空字符串 */
   toReleaseId: string;
-  /** 操作类型：switch 正常切换；rollback 回滚到上一个 */
-  operation: "switch" | "rollback";
+  /** 操作类型：switch 正常切换；rollback 回滚到上一个；revoke 撤销当前指针（无后继） */
+  operation: "switch" | "rollback" | "revoke";
   reason: string;
   actor: string;
   timestamp: string;

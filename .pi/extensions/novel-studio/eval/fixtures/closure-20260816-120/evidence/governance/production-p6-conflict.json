@@ -1,0 +1,26 @@
+{
+  "schemaId": "pinovel.production-p6-conflict",
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-16T07:50:00.000Z",
+  "releaseId": "rel-prod-120",
+  "p6": {
+    "verdict": "rejected",
+    "code": "EVAL_EVIDENCE_ARM_GRADER_FAILED",
+    "reason": "四臂确定性 Grader 未全部通过：臂 baseline grader 失败：model_call_evidence"
+  },
+  "action": {
+    "command": "evolution:hold --release-id rel-prod-120 --actor user",
+    "fromStatus": "active_prod",
+    "toStatus": "held",
+    "reason": "P6 EVAL_EVIDENCE_ARM_GRADER_FAILED: baseline model_call_evidence; active_prod must not remain after P6 reject"
+  },
+  "pointer": {
+    "kind": "production",
+    "releaseId": null,
+    "previousReleaseId": "rel-prod-120",
+    "revoked": true,
+    "revokeReason": "P6 EVAL_EVIDENCE_ARM_GRADER_FAILED; held release must not remain production active; 115 held so rollback is illegal",
+    "historicalReason": "user-authorized 2026-08-16: promote rel-prod-120 to active_prod after network APPROVE_DEV, verify YES, and P6 approved",
+    "note": "hold 之后必须撤销生产指针。rel-prod-115 已 held，不得 rollback 复活。恢复必须新 releaseId + 四臂三连 + 独立裸写 raw_direct。"
+  }
+}

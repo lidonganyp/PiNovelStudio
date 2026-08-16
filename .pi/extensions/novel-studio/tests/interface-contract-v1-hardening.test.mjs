@@ -492,6 +492,7 @@ async function setupRegistry() {
   });
   const registry = createNarrativeToolRegistry({
     searchService: {
+      getSnapshotId: () => undefined,
       searchRanked: () => [],
       searchChapterSpan: () => [],
       queryCanon: (/* category */) => [],

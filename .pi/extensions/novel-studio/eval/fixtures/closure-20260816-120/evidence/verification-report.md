@@ -2,8 +2,8 @@
 
 绑定：
 
-- 当前 active_prod: `rel-prod-120`（2026-08-16T06:53:52 已切换；当时门禁尚未强制四臂）
-- candidate release: `rel-prod-120` / status=`active_prod` / activatedAt=`2026-08-16T06:53:52.294Z`
+- 当前生产指针: **无**（2026-08-16 已 revoke；历史指针见 `active-production.pre-revoke.json`）
+- candidate release: `rel-prod-120` / status=`held` / activatedAt=`2026-08-16T06:53:52.294Z` / heldAt=`2026-08-16T08:03:15.431Z`
 - codeCommit: `57486b915e437015d86ef34401f29a0dfad51aa2`
 - fpHash: `bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d`
 - bundleId: `aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7`
@@ -51,6 +51,7 @@
   - raw_direct：`rel-prod-120` / `closure-recorded-120`（3/3 recorded，回放 candidate 三份正文）
   - recovery：`rel-prod-120` / `closure-synthetic-120`（3/3 synthetic，同夹具故障计划）
 - 仍不能当作“相对 115 的 3 连真实 A/B”：baseline 只有 1 个样本；raw_direct 是 candidate 正文的确定性回放，不是独立裸写
+- 门禁已收口：raw_direct 必须从 trace 路由证明 `independent_raw`（仅裸写、无 amplified）；candidate 必须是 `unified_full`；P6 始终用 runRoot manifest/trace 覆盖报告里的 replayMode/pipelineKind
 
 ## CLI 口径
 
@@ -59,9 +60,13 @@
 
 ## 生产指针
 
-- 已于 2026-08-16T06:53:52 切到 `rel-prod-120`（用户授权 promote；当时 R1 尚可不带四臂过门）
-- `rel-prod-115` 已 held
-- 本次未再次 promote
+- 06:53:52 曾切到 `rel-prod-120`（当时 R1 可不带四臂过门，理由仍写着 P6 approved）
+- 最新 P6：`EVAL_EVIDENCE_ARM_GRADER_FAILED`（baseline `model_call_evidence`；且 baseline 1/1、raw_direct 为 recorded）
+- 已 `evolution:hold rel-prod-120`（active_prod → held）
+- 已 `evolution:revoke-pointer --kind production`：生产指针撤销，不再自称 active_prod / P6 approved
+- `rel-prod-115` 已 held，不得 rollback 复活
+- 见 `evidence/governance/production-p6-conflict.json` 与 `active-production.pre-revoke.json`
+- 恢复生产必须新 releaseId，重新走审批 + 四臂三连 + 独立裸写 raw_direct + grader
 
 ## 未做
 

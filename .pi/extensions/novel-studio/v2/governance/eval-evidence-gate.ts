@@ -36,6 +36,7 @@ import {
 import {
   parseBoundMatrixReport,
   recomputeBoundMatrixReport,
+  inferArmPipelineKind,
   MATRIX_ARM_IDS,
   type BoundMatrixReport,
 } from "../core/eval-replay-matrix.js";
@@ -104,6 +105,33 @@ export function matrixEvidenceRequired(changeClass: ChangeClass): boolean {
 // ============================================================================
 // 内部工具
 // ============================================================================
+
+/**
+ * P6 不信任报告落盘的 replayMode / pipelineKind。
+ * 有 runRoot 时一律用真实 manifest + trace 覆盖后再 recompute。
+ */
+function enrichMatrixArmsFromRunRoots(report: BoundMatrixReport): BoundMatrixReport {
+  const arms = report.arms.map((arm) => {
+    if (!arm.runRoot || !existsSync(arm.runRoot)) {
+      return {
+        ...arm,
+        replayMode: null,
+        pipelineKind: "unknown" as const,
+      };
+    }
+    const loaded = loadRunManifest(arm.runRoot);
+    const replayMode = loaded.manifest?.replayMode ?? null;
+    return {
+      ...arm,
+      replayMode,
+      pipelineKind: inferArmPipelineKind({
+        replayMode,
+        runRoot: arm.runRoot,
+      }),
+    };
+  });
+  return { ...report, arms };
+}
 
 function readMatrixReportRaw(evalRunRoot: string): unknown | null {
   const path = join(evalRunRoot, "matrix-report.json");
@@ -323,7 +351,9 @@ export function evaluateEvalEvidenceGate(
         gradeReport: grade,
       };
     }
-    const recomputed = recomputeBoundMatrixReport(parsed.report);
+    const recomputed = recomputeBoundMatrixReport(
+      enrichMatrixArmsFromRunRoots(parsed.report),
+    );
     evidence.matrixRecomputed = true;
     evidence.matrixVerdict = recomputed.verdict;
     evidence.candidatePassPow3 = recomputed.candidatePassPow3;

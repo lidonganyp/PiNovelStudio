@@ -304,3 +304,41 @@ test("EVOLUTION-RELEASE-GOVERNANCE-1A pointer: 未知 schemaId 的 pointer 抛�
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("EVOLUTION-RELEASE-GOVERNANCE-1A pointer: revokeActive 删除 production pointer 且不切后继", () => {
+  const dir = makeTempDir();
+  try {
+    const store = createReleasePointerStore({ configDir: dir });
+    store.switchActive("production", "rel-held-120", { reason: "P6 approved", actor: "user" });
+    assert.equal(store.readActive("production").releaseId, "rel-held-120");
+
+    const previous = store.revokeActive("production", {
+      actor: "user",
+      reason: "P6 ARM_GRADER_FAILED; held release must not remain production",
+    });
+    assert.equal(previous.releaseId, "rel-held-120");
+    assert.equal(store.readActive("production"), null);
+    assert.equal(existsSync(join(dir, "active-production.json")), false);
+
+    const history = readFileSync(join(dir, "rollback-history-production.jsonl"), "utf-8");
+    assert.match(history, /"operation":"revoke"/);
+    assert.doesNotMatch(history, /rel-prod-115/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("EVOLUTION-RELEASE-GOVERNANCE-1A pointer: system 不得 revoke production pointer", () => {
+  const dir = makeTempDir();
+  try {
+    const store = createReleasePointerStore({ configDir: dir });
+    store.switchActive("production", "rel-001", { reason: "user init", actor: "user" });
+    assert.throws(
+      () => store.revokeActive("production", { actor: "system", reason: "auto" }),
+      /production|禁止|actor/i,
+    );
+    assert.equal(store.readActive("production").releaseId, "rel-001");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

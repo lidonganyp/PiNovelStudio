@@ -1391,19 +1391,63 @@ function cmdHold(args) {
     timestamp: new Date().toISOString(),
   });
 
-  // 不切指针（hold 不撤下 active；如需撤下配合 evolution:rollback）
   const store = createReleasePointerStore({ configDir: configDir() });
   const devPointer = store.readActive("development");
   const prodPointer = store.readActive("production");
+  let revokedProd = false;
+  if (prodPointer?.releaseId === releaseId && actor === "user") {
+    store.revokeActive("production", {
+      actor: "user",
+      reason:
+        `hold ${releaseId}: production pointer revoked because held release must not remain active_prod ` +
+        `(${reason})`,
+    });
+    revokedProd = true;
+  }
 
   console.log(`[evolution:hold] ✓ 已 hold`);
   console.log(`  releaseId       : ${releaseId}`);
   console.log(`  status          : ${manifest.status} → held`);
   console.log(`  actor           : ${actor}`);
   console.log(`  reason          : ${reason}`);
-  console.log(
-    `  ⚠ 未切换 pointer（dev=${devPointer?.releaseId ?? "(none)"}, prod=${prodPointer?.releaseId ?? "(none)"}）；如需撤下 active，请配合 evolution:rollback`,
-  );
+  if (revokedProd) {
+    console.log(`  production ptr  : ${releaseId} → (revoked)；恢复必须新 releaseId`);
+  } else {
+    console.log(
+      `  ⚠ 未切换 pointer（dev=${devPointer?.releaseId ?? "(none)"}, prod=${prodPointer?.releaseId ?? "(none)"}）；生产指针仍指向本 release 时请 evolution:revoke-pointer --kind production --actor user`,
+    );
+  }
+}
+
+// ============================================================================
+// 子命令：revoke-pointer
+// ============================================================================
+
+/**
+ * 撤销 active pointer，不切到任何后继。
+ * held + P6 失败且 rollback 目标也已 held 时，不得继续自称 production active。
+ */
+function cmdRevokePointer(args) {
+  const kind = args["kind"] === "development" ? "development" : "production";
+  const actor = args["actor"] || (kind === "production" ? "user" : "system");
+  const reason = args["reason"] || "evolution:revoke-pointer";
+  const store = createReleasePointerStore({ configDir: configDir() });
+  const current = store.readActive(kind);
+  if (!current) {
+    console.error(`[evolution:revoke-pointer] 错误：当前 ${kind} 无 active pointer`);
+    process.exit(3);
+  }
+  try {
+    store.revokeActive(kind, { actor, reason });
+  } catch (e) {
+    console.error(`[evolution:revoke-pointer] 失败：${e.message}`);
+    process.exit(5);
+  }
+  console.log(`[evolution:revoke-pointer] ✓ 已撤销 ${kind} pointer`);
+  console.log(`  from            : ${current.releaseId}`);
+  console.log(`  to              : (none)`);
+  console.log(`  actor           : ${actor}`);
+  console.log(`  reason          : ${reason}`);
 }
 
 // ============================================================================
@@ -2386,7 +2430,8 @@ function printHelp() {
   evaluate      1C：frozen → evaluated 状态迁移
   proxy-review  1C：代理审批端到端（artifact 落盘 + approvalRef + 状态事件，不切 pointer）
   promote       G5：晋级 release（approved_dev→active_dev / active_dev→candidate_prod / candidate_prod→active_prod）
-  hold          G5：暂停 release（active_dev/candidate_prod/active_prod → held，不切 pointer）
+  hold          G5：暂停 release（active_dev/candidate_prod/active_prod → held）；user hold 且生产指针指向该 release 时撤销生产指针
+  revoke-pointer 撤销 development/production active pointer（不切后继；held+P6 失败时使用）
   rollback      G5：回滚 active pointer 到前序 release + 标记当前 release held
   health        G8：打印 release 健康报告（insufficient_data/auto_hold_eligible/retired_suggestion/warning/healthy）；
                 可选 --apply 自动执行 auto-hold（幂等），可选 --recompute-eligibility 重算策略资格
@@ -2490,6 +2535,9 @@ async function main() {
       break;
     case "hold":
       cmdHold(args);
+      break;
+    case "revoke-pointer":
+      cmdRevokePointer(args);
       break;
     case "rollback":
       cmdRollback(args);

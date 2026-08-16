@@ -1,9 +1,22 @@
 {
-  "schemaId": "pinovel.evolution-release-pointer",
+  "schemaId": "pinovel.production-status-snapshot",
   "schemaVersion": 1,
   "kind": "production",
-  "releaseId": "rel-prod-120",
-  "reason": "user-authorized 2026-08-16: promote rel-prod-120 to active_prod after network APPROVE_DEV, verify YES, and P6 approved",
+  "releaseId": null,
+  "manifestStatus": "held",
+  "heldReleaseId": "rel-prod-120",
+  "productionRunnable": false,
+  "p6": {
+    "verdict": "rejected",
+    "code": "EVAL_EVIDENCE_ARM_GRADER_FAILED"
+  },
+  "reason": "production pointer revoked after P6 EVAL_EVIDENCE_ARM_GRADER_FAILED; rel-prod-120 is held; rel-prod-115 is held so rollback is illegal",
   "actor": "user",
-  "switchedAt": "2026-08-16T06:53:52.889Z"
+  "revokedAt": "2026-08-16T08:17:18.354Z",
+  "historicalPointer": {
+    "releaseId": "rel-prod-120",
+    "reason": "user-authorized 2026-08-16: promote rel-prod-120 to active_prod after network APPROVE_DEV, verify YES, and P6 approved",
+    "switchedAt": "2026-08-16T06:53:52.889Z"
+  }
 }
+

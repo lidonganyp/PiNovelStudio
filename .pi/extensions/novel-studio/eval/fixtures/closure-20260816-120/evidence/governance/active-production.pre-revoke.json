@@ -1,0 +1,10 @@
+{
+  "schemaId": "pinovel.evolution-release-pointer",
+  "schemaVersion": 1,
+  "kind": "production",
+  "releaseId": "rel-prod-120",
+  "reason": "user-authorized 2026-08-16: promote rel-prod-120 to active_prod after network APPROVE_DEV, verify YES, and P6 approved",
+  "actor": "user",
+  "switchedAt": "2026-08-16T06:53:52.889Z",
+  "note": "historical pointer at promote time. superseded by revoke after P6 EVAL_EVIDENCE_ARM_GRADER_FAILED + hold."
+}

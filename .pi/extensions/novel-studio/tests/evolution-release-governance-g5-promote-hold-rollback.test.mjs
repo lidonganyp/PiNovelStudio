@@ -134,10 +134,44 @@ function makeRegistry(root) {
   return createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
 }
 
+function g5PipelineTrace(kind) {
+  if (kind === "independent_raw") {
+    return {
+      gates: [{
+        stage: "v2_final_selected",
+        evidence: {
+          modelCalls: [
+            { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31", kind: "raw_direct" },
+          ],
+        },
+      }],
+      recoveryAttempts: [],
+    };
+  }
+  if (kind === "unified_full") {
+    return {
+      gates: [{
+        stage: "v2_final_selected",
+        evidence: {
+          modelCalls: [
+            { requestedRoute: "v2_rawstage2_gemini31", actualProvider: "gemini31", kind: "agentic_raw" },
+            { requestedRoute: "v2_amplified_gemini31", actualProvider: "gemini31", kind: "author_style_optimization" },
+          ],
+        },
+      }],
+      recoveryAttempts: [],
+    };
+  }
+  return { stageResults: [], recoveryAttempts: [] };
+}
+
 function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
   const fixtureIdBase = opts.fixtureId ?? "fixture.g5-001";
   const sampleCount = opts.sampleCount ?? 1;
   const runId = opts.runId ?? "run-g5-001";
+  const pipelineKind = opts.pipelineKind ?? null;
+  const replayMode = opts.replayMode ?? "stub";
+  const modelCalls = pipelineKind === "independent_raw" ? 1 : pipelineKind === "unified_full" ? 2 : 0;
   const samples = [];
 
   for (let i = 0; i < sampleCount; i += 1) {
@@ -151,7 +185,7 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
       fixtureId,
       evalProtocolVersion: "pinovel.eval-protocol/1",
       evalOnly: true,
-      replayMode: "stub",
+      replayMode,
       createdAt: "2026-08-16T00:00:00.000Z",
       provenance: {
         releaseId,
@@ -197,7 +231,7 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
     writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
     writeFileSync(
       join(tracesDir, "chapter-001-quality-trace.json"),
-      JSON.stringify({ stageResults: [], recoveryAttempts: [] }),
+      JSON.stringify(g5PipelineTrace(pipelineKind)),
     );
     writeFileSync(
       join(sampleDir, "state-projection.json"),
@@ -206,7 +240,7 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
     samples.push({
       fixtureId,
       fixtureHash: computeEvalFixtureHash(fixture),
-      replayMode: "stub",
+      replayMode,
       scratchWorkspaceId: `eval-stub-g5-${i + 1}`,
       status: "completed",
       failureAttribution: null,
@@ -214,7 +248,7 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
       traceArchived: true,
       traceArchivePath: tracesDir,
       isolationViolations: [],
-      modelCalls: 0,
+      modelCalls,
       durationMs: 500 + i,
     });
   }
@@ -226,7 +260,7 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
       schemaVersion: 1,
       runId,
       evalProtocolVersion: "pinovel.eval-protocol/1",
-      replayMode: "stub",
+      replayMode,
       releaseId,
       bundleId,
       runRoot,
@@ -252,12 +286,20 @@ function writePassingEvalEvidence(root, releaseId, changeClass = "R1") {
   const evalRunRoot = join(root, `eval-evidence-${releaseId}`);
   makeEvalRunRoot(evalRunRoot, releaseId, bundleId);
   const armIds = ["baseline", "candidate", "raw_direct", "recovery"];
+  const armKinds = {
+    baseline: "unified_full",
+    candidate: "unified_full",
+    raw_direct: "independent_raw",
+    recovery: "synthetic_recovery",
+  };
   const armRunRoots = {};
   for (const armId of armIds) {
     armRunRoots[armId] = makeEvalRunRoot(join(evalRunRoot, "arms", armId), releaseId, bundleId, {
       fixtureId: `fixture.${armId}`,
       sampleCount: 3,
       runId: `run-${armId}`,
+      pipelineKind: armKinds[armId],
+      replayMode: armId === "recovery" ? "synthetic" : "stub",
     });
   }
   writeMatrixReport(

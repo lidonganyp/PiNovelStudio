@@ -113,6 +113,12 @@ export interface ReleasePointerStore {
    */
   rollback(kind: PointerKind, opts: RollbackOptions): ReleasePointer | null;
   /**
+   * 撤销当前 active pointer（删除指针文件，不切到任何后继）。
+   * held + P6 失败的 production 不得继续自称 active。
+   * 无合法 rollback 目标时必须走本入口，不得把已 held 的旧基线重新激活。
+   */
+  revokeActive(kind: PointerKind, opts: SwitchActiveOptions): ReleasePointer;
+  /**
    * 只读 peek：返回当前可回滚到的目标 releaseId，不切换。
    * 无可回滚目标时返回 null。
    * history 不一致时抛错（与 rollback 一致）。
@@ -215,7 +221,7 @@ function parseHistoryEntry(line: string, lineNumber: number): PointerHistoryEntr
   if (obj.schemaId !== "pinovel.evolution-release-pointer-history") {
     throw new Error(`rollback-history 第 ${lineNumber} 行 schemaId 未知`);
   }
-  if (obj.operation !== "switch" && obj.operation !== "rollback") {
+  if (obj.operation !== "switch" && obj.operation !== "rollback" && obj.operation !== "revoke") {
     throw new Error(`rollback-history 第 ${lineNumber} 行 operation 非法：${obj.operation}`);
   }
   if (obj.kind !== "development" && obj.kind !== "production") {
@@ -526,10 +532,54 @@ export function createReleasePointerStore(
     return newPointer;
   }
 
+  function revokeActive(kind: PointerKind, opts: SwitchActiveOptions): ReleasePointer {
+    assertActorCanModify(kind, opts.actor);
+    const current = readActive(kind);
+    if (current === null) {
+      throw new Error(`revoke 失败：当前 ${kind} 无 active pointer`);
+    }
+    const now = new Date().toISOString();
+    const historyEntry: PointerHistoryEntry = {
+      schemaId: "pinovel.evolution-release-pointer-history",
+      schemaVersion: 1,
+      kind,
+      fromReleaseId: current.releaseId,
+      toReleaseId: "",
+      operation: "revoke",
+      reason: opts.reason,
+      actor: opts.actor,
+      timestamp: now,
+    };
+    const filePath = pointerPath(configDir, kind);
+    const previousContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : null;
+    mkdirSync(configDir, { recursive: true });
+    if (existsSync(filePath)) {
+      rmSync(filePath, { force: true });
+    }
+    try {
+      appendHistory(historyEntry);
+    } catch (historyError) {
+      if (previousContent !== null) {
+        try {
+          atomicWrite(filePath, previousContent);
+        } catch (restoreError) {
+          const historyMessage = historyError instanceof Error ? historyError.message : String(historyError);
+          const restoreMessage = restoreError instanceof Error ? restoreError.message : String(restoreError);
+          throw new Error(
+            `pointer revoke 失败且 pointer 恢复失败：history=${historyMessage}; restore=${restoreMessage}`,
+          );
+        }
+      }
+      throw historyError;
+    }
+    return current;
+  }
+
   return {
     readActive,
     switchActive,
     rollback,
+    revokeActive,
     peekRollbackTarget,
     loadRollbackHistory,
   };

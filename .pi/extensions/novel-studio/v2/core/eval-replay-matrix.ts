@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import {
   validateReplayRunManifestV1,
+  type ReplayMode,
   type ReplayRunManifestV1,
 } from "./eval-fixture-contract.js";
 import {
@@ -80,6 +81,66 @@ export interface MatrixArmMetrics {
   longTailFailures: number;
   /** 逐样本通过布尔序列（pass@k / pass^k 输入）。 */
   perSamplePass: boolean[];
+  /** 该臂 manifest.replayMode；缺省表示旧报告未记录。 */
+  replayMode?: ReplayMode | null;
+  /**
+   * 从 manifest + 归档 trace 推断的路径身份。
+   * P6 必须按 runRoot 重算，不得信任报告落盘值。
+   */
+  pipelineKind?: MatrixPipelineKind | null;
+}
+
+export type MatrixPipelineKind =
+  | "unified_full"
+  | "independent_raw"
+  | "recorded_replay"
+  | "synthetic_recovery"
+  | "unknown";
+
+const AMPLIFIED_ROUTE_RE = /amplified|author_style|style_optimization/i;
+const RAW_ROUTE_RE = /rawstage2|raw_direct|one[_-]?shot|^v2_raw(?!_amplified)/i;
+
+function collectArmRouteTokens(runRoot: string | null): string[] {
+  if (!runRoot) return [];
+  const samplesDir = join(runRoot, "samples");
+  if (!existsSync(samplesDir)) return [];
+  const tokens: string[] = [];
+  for (const fixtureId of readdirSync(samplesDir)) {
+    const tracesDir = join(samplesDir, fixtureId, "traces");
+    if (!existsSync(tracesDir)) continue;
+    for (const name of readdirSync(tracesDir)) {
+      if (!name.endsWith(".json") || name.includes("evidence-report")) continue;
+      try {
+        const trace = JSON.parse(readFileSync(join(tracesDir, name), "utf-8")) as unknown;
+        for (const call of extractReplayModelCalls(trace)) {
+          if (call.requestedRoute) tokens.push(call.requestedRoute);
+          if (call.route) tokens.push(call.route);
+          if (call.kind) tokens.push(call.kind);
+        }
+      } catch {
+        // 损坏 trace 不编造路径身份
+      }
+    }
+  }
+  return tokens;
+}
+
+/**
+ * 从 replayMode + 归档 modelCalls 推断臂路径。
+ * recorded / synthetic 以 manifest 为准；其余必须看 trace 路由，不得靠自称。
+ */
+export function inferArmPipelineKind(options: {
+  replayMode?: ReplayMode | null;
+  runRoot?: string | null;
+}): MatrixPipelineKind {
+  if (options.replayMode === "recorded") return "recorded_replay";
+  if (options.replayMode === "synthetic") return "synthetic_recovery";
+  const tokens = collectArmRouteTokens(options.runRoot ?? null);
+  const hasAmplified = tokens.some((token) => AMPLIFIED_ROUTE_RE.test(token));
+  const hasRaw = tokens.some((token) => RAW_ROUTE_RE.test(token));
+  if (hasAmplified) return "unified_full";
+  if (hasRaw) return "independent_raw";
+  return "unknown";
 }
 
 /** 零容忍违规（任一 > 0 → reject）。 */
@@ -263,6 +324,9 @@ export const DEFAULT_MIN_QUALITY_SCORE = 0.8;
  *  5. 任意臂 coverage / completeness / continuity 低于最低阈值；
  *  6. candidate pass^3 !== 1（发布关键路径要求连续 3 次全通过；
  *     样本不足 → null 同样拒绝）；
+ *  6b. baseline / raw_direct 样本数 < 3（不得用 1/1 冒充三连 A/B）；
+ *  6c. raw_direct 必须是 independent_raw（trace 只有裸写路由，无 amplified/风格优化）；
+ *  6d. candidate 必须是 unified_full（统一主链路，不得与 raw_direct 同路径）；
  *  7. candidate 相对 baseline 的 firstAttemptSuccessRate /
  *     recoveredSuccessRate 下降超过阈值；
  *  8. candidate 长尾失败增量超过阈值。
@@ -336,6 +400,33 @@ export function compareMatrixArms(options: CompareMatrixOptions): MatrixComparis
         `candidate pass^3 = ${candidatePassPow3?.toFixed(3)}（发布关键路径要求连续 3 次全通过 = 1.0）`,
       );
     }
+  }
+
+  if (baseline !== null && baseline.perSamplePass.length < 3) {
+    reasons.push(
+      `baseline 样本数 ${baseline.perSamplePass.length} < 3（不是三连，不得作为相对基线 A/B 证据）`,
+    );
+  }
+  const rawDirect = options.arms.find((a) => a.armId === "raw_direct") ?? null;
+  if (rawDirect !== null && rawDirect.perSamplePass.length < 3) {
+    reasons.push(
+      `raw_direct 样本数 ${rawDirect.perSamplePass.length} < 3（不是三连，不得作为裸模型对照）`,
+    );
+  }
+  if (candidate !== null && candidate.pipelineKind !== "unified_full") {
+    reasons.push(
+      `candidate 不是统一主链路（pipelineKind=${String(candidate.pipelineKind ?? "unknown")}），不得作为发布候选`,
+    );
+  }
+  if (rawDirect !== null && rawDirect.pipelineKind !== "independent_raw") {
+    reasons.push(
+      `raw_direct 未证明独立裸写路径（pipelineKind=${String(rawDirect.pipelineKind ?? "unknown")}；要求 trace 仅有裸写路由，不得与 candidate 同为全链路或 recorded 回放）`,
+    );
+  }
+  if (rawDirect?.replayMode === "recorded") {
+    reasons.push(
+      "raw_direct 是 recorded 回放，不是独立裸写（不得作为相对裸模型的 A/B 证据）",
+    );
   }
 
   const maxRegression = options.maxSuccessRateRegression ?? 0;
@@ -551,6 +642,11 @@ export function deriveArmMetricsFromReplayManifest(
         sample.traceArchived &&
         sample.isolationViolations.length === 0,
     ),
+    replayMode: manifest.replayMode,
+    pipelineKind: inferArmPipelineKind({
+      replayMode: manifest.replayMode,
+      runRoot,
+    }),
   };
 }
 
@@ -750,6 +846,14 @@ function parseArmMetrics(raw: unknown, index: number, errors: string[]): MatrixA
     p95LatencyMs: raw.p95LatencyMs as number,
     longTailFailures: raw.longTailFailures as number,
     perSamplePass: raw.perSamplePass as boolean[],
+    replayMode:
+      typeof raw.replayMode === "string" && raw.replayMode.trim().length > 0
+        ? (raw.replayMode as ReplayMode)
+        : null,
+    pipelineKind:
+      typeof raw.pipelineKind === "string" && raw.pipelineKind.trim().length > 0
+        ? (raw.pipelineKind as MatrixPipelineKind)
+        : null,
   };
 }
 
