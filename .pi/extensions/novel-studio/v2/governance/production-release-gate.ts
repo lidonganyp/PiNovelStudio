@@ -601,12 +601,10 @@ export function evaluateProductionReleaseGate(
     );
   }
   if (behaviorIdentity.bundleId !== null) {
-    const otherComponentsComplete = BEHAVIOR_COMPONENT_FIELDS
-      .filter((field) => field !== "capabilityPackageSetHash")
-      .every((field) => {
-        const value = (manifest as unknown as Record<string, unknown>)[field];
-        return typeof value === "string" && value.length > 0;
-      });
+    const otherComponentsComplete = BEHAVIOR_COMPONENT_FIELDS.every((field) => {
+      const value = (manifest as unknown as Record<string, unknown>)[field];
+      return typeof value === "string" && value.length > 0;
+    });
     if (otherComponentsComplete && !behaviorIdentity.capabilityPackageSetHash) {
       return releaseGateBlocked(
         "capabilityPackageSetHash missing：生产 release 必须显式冻结 CapabilityPackageSet（CPG-1.5）",
