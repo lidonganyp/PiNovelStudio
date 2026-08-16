@@ -1,0 +1,108 @@
+{
+  "schemaId": "pinovel.eval-replay-matrix",
+  "schemaVersion": 1,
+  "candidateReleaseId": "rel-prod-120",
+  "candidateBundleId": "aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7",
+  "baselineReleaseId": "rel-prod-115",
+  "createdAt": "2026-08-16T07:10:03.705Z",
+  "arms": [
+    {
+      "armId": "baseline",
+      "runId": "closure-production-like-f8e0040c",
+      "sampleCount": 1,
+      "factHardErrors": 0,
+      "failureClassificationCompleteness": 1,
+      "coverage": 1,
+      "completeness": 1,
+      "continuity": 1,
+      "userEditDistance": null,
+      "modelCalls": 0,
+      "tokenCost": 24295,
+      "firstAttemptSuccessRate": 1,
+      "recoveredSuccessRate": 1,
+      "p50LatencyMs": 151009,
+      "p95LatencyMs": 151009,
+      "longTailFailures": 0,
+      "perSamplePass": [
+        true
+      ]
+    },
+    {
+      "armId": "candidate",
+      "runId": "closure-production-like-120",
+      "sampleCount": 3,
+      "factHardErrors": 0,
+      "failureClassificationCompleteness": 1,
+      "coverage": 1,
+      "completeness": 1,
+      "continuity": 1,
+      "userEditDistance": null,
+      "modelCalls": 6,
+      "tokenCost": 37107,
+      "firstAttemptSuccessRate": 1,
+      "recoveredSuccessRate": 1,
+      "p50LatencyMs": 74899,
+      "p95LatencyMs": 80126.2,
+      "longTailFailures": 0,
+      "perSamplePass": [
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "armId": "raw_direct",
+      "runId": "closure-recorded-118",
+      "sampleCount": 1,
+      "factHardErrors": 0,
+      "failureClassificationCompleteness": 1,
+      "coverage": 1,
+      "completeness": 1,
+      "continuity": 1,
+      "userEditDistance": null,
+      "modelCalls": 2,
+      "tokenCost": 0,
+      "firstAttemptSuccessRate": 1,
+      "recoveredSuccessRate": 1,
+      "p50LatencyMs": 1315,
+      "p95LatencyMs": 1315,
+      "longTailFailures": 0,
+      "perSamplePass": [
+        true
+      ]
+    },
+    {
+      "armId": "recovery",
+      "runId": "closure-synthetic-118",
+      "sampleCount": 1,
+      "factHardErrors": 0,
+      "failureClassificationCompleteness": 1,
+      "coverage": 1,
+      "completeness": 1,
+      "continuity": 1,
+      "userEditDistance": null,
+      "modelCalls": 2,
+      "tokenCost": 600,
+      "firstAttemptSuccessRate": 1,
+      "recoveredSuccessRate": 1,
+      "p50LatencyMs": 1176,
+      "p95LatencyMs": 1176,
+      "longTailFailures": 0,
+      "perSamplePass": [
+        true
+      ]
+    }
+  ],
+  "zeroTolerance": {
+    "statePollution": 0,
+    "productionPointerMutation": 0,
+    "factHardGateViolation": 0,
+    "duplicateSubmission": 0
+  },
+  "verdict": "pass",
+  "verdictReasons": [],
+  "candidatePassAt3": 1,
+  "candidatePassPow3": 1,
+  "codeCommit": "57486b915e437015d86ef34401f29a0dfad51aa2",
+  "reportHash": "e918aad9ae5c8ced4c5f44e628d01b24473df0a54e95418a7e463e52577971d1"
+}

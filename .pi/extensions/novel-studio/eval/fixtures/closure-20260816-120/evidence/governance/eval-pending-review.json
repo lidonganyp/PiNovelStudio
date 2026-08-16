@@ -3,22 +3,22 @@
   "schemaVersion": 1,
   "releaseId": "rel-prod-120",
   "changeClass": "R1",
-  "verdict": "insufficient",
-  "code": "EVAL_EVIDENCE_MATRIX_MISSING",
-  "reason": "changeClass=R1 要求 A/B 回放矩阵证据（matrix-report.json 缺失）",
+  "verdict": "approved",
+  "code": "EVAL_EVIDENCE_APPROVED",
+  "reason": "确定性 Grader 通过 + 四臂矩阵 pass + pass^3=1（证据完整，可进入人工审批）",
   "evidence": {
     "evalRunRoot": "D:\\CODE\\pns-eval-archives-120\\closure-production-like-120",
     "runManifestFound": true,
     "runManifestValid": true,
     "deterministicGradePassed": true,
     "failedChecks": [],
-    "matrixReportFound": false,
-    "matrixVerdict": null,
-    "candidatePassPow3": null,
-    "matrixRecomputed": false,
+    "matrixReportFound": true,
+    "matrixVerdict": "pass",
+    "candidatePassPow3": 1,
+    "matrixRecomputed": true,
     "isolationViolationCount": 0,
     "traceRetentionRate": 1
   },
-  "generatedAt": "2026-08-16T06:55:28.967Z",
-  "nextAction": "capture_eval_evidence_first"
+  "generatedAt": "2026-08-16T07:10:11.895Z",
+  "nextAction": "human_review_required"
 }

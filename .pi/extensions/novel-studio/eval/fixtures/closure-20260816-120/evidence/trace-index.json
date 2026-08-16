@@ -6,8 +6,11 @@
   "generatedAt": "2026-08-16T07:00:49.732Z",
   "note": "Clean checkout can rehash these paths if the external archive is present. Scratch copies are excluded.",
   "matrix": {
-    "reportFound": false,
-    "candidatePassPow3": null,
+    "reportFound": true,
+    "reportPath": "evidence/production-like/matrix-report.json",
+    "reportHash": "e918aad9ae5c8ced4c5f44e628d01b24473df0a54e95418a7e463e52577971d1",
+    "candidatePassPow3": 1,
+    "verdict": "pass",
     "requiredArms": [
       "baseline",
       "candidate",
@@ -15,14 +18,13 @@
       "recovery"
     ],
     "availableArms": {
-      "candidate": "closure-production-like-120"
+      "baseline": "D:\\CODE\\PiNovelStudio\\.pi\\eval-replay-archives-115\\closure-production-like-f8e0040c",
+      "candidate": "closure-production-like-120",
+      "raw_direct": "D:\\CODE\\pns-eval-archives-118\\closure-recorded-118",
+      "recovery": "D:\\CODE\\pns-eval-archives-118\\closure-synthetic-118"
     },
-    "missingArms": [
-      "baseline",
-      "raw_direct",
-      "recovery"
-    ],
-    "gate": "EVAL_EVIDENCE_MATRIX_MISSING"
+    "missingArms": [],
+    "gate": "EVAL_EVIDENCE_APPROVED"
   },
   "traces": [
     {

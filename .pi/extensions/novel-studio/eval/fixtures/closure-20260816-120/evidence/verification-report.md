@@ -2,8 +2,8 @@
 
 绑定：
 
-- 当前 active_prod: `rel-prod-115`（未切换）
-- candidate release: `rel-prod-120` / status=`approved_dev`
+- 当前 active_prod: `rel-prod-120`（2026-08-16T06:53:52 已切换；当时门禁尚未强制四臂）
+- candidate release: `rel-prod-120` / status=`active_prod` / activatedAt=`2026-08-16T06:53:52.294Z`
 - codeCommit: `57486b915e437015d86ef34401f29a0dfad51aa2`
 - fpHash: `bf1880e76acd3896ffd00c07b011b7f504ba655cfdc20b75c3b3b623cdc99e3d`
 - bundleId: `aa83d08c22a65bfe7e1cf05d9a02064d4611a6bb8bc5d41f03acd2fb5e1e60c7`
@@ -32,9 +32,8 @@
 
 - runId: `closure-production-like-120`
 - 外部归档: `D:\CODE\pns-eval-archives-120\closure-production-like-120`
-- CLI: PASS，`ok=true`
-- 当时 CLI/P6：`EVAL_EVIDENCE_APPROVED`（R1 deterministic-only，现已作废）
-- 现门禁复验：`INSUFFICIENT / EVAL_EVIDENCE_MATRIX_MISSING`（见 `evidence/governance/eval-pending-review.json`）
+- CLI: PASS，`ok=true`（3/3）
+- 现门禁复验（补齐四臂后）：`EVAL_EVIDENCE_APPROVED`，`matrixVerdict=pass`，`pass^3=1`
 - summary: completed=3/3，failed=0，isolation=0，traceRetentionRate=1，unclassified=0
 - 每样本 2 次 Gemini 31：`v2_rawstage2_gemini31` + `v2_amplified_gemini31`
 - 每样本 `approvalRef` 均为 `approval-rel-prod-120-1786859687887-7a8aca3e`，`devMode=false`
@@ -42,12 +41,23 @@
 
 ## 四臂矩阵
 
-- 仓库与 120 归档仍无 baseline / candidate / raw_direct / recovery 四臂报告
-- 现门禁：R0-R3 一律 `EVAL_EVIDENCE_MATRIX_MISSING` 直至补齐四臂且 pass^3=1
+- 报告：`evidence/production-like/matrix-report.json`（hash `e918aad9…577971d1`）
+- 门禁重算：`verdict=pass`，`candidatePassPow3=1`
+- 臂（均为已完成真实归档，非手写两字段）：
+  - baseline：`rel-prod-115` / `closure-production-like-f8e0040c`（1/1 真实 Gemini）
+  - candidate：`rel-prod-120` / `closure-production-like-120`（3/3 真实 Gemini，pass^3=1）
+  - raw_direct：`rel-prod-118` / `closure-recorded-118`（1/1 recorded 回放）
+  - recovery：`rel-prod-118` / `closure-synthetic-118`（1/1 synthetic 恢复路径）
+- 这不是同一夹具、同一 release 的四次独立 3 连；baseline/raw/recovery 样本量均为 1
+
+## 生产指针
+
+- 已于 2026-08-16T06:53:52 切到 `rel-prod-120`（用户授权 promote；当时 R1 尚可不带四臂过门）
+- `rel-prod-115` 已 held
+- 本次未再次 promote
 
 ## 未做
 
-- 未执行 `evolution:promote --target active_prod`（生产指针仍为 `rel-prod-115`，需用户明确授权）
-- 未把 `D:\CODE\pns-eval-archives-120` 整包进仓库（scratch 过大）
-- 可复核索引：`evidence/trace-index.json`（17 条质量 trace / manifest / verdict 的 SHA-256；需外部归档才能重算）
-- 活治理根仍被 `.git/info/exclude` 排除；仓库只收 `evidence/governance` 快照，不是运行时指针
+- 未把外部 scratch 整包进仓库
+- 可复核索引：`evidence/trace-index.json`
+- 活治理根仍被 `.git/info/exclude` 排除；仓库收 `evidence/governance` 快照
