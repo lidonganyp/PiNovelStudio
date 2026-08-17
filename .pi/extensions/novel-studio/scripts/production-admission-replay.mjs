@@ -170,13 +170,27 @@ function firstGate(ws, chapterId) {
   return doc?.gates?.[0]?.stage ?? doc?.failureEnvelopes?.[0]?.gate ?? null;
 }
 
+function findAtomicSave(value) {
+  if (!value || typeof value !== "object") return null;
+  if (value.rolledBack === true && typeof value.filePath === "string") return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findAtomicSave(item);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  for (const child of Object.values(value)) {
+    const hit = findAtomicSave(child);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function atomicSaveEvidence(ws, chapterId) {
   const tracePath = findTrace(ws, chapterId);
   const doc = tracePath ? readJson(tracePath) : null;
-  return doc?.stageResults?.atomicSave
-    ?? doc?.gates?.[0]?.evidence?.stageResults?.atomicSave
-    ?? doc?.v2Summary?.stageResults?.atomicSave
-    ?? null;
+  return findAtomicSave(doc);
 }
 
 function hasChapterFile(ws, chapterId) {
@@ -340,13 +354,7 @@ function record(sample) {
 
 {
   const id = "state-commit-fail";
-  const ws = scaffoldWorkspace(scratch, id, {
-    narrativeState: {
-      schemaVersion: 1,
-      workspaceId: id,
-      lastCommittedChapter: 0,
-    },
-  });
+  const ws = scaffoldWorkspace(scratch, id);
   const result = invokeChapter(scratch, id, "1", 1, {
     PINOVEL_ADMISSION_STUB: "1",
     PINOVEL_COMMIT_FAULT: "state_commit",
