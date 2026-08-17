@@ -117,6 +117,22 @@ async function main() {
     return;
   }
 
+  if (mode === "budget-reserve") {
+    const { reservePersistedBudget } = await import(
+      pathToFileURL(join(EXT_ROOT, "dist", "v2", "core", "budget-ledger-store.js")).href
+    );
+    const r = reservePersistedBudget(workspaceId, PROJECT_ROOT, {
+      stage: extra.stage ?? "agenticDraft",
+      modelCalls: extra.modelCalls ?? 1,
+      reservationId: extra.reservationId ?? `xproc-${process.pid}`,
+    });
+    writeFileSync(resultFile, JSON.stringify({
+      mode, pid: process.pid, ok: r.ok, reason: r.reason ?? null,
+      remaining: r.snapshot?.remainingModelCalls ?? null,
+    }), "utf-8");
+    return;
+  }
+
   throw new Error(`unknown mode: ${mode}`);
 }
 

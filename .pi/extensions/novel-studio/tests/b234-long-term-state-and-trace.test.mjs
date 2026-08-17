@@ -272,7 +272,7 @@ test("B2: reanchorStagedStateToFinalText 处理 pattern kind（hash 前缀，无
 // B2 e2e：orchestrator 提交的状态含四类 entry（canon/character/promise/pattern）
 // ============================================================================
 
-test("B2 e2e: orchestrator 提交 canon/character/promise/pattern 四类状态到 store", async () => {
+test("B2 e2e: 遗留分支（productionFlow 未设置）不提交四类状态到 store", async () => {
   const { dir, workspaceId } = makeTempProject();
   try {
     const stagedStateUpdate = {
@@ -333,42 +333,16 @@ test("B2 e2e: orchestrator 提交 canon/character/promise/pattern 四类状态�
 
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留 raw/judge 分支（productionFlow 未设置）不 commit。
+    // stagedStateUpdate 不再经由遗留分支提交——状态提交仅限 agentic 生产路径或 qualityExperiment。
+    // 重锚定逻辑（reanchorStagedStateToFinalText）由上方单元测试独立验证。
     assert.equal(result.status, "ok");
-
-    // 读取落盘的 narrative-state-store.json
-    const statePath = join(dir, "workspaces", workspaceId, "narrative-state-store.json");
-    assert.ok(existsSync(statePath), "narrative-state-store.json 应已落盘");
-    const store = JSON.parse(readFileSync(statePath, "utf-8"));
-
-    // B2：四类状态都应存在
-    assert.ok(store.promise.length >= 1, `promise 应有 entry，实际: ${store.promise.length}`);
-    assert.ok(store.canon.length >= 1, `canon 应有 entry，实际: ${store.canon.length}`);
-    assert.ok(store.character.length >= 1, `character 应有 entry，实际: ${store.character.length}`);
-    assert.ok(store.pattern.length >= 1, `pattern 应有 entry（从正文扫描），实际: ${store.pattern.length}`);
-
-    // 验证 canon entry 的 sourceRef 含 finalText（重锚定后不再 seed:*）
-    const canon = store.canon.find((c) => c.id === "canon:fact:0:ch1");
-    assert.ok(canon, "应有 canon:fact:0:ch1 entry");
-    assert.ok(canon.sourceRef.includes("finalText:"), `canon sourceRef 应含 finalText:，实际: ${canon.sourceRef}`);
-    assert.ok(!canon.sourceRef.includes("seed:"), `canon sourceRef 不应含 seed:，实际: ${canon.sourceRef}`);
-
-    // 验证 character entry 的 sourceRef 含 finalText
-    const character = store.character.find((c) => c.id === "character:林川:ch1");
-    assert.ok(character, "应有 character:林川:ch1 entry");
-    assert.ok(character.sourceRef.includes("finalText:"), `character sourceRef 应含 finalText:，实际: ${character.sourceRef}`);
-
-    // 验证 pattern entry 保留 scanner 的全部正文证据 span
-    const pattern = store.pattern[0];
-    assert.equal(pattern.patternType, "sentence_risk", `pattern patternType 应为 sentence_risk，实际: ${pattern.patternType}`);
-    assert.match(pattern.sourceRef, /finalText:\w+:\d+-\d+$/, `pattern sourceRef 应指向首个 scanner span，实际: ${pattern.sourceRef}`);
-    assert.ok(Array.isArray(pattern.sourceRefs) && pattern.sourceRefs.length >= 1, "pattern 应保留全部 scanner sourceRefs");
-    assert.ok(pattern.sourceRefs.every((sourceRef) => /finalText:\w+:\d+-\d+$/.test(sourceRef)), "pattern sourceRefs 必须全部指向正文 span");
-    assert.ok(typeof pattern.occurrenceCount === "number" && pattern.occurrenceCount >= 1, "pattern 应有 occurrenceCount");
-
-    // 验证 stageResults.stateCommit 记录 patternEntriesAdded
-    assert.ok(
-      typeof result.stageResults.stateCommit.patternEntriesAdded === "number",
-      `stageResults.stateCommit.patternEntriesAdded 应为 number，实际: ${result.stageResults.stateCommit.patternEntriesAdded}`,
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stateCommit, null);
+    assert.equal(
+      existsSync(join(dir, "workspaces", workspaceId, "narrative-state-store.json")),
+      false,
+      "遗留分支不得写 narrative-state-store.json",
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -198,7 +198,9 @@ export class NarrativeVerifierSuite {
       severity: diagnostic.severity,
       span,
       conflictFact: diagnostic.evidence,
-      sourceRef: diagnostic.id,
+      // sourceRef 只作定位符（guard 来源），不得用 finding 自身 id 充当权威证据引用；
+      // 权威引用经 evidenceId → EvidenceRecord 回源（Phase 2A 授权策略填充）。
+      sourceRef: diagnostic.source,
       confidence: isHard ? 1.0 : 0.5,
       allowedRepairRange: span,
       description: diagnostic.evidence,

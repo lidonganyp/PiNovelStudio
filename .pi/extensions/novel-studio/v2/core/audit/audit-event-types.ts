@@ -294,6 +294,10 @@ export interface AuditEvent {
   attempt?: number;
   maxAttempts?: number;
   userActionRequired?: string[] | boolean;
+  /** 系统授权的修订动作（RepairAction 字面量；repair_started/repair_completed 事件） */
+  action?: string;
+  /** 修订/验证循环的结构化停止原因（RepairStopReason / AgentLoopStopReason 字面量） */
+  stopReason?: string;
   /** 事件特有载荷；不得塞入完整正文或大型工具结果 */
   payload?: Record<string, unknown>;
 }
@@ -328,3 +332,25 @@ export const REQUIRED_RUN_TERMINAL_EVENTS: readonly AuditEventType[] = [
 ] as const;
 
 export const RUN_START_EVENT: AuditEventType = "run_started";
+
+// ============================================================================
+// 禁止原始思维链（RRB-5.4 / T26）
+// ============================================================================
+
+/**
+ * 原始思维链字段名黑名单。事件 payload 不得出现这些键（含嵌套一层）。
+ * 模型内部推理只可决定动作，不可作为事实或授权写入 trace。
+ */
+export const REASONING_CHAIN_OF_THOUGHT_BANNED_FIELDS = [
+  "reasoning_content",
+  "thinking",
+  "chain_of_thought",
+  "chainOfThought",
+  "internal_monologue",
+  "internalMonologue",
+  "hidden_reasoning",
+  "hiddenReasoning",
+  "cot",
+  "model_internal_state",
+  "modelInternalState",
+] as const;

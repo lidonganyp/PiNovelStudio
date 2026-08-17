@@ -19,6 +19,11 @@ import { createNarrativeTools } from "../tools/narrative-tools.js";
 import { validateToolCapabilitiesAgainstRuntime, TOOL_CAPABILITIES } from "../tools/tool-capability.js";
 import { createQueryNarrativeProductionFacadeTool } from "../tools/query-narrative-facade.js";
 import type { NarrativeSearchService } from "./narrative-search-service.js";
+import {
+  createActivateCapabilityPackageTool,
+  createSubmitCapabilityOutputTool,
+} from "./capability-package-runtime.js";
+import type { ActivateCapabilityPackageToolContext } from "./capability-package-runtime.js";
 
 // ============================================================================
 // Registry
@@ -35,6 +40,11 @@ export interface NarrativeToolRegistryOptions {
    * 只是新增一个按 intent 路由的统一入口，作为 "guided facade vs 9 工具" 的受控对照。
    */
   enableFacade?: boolean;
+  /**
+   * When this chapter has a system-issued Activation Manifest, register the
+   * internal activate_capability_package tool. Not a public novel_* entry.
+   */
+  capabilityPackages?: ActivateCapabilityPackageToolContext;
 }
 
 export class NarrativeToolRegistry {
@@ -67,6 +77,14 @@ export class NarrativeToolRegistry {
         searchService: options.searchService,
       });
       this.register(facade);
+    }
+    if (options.capabilityPackages) {
+      this.register(createActivateCapabilityPackageTool(options.capabilityPackages));
+      this.register(createSubmitCapabilityOutputTool({
+        ledger: options.capabilityPackages.ledger,
+        workspaceId: options.capabilityPackages.manifest.workspaceId,
+        runId: options.capabilityPackages.manifest.runId,
+      }));
     }
   }
 

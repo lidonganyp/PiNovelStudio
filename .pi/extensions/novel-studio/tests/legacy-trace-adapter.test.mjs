@@ -420,7 +420,9 @@ test("P15: deriveContextHashFromCompiled 生成稳定签名", () => {
     sourceMap: [],
   };
   const hash = deriveContextHashFromCompiled(ctx);
-  assert.equal(hash, "f2-l1-c3-w1-s2");
+  // CEG-0.3：实现已从数量签名（f2-l1-c3-w1-s2）迁移到 SHA-256 内容签名
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.equal(deriveContextHashFromCompiled(ctx), hash, "同一上下文签名稳定");
 });
 
 test("P15: trace 写入失败不抛异常（trace 缺失不阻断生成）", () => {

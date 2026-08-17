@@ -437,7 +437,7 @@ export const BASELINE_SCENARIOS: BaselineScenario[] = [
 ];
 
 // ============================================================================
-// Workspace 构造（写入 legacy 状态文件）
+// Workspace 构造（写入统一 narrative-state-store.json）
 // ============================================================================
 
 export function setupBaselineWorkspace(data: BaselineWorkspaceData): {
@@ -461,10 +461,81 @@ export function setupBaselineWorkspace(data: BaselineWorkspaceData): {
     writeFileSync(join(chDir, "final.md"), ch.text, "utf-8");
   }
 
-  writeFileSync(join(wsDir, "skeleton.json"), JSON.stringify(data.skeleton), "utf-8");
-  writeFileSync(join(wsDir, "narrative-state.json"), JSON.stringify(data.narrativeState), "utf-8");
-  writeFileSync(join(wsDir, "arc-registry.json"), JSON.stringify(data.arcRegistry), "utf-8");
-  writeFileSync(join(wsDir, "unsettled-details.json"), JSON.stringify(data.unsettledDetails), "utf-8");
+  const now = new Date().toISOString();
+  const sourceChapter = `ch${data.historicalChapters.length}`;
+
+  // 将 legacy 格式数据转换为 narrative-state-store.json 统一格式
+  const stateStore = {
+    schemaVersion: "narrative-state-store-v1",
+    workspaceId: data.workspaceId,
+    canon: data.skeleton.events.map((ev) => ({
+      kind: "canon" as const,
+      id: `event:${ev.eventId}`,
+      fact: ev.summary,
+      category: "timeline" as const,
+      sourceChapter,
+      sourceRef: `skeleton:${ev.eventId}`,
+      confidence: 1.0,
+      lastUpdated: now,
+    })),
+    character: data.narrativeState.characterUpdates.map((cs) => ({
+      kind: "character" as const,
+      id: `character:${cs.name}:${cs.field}`,
+      characterId: cs.name,
+      field: cs.field,
+      value: cs.value,
+      sourceChapter,
+      sourceRef: "narrative-state",
+      confidence: 1.0,
+      lastUpdated: now,
+    })),
+    promise: [
+      ...data.arcRegistry.arcs.map((a) => ({
+        kind: "promise" as const,
+        id: `promise:${a.arcId}`,
+        promiseId: a.arcId,
+        description: a.coreQuestion ?? a.name,
+        status: (a.status as "open" | "advancing" | "fulfilled" | "broken") ?? "open",
+        currentHeat: a.priority === "high" ? 0.8 : 0.5,
+        sourceChapter,
+        sourceRef: `arc-registry:${a.arcId}`,
+        confidence: 1.0,
+        lastUpdated: now,
+      })),
+      ...data.arcRegistry.foreshadowings.map((f) => ({
+        kind: "promise" as const,
+        id: `promise:${f.id}`,
+        promiseId: f.id,
+        description: f.description,
+        status: (f.status as "open" | "advancing" | "fulfilled" | "broken") ?? "open",
+        currentHeat: f.level === "high" ? 0.8 : 0.5,
+        sourceChapter,
+        sourceRef: `arc-registry:${f.id}`,
+        confidence: 1.0,
+        lastUpdated: now,
+      })),
+      // unsettledDetails 作为 reader_expectation 类型的 promise
+      ...data.unsettledDetails.map((u) => ({
+        kind: "promise" as const,
+        id: `promise:${u.id}`,
+        promiseId: u.id,
+        description: u.description,
+        status: (u.status as "open" | "advancing" | "fulfilled" | "broken") ?? "open",
+        currentHeat: 0.5,
+        sourceChapter: u.chapterId ?? sourceChapter,
+        sourceRef: `unsettled:${u.id}`,
+        confidence: 1.0,
+        lastUpdated: now,
+      })),
+    ],
+    pattern: [],
+    expectation: [],
+    eventLog: [],
+    quarantine: [],
+    planned: [],
+    updatedAt: now,
+  };
+  writeFileSync(join(wsDir, "narrative-state-store.json"), JSON.stringify(stateStore, null, 2), "utf-8");
 
   return {
     projectRoot,

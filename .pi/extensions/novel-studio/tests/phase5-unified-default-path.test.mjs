@@ -214,9 +214,10 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
     );
   });
 
-  it("统一主链路落盘 trace（P1-8：候选/judge/选择证据可回放）", async () => {
-    // 验证 runUnifiedPipeline 把每章候选、judge 仲裁、最终选择落盘到
-    // {workspace}/traces/{chapterId}-quality-trace.json（legacy QualityTraceDocument 格式）。
+  it("统一主链路落盘 trace（生产路径：Agentic/风格/选择证据可回放，不含机器裁判）", async () => {
+    // 验证 runUnifiedPipeline 把每章候选与最终选择落盘到
+    // {workspace}/traces/{chapterId}-quality-trace.json。
+    // 生产路径不调用机器文学裁判；隔离评测的裁判载荷不是本 smoke 合同。
     // 用独立 chapterId 避免与其他用例的 trace 互相 append。
     // Phase 2A：chapterNumber=1 避免触发 Preflight 前章连续性检查（ch98 state store 不存在）；
     // trace 路径由 chapterId 决定，与 chapterNumber 无关。
@@ -285,38 +286,22 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
       typeof summary.finalSelectedId === "string" && summary.finalSelectedId.length > 0,
       `v2Summary.finalSelectedId 应为非空字符串，实际: ${summary.finalSelectedId}`,
     );
-    assert.ok(
-      ["rawStage2", "v2_amplified"].includes(summary.finalSelectedSource),
-      `v2Summary.finalSelectedSource 应为 rawStage2 或 v2_amplified，实际: ${summary.finalSelectedSource}`,
+    assert.equal(
+      summary.finalSelectedSource,
+      "v2_amplified",
+      `生产 agentic_style 成功路径 finalSelectedSource 必须是 v2_amplified，不得回退 rawStage2；实际: ${summary.finalSelectedSource}`,
     );
     assert.ok(
       ["positive", "neutral"].includes(summary.projectGain),
-      `v2Summary.projectGain 应为 positive 或 neutral（统一主链路不交付劣于 raw 的正文），实际: ${summary.projectGain}`,
+      `v2Summary.projectGain 应为 positive 或 neutral，实际: ${summary.projectGain}`,
     );
 
-    // 5. A6：若裁判跑过（v2_candidate_compared gate 存在），其 evidence 必须含
-    //    完整 judgeEvidence（匿名映射 / verdict / evidence spans），而非只压缩 auditSummary。
+    // 生产路径不得出现机器文学裁判 gate。
     const comparedGate = gates.find((g) => g.stage === "v2_candidate_compared");
-    if (comparedGate) {
-      const je = comparedGate.evidence?.judgeEvidence;
-      assert.ok(je, "v2_candidate_compared gate evidence 应含 judgeEvidence（A6）");
-      assert.ok(Array.isArray(je.rounds), "judgeEvidence.rounds 应为数组");
-      assert.ok(je.rounds.length >= 1, `judgeEvidence 至少 1 轮，实际: ${je.rounds.length}`);
-      const r0 = je.rounds[0];
-      assert.ok(r0.mapping, "首轮应有匿名映射 mapping");
-      assert.ok(["A", "B"].includes(r0.mapping.leftLabel), "mapping.leftLabel 应为 A/B");
-      assert.ok(typeof r0.mapping.seed === "number", "mapping.seed 应为 number");
-      assert.ok(r0.evidenceValidation, "首轮应有 evidenceValidation");
-      assert.equal(typeof r0.degraded, "boolean", "degraded 应为 boolean");
-      // 非降级时 verdict 非 null，含 decisiveReasons（spans 可回放）
-      if (!r0.degraded && r0.verdict) {
-        assert.ok(Array.isArray(r0.verdict.decisiveReasons), "verdict.decisiveReasons 应为数组");
-        assert.ok(
-          ["clear", "slight", "uncertain"].includes(r0.verdict.confidence),
-          `verdict.confidence 应为 clear/slight/uncertain，实际: ${r0.verdict.confidence}`,
-        );
-      }
-      assert.equal(typeof je.auditSummary, "string", "judgeEvidence.auditSummary 应为 string");
-    }
+    assert.equal(
+      comparedGate,
+      undefined,
+      "生产 smoke 不得写入 v2_candidate_compared",
+    );
   });
 });

@@ -297,24 +297,16 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             default: "gemini31",
             description: "正文主写模型：Gemini 3.1 Pro（默认）。通常省略本字段或传 gemini31；仅当用户明确要求 Claude 时才允许传 claude。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。",
           },
-          modelTestRoute: { type: "string", enum: ["glm", "gemini31", "claude48"], description: "显式模型对比路由：glm 锁定 GLM5.2；gemini31 锁定 Gemini 3.1 Pro；claude48 锁定 Claude Opus 4.8。正文实验路由均 fallback=[]，未传时走默认生产路由。" },
+          // PRODUCTION-ROLLOUT-AUDIT-1 P0-1b/P0-10：modelTestRoute 已从公开 schema 移除
+          // （eval-only 模型对比路由）。生产路径不接受显式模型对比路由；内部 handler 仍
+          // 保留该字段供 eval/评测入口直调，公开工具不再暴露。
           seed: { type: "number", description: "【REAL-QUALITY-1-PREFLIGHT】随机种子（Thompson Sampling 策略筛选可复现；eval-only 路径同时复现 judge 匿名化与 editorial 候选生成，seed=1 时 sample≈0.6271≥0.5，策略被选中→生成 editorial 候选）。生产路径不调用 judge，seed 仅影响策略信誉采样。" },
           candidateTimeoutMs: { type: "number", description: "单次正文候选模型调用的有界超时（毫秒）；未传时使用统一主链路默认值。" },
           previewTotalTimeoutMs: { type: "number", description: "完整只读预览全部模型调用的总时间预算（毫秒）；仅 fullPipelinePreview 生效。" },
           sceneSolution: { type: "object", description: "仅受控评测兼容字段；生产 raw 不消费场景解法卡。" },
-          recoverBlockedRaw: { type: "boolean", description: "显式复用经 hash/完整性校验的 raw_fact_guard 冻结 raw；必须同时显式指定相同 writerModel，默认关闭。" },
-          previewOnly: { type: "boolean", description: "【已弃用】旧预览短路径开关（FactGuard 后直接返回 raw）。被 fullPipelinePreview 取代，入口处归一化为完整链路预览。" },
-          fullPipelinePreview: { type: "boolean", description: "【FULL-PIPELINE-PREVIEW-1】完整链路只读预览：执行统一主链路（NovelOS Agentic → 作者风格整章优化 → 事实复检），但跳过所有副作用（不写章节、不提交状态、不写 trace/策略库/证据文件、不执行代理审批、不记录 Phase 6 学习 outcome）。用于在不污染工作区状态下预览生成结果。Phase 1 整改后生产路径不含 judge/select；如需评测旧 raw→editorial→judge→select 链路请使用 evalMode=B4。" },
-          boundedBestOf3: { type: "boolean", description: "仅历史评测兼容字段；固定场景多候选已退出生产主链路。" },
-          qualityExperiment: {
-            type: "object",
-            description: "Read-only quality ceiling sample isolated from production candidate expansion.",
-            properties: {
-              arm: { type: "string", enum: ["raw", "scene", "oracle_scene"] },
-              sampleIndex: { type: "number", minimum: 1, maximum: 3 },
-            },
-            required: ["arm", "sampleIndex"],
-          },
+          // PRODUCTION-ROLLOUT-AUDIT-1 P0-1b/P0-10：fullPipelinePreview 已从公开 schema 移除
+          // （只读预览为 eval/开发能力，生产验收路径拒绝它）。内部 handler/orchestrator 仍
+          // 保留该字段供评测入口与测试直调，公开工具不再暴露；预览请走 novel_preflight_workspace。
           // ── BATCH-P0-01：批量章节生成模式 ──
           // 不新增第二个正文生成工具；批量能力作为 novel_generate_chapter 的 mode="batch" 分支。
           // 内部仍逐章调用统一主链路（handleGenerateChapter），禁止直接调用模型。
@@ -372,22 +364,14 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         outline?: string;
         previousChapterSummary?: string;
         styleProfile?: string;
-        // P11新增：人工审阅点恢复支持
         reviewToken?: string;
         reviewDecision?: "confirm" | "reject";
         reviewFeedback?: string;
-        // REAL-QUALITY-1-PREFLIGHT：单次路由锁定 + 可复现种子
         writerModel?: "claude" | "gemini31";
-        modelTestRoute?: "glm" | "doubao" | "gpt56" | "gemini31" | "claude48";
         seed?: number;
         candidateTimeoutMs?: number;
         previewTotalTimeoutMs?: number;
         sceneSolution?: Record<string, unknown>;
-        recoverBlockedRaw?: boolean;
-        previewOnly?: boolean;
-        fullPipelinePreview?: boolean;
-        boundedBestOf3?: boolean;
-        qualityExperiment?: { arm: "raw" | "scene" | "oracle_scene"; sampleIndex: number };
         // BATCH-P0-01：批量章节生成模式字段
         mode?: "batch";
         action?: "start" | "resume" | "status" | "cancel";
@@ -399,8 +383,27 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         jobId?: string;
         commandId?: string;
         _projectRoot?: string;
-        _mockGenerateChapter?: (input: any) => Promise<any>;
       }) {
+        const _forbiddenProduction = [
+          "modelTestRoute",
+          "fullPipelinePreview",
+          "qualityExperiment",
+          "boundedBestOf3",
+          "_mockGenerateChapter",
+          "recoverBlockedRaw",
+          "previewOnly",
+        ].filter((field) => (input as Record<string, unknown>)[field] !== undefined);
+        // 批量测试入口可带 _mockGenerateChapter；生产公开调用不得带 mock。
+        const _allowTestMock =
+          process.env.NOVEL_TEST_TOOLS === "1"
+          && _forbiddenProduction.length === 1
+          && _forbiddenProduction[0] === "_mockGenerateChapter";
+        if (_forbiddenProduction.length > 0 && !_allowTestMock) {
+          throw new Error(
+            `实验字段在生产入口被拒绝：${_forbiddenProduction.join(", ")}。` +
+            `这些字段仅用于 eval/评测，生产 schema 不接受 raw/judge/preview/mock 旁路。`,
+          );
+        }
         // =========================================================================
         // BATCH-P0-01：批量章节生成分支
         // mode === "batch" 时走批量分支，委托 handleBatchGeneration。
@@ -418,7 +421,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         // 供 index.ts 顶层 catch 区分首次失败与重试耗尽）。非 Agentic model_timeout 失败不重试。
         // =========================================================================
         const chapterFileSnapshot = captureChapterFileSnapshot(input as unknown as Record<string, unknown>);
-        const _mtMaxRetries = input.fullPipelinePreview || input.previewOnly ? 0 : 1;
+        const _mtMaxRetries = 1;
         let _mtAttempt = 0;
         let _mtResult: any;
         // P1-6: 记录工具层 model_timeout 重试证据，供 canary runner / metrics 识别恢复路径。

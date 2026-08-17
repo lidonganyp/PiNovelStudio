@@ -206,6 +206,11 @@ describe("P1 审阅包回填：handleStrategyFeedback 端到端", () => {
         deliveredText: delivered,
         userFinalText: userFinal,
         chapterId: "17",
+        orchestratorRunId: "run-backfill-17",
+        candidateId: "cand-backfill-17",
+        strategyBundleId: "bundle:voice_emphasis",
+        exposureId: "exp-backfill-17",
+        promptBundleId: "prompt:author_style:default",
         _projectRoot: dir,
       });
 
@@ -240,6 +245,11 @@ describe("P1 审阅包回填：handleStrategyFeedback 端到端", () => {
         deliveredSource: "editorial",
         deliveredText: "原稿",
         userFinalText: "修改稿",
+        orchestratorRunId: "run-backfill-no-ch",
+        candidateId: "cand-backfill-no-ch",
+        strategyBundleId: "bundle:voice_emphasis",
+        exposureId: "exp-backfill-no-ch",
+        promptBundleId: "prompt:author_style:default",
         // 故意不提供 chapterId
         _projectRoot: dir,
       });
@@ -267,6 +277,11 @@ describe("P1 审阅包回填：handleStrategyFeedback 端到端", () => {
         deliveredSource: "editorial",
         modified: true,
         chapterId: "17",
+        orchestratorRunId: "run-backfill-mod",
+        candidateId: "cand-backfill-mod",
+        strategyBundleId: "bundle:voice_emphasis",
+        exposureId: "exp-backfill-mod",
+        promptBundleId: "prompt:author_style:default",
         // 故意不提供 userFinalText/deliveredText
         _projectRoot: dir,
       });
@@ -293,6 +308,11 @@ describe("P1 审阅包回填：handleStrategyFeedback 端到端", () => {
         deliveredText: "原稿",
         userFinalText: "修改稿",
         chapterId: "18", // sidecar 不存在
+        orchestratorRunId: "run-backfill-18",
+        candidateId: "cand-backfill-18",
+        strategyBundleId: "bundle:voice_emphasis",
+        exposureId: "exp-backfill-18",
+        promptBundleId: "prompt:author_style:default",
         _projectRoot: dir,
       });
 

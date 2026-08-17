@@ -404,6 +404,35 @@ export function reserveLayeredBudget(
 }
 
 /**
+ * 兼容投影：按实际调用记入 layered 用量，永不因 layered 上限阻断。
+ * 生产准入只认 BudgetLedger。
+ */
+export function projectLayeredUsage(
+  budget: LayeredBudget,
+  actual: BudgetSettlement,
+): LayeredBudget {
+  const next = cloneBudget(budget);
+  const stage = next.stages[actual.stage] ?? next.stages.other;
+  stage.usedModelCalls += actual.modelCalls;
+  stage.usedLatencyMs += actual.latencyMs;
+  next.stages[actual.stage] = stage;
+  if (actual.budgetType === "recovery") {
+    next.recovery.usedModelCalls += actual.modelCalls;
+    next.recovery.usedInputTokens += actual.inputTokens;
+    next.recovery.usedOutputTokens += actual.outputTokens;
+    next.recovery.usedLatencyMs += actual.latencyMs;
+  } else {
+    next.normal.usedModelCalls += actual.modelCalls;
+    next.normal.usedInputTokens += actual.inputTokens;
+    next.normal.usedOutputTokens += actual.outputTokens;
+    next.normal.usedLatencyMs += actual.latencyMs;
+  }
+  next.ux.usedWallMs += actual.latencyMs;
+  if (next.ux.firstResponseMs === undefined) next.ux.firstResponseMs = actual.latencyMs;
+  return next;
+}
+
+/**
  * 调用后结算实际用量。
  * 预扣时可能用估算值；结算用实际 token/耗时，失败也计入。
  * 若实际 > 预扣，追加差额；不足不退还（保守成本）。

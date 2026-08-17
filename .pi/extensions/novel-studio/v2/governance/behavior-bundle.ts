@@ -42,6 +42,7 @@ export const BEHAVIOR_COMPONENT_FIELDS = [
   "recoveryPolicyHash",
   "knowledgeSnapshotHash",
   "runtimeFingerprint",
+  "capabilityPackageSetHash",
 ] as const;
 
 export type BehaviorComponentField = (typeof BEHAVIOR_COMPONENT_FIELDS)[number];
@@ -74,6 +75,7 @@ export interface BehaviorBundleComponents {
   recoveryPolicyHash: string;
   knowledgeSnapshotHash: string;
   runtimeFingerprint: string;
+  capabilityPackageSetHash: string;
   evalProtocolVersion: string;
 }
 
@@ -125,6 +127,7 @@ export function extractBehaviorComponents(
     "recoveryPolicyHash",
     "knowledgeSnapshotHash",
     "runtimeFingerprint",
+    "capabilityPackageSetHash",
     "evalProtocolVersion",
   ];
   const components: Partial<BehaviorBundleComponents> = {};

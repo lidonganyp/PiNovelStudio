@@ -19,6 +19,7 @@
     "test:fresh": "node scripts/artifact-operation-lock.mjs --command \"npm run build && node --import ./tests/setup-test-env.mjs --test --test-concurrency=1 tests/*.test.mjs\"",
     "smoke": "node scripts/artifact-operation-lock.mjs --command \"node --import ./tests/setup-test-env.mjs --test tests/phase5-unified-default-path.test.mjs\"",
     "replay:multi-agent-boundary": "node scripts/artifact-operation-lock.mjs --command \"node scripts/multi-agent-boundary-replay.mjs --samples=3\"",
+    "replay:generation-matrix": "node scripts/artifact-operation-lock.mjs --command \"node ../../../scripts/replay-generation-matrix.mjs\"",
     "replay:eval-full-pipeline": "node scripts/eval-full-pipeline-replay.mjs",
     "replay:eval-matrix-report": "node scripts/eval-generate-matrix-report.mjs",
     "simplicity-gate": "node scripts/artifact-operation-lock.mjs --command \"node scripts/simplicity-gate.mjs\"",

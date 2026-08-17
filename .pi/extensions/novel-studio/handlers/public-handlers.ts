@@ -62,24 +62,14 @@ export async function handleGenerateChapter(input: {
   outline?: string;
   previousChapterSummary?: string;
   styleProfile?: string;
-  recoverBlockedRaw?: boolean;
   /** Production writer selection. Undefined uses Gemini; neither writer is a silent fallback. */
   writerModel?: "claude" | "gemini31";
-  /**
-   * @deprecated 被 fullPipelinePreview 取代（旧短路径在 FactGuard 后直接返回 raw）。
-   * 入口 normalize 为 fullPipelinePreview，等价于完整链路只读预览。
-   */
-  previewOnly?: boolean;
   /**
    * FULL-PIPELINE-PREVIEW-1：完整链路只读预览。
    * 执行统一主链路（NovelOS Agentic → 作者风格整章优化 → 事实复检），但跳过所有副作用
    * （不写章节、不提交状态、不写 trace）。Phase 1 整改后生产路径不含 judge/select。
    */
   fullPipelinePreview?: boolean;
-  /** 高价值章节显式启用 raw + 2 个不同场景解法候选。 */
-  boundedBestOf3?: boolean;
-  /** Eval-only isolated pass@k sample. Requires fullPipelinePreview. */
-  qualityExperiment?: import("../v2/core/types.js").QualityExperimentControl;
   /** Per-candidate bounded model timeout in milliseconds. */
   candidateTimeoutMs?: number;
   /** Wall-clock budget for all model calls in one read-only preview. */
@@ -106,33 +96,14 @@ export async function handleGenerateChapter(input: {
    */
   modelTestRoute?: "doubao" | "glm" | "gpt" | "deepseek" | "claude" | "gemini31" | "claude48";
   /**
-   * P30 新增：StyleShaper 路由（保守默认 "claude"）。
-   *
-   * - "claude"（默认）→ Stage 5/8 StyleShaper 走 style_shaper 主路由（Claude）。
-   * - "doubao"/"ernie"/"glm"/"gpt"/"deepseek"/"qwen" → 走 style_shaper_testing_<model> 测试路由。
-   *
-   * 默认职责：Stage 2 用 Gemini，Stage 5/8 仍用 Claude。
-  /**
-   * P31 新增（P39 扩展为 6 模型）：Stage 2.7 中文自然化 patch 开关。
-   *
-   * - "doubao"/"ernie"/"glm"/"gpt"/"deepseek"/"qwen" → Stage 2 初稿成功后、Stage 5 之前
-   *              插入条件阶段 ChineseNaturalizer：只做受约束中文自然化 patch，
-   *              不重写剧情；patch 必须通过 StructuralLockComparator +
-   *              PatchQualityComparator 双重验收，被拒绝时保留 Claude 原段。
-   * - undefined → 不启用 Stage 2.7（生产默认，保持 Gemini 原生正文链路）。
-   *
-   * 仅影响本次生成，不污染全局配置；不改 .env、不改生产主路由（默认 Gemini）。
-  /**
-   * P31 guard: fusion replay only. When true, Stage 2 must use Claude and
-   * must fail with "Claude unavailable" if narrator_primary falls back.
-   */
-  /**
    * REAL-QUALITY-1-PREFLIGHT：随机种子（judge 匿名化 + Thompson Sampling 策略筛选可复现）。
    *
    * 传入使 editorial 候选生成可复现（seed=1 时 sample≈0.6271≥0.5，策略被选中→生成 editorial 候选）。
    * 未传时使用 Math.random（策略筛选 50% 概率）。
    */
   seed?: number;
+  /** 批量任务跨章延续的统一预算账本 */
+  _priorBudgetLedger?: import("../v2/core/budget-types.js").BudgetLedger;
 }) {
   const {
     workspaceId, chapterId, chapterNumber,
@@ -140,6 +111,48 @@ export async function handleGenerateChapter(input: {
     modelTestRoute,
     seed,
   } = input;
+
+  // ============================================================================
+  // EXPERIMENTAL-FIELDS-REJECT-1：拒绝实验字段与旧 raw/judge 分支
+  // 生产入口拒绝以下字段（仅 eval/评测使用）：
+  // - recoverBlockedRaw：旧 raw 恢复分支（raw 候选不经过编辑/风格优化后交付）
+  // - boundedBestOf3：旧固定场景多候选评测（已退出生产主链路）
+  // - qualityExperiment：eval-only 质量天花板样本（NovelBench B4 矩阵）
+  // - previewOnly：已弃用
+  // - modelTestRoute：eval-only 模型对比路由
+  // - fullPipelinePreview：只读预览，不得走生产提交入口
+  // - _mockGenerateChapter：测试替身，不得进入生产提交
+  // 生产路径不含 PairwiseJudge / SelectionPolicy / EditorialOpportunityJudge。
+  // ============================================================================
+  const _rejectedExperimental: string[] = [];
+  if ((input as any).recoverBlockedRaw !== undefined) {
+    _rejectedExperimental.push("recoverBlockedRaw");
+  }
+  if ((input as any).boundedBestOf3 !== undefined) {
+    _rejectedExperimental.push("boundedBestOf3");
+  }
+  if ((input as any).qualityExperiment !== undefined) {
+    _rejectedExperimental.push("qualityExperiment");
+  }
+  if ((input as any).previewOnly !== undefined) {
+    _rejectedExperimental.push("previewOnly");
+  }
+  if (modelTestRoute !== undefined) {
+    _rejectedExperimental.push("modelTestRoute");
+  }
+  if (input.fullPipelinePreview !== undefined) {
+    _rejectedExperimental.push("fullPipelinePreview");
+  }
+  if ((input as any)._mockGenerateChapter !== undefined) {
+    _rejectedExperimental.push("_mockGenerateChapter");
+  }
+  if (_rejectedExperimental.length > 0) {
+    throw new Error(
+      `实验字段在生产入口被拒绝：${_rejectedExperimental.join(", ")}。` +
+      `这些字段仅用于 eval/评测（NovelBench），生产路径不含 raw/judge 分支。` +
+      `如需评测请使用 eval 入口；如需只读预览请直调 runUnifiedPipeline。`,
+    );
+  }
 
   // ============================================================================
   // 统一主链路 — 唯一生产路径（计划 §Phase 5/7）
@@ -174,18 +187,15 @@ export async function handleGenerateChapter(input: {
       chapterNumber,
       projectRoot: _unifiedProjectRoot,
       writerModel,
-      modelTestRoute,
-      recoverBlockedRaw: input.recoverBlockedRaw,
-      previewOnly: input.previewOnly,
-      fullPipelinePreview: input.fullPipelinePreview,
-      boundedBestOf3: input.boundedBestOf3,
-      qualityExperiment: input.qualityExperiment,
+      // EXPERIMENTAL-FIELDS-REJECT-1：实验字段已在入口 guard 拒绝，此处不再透传。
+      // 旧 raw/judge 分支与 modelTestRoute / fullPipelinePreview / mock 不得进入生产提交。
       candidateTimeoutMs: input.candidateTimeoutMs,
       previewTotalTimeoutMs: input.previewTotalTimeoutMs,
       sceneSolution: input.sceneSolution,
       // REAL-QUALITY-1-PREFLIGHT：seed 透传到统一编排器（Thompson 策略筛选可复现；eval-only 路径同时复现 judge 匿名化）
       seed,
       onUpdate: (input as any).__onUpdate,
+      _priorBudgetLedger: input._priorBudgetLedger,
     });
     return _unifiedResult as any;
   } catch (e: any) {

@@ -1003,70 +1003,6 @@ export interface NewCharacterIntroCheck {
 }
 
 // ============================================================================
-// 修稿工艺类型（第四轮蒸馏）
-// ============================================================================
-
-/** 问题层级 */
-export type ProblemLayer = 'expression' | 'structure';
-
-/** 问题诊断 */
-export interface ProblemDiagnosis {
-  id: string;
-  description: string;
-  layer: ProblemLayer;
-  span: { start: number; end: number };
-  sameSegmentProblemCount: number;
-  sameSegmentStructureCount: number;
-}
-
-/** 修复行动类型 */
-export type RepairActionType = 'full_rewrite' | 'local_fix';
-
-/** 修复行动 */
-export interface RepairAction {
-  type: RepairActionType;
-  segment: string;
-  problems: ProblemDiagnosis[];
-}
-
-/** 重写指令四要素 */
-export interface RewriteInstruction {
-  anchors: {
-    correctEmotionalArc: string;
-    correctRelationship: string;
-    correctInformation: string;
-    preservedSentences?: string[];
-  };
-  diagnosis: {
-    layer: ProblemLayer;
-    functionalDescription: string;
-    rootCause: string;
-    fixStrategy: string;
-  };
-  boundaries: {
-    maxLengthAdjustment: string;
-    endStatePreserved: string;
-    forbiddenActions: string[];
-  };
-  mechanics: {
-    incomingEmotion: string;
-    outgoingEmotionRequired: string;
-    positionInChapter: string;
-  };
-}
-
-/** 修后四检项 */
-export type PostRevisionCheckLevel = 1 | 2 | 3 | 4;
-
-export interface PostRevisionCheck {
-  level: PostRevisionCheckLevel;
-  passed: boolean;
-  checkType: 'internal_consistency' | 'rhythm_weight' | 'character_entrance' | 'reader_expectation';
-  description: string;
-  issues: string[];
-}
-
-// ============================================================================
 // 模式疲劳检测类型（第四轮蒸馏）
 // ============================================================================
 
@@ -1149,16 +1085,6 @@ export interface OneTimeWeapon {
   minInterval?: number;
   intervalUnit?: 'chapter' | 'scene';
   additionalConstraints?: string[];
-}
-
-/** 规则化 Critic 结果 */
-export interface RuleBasedCriticResult {
-  layer: ProblemLayer;
-  functionalDescription: string;
-  functionalType: 'info' | 'relation' | 'emotion' | null;
-  functionalMismatch: boolean;
-  skip: boolean;
-  skipReason: string | null;
 }
 
 // ============================================================================

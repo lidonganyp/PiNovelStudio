@@ -36,6 +36,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
+import { hashText, buildCandidateId } from "../dist/v2/core/candidate-revision-store.js";
 import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 // ============================================================================
@@ -109,7 +110,14 @@ function makeAgenticSource(text = AGENTIC_TEXT) {
     async generate() {
       return {
         candidate: {
-          id: "candidate:agentic_raw:ch-test",
+          // RRB-2.1 / RRB-5.1：candidate.id 必须含运行身份 + 正文 hash 前缀，
+          // 与真实生产源 agentic-raw-candidate-source.ts 的 buildCandidateId 口径一致。
+          id: buildCandidateId({
+            runId: "session-test",
+            derivationType: "agentic_generation",
+            textHash: hashText(text),
+            sequence: 0,
+          }),
           text,
           kind: "agentic_raw",
           model: "novelos_agentic",

@@ -2,6 +2,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   generatePositiveGainCandidates,
@@ -66,20 +69,32 @@ test("retired scene generator performs no model calls and preserves raw", async 
   assert.equal(result.trace.rawBaselineMutated, false);
 });
 
-test("orchestrator preserves raw when the chapter has no span-supported opportunity", async () => {
+test("orchestrator preserves raw baseline in preview when the chapter has no span-supported opportunity", async () => {
   const orchestrator = createUnifiedOrchestrator();
-  const result = await orchestrator.orchestrate({
-    ...baseInput,
-    allowAutomaticLiterarySelection: false,
-    modelGenerate: async (request) => {
-      if (request.kind === "raw_chapter") {
-        return { text: "完整 raw 正文。", model: "stub", route: request.route, durationMs: 1 };
-      }
-      return { text: JSON.stringify({ hypotheses: [], noOpReason: "无 span 机会" }), model: "stub", route: request.route, durationMs: 1 };
-    },
-  });
+  // 预算账本按 projectRoot 落盘：改用独立临时 projectRoot，避免共享 workspace "xinmo"
+  // 的 budget-ledger.json 跨轮累积耗尽导致 blocked（测试隔离问题）。
+  const projectRoot = mkdtempSync(join(tmpdir(), "positive-gain-"));
+  try {
+    const result = await orchestrator.orchestrate({
+      ...baseInput,
+      projectRoot,
+      // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：raw 仅允许在 fullPipelinePreview（只读预览）
+      // 下交付基线；生产路径（无 evalMode/fullPipelinePreview）已 fail-closed。
+      // 本测试聚焦"退役场景生成器无 span 机会 → raw 基线"这一证据链路，故以预览模式运行。
+      fullPipelinePreview: true,
+      allowAutomaticLiterarySelection: false,
+      modelGenerate: async (request) => {
+        if (request.kind === "raw_chapter") {
+          return { text: "完整 raw 正文。", model: "stub", route: request.route, durationMs: 1 };
+        }
+        return { text: JSON.stringify({ hypotheses: [], noOpReason: "无 span 机会" }), model: "stub", route: request.route, durationMs: 1 };
+      },
+    });
 
-  assert.equal(result.selectedSource, "raw");
-  assert.equal(result.text, "完整 raw 正文。");
-  assert.equal(result.stageResults.positiveGainCandidates.status, "retired_from_production");
+    assert.equal(result.selectedSource, "raw");
+    assert.equal(result.text, "完整 raw 正文。");
+    assert.equal(result.stageResults.positiveGainCandidates.status, "retired_from_production");
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 });

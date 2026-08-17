@@ -123,6 +123,45 @@ const TEST_CHARACTERS = [
 // 1. accept: handler 调用 runFinalization -> commitAndSave 写入正文 + feedback + health
 // ============================================================================
 
+test("handler accept: 审计会话创建失败时 fail-closed，禁止无审计正式提交", async () => {
+  const { projectRoot, workspaceId, workspacePath } = makeTempWorkspace();
+  try {
+    writeWorkspaceConfig(workspacePath, TEST_CHARACTERS);
+    setupPendingDraft(workspacePath);
+
+    const result = await handleChapterProxyFinalization({
+      workspaceId,
+      chapterId: "1",
+      chapterNumber: 1,
+      approvalId: "cpa-handler-001",
+      action: "accept",
+      confirm: true,
+      _projectRoot: projectRoot,
+      _forceAuditSessionFailure: true,
+    });
+
+    assert.equal(result.status, "blocked");
+    assert.equal(
+      result.finalization?.finalization?.blockReason,
+      "audit_session_unavailable",
+    );
+    assert.match(result.error ?? "", /审计会话创建失败|禁止无审计提交/);
+    // 不得写入章节
+    assert.equal(
+      existsSync(join(workspacePath, "chapters", "1.md")),
+      false,
+      "audit fail-closed must not write chapter",
+    );
+    // pending 应保留，允许修复审计后重试
+    assert.equal(hasPendingProxyDraft(workspacePath, "1"), true);
+    assert.ok(result.auditRun);
+    assert.equal(result.auditRun.auditWriteFailed, true);
+    assert.equal(result.auditRun.persisted, false);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test("handler accept: 调用 runFinalization -> commitAndSave 写入 draftText + feedback 记录 + health 报告", async () => {
   const { projectRoot, workspaceId, workspacePath } = makeTempWorkspace();
   try {
@@ -171,6 +210,25 @@ test("handler accept: 调用 runFinalization -> commitAndSave 写入 draftText +
     assert.ok(result.releaseHealth, "handler 应调用 aggregateReleaseHealth 返回 health 报告");
     assert.ok(typeof result.releaseHealth.actionBreakdown === "object");
     assert.equal(result.releaseHealth.actionBreakdown.accept, 1);
+
+    // AUDIT-1：accept 正式提交必须挂上 auditRun，并落盘 events.jsonl
+    assert.ok(result.auditRun, "accept 路径应返回 auditRun");
+    assert.equal(result.auditRun.runTerminal, true);
+    assert.ok(result.auditRun.eventsPath, "auditRun.eventsPath 应存在");
+    assert.equal(existsSync(result.auditRun.eventsPath), true, "events.jsonl 应落盘");
+    const auditLines = readFileSync(result.auditRun.eventsPath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    const auditTypes = auditLines.map((e) => e.eventType);
+    assert.ok(auditTypes.includes("run_started"));
+    assert.ok(auditTypes.includes("chapter_save_attempted") || auditTypes.includes("chapter_saved"));
+    assert.ok(auditTypes.includes("final_submission"));
+    assert.ok(
+      auditTypes.includes("run_finished") || auditTypes.includes("run_failed"),
+      "accept 路径应有 run 终止事件",
+    );
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

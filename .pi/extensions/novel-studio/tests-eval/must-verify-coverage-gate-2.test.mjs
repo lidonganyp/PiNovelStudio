@@ -136,7 +136,7 @@ describe("MUST-VERIFY-COVERAGE-GATE-2: real coverage gate", () => {
             evidences: [
               {
                 sourceRef: "character:lin-mo:leftArmStatus",
-                evidenceLevel: "confirmed_state",
+                evidenceLevel: "confirmed",
                 excerpt: `${makeInput().evidencePlan.mustVerify[0]}已经稳定`,
               },
             ],

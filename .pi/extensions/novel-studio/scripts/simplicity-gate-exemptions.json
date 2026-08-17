@@ -104,6 +104,126 @@
       "lines": 835,
       "reason": "G7 章节代理审批 caller（stub + real gpt5.6-sol + endpoint 校验）。P0-EXTENSION-WORKTREE-RECOVERY-1 确认为 HEAD=34b33a4 既存状态（git diff HEAD 空），非 P0-3 引入。超 35 行，待后续迭代拆分 stub/real/endpoint-validation 子模块。",
       "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/audit/audit-run-session.ts",
+      "lines": 1108,
+      "reason": "AUDIT-1 run 生命周期与事件写入。本轮核验确认超限为既存技术债，不在本轮拆分；后续按 event sink / seal / trust context 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/batch-generation-job-store.ts",
+      "lines": 919,
+      "reason": "Batch 任务持久化与 checkpoint。本轮核验确认超限为既存技术债，后续按 store / checkpoint / recovery 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/eval-fixture-contract.ts",
+      "lines": 1019,
+      "reason": "eval-only fixture 契约与回放身份校验，不进入生产 dist/ 主路径。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/eval-replay-isolation.ts",
+      "lines": 813,
+      "reason": "eval-only 回放隔离，不进入生产交付路径。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/eval-replay-matrix.ts",
+      "lines": 1084,
+      "reason": "eval-only 回放矩阵身份推断，不进入生产交付路径。",
+      "category": "eval-only"
+    },
+    {
+      "path": "v2/core/event-extractor.ts",
+      "lines": 837,
+      "reason": "事件提取器，略超上限。本轮核验确认超限为既存技术债，后续从 story-preservation 消费侧再拆。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/orchestrator-commit-save.ts",
+      "lines": 1224,
+      "reason": "从 unified-orchestrator 抽出的 commit/save 相位。父模块已豁免；本文件仍超限，后续按 authorization / state commit / atomic save 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/core/orchestrator-factguard.ts",
+      "lines": 898,
+      "reason": "从 unified-orchestrator 抽出的 FactGuard 相位。父模块已豁免；本文件仍超限，后续按 raw/final recheck 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/adapters/legacy-model-route-adapter.ts",
+      "lines": 950,
+      "reason": "模型路由适配与 fallback。本轮核验确认超限为既存技术债，后续按 provider adapter 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/governance/chapter-proxy-approval-draft-checkpoint.ts",
+      "lines": 845,
+      "reason": "G7 代理审批草稿 checkpoint。本轮核验确认超限为既存技术债，后续按 schema / persist 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "v2/governance/environment-fingerprint.ts",
+      "lines": 883,
+      "reason": "发行指纹采集。本轮核验确认超限为既存技术债，后续按 git / artifact / hash 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "handlers/batch-generation-handler.ts",
+      "lines": 836,
+      "reason": "批量生成公开 handler。本轮核验确认超限为既存技术债，后续按 command / recovery 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "handlers/chapter-proxy-finalization-handler.ts",
+      "lines": 1041,
+      "reason": "G7 终稿确认 handler。本轮核验确认超限为既存技术债，后续按 review / finalize 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "handlers/public-handlers.ts",
+      "lines": 1057,
+      "reason": "6 个公开工具 handler 聚合。本轮核验确认超限为既存技术债，后续按 generate / workspace / strategy 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "novelos/agent/agentic-raw-candidate-source.ts",
+      "lines": 1288,
+      "reason": "NovelOS Agentic 候选源。本轮核验确认超限为既存技术债，后续按 packet / workspace / generate 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "novelos/agent/capability-package-runtime.ts",
+      "lines": 976,
+      "reason": "能力包运行时。本轮核验确认超限为既存技术债，后续按 activation / consumption 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "novelos/agent/narrative-agent-loop.ts",
+      "lines": 1466,
+      "reason": "NovelOS ReAct 主循环。本轮核验确认超限为既存技术债，后续按 retrieve / verify / patch 切开。",
+      "category": "planned-refactor"
+    },
+    {
+      "path": "novelos/eval/tool-ab-real-runner.ts",
+      "lines": 2153,
+      "reason": "eval-only tool A/B real runner，不进入生产 dist/。",
+      "category": "eval-only"
+    },
+    {
+      "path": "novelos/eval/tool-interface-baseline.ts",
+      "lines": 939,
+      "reason": "eval-only tool interface baseline，不进入生产 dist/。",
+      "category": "eval-only"
+    },
+    {
+      "path": "novelos/eval/uncertainty-driven-ablation.ts",
+      "lines": 955,
+      "reason": "eval-only uncertainty ablation harness，不进入生产 dist/。",
+      "category": "eval-only"
     }
   ]
 }

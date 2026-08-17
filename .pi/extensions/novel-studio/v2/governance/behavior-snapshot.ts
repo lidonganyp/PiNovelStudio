@@ -30,7 +30,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, relative, sep, isAbsolute, join } from "node:path";
 import { computeBehaviorBundleId } from "./behavior-bundle.js";
-import { canonicalize } from "./evolution-release-schema.js";
+import {
+  computeCapabilityPackageSetHash,
+  createEmptyCapabilityPackageSet,
+  validateCapabilityPackageSet,
+} from "./capability-package-registry.js";
+import type { CapabilityPackageSet } from "../core/capability-package-contracts.js";
 
 // ============================================================================
 // Schema 常量
@@ -81,6 +86,11 @@ export const DEFAULT_RUNTIME_FILE_PATHS = [
   "package-lock.json",
 ];
 
+/** 冻结能力包集合（CPG-1.4 / 1.5） */
+export const DEFAULT_CAPABILITY_PACKAGE_SET_PATHS = [
+  "data/runtime/capability-package-set.json",
+];
+
 /** 构建产物（显式单文件，兜底保证入口产物被 hash） */
 export const DEFAULT_BUILD_ARTIFACT_PATHS = [
   ".pi/extensions/novel-studio/dist/index.js",
@@ -119,7 +129,8 @@ export interface SnapshotComponent {
     | "qualityPolicy"
     | "recoveryPolicy"
     | "knowledgeSnapshot"
-    | "runtimeFingerprint";
+    | "runtimeFingerprint"
+    | "capabilityPackageSet";
   /** 聚合 hash（规范化后 sha256） */
   hash: string;
   /** 参与聚合的文件清单（供审计） */
@@ -145,7 +156,6 @@ export interface RuntimeDataSnapshot {
   recoveryPolicyHash: string;
   knowledgeSnapshotHash: string;
   runtimeFingerprint: string;
-  /** 冻结能力包集合 hash；当前仓库无包时为规范空集。 */
   capabilityPackageSetHash: string;
   evalProtocolVersion: string;
   /** 组件明细（含文件清单，供审计与 verify） */
@@ -173,21 +183,15 @@ export interface SnapshotCaptureInput {
   buildArtifactDirs?: string[];
   /** 测试注入：绕过真实 node/npm 版本探测 */
   mockRuntimeVersions?: RuntimeVersions;
+  /** 冻结能力包集合；缺省按空集合派生确定性 hash */
+  capabilityPackageSet?: CapabilityPackageSet;
+  /** 能力包集合文件（JSON）；存在时优先于空集合 */
+  capabilityPackageSetPaths?: string[];
 }
 
 // ============================================================================
 // 辅助
 // ============================================================================
-
-function computeEmptyCapabilityPackageSetHash(): string {
-  return sha256(
-    canonicalize({
-      schemaVersion: "capability-package-set-v1",
-      packages: [],
-      payloadHashes: [],
-    }),
-  );
-}
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf-8").digest("hex");
@@ -283,8 +287,46 @@ function captureRuntimeVersions(mock?: RuntimeVersions): RuntimeVersions {
  * - knowledgeSnapshotHash ← knowledgeSnapshotPaths
  * - runtimeFingerprint    ← runtimeFilePaths + buildArtifactPaths + buildArtifactDirs + 运行时版本
  *
- * bundleId = computeBehaviorBundleId({ modelVersion, 8 组件 hash, evalProtocolVersion })。
+ * bundleId = computeBehaviorBundleId({ modelVersion, 组件 hash, evalProtocolVersion })。
  */
+function resolveCapabilityPackageSetHash(input: SnapshotCaptureInput): {
+  hash: string;
+  files: SnapshotFileEntry[];
+} {
+  if (input.capabilityPackageSet) {
+    const validation = validateCapabilityPackageSet(input.capabilityPackageSet);
+    const hash = validation.capabilityPackageSetHash
+      ?? computeCapabilityPackageSetHash(input.capabilityPackageSet);
+    return { hash, files: [] };
+  }
+  const paths = input.capabilityPackageSetPaths ?? [];
+  const files = hashFileList(input.projectRoot, paths);
+  const existing = files.find((file) => file.exists);
+  if (existing) {
+    const abs = resolve(input.projectRoot, existing.path);
+    let parsed: CapabilityPackageSet;
+    try {
+      parsed = JSON.parse(readFileSync(abs, "utf-8")) as CapabilityPackageSet;
+    } catch (error) {
+      throw new Error(
+        `capability_package_set_unreadable:${existing.path}:${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const validation = validateCapabilityPackageSet(parsed);
+    if (!validation.valid || !validation.capabilityPackageSetHash) {
+      throw new Error(`capability_package_set_invalid:${existing.path}:${validation.errors.join(";")}`);
+    }
+    return {
+      hash: validation.capabilityPackageSetHash,
+      files,
+    };
+  }
+  if (paths.length > 0) {
+    throw new Error(`capability_package_set_missing:${paths.join(",")}`);
+  }
+  return { hash: computeCapabilityPackageSetHash(createEmptyCapabilityPackageSet()), files };
+}
+
 export function captureBehaviorSnapshot(input: SnapshotCaptureInput): RuntimeDataSnapshot {
   const {
     projectRoot,
@@ -330,6 +372,9 @@ export function captureBehaviorSnapshot(input: SnapshotCaptureInput): RuntimeDat
     aggregateHash(runtimeAll) + "\n" + runtimeVersionsTag,
   );
 
+  const capabilityPackageSetResolved = resolveCapabilityPackageSetHash(input);
+  const capabilityPackageSetHash = capabilityPackageSetResolved.hash;
+
   const bundleId = computeBehaviorBundleId({
     modelVersion,
     promptBundleHash,
@@ -340,6 +385,7 @@ export function captureBehaviorSnapshot(input: SnapshotCaptureInput): RuntimeDat
     recoveryPolicyHash,
     knowledgeSnapshotHash,
     runtimeFingerprint,
+    capabilityPackageSetHash,
     evalProtocolVersion,
   });
 
@@ -356,6 +402,11 @@ export function captureBehaviorSnapshot(input: SnapshotCaptureInput): RuntimeDat
       hash: runtimeFingerprint,
       files: [...runtimeFiles, ...allBuildArtifacts],
     },
+    {
+      name: "capabilityPackageSet",
+      hash: capabilityPackageSetHash,
+      files: capabilityPackageSetResolved.files,
+    },
   ];
 
   return {
@@ -371,7 +422,7 @@ export function captureBehaviorSnapshot(input: SnapshotCaptureInput): RuntimeDat
     recoveryPolicyHash,
     knowledgeSnapshotHash,
     runtimeFingerprint,
-    capabilityPackageSetHash: computeEmptyCapabilityPackageSetHash(),
+    capabilityPackageSetHash,
     evalProtocolVersion,
     components,
     runtimeVersions,
@@ -402,6 +453,7 @@ export function captureDefaultBehaviorSnapshot(
     runtimeFilePaths: DEFAULT_RUNTIME_FILE_PATHS,
     buildArtifactPaths: DEFAULT_BUILD_ARTIFACT_PATHS,
     buildArtifactDirs: DEFAULT_BUILD_ARTIFACT_DIRS,
+    capabilityPackageSetPaths: DEFAULT_CAPABILITY_PACKAGE_SET_PATHS,
   });
 }
 
@@ -447,7 +499,8 @@ export function verifyBehaviorSnapshot(
 
   const componentNames: Array<{
     field: "promptBundleHash" | "modelRoutingHash" | "toolSchemaHash" | "contextCompilerHash" |
-      "qualityPolicyHash" | "recoveryPolicyHash" | "knowledgeSnapshotHash" | "runtimeFingerprint";
+      "qualityPolicyHash" | "recoveryPolicyHash" | "knowledgeSnapshotHash" | "runtimeFingerprint" |
+      "capabilityPackageSetHash";
     label: string;
   }> = [
     { field: "promptBundleHash", label: "promptBundleHash" },
@@ -458,6 +511,7 @@ export function verifyBehaviorSnapshot(
     { field: "recoveryPolicyHash", label: "recoveryPolicyHash" },
     { field: "knowledgeSnapshotHash", label: "knowledgeSnapshotHash" },
     { field: "runtimeFingerprint", label: "runtimeFingerprint" },
+    { field: "capabilityPackageSetHash", label: "capabilityPackageSetHash" },
   ];
   for (const { field, label } of componentNames) {
     const match = recorded[field] === actual[field];

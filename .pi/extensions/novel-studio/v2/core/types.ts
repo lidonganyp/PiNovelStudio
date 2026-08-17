@@ -397,9 +397,7 @@ export type RepairPlan =
   | { kind: "sentence_patch"; span: TextSpan; reason: string; expectedGain: string; possibleDamage: string }
   | { kind: "paragraph_patch"; span: TextSpan; reason: string; expectedGain: string; possibleDamage: string }
   | { kind: "bridge_patch"; location: string; reason: string; expectedGain: string; possibleDamage: string }
-  | { kind: "event_patch"; eventId: string; reason: string; expectedGain: string; possibleDamage: string }
-  | { kind: "event_rewrite"; eventId: string; reason: string; expectedGain: string; possibleDamage: string; failureEvidence: string }
-  | { kind: "chapter_rewrite"; reason: "catastrophic_only"; failureEvidence: string };
+  | { kind: "event_patch"; eventId: string; reason: string; expectedGain: string; possibleDamage: string };
 
 // ============================================================================
 // P7 CandidateComparison — 候选比较器输出（V2 核心）

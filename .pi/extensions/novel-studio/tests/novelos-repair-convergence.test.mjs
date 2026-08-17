@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { NarrativeAgentLoop } from "../dist/novelos/agent/narrative-agent-loop.js";
+import { createCandidateWorkspace } from "../dist/novelos/agent/candidate-workspace.js";
 
 const EMPTY_CONTEXT = {
   facts: [],
@@ -15,6 +16,37 @@ const EMPTY_CONTEXT = {
   styleReferences: [],
   sourceMap: [],
 };
+
+/** RRB-3.7：修订授权要求 candidate.snapshotId 与 evidenceRecord.snapshotId 一致。 */
+const SNAPSHOT_ID = "snap-test";
+
+/**
+ * RRB-3.7：从 findings 构建权威证据记录（按 evidenceId 索引），供 verifyAndPatch
+ * 逐 finding 走 evaluateRepairAuthorization fail-closed 授权。authorityClass 选
+ * author_declaration（→ hard_constraint），sourceContentHash / evidenceExcerptHash 非空。
+ */
+function buildEvidenceRecords(findings) {
+  const byId = new Map();
+  for (const f of findings) {
+    if (!f.evidenceId || byId.has(f.evidenceId)) continue;
+    byId.set(f.evidenceId, {
+      evidenceId: f.evidenceId,
+      statement: f.conflictFact,
+      authorityClass: "author_declaration",
+      epistemicStatus: "confirmed",
+      sourceRef: f.sourceRef,
+      sourceContentHash: `src-hash-${f.evidenceId}`,
+      evidenceExcerptHash: `excerpt-hash-${f.evidenceId}`,
+      validFrom: null,
+      validUntil: null,
+      matchedBecause: ["AUTHOR_CONTRACT"],
+      retrievalQueryId: null,
+      snapshotId: SNAPSHOT_ID,
+      traceable: true,
+    });
+  }
+  return [...byId.values()];
+}
 
 function makeFinding({
   id,
@@ -29,12 +61,17 @@ function makeFinding({
     source,
     failureType,
     severity: "hard",
-    span: { start: 0, end: 0, excerpt: "" },
+    span: { start: 0, end: 3, excerpt: "" },
     conflictFact,
     sourceRef,
+    // RRB-3.7：修订授权需要确定性 + 可回源 evidenceId；默认回源到 sourceRef。
+    evidenceId: sourceRef,
     confidence: 1,
-    allowedRepairRange: { start: 0, end: 100, excerpt: "" },
+    // 有效 span（end > start 且不越界），否则会被 selectRepairFindings / 授权拒绝。
+    allowedRepairRange: { start: 0, end: 3, excerpt: "" },
     description,
+    certainty: "deterministic",
+    coverageStatus: "missing",
   };
 }
 
@@ -85,6 +122,7 @@ function makeHarness({ reports, patchedTexts, maxRepairRounds = 10 }) {
         suggestion: feedback.repairSuggestion,
         repairDirection: `repair ${feedback.findingId}`,
         applied: false,
+        localReplacement: false,
       }));
     },
     evaluatePatch() {
@@ -98,11 +136,26 @@ function makeHarness({ reports, patchedTexts, maxRepairRounds = 10 }) {
     getSnapshot: () => ({ turns: prompts.length, toolCalls: 0 }),
   };
 
+  // RRB-3.7：候选工作区必须是真实 dryRun 实例，提供 writeDraft → createCandidate →
+  // advanceCurrentCandidate → getCurrentCandidateId → readCandidateManifest →
+  // readCandidateText → deriveChildCandidate 的不可变候选链路。noOpStore Proxy 无法
+  // 支撑授权所需的候选身份（candidateId + textHash），会导致 readCurrentManifest=null
+  // 而 fail-closed 拒绝全部修订。
+  const candidateWorkspace = createCandidateWorkspace({
+    workspaceRoot: "novelos-repair-convergence-test",
+    sessionId: "novelos-test-session",
+    dryRun: true,
+  });
+
+  const evidenceRecords = buildEvidenceRecords(
+    reports.flatMap((report) => report.hardFindings),
+  );
+
   const loop = new NarrativeAgentLoop({
     runtime,
     registry: {},
     searchService: {},
-    candidateWorkspace: noOpStore,
+    candidateWorkspace,
     permissionPolicy: {},
     budget,
     trajectory: noOpStore,
@@ -111,14 +164,16 @@ function makeHarness({ reports, patchedTexts, maxRepairRounds = 10 }) {
     maxRepairRounds,
   });
 
-  return { loop, prompts, feedbackBatches };
+  return { loop, prompts, feedbackBatches, evidenceRecords };
 }
 
-function runLoop(loop) {
+function runLoop(loop, evidenceRecords) {
   return loop.run({
     chapterIntent: "作者章纲事件顺序：\n  1. 事件一\n作者章纲必须包含：锚点一",
     seedContext: "seed",
     context: EMPTY_CONTEXT,
+    snapshotId: SNAPSHOT_ID,
+    evidenceRecords,
   });
 }
 
@@ -146,13 +201,13 @@ test("高约束章纲每轮只修复有限批次，并优先事实与原句约�
     sourceRef: `author-outline:event:${index + 1}`,
   }));
   const hardFindings = [events[0], ...anchors, ...events.slice(1), verbatim, fact];
-  const { loop, prompts, feedbackBatches } = makeHarness({
+  const { loop, prompts, feedbackBatches, evidenceRecords } = makeHarness({
     reports: [makeReport(hardFindings), makeReport(hardFindings)],
     patchedTexts: ["第一轮已接受候选。人物走进现场，开始调查并核对事实。"],
     maxRepairRounds: 1,
   });
 
-  const result = await runLoop(loop);
+  const result = await runLoop(loop, evidenceRecords);
 
   assert.equal(feedbackBatches[0].length, 4);
   assert.deepEqual(
@@ -172,7 +227,7 @@ test("连续两轮 hard finding 无减少时停止，不耗尽全部修复预算
   const unchanged = makeReport([
     makeFinding({ id: "anchor-stuck", sourceRef: "author-outline:始终遗漏的锚点" }),
   ]);
-  const { loop, prompts } = makeHarness({
+  const { loop, prompts, evidenceRecords } = makeHarness({
     reports: [unchanged, unchanged, unchanged, unchanged],
     patchedTexts: [
       "第一轮已接受候选。人物进入现场，继续调查。",
@@ -182,7 +237,7 @@ test("连续两轮 hard finding 无减少时停止，不耗尽全部修复预算
     maxRepairRounds: 10,
   });
 
-  const result = await runLoop(loop);
+  const result = await runLoop(loop, evidenceRecords);
 
   assert.equal(result.repairRounds, 2);
   assert.equal(prompts.length, 3, "一次初稿调用加两次修复调用");
@@ -200,13 +255,13 @@ test("事件级遗漏进入修复批次时携带完整事件摘要", async () =>
     description: "作者章纲事件遗漏：回程时木心微亮，但墨老仍未醒",
   });
   const report = makeReport([eventFinding]);
-  const { loop, prompts } = makeHarness({
+  const { loop, prompts, evidenceRecords } = makeHarness({
     reports: [report, makeReport([])],
     patchedTexts: ["修复候选。回程时木心微亮，但墨老仍未醒。"],
     maxRepairRounds: 1,
   });
 
-  const result = await runLoop(loop);
+  const result = await runLoop(loop, evidenceRecords);
 
   assert.match(prompts[1], /回程时木心微亮，但墨老仍未醒/);
   assert.equal(result.lineage.verifierCleared, true);
@@ -215,7 +270,7 @@ test("事件级遗漏进入修复批次时携带完整事件摘要", async () =>
 test("hard finding 持续减少时继续下一批并在清零后通过", async () => {
   const first = [1, 2, 3, 4].map((index) => makeFinding({ id: `anchor-${index}` }));
   const second = first.slice(2);
-  const { loop } = makeHarness({
+  const { loop, evidenceRecords } = makeHarness({
     reports: [makeReport(first), makeReport(second), makeReport([])],
     patchedTexts: [
       "第一轮候选。人物调查并处理前两个锚点。",
@@ -223,10 +278,10 @@ test("hard finding 持续减少时继续下一批并在清零后通过", async (
     ],
   });
 
-  const result = await runLoop(loop);
+  const result = await runLoop(loop, evidenceRecords);
 
   assert.equal(result.repairRounds, 2);
   assert.equal(result.lineage.verifierCleared, true);
-  assert.equal(result.lineage.stopReason, "verifier_cleared");
+  assert.equal(result.lineage.stopReason, "cleared");
   assert.equal(result.text, "第二轮候选。人物调查并处理全部锚点。");
 });

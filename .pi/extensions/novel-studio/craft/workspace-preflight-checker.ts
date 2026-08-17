@@ -103,8 +103,10 @@ export interface PreflightWorkspaceOptions {
 // 校验逻辑（chapterNumber > 1 时）：
 //  1. state store 文件存在 → 它是权威连续性证据：
 //     - workspaceId 必须匹配
-//     - 必须有 sourceChapter=ch{N-1} 的 entry（否则陈旧 → 阻断）
-//     - 至少一个 entry 的 sourceRef 必须锚定 finalText（ch{N-1}#finalText:{hash}），
+//     - 必须有 sourceChapter=ch{N-1} 的 entry，或 lastCommittedChapter=ch{N-1}
+//       （前章已提交但所有 seed 派生的权威状态条目均被 reanchor 拒绝 → 合法，
+//        由 lastCommittedChapter + 章节文件存在性证明连续性，不阻断）
+//     - 若存在 entry，至少一个 entry 的 sourceRef 必须锚定 finalText（ch{N-1}#finalText:{hash}），
 //       而非 candidate:*（staged 未提交 → 阻断）
 //     - sourceRef 中的 hash 必须与 chapters/{N-1}.md 实际 SHA-256 前 12 位匹配
 //     - chapters/{N-1}.md 必须存在（state 声称 committed 但文件缺失 → 阻断）
@@ -117,10 +119,21 @@ export interface PreflightWorkspaceOptions {
 interface StateStoreContinuityResult {
   /** 连续性证据是否有效 */
   valid: boolean;
-  /** 连续性来源（"state-store" / "skeleton-legacy" / "first-chapter"） */
+  /** 连续性来源（"state-store" / "state-store-committed-no-entries" / "skeleton-legacy" / "first-chapter"） */
   source?: string;
   /** 无效时的原因标识（state-store-absent 表示文件不存在，应回退 skeleton） */
   reason?: string;
+}
+
+/** 解析前章章节文件路径（兼容命名形式），找不到返回 null。 */
+function resolvePreviousChapterFile(
+  workspacePath: string,
+  previousChapter: number,
+): string | null {
+  const resolved = resolveExistingChapterFile(workspacePath, String(previousChapter));
+  if (resolved?.path) return resolved.path;
+  const bare = join(workspacePath, "chapters", `${previousChapter}.md`);
+  return existsSync(bare) ? bare : null;
 }
 
 function validateStateStoreContinuity(
@@ -169,10 +182,28 @@ function validateStateStoreContinuity(
     (e) => e && typeof e === "object" && e.sourceChapter === previousChapterId,
   );
   if (prevEntries.length === 0) {
-    return {
-      valid: false,
-      reason: `state-store-stale: no entries with sourceChapter=${previousChapterId} (lastCommittedChapter=${parsed.lastCommittedChapter ?? "unknown"})`,
-    };
+    // 无 ch{N-1} authoritative entry。区分两种合法/非法情况：
+    //  - lastCommittedChapter === ch{N-1}：前章已提交但未晋级任何权威状态条目
+    //    （干净 workspace 首章、或所有 seed 派生的状态均被 reanchor 拒绝时常见）。
+    //    连续性由 lastCommittedChapter + 章节文件存在性证明 → 不阻断。
+    //  - lastCommittedChapter 落后于 ch{N-1}（或缺失）：真正陈旧 → 阻断。
+    if (parsed.lastCommittedChapter !== previousChapterId) {
+      return {
+        valid: false,
+        reason: `state-store-stale: no entries with sourceChapter=${previousChapterId} (lastCommittedChapter=${parsed.lastCommittedChapter ?? "unknown"})`,
+      };
+    }
+
+    // 前章已提交但无权威状态条目：章节文件必须存在（无 entry 可 hash 校验，仅验证文件存在）。
+    const prevChapterPath = resolvePreviousChapterFile(workspacePath, previousChapter);
+    if (!prevChapterPath) {
+      return {
+        valid: false,
+        reason: `state-store-chapter-file-missing: no compatible chapter file found for ${previousChapterId} (committed with no state entries)`,
+      };
+    }
+
+    return { valid: true, source: "state-store-committed-no-entries" };
   }
 
   // 验证至少一个 entry 的 sourceRef 锚定 finalText（非 candidate:*）
@@ -196,10 +227,7 @@ function validateStateStoreContinuity(
   }
   const stateHash = hashMatch[1].toLowerCase();
 
-  const resolvedPreviousChapter = resolveExistingChapterFile(workspacePath, String(previousChapter));
-  const barePreviousChapterPath = join(workspacePath, "chapters", `${previousChapter}.md`);
-  const prevChapterPath = resolvedPreviousChapter?.path
-    ?? (existsSync(barePreviousChapterPath) ? barePreviousChapterPath : null);
+  const prevChapterPath = resolvePreviousChapterFile(workspacePath, previousChapter);
   if (!prevChapterPath) {
     return {
       valid: false,

@@ -20,11 +20,23 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Candidate, CompiledContext } from "../../v2/core/types.js";
+import { hashText, buildCandidateId } from "../../v2/core/candidate-revision-store.js";
 import type { ChapterIntent } from "../../v2/core/chapter-intent-builder.js";
 import type { ModelGenerateFn } from "../../v2/adapters/legacy-model-route-adapter.js";
 import { buildChapterContract, renderContract, renderLayeredContract } from "../../v2/core/model-prompt-adapter.js";
 import type { WriterPromptProfile } from "../../v2/core/model-prompt-adapter.js";
 import type { UnifiedOrchestratorInput } from "../../v2/core/orchestrator-types.js";
+import {
+  compileContextSafety,
+  createConstraintManifest,
+} from "../../v2/core/context-safety.js";
+import {
+  compileProductionContextPackage,
+  renderContextPackage,
+  collectConfirmedCoverageFromPackage,
+  collectEvidenceRecordsFromPackage,
+} from "../../v2/core/context-package-production.js";
+import type { ContextPackage } from "../../v2/core/trust/context-package.js";
 import { createNovelSession } from "../session/novel-session.js";
 import { BudgetPolicy, createBudgetConfigFromEnv } from "../runtime/budget-policy.js";
 import type { BudgetSnapshot } from "../runtime/budget-policy.js";
@@ -47,6 +59,16 @@ import {
   type AgenticFewshotSelection,
 } from "./agentic-fewshot-prompt.js";
 import { NARRATIVE_TOOL_NAMES, NARRATIVE_TOOL_NAMES_WITH_FACADE, RETRIEVAL_TOOL_NAMES } from "../tools/narrative-tools.js";
+import {
+  ACTIVATE_CAPABILITY_PACKAGE_TOOL,
+  SUBMIT_CAPABILITY_OUTPUT_TOOL,
+  applyCapabilityModelTurnUsage,
+  estimateCapabilityModelTurnCost,
+  failClosedIfCapabilityBudgetExhausted,
+  recordDeliveredCapabilityCatalog,
+  releaseCapabilityRuntimeSessions,
+  wrapToolsWithCapabilitySandbox,
+} from "./capability-package-runtime.js";
 import type { NarrativeToolMode } from "./evidence-plan.js";
 import {
   createToolVisibilitySnapshot,
@@ -127,6 +149,10 @@ export interface AgenticRawSourceInput {
    * 仅 evalMode 隔离评测使用。
    */
   writerPromptProfile?: WriterPromptProfile;
+  /** CEG-1.4：冻结快照，检索不得再读 LegacyStateAdapter。 */
+  evidenceSnapshot?: import("../../v2/core/narrative-evidence-snapshot.js").NarrativeEvidenceSnapshotRuntime;
+  /** CEG-3.2：验证后的 ContextPackage。缺失时本地编译，渲染结果仍是唯一静态输入。 */
+  contextPackage?: ContextPackage;
   /**
    * eval-only：覆盖 Agentic loop 的检索决策规则 prompt。
    *
@@ -177,6 +203,10 @@ export interface AgenticRawSourceInput {
   promptBundleHash?: string;
   constraintManifestHash?: string;
   strategyBundleId?: string;
+  capabilityActivation?: import("../../v2/core/capability-package-contracts.js").CapabilityActivationManifest;
+  capabilityPackageSet?: import("../../v2/core/capability-package-contracts.js").CapabilityPackageSet;
+  capabilityCatalog?: import("../../v2/core/capability-package-contracts.js").CapabilityCatalogEntry[];
+  capabilityConsumptionLedger?: import("../../v2/core/capability-consumption-ledger.js").CapabilityConsumptionLedger;
 }
 
 /**
@@ -241,8 +271,8 @@ export interface AgenticRawSourceResult {
   mustVerifyCoveredCount: number;
   /** AGENTIC-EVIDENCE-MERGE-1 可观测性：mustVerify 覆盖门结果 */
   coverageResult?: CoverageGateResult;
-  /** AGENTIC-EVIDENCE-MERGE-1 可观测性：按阶段聚合的模型调用数 */
-  modelCallsByKind: { draft: number; patch: number; verify: number };
+  /** REASONING-REPAIR-BOUNDARY-1 Wave 3：按阶段聚合的模型调用数（draft/patch/newCandidate/authorStyle） */
+  modelCallsByKind: { draft: number; patch: number; newCandidate: number; authorStyle: number };
   /** verifier 是否清零（无硬失败或 patch 后清零） */
   verifierCleared?: boolean;
   /** 修复轮次（verify/patch 闭环执行了几轮） */
@@ -269,6 +299,8 @@ export interface AgenticRawSourceResult {
    * MA：本次 Agentic 调用使用的工作包摘要（供编排器 trace；无正文）。
    */
   workPackageSummary?: Record<string, unknown>;
+  capabilityConsumption?: readonly import("../../v2/core/capability-package-contracts.js").CapabilityConsumptionEvent[];
+  modelInputHash?: string | null;
 }
 
 /**
@@ -373,7 +405,13 @@ export function createAgenticRawCandidateSource(
         systemPromptOverride,
         toolMode,
         auditSink,
+        capabilityActivation,
+        capabilityPackageSet,
+        capabilityCatalog,
+        capabilityConsumptionLedger,
       } = input;
+      const selectedCapabilityCount = capabilityActivation?.decisions.filter((decision) => decision.decision === "selected").length ?? 0;
+      try {
 
       // ── 0b. Phase 8 Stage P eval-only fail-closed 守卫 ─────────────────
       // systemPromptOverride 仅允许经 createAgenticRawCandidateSource({permitSystemPromptOverride:true})
@@ -385,7 +423,13 @@ export function createAgenticRawCandidateSource(
           "禁止注入（fail-closed）。生产路径不得设置系统提示词覆盖，请移除该系统提示词覆盖。",
         );
       }
-      const effectiveSystemPrompt = systemPromptOverride ?? NOVELOS_SYSTEM_PROMPT;
+      const catalogBlock = selectedCapabilityCount > 0 && capabilityCatalog && capabilityCatalog.length > 0
+        ? "\n\n【已授权能力包 Catalog】只能调用 activate_capability_package，且 activationId 必须来自下列条目。禁止加载未列出的 package、扩大预算或调用未授权工具。\n"
+          + capabilityCatalog.map((entry) =>
+            `- ${entry.activationId}: ${entry.packageId}@${entry.version} / ${entry.targetStage} / ${entry.purpose}`
+          ).join("\n")
+        : "";
+      const effectiveSystemPrompt = (systemPromptOverride ?? NOVELOS_SYSTEM_PROMPT) + catalogBlock;
 
       // ── 0. P1-5 修复：包装 modelGenerate 捕获真实模型名 ──────────────
       // 原先 candidate.model 固定为 "novelos_agentic"，导致 detectModelVersion
@@ -394,7 +438,22 @@ export function createAgenticRawCandidateSource(
       // 用于 candidate.model，保证版本键反映真实 provider/model。
       let lastActualModel: string | null = null;
       let lastActualProvider: string | null = null;
+      let lastModelInputHash: string | null = null;
       const modelGenerateWithCapture: ModelGenerateFn = async (modelInput) => {
+        if (
+          capabilityActivation
+          && capabilityConsumptionLedger
+          && selectedCapabilityCount > 0
+        ) {
+          lastModelInputHash = recordDeliveredCapabilityCatalog({
+            ledger: capabilityConsumptionLedger,
+            manifest: capabilityActivation,
+            systemPrompt: modelInput.systemPrompt ?? "",
+            userPrompt: modelInput.userPrompt ?? "",
+            workspaceId,
+            runId: capabilityActivation.runId,
+          });
+        }
         const output = await modelGenerate(modelInput);
         // 捕获最后一次成功调用的真实模型名（覆盖 draft / patch / verify 所有调用）
         if (output?.model) {
@@ -402,6 +461,26 @@ export function createAgenticRawCandidateSource(
         }
         if (output?.provider) {
           lastActualProvider = output.provider;
+        }
+        if (capabilityActivation && selectedCapabilityCount > 0) {
+          const tokenUsage = output?.tokenUsage && output.tokenUsage !== "unknown"
+            ? output.tokenUsage
+            : { in: 0, out: 0 };
+          failClosedIfCapabilityBudgetExhausted(applyCapabilityModelTurnUsage({
+            workspaceId,
+            runId: capabilityActivation.runId,
+            usage: {
+              inputTokens: tokenUsage.in,
+              outputTokens: tokenUsage.out,
+              latencyMs: output?.durationMs ?? 0,
+              cost: estimateCapabilityModelTurnCost({
+                provider: output?.provider ?? lastActualProvider ?? undefined,
+                inputTokens: tokenUsage.in,
+                outputTokens: tokenUsage.out,
+              }),
+            },
+            ledger: capabilityConsumptionLedger,
+          }));
         }
         return output;
       };
@@ -424,6 +503,7 @@ export function createAgenticRawCandidateSource(
         projectRoot,
         workspaceId,
         sourceChapter,
+        evidenceSnapshot: input.evidenceSnapshot,
       });
 
       const permissionPolicy = new PermissionPolicy({
@@ -439,6 +519,15 @@ export function createAgenticRawCandidateSource(
         // Phase 5 受控接入：仅 canary workspace opt-in（toolMode="facade"）时
         // 额外注册 query_narrative_production facade runtime 变体；默认不注册。
         enableFacade: facadeEnabled,
+        ...(capabilityActivation && capabilityPackageSet && selectedCapabilityCount > 0
+          ? {
+              capabilityPackages: {
+                manifest: capabilityActivation,
+                packageSet: capabilityPackageSet,
+                ledger: capabilityConsumptionLedger,
+              },
+            }
+          : {}),
       });
 
       const candidateWorkspace = createCandidateWorkspace({
@@ -477,7 +566,49 @@ export function createAgenticRawCandidateSource(
       // Phase 2C：在 runtime 创建前构建，以便 createEvidencePlan 消费 seedContext，
       // 再用 plan.allowedTools 过滤工具集。
       const chapterIntentStr = buildChapterIntentString(intent);
-      const seedContextStr = buildContractContextString(intent, context, characterNames, targetWordCount, fewshotSelection, writerPromptProfile);
+      const packaged = input.contextPackage
+        ? { ok: true as const, package: input.contextPackage, errors: [] as string[], contextPackageHash: input.contextPackage.contextHash, snapshotId: input.evidenceSnapshot?.snapshotId ?? null }
+        : compileProductionContextPackage({
+            safety: compileContextSafety({
+              manifest: createConstraintManifest({ intent, context }),
+              intent,
+              context,
+              modelWindowTokens: Number(process.env.PINOVEL_CONTEXT_WINDOW_TOKENS ?? 128000),
+              outputReserveTokens: Number(process.env.PINOVEL_CONTEXT_OUTPUT_RESERVE_TOKENS ?? 8192),
+              safetyMarginTokens: Number(process.env.PINOVEL_CONTEXT_SAFETY_MARGIN_TOKENS ?? 4096),
+            }),
+            snapshotId: input.evidenceSnapshot?.snapshotId,
+            characterNames,
+            targetWordCount,
+            fewshotSelection,
+          });
+      if (!packaged.ok || !packaged.package) {
+        const reason = `ContextPackage 编译失败：${packaged.errors.join("; ") || "missing_package"}`;
+        trajectory.recordFailure({
+          stage: "context_compile",
+          severity: "hard",
+          failureClass: "blocked",
+          reason,
+          recoverable: false,
+          retryPlan: "revise_inputs_and_retry_same_chapter",
+        });
+        await trajectory.flush();
+        return makeFallbackResult(
+          sessionId, trajectory.getDetailOutputPath(), budget, "not_run",
+          reason, "unknown",
+        );
+      }
+      const rendered = renderContextPackage(packaged.package);
+      const seedContextStr = rendered.text;
+      const coverageSnapshotId = input.evidenceSnapshot?.snapshotId;
+      const confirmedCoverage = coverageSnapshotId
+        ? collectConfirmedCoverageFromPackage(packaged.package, coverageSnapshotId)
+        : undefined;
+      // RRB-3.7：从 ContextPackage 权威槽构建 EvidenceRecord[]，注入 agent loop，
+      // 供 verifyAndPatch 逐 finding 用 evaluateRepairAuthorization 做 fail-closed 修订授权。
+      const evidenceRecords = coverageSnapshotId
+        ? collectEvidenceRecordsFromPackage(packaged.package, coverageSnapshotId)
+        : [];
 
       // ── 4. EvidencePlan（Phase 2C + Phase 2D 三缺口修复） ───────────
       // 在 runtime 创建前创建 plan，用 plan.allowedTools 过滤工具集，
@@ -506,7 +637,16 @@ export function createAgenticRawCandidateSource(
       // 系统直接使用 EvidencePlan 的安全边界（allowedTools / mustVerify / retrievalCallLimit）。
       // Agentic 在 ReAct 循环内自主决定是否检索、检索什么、何时停止。
       // 不再发起独立证据决策模型调用。
-      const evidencePlan = evidencePlanBase;
+      const capabilityToolNames = [ACTIVATE_CAPABILITY_PACKAGE_TOOL, SUBMIT_CAPABILITY_OUTPUT_TOOL];
+      const evidencePlan = selectedCapabilityCount > 0
+        ? {
+            ...evidencePlanBase,
+            allowedTools: [
+              ...evidencePlanBase.allowedTools,
+              ...capabilityToolNames.filter((name) => !evidencePlanBase.allowedTools.includes(name)),
+            ],
+          }
+        : evidencePlanBase;
 
       // ── 5. 构造 NovelOS Runtime + Agent ──────────────────────────────
       // 工具列表从 registry 按 agent 角色获取（只读工具 + project_propose）
@@ -514,7 +654,14 @@ export function createAgenticRawCandidateSource(
       // Phase 2C：用 plan.allowedTools 过滤工具集（限定工具防无界遍历）
       const allTools = enableRetrieval ? registry.getToolsForRole("agent") : [];
       const allowedToolSet = new Set(evidencePlan.allowedTools);
-      const tools = allTools.filter((tool) => allowedToolSet.has(tool.name));
+      const tools = wrapToolsWithCapabilitySandbox(
+        allTools.filter((tool) => allowedToolSet.has(tool.name)),
+        {
+          workspaceId,
+          runId: capabilityActivation?.runId,
+          ledger: capabilityConsumptionLedger,
+        },
+      );
 
       // ── 5b. 记录工具可见性快照 ──────────────────────────────────────
       // AGENTIC-EVIDENCE-MERGE-1：快照只记录「系统允许边界 / 最终可见」两者
@@ -562,7 +709,14 @@ export function createAgenticRawCandidateSource(
           // 即使未来绕过 evidencePlan.allowedTools 过滤，集合外工具也无法注入。
           // Phase 5 受控接入：facade 模式下白名单扩为 {9 专用工具, query_narrative_production}，
           // 使统一入口可被注入；默认生产仍为 NARRATIVE_TOOL_NAMES（9 工具），行为不变。
-          allowedToolNames: facadeEnabled ? NARRATIVE_TOOL_NAMES_WITH_FACADE : NARRATIVE_TOOL_NAMES,
+          allowedToolNames: (() => {
+            const names = new Set(facadeEnabled ? NARRATIVE_TOOL_NAMES_WITH_FACADE : NARRATIVE_TOOL_NAMES);
+            if (selectedCapabilityCount > 0) {
+              names.add(ACTIVATE_CAPABILITY_PACKAGE_TOOL);
+              names.add(SUBMIT_CAPABILITY_OUTPUT_TOOL);
+            }
+            return names;
+          })(),
           // AGENTIC-EVIDENCE-MERGE-1：把系统检索调用上限传给 runtime。
           // runtime 统计检索工具调用并在达到预算时经 afterToolCall 停止 loop，
           // 使"retrievalCallLimit -> 工具调用次数/停止逻辑"成为系统强制约束（非仅 prompt 建议）。
@@ -645,6 +799,9 @@ export function createAgenticRawCandidateSource(
           context,
           knownCharacterNames: characterNames,
           inviolableFacts: intent.inviolableFacts,
+          snapshotId: coverageSnapshotId,
+          confirmedCoverage,
+          evidenceRecords,
           evalPrefix,
           // Phase 2C：传入预创建的 plan（allowedTools 已在 runtime 创建前过滤，
           // loop 不再内部 createEvidencePlan，直接消费此 plan 的 mustVerify + stopConditions）
@@ -699,7 +856,7 @@ export function createAgenticRawCandidateSource(
         // - stopReason="model_error" 且 failureReason 含超时模式 → model_timeout
         // - stopReason="model_error" 其他 → model_error
         // - stopReason="budget_exhausted" → budget_exhausted
-        // - stopReason="stagnant"/"verifier_cleared" 但文本空 → empty_draft
+        // - stopReason="stagnant"/"cleared" 但文本空 → empty_draft
         // - 其他 → unknown
         //
         // AGENTIC-EVIDENCE-MERGE-1 修复：loop catch 块现在通过 lineage.failureReason
@@ -751,8 +908,17 @@ export function createAgenticRawCandidateSource(
       // 回退：若捕获失败（理论上不应发生，loop 成功至少有一次模型调用），
       // 使用 route 作为 model（比固定占位符更能反映路由差异）。
       const candidateModel = lastActualModel ?? route;
+      // RRB-2.1：candidate.id 必须含运行身份 + 内容 hash，不得用每章固定 ID
+      // 表示多轮不同正文。复用 buildCandidateId 与 candidate-workspace 内
+      // manifest 口径一致（runId=sessionId，derivationType=agentic_generation）。
+      const candidateId = buildCandidateId({
+        runId: sessionId,
+        derivationType: "agentic_generation",
+        textHash: hashText(loopResult.text),
+        sequence: 0,
+      });
       const candidate: Candidate = {
-        id: `candidate:agentic_raw:${chapterId}`,
+        id: candidateId,
         text: loopResult.text,
         kind: AGENTIC_RAW_KIND,
         model: candidateModel,
@@ -776,6 +942,8 @@ export function createAgenticRawCandidateSource(
         sessionId,
         trajectoryPath: trajectory.getDetailOutputPath(),
         budgetSnapshot: budget.getSnapshot(),
+        capabilityConsumption: capabilityConsumptionLedger?.events(),
+        modelInputHash: lastModelInputHash,
         stopReason: loopResult.lineage.stopReason,
         sourceRefs: loopResult.lineage.sourceRefs,
         toolCalls: loopResult.lineage.toolCalls,
@@ -805,6 +973,14 @@ export function createAgenticRawCandidateSource(
           coverageStatus: finding.coverageStatus,
         })),
       };
+      } finally {
+        if (capabilityActivation) {
+          releaseCapabilityRuntimeSessions({
+            workspaceId,
+            runId: capabilityActivation.runId,
+          });
+        }
+      }
     },
   };
 }
@@ -860,6 +1036,9 @@ export function classifyFailureKind(
       return "model_timeout";
     }
   }
+  if (lower.includes("budget_exhausted") || lower.includes("capability_package_budget_exhausted")) {
+    return "budget_exhausted";
+  }
   if (stopReason === "must_verify_coverage_failed") {
     return "must_verify_coverage_failed";
   }
@@ -897,7 +1076,7 @@ function makeFallbackResult(
     mustVerifyCount?: number;
     mustVerifyCoveredCount?: number;
     coverageResult?: CoverageGateResult;
-    modelCallsByKind?: { draft: number; patch: number; verify: number };
+    modelCallsByKind?: { draft: number; patch: number; newCandidate: number; authorStyle: number };
     sourceRefs?: string[];
     toolCalls?: number;
   },
@@ -918,7 +1097,7 @@ function makeFallbackResult(
     mustVerifyCount: observed?.mustVerifyCount ?? 0,
     mustVerifyCoveredCount: observed?.mustVerifyCoveredCount ?? 0,
     ...(observed?.coverageResult ? { coverageResult: observed.coverageResult } : {}),
-    modelCallsByKind: observed?.modelCallsByKind ?? { draft: 0, patch: 0, verify: 0 },
+    modelCallsByKind: observed?.modelCallsByKind ?? { draft: 0, patch: 0, newCandidate: 0, authorStyle: 0 },
     verifierCleared: false,
     repairRounds: 0,
     hardFindingCount: 0,

@@ -10,6 +10,8 @@
     "build": "npm run build --workspace novel-studio",
     "test": "npm test --workspace novel-studio",
     "smoke": "npm run smoke --workspace novel-studio",
+    "replay:multi-agent-boundary": "npm run replay:multi-agent-boundary --workspace novel-studio",
+    "replay:generation-matrix": "node scripts/replay-generation-matrix.mjs",
     "simplicity-gate": "npm run simplicity-gate --workspace novel-studio",
     "typecheck": "npm run typecheck --workspace novel-studio",
     "test:eval": "npm run test:eval --workspace novel-studio",
@@ -17,5 +19,8 @@
   },
   "devDependencies": {
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9"
   }
 }

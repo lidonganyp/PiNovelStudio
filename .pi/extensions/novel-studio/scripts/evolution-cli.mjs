@@ -395,9 +395,27 @@ function cmdFreeze(args) {
       process.exit(5);
     }
     const rollback = registry.loadManifest(manifest.rollbackReleaseId);
-    if (!rollback || rollback.status !== "active_prod") {
+    const prodPointer = pointerStore.readActive("production");
+    if (!rollback) {
       console.error(
-        `[evolution:freeze] error: rollback target ${manifest.rollbackReleaseId} must exist with status active_prod`,
+        `[evolution:freeze] error: rollback target ${manifest.rollbackReleaseId} does not exist`,
+      );
+      process.exit(5);
+    }
+    const noPointerRollback = new Set([
+      "held",
+      "retired",
+      "frozen",
+      "approved_dev",
+      "active_dev",
+      "candidate_prod",
+    ]);
+    const rollbackOk = rollback.status === "active_prod"
+      || (!prodPointer && noPointerRollback.has(rollback.status));
+    if (!rollbackOk) {
+      console.error(
+        `[evolution:freeze] error: rollback target ${manifest.rollbackReleaseId} must exist with status active_prod`
+          + (!prodPointer ? " (or held/retired/approved_dev when production pointer is none)" : ""),
       );
       process.exit(5);
     }

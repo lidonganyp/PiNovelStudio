@@ -5,7 +5,7 @@
  * 接入统一编排器，而不另建第二套路由或预算系统。
  *
  * 设计：
- * - 与既有 RecoveryBudget / modelBudget 并存；layered budget 是权威分层账本
+ * - 与既有 RecoveryBudget / modelBudget 并存；生产准入权威是 BudgetLedger，layered 只投影
  * - 失败策略矩阵补充 attemptHistory 与 prohibited 证据，不替换 FailureEnvelope 主路径
  * - 观测与质量-成本报告写入 stageResults，供 trace 验收
  */
@@ -14,6 +14,7 @@ import {
   createLayeredBudget,
   reserveLayeredBudget,
   settleLayeredBudget,
+  projectLayeredUsage,
   snapshotLayeredBudget,
   computeChapterCostBreakdown,
   type BudgetStage,
@@ -204,6 +205,43 @@ export function reserveForModelCall(
 /**
  * 模型调用后结算实际 token/耗时（失败也计）。
  */
+/**
+ * 兼容投影：把已由 BudgetLedger 准入的调用记入 layered，永不阻断。
+ */
+export function projectModelCall(
+  state: RoutingGovernanceState,
+  input: {
+    stage: BudgetStage;
+    budgetType: BudgetType;
+    durationMs: number;
+    tokenUsage?: "unknown" | { in: number; out: number };
+    failed: boolean;
+    route?: string;
+    provider?: string;
+    model?: string;
+  },
+): RoutingGovernanceState {
+  const tokens =
+    input.tokenUsage && input.tokenUsage !== "unknown"
+      ? input.tokenUsage
+      : { in: 0, out: 0 };
+  return {
+    ...state,
+    layeredBudget: projectLayeredUsage(state.layeredBudget, {
+      stage: input.stage,
+      budgetType: input.budgetType,
+      modelCalls: 1,
+      inputTokens: tokens.in,
+      outputTokens: tokens.out,
+      latencyMs: input.durationMs,
+      failed: input.failed,
+      route: input.route,
+      provider: input.provider,
+      model: input.model,
+    }),
+  };
+}
+
 export function settleModelCall(
   state: RoutingGovernanceState,
   input: {

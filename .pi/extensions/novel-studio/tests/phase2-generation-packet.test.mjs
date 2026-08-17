@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
+import { hashText, buildCandidateId } from "../dist/v2/core/candidate-revision-store.js";
 import { buildChapterContract, renderContract } from "../dist/v2/core/model-prompt-adapter.js";
 import { detectModelVersion } from "../dist/v2/learning/model-version-migration.js";
 
@@ -149,7 +150,13 @@ function createMockAgenticSource(projectRoot, capturedRef) {
       capturedRef.input = input;
       return {
         candidate: {
-          id: "candidate:agentic_raw:test",
+          // RRB-2.1 / RRB-5.1：candidate.id 必须含运行身份 + 正文 hash 前缀。
+          id: buildCandidateId({
+            runId: "session-test",
+            derivationType: "agentic_generation",
+            textHash: hashText(AGENTIC_TEXT),
+            sequence: 0,
+          }),
           text: AGENTIC_TEXT,
           kind: "agentic_raw",
           model: "novelos_agentic",

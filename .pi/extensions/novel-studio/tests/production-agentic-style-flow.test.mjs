@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
+import { hashText, buildCandidateId } from "../dist/v2/core/candidate-revision-store.js";
 
 const AGENTIC_TEXT = [
   "雨水顺着旧仓库的铁皮檐滴下来。李一凡站在门外，没有立刻进去。",
@@ -29,6 +30,15 @@ const STYLED_TEXT = [
   "楼梯下面，脚步声正往上来。",
   "他没回头。",
 ].join("\n\n");
+
+// RRB-2.1 / RRB-5.1：candidate.id 必须含运行身份 + 内容 hash（与真实生产源
+// agentic-raw-candidate-source.ts 的 buildCandidateId 口径一致）。
+const AGENTIC_CANDIDATE_ID = buildCandidateId({
+  runId: "session-test",
+  derivationType: "agentic_generation",
+  textHash: hashText(AGENTIC_TEXT),
+  sequence: 0,
+});
 
 function makeIntent() {
   return {
@@ -101,7 +111,7 @@ test("生产主链路强制执行 Agentic + 作者风格优化，且不调用机
       agenticCalls += 1;
       return {
         candidate: {
-          id: "candidate:agentic_raw:ch-17",
+          id: AGENTIC_CANDIDATE_ID,
           text: AGENTIC_TEXT,
           kind: "agentic_raw",
           model: "novelos_agentic",
@@ -241,7 +251,7 @@ test("NovelOS 验证未清零时生产流程阻断且不保存", async () => {
         async generate() {
           return {
             candidate: {
-              id: "candidate:agentic_raw:ch-17",
+              id: AGENTIC_CANDIDATE_ID,
               text: AGENTIC_TEXT,
               kind: "agentic_raw",
               model: "novelos_agentic",

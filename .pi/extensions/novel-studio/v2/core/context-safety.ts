@@ -242,9 +242,40 @@ export function createConstraintManifest(input: {
   addIntentList("readerExperience", input.intent.readerExperience, "P2");
   addIntentList("currentPressure", input.intent.currentPressure, "P2");
   addIntentList("concreteDelivery", input.intent.concreteDelivery ?? [], "P2");
-  addIntentList("resistance", input.intent.resistance ?? [], "P3");
+  addIntentList("resistance", input.intent.resistance ?? [], "P1");
   addIntentList("expectedIrreversibleChange", input.intent.expectedIrreversibleChange ?? [], "P3");
   addIntentList("causalEndPressure", input.intent.causalEndPressure ?? [], "P2");
+  addIntentList(
+    "focusCharacterGoals",
+    (input.intent.focusCharacterGoals ?? []).map((entry) => `${entry.character}:${entry.goal}`),
+  );
+  addIntentList(
+    "choicesAndCosts",
+    (input.intent.choicesAndCosts ?? []).map((entry) => `${entry.choice}→${entry.cost}`),
+  );
+  addIntentList(
+    "selectedExpectationsToAdvance",
+    (input.intent.selectedExpectationsToAdvance ?? []).map((entry) => entry.description),
+  );
+  addIntentList("meaningfulChoices", input.intent.meaningfulChoices ?? [], "P2");
+
+  const bridge = input.context.bridgeContext;
+  if (bridge?.available) {
+    const bridgeRefs = bridge.sourceIds?.length ? bridge.sourceIds : ["bridgeContext"];
+    if (bridge.lastEventSummary) {
+      add("p1:bridge:last-event", "P1", "bridge_last_event", `前章最后事件：${bridge.lastEventSummary}`, bridgeRefs, { area: "context", field: "bridgeContext", key: "lastEventSummary" });
+    }
+    if (bridge.endingEmotion) {
+      add("p2:bridge:emotion", "P2", "bridge_emotion", `前章结尾情绪：${bridge.endingEmotion}`, bridgeRefs, { area: "context", field: "bridgeContext", key: "endingEmotion" });
+    }
+    (bridge.openHooks ?? []).forEach((hook, index) =>
+      add(`p1:bridge:hook:${index}`, "P1", "bridge_hook", `开放钩子（本章必须承接）：${hook}`, bridgeRefs, { area: "context", field: "bridgeContext", key: `openHook:${index}` }));
+    (bridge.unresolvedTensions ?? []).forEach((tension, index) =>
+      add(`p1:bridge:tension:${index}`, "P1", "bridge_tension", `未解张力（本章必须回应）：${tension}`, bridgeRefs, { area: "context", field: "bridgeContext", key: `tension:${index}` }));
+    if ((bridge.introducedCharacters ?? []).length > 0) {
+      add("p2:bridge:characters", "P2", "bridge_characters", `前章引入角色：${bridge.introducedCharacters.join("、")}`, bridgeRefs, { area: "context", field: "bridgeContext", key: "introducedCharacters" });
+    }
+  }
 
   input.context.facts.forEach((entry) => {
     const priority: ConstraintPriority = entry.kind === "candidate_experience" ? "P4" : "P3";
@@ -279,6 +310,7 @@ export function compileConstraintManifestToContextPackage(
     if (
       item.priority === "P4" ||
       item.priority === "P3" ||
+      item.priority === "P2" ||
       item.kind === "style_advisory" ||
       item.kind === "candidate_experience" ||
       item.kind === "world_reference"

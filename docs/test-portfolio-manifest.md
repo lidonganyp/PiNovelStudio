@@ -122,11 +122,11 @@ TEST-PORTFOLIO-1 / TEST-CLEANUP-3 在**死代码维度可标记为完成**。剩
 | 保护项 | 关键测试 | 说明 |
 |--------|---------|------|
 | 关键公开工具（6 个 `novel_*`） | `production-tool-registration.test.mjs` | 生产入口只注册 6 个公开工具 |
-| 状态提交（FinalStateCommit） | `orchestration-transaction.test.mjs`、`b234-long-term-state-and-trace.test.mjs` | 只在最终正文选定后提交 |
-| 原子保存 | `orchestration-transaction.test.mjs` | 临时文件 → rename，失败回滚 |
+| 状态提交（FinalStateCommit） | `audit-commit-save-events.test.mjs`、`orchestrator-commit-save-p1.test.mjs` | 只在最终正文选定后提交 |
+| 原子保存 | `audit-commit-save-events.test.mjs`、`orchestrator-commit-save-p1.test.mjs` | 临时文件 → rename，失败回滚 |
 | FactGuard | `fact-guard-*.test.mjs`（含引文豁免、实体检查、prod-trigger） | 候选与最终正文均经 FactGuard |
-| Pairwise Judge | `novelos-pairwise-judge.test.mjs`、`editorial-story-preservation-*.test.mjs` | 匿名 A/B、span 约束、故事保持门禁 |
-| raw fallback | `phase5-unified-default-path.test.mjs`、`final-selector.test.mjs` | 无明确胜出时交付 raw，不交付低于 raw 的文本 |
+| StoryPreservation | `editorial-story-preservation-*.test.mjs` | full_entities + 0.25/3；文学裁判不进入生产 |
+| Agentic + 作者风格交付 | `production-agentic-style-flow.test.mjs`、`phase5-unified-default-path.test.mjs` | 风格失败不交付 raw；`selectedSource` 生产成功路径为 editorial / v2_amplified |
 | 依赖边界 | `dependency-boundary.test.mjs`（13 项断言） | lab-only 产物不出现在 `dist/` |
 | provenance guard | `replay-provenance-guard.test.mjs`、`r2-4-b4-artifacts-provenance.test.mjs` | hash/ID/kind/path 一致性 |
 
@@ -157,7 +157,7 @@ TEST-PORTFOLIO-1 / TEST-CLEANUP-3 在**死代码维度可标记为完成**。剩
 - 每批最多 10 个测试文件；
 - 每批需记录删除前后的测试数量、耗时与行为覆盖；
 - 第 7 节"覆盖保护清单"中的关键行为覆盖**不得下降**；
-- 关键公开工具、状态提交、原子保存、FactGuard、pairwise judge、raw fallback 的覆盖**不得下降**。
+- 关键公开工具、状态提交、原子保存、FactGuard、StoryPreservation、Agentic+作者风格交付的覆盖**不得下降**。Pairwise Judge 与 raw fallback 只属于隔离评测，不再作为生产保护项。
 
 ---
 

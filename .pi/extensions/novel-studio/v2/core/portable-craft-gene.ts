@@ -3,6 +3,9 @@
  * Evaluator provenance and source excerpts are deliberately outside this runtime shape.
  */
 
+import { sealCapabilityPackage } from "../governance/capability-package-registry.js";
+import type { CapabilityPackageManifest, CapabilityPayloadRecord } from "./capability-package-contracts.js";
+
 export interface PortableCraftGene {
   geneId: string;
   generationGuidance: string;
@@ -102,4 +105,56 @@ function validateList(
 
 function isBoundedText(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
+}
+
+/** Read-only one-shot adapter. Genes stay candidate_only / excluded_from_raw. */
+export function adaptCraftGeneToPackage(
+  gene: PortableCraftGene,
+): { manifest: CapabilityPackageManifest; payload: CapabilityPayloadRecord } {
+  return sealCapabilityPackage({
+    schemaVersion: "capability-package-v1",
+    packageId: `craft_gene.${gene.geneId}`,
+    version: "1.0.0",
+    slot: `craft_gene.${gene.geneId}`,
+    kind: "craft_gene",
+    purpose: gene.generationGuidance.slice(0, 240),
+    applicableWhen: [],
+    excludedWhen: [],
+    requiredInputs: [],
+    outputArtifacts: [{ kind: "candidate_guidance", schemaId: "craft-gene-guidance-v1" }],
+    payloadRef: {
+      mediaType: "application/json",
+      payloadHash: "",
+      sourceRef: `craft-gene:${gene.geneId}`,
+    },
+    targetStages: ["style_optimization"],
+    allowedTools: [],
+    stopConditions: [{ kind: "max_output_artifacts", value: 1 }],
+    budgetPolicy: {
+      maxCalls: 0,
+      maxInputTokens: 400,
+      maxOutputTokens: 0,
+      maxLatencyMs: 0,
+      maxCost: 0,
+    },
+    authority: "methodology",
+    enforcement: "candidate_only",
+    dependencies: [],
+    conflicts: [],
+    modelCapabilityRequirements: [],
+    provenance: [{ sourceId: gene.geneId, sourceType: "portable_craft_gene" }],
+    evalManifestId: `craft-gene:${gene.geneId}`,
+    admissionEvidence: [{
+      evalManifestId: `craft-gene:${gene.geneId}`,
+      sampleSize: 0,
+      validatedWinRate: null,
+      reason: "adapter_only_not_auto_admitted",
+    }],
+    status: "eval",
+    criticality: "optional",
+  }, {
+    generationGuidance: gene.generationGuidance,
+    requiredMoves: gene.requiredMoves,
+    avoidPatterns: gene.avoidPatterns,
+  });
 }

@@ -289,10 +289,15 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     // settle + model-call-observability 接入生产闭包，合法新增 1 个生产模块。闭包 324 → 325。
     // 2026-08-16：34537d0 把 capability/evidence 生产模块纳入版本，干净闭包 334。
     // 阈值上调到 340。
-    // 守卫仍是绊线：真正「退化」信号是旧通配 include 的全量树（~460）或旧 237，远高于此。
+    // 2026-08-16 RRB-1（REASONING-REPAIR-BOUNDARY-1）Wave 3+ 把修复授权/候选修订/模型计量
+    // 合法接入生产闭包（repair-authorization-contracts / repair-authorization-policy /
+    // repair-authorization-ledger / candidate-revision-store / diff-utils / model-call-meter /
+    // validator-run-meter），CEG-3.5 动态工具信任把 v2/core/trust/*（tool-result-consumer /
+    // tool-result-trust / trust-audit / authority-matrix 等）接入生产闭包，干净闭包 334 → ~343。
+    // 阈值上调到 350。守卫仍是绊线：真正「退化」信号是旧通配 include 的全量树（~460），远高于此。
     assert.ok(
-      distCount < 340,
-      `dist/ JS 文件数（${distCount}）应 < 340（生产闭包约 334，含 capability/evidence 模块；旧通配 include 接近全量）；超过说明 tsconfig.prod.json 退化为全量编译`,
+      distCount < 350,
+      `dist/ JS 文件数（${distCount}）应 < 350（生产闭包约 343，含 RRB 修复授权 + CEG trust/evidence 模块；旧通配 include 接近全量 ~460）；超过说明 tsconfig.prod.json 退化为全量编译`,
     );
   });
 });

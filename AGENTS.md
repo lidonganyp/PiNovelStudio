@@ -338,7 +338,7 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
 
 **PatchQualityComparator 唯一补丁权威**：SpanRepair 修订补丁必须经过 comparator；退化改写（agency 稀释 / score 跨 70 阈值回落 / 新增 critical issue）`accepted=false` 时原文不被覆盖，补丁取舍写入 trace。禁止 patch comparator 拒绝后仍覆盖原文。
 
-**Replay Matrix**：`scripts/replay-generation-matrix.mjs` 支持多 workspace/章节/sample 批量 replay，输出 `reports/generation-blocker-matrix.json`（原始矩阵）+ `reports/generation-blocker-summary.md`（仪表盘：总成功率/首次成功率/自动恢复后成功率/Top 10 blocker/stage 分布/gate 分布/需用户补输入的失败/仍需系统修复的失败/样例 trace 路径）。trace 副本复制到 `reports/traces/` 避免多次采样覆盖。
+**Replay Matrix**：唯一脚本是 `scripts/replay-generation-matrix.mjs`（`npm run replay:generation-matrix`）。它只走已注册的 `novel_generate_chapter` 生产调用器 `scripts/production-generate-chapter.mjs`，拒绝 mock / preview / eval / qualityExperiment / modelTestRoute。当前实现是确定性 harness（工具注册、禁止旗标、隔离目录），输出 `reports/production-rollout-audit/replay-matrix.json` 与 `replay-summary.md`。`scripts/invoke-generate-chapter.mjs` 默认 `modelTestRoute=glm`，不得作为生产验收入口。产品级成功/失败/恢复/并发样本属于 Wave 5，必须在隔离副本中用 stub 或经授权的真实模型运行。
 
 **稳定性门槛**（验收口径，必须通过真实 workspace replay 验证）：
 | 指标 | 目标 |

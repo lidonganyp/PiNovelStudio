@@ -43,6 +43,12 @@ jobs:
       - name: Run unified-pipeline smoke test
         run: npm run smoke
 
+      - name: Multi-agent boundary replay (stub, trace retention gate)
+        env:
+          V2_FORCE_STUB: "1"
+          PINOVEL_DEV_MODE: "1"
+        run: npm run replay:multi-agent-boundary
+
       - name: Run simplicity gate
         run: npm run simplicity-gate
 

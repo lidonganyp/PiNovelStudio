@@ -65,13 +65,14 @@ test("evalMode=B0 + writerModel=gemini31 请求 v2_rawstage2_gemini31", async ()
   const prev = process.env.PINOVEL_EVAL_ONLY;
   process.env.PINOVEL_EVAL_ONLY = "1";
   const requested = [];
+  const root = mkdtempSync(join(tmpdir(), "independent-raw-b0-"));
   try {
     const { runUnifiedPipeline } = await import("../dist/v2/core/unified-entry.js");
     await runUnifiedPipeline({
       workspaceId: "eval-b0-route",
       chapterId: "chapter-001",
       chapterNumber: 1,
-      projectRoot: process.cwd(),
+      projectRoot: root,
       writerModel: "gemini31",
       evalMode: "B0",
       evalPrefix: "independent-raw",
@@ -110,6 +111,7 @@ test("evalMode=B0 + writerModel=gemini31 请求 v2_rawstage2_gemini31", async ()
   } finally {
     if (prev === undefined) delete process.env.PINOVEL_EVAL_ONLY;
     else process.env.PINOVEL_EVAL_ONLY = prev;
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

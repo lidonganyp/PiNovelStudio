@@ -579,6 +579,15 @@ export function materializeScratchProjectSkeleton(
     if (qualityGatesSource) {
       copyFileSync(qualityGatesSource, join(configDir, "quality-gates.json"));
     }
+    const capabilityDir = join(scratchRoot, "data", "runtime");
+    mkdirSync(capabilityDir, { recursive: true });
+    const capabilitySource = locateProjectAsset(
+      source.projectRoot,
+      join("data", "runtime", "capability-package-set.json"),
+    );
+    if (capabilitySource) {
+      copyFileSync(capabilitySource, join(capabilityDir, "capability-package-set.json"));
+    }
   }
   if (source.copyDotEnv) {
     const envSource = locateProjectAsset(source.projectRoot, ".env");

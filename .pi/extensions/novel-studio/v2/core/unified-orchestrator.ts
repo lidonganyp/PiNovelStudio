@@ -221,7 +221,9 @@ import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-
 // Step 1d 修复：导入 AGENTIC_RAW_KIND 共享常量，SOFT 预算过滤器用此 kind
 // 排除 agentic 调用（与路由名 AGENTIC_RAW_ROUTE="novelos_agentic" 区分，二者不可混用）。
 import { AGENTIC_RAW_KIND } from "../../novelos/agent/agentic-raw-candidate-source.js";
+import { checkCandidateTextHashBinding } from "./candidate-revision-store.js";
 import type { ContextSafetyResult } from "./context-safety.js";
+import { buildProtectedContextOverflowFailure } from "./context-package-production.js";
 import { createMethodologyDiagnosticStateLoader } from "./methodology-diagnostic-state.js";
 import {
   buildTrustedControlPlane,
@@ -254,16 +256,18 @@ import type { RecoveryBudget } from "./recovery-types.js";
 // 与 layered budget / RecoveryBudget 并存接线；别名避免与 recovery-budget 的 reserveBudget 冲突。
 import {
   createBudgetLedger,
-  reserveBudget as reserveLedgerBudget,
-  settleBudget as settleLedgerBudget,
   getBudgetLedger,
   type BudgetLedger,
   type BudgetStage as LedgerBudgetStage,
 } from "./budget-ledger.js";
 import {
+  admitProductionModelCall,
+  settleProductionModelCall,
+} from "./budget-admission.js";
+import { seedBudgetLedgerStoreIfAbsent } from "./budget-ledger-store.js";
+import {
   createRoutingGovernanceState,
-  reserveForModelCall,
-  settleModelCall,
+  projectModelCall,
   recordFailureStrategy,
   buildGovernanceReports,
   attachGovernanceReports,
@@ -582,8 +586,7 @@ export class UnifiedOrchestrator {
     stageResults._budgetLedgerState = budgetLedgerState;
     stageResults.budgetLedger = getBudgetLedger(budgetLedgerState);
 
-    // WP-03..07：分层预算 / 失败策略 / 观测 / 质量-成本 生产运行时状态
-    // 与 RecoveryBudget 并存；layered budget 为权威分层账本，写入 stageResults 供 trace 验收。
+    // WP-03..07：分层预算仅作兼容投影；生产准入权威是 BudgetLedger。
     let routingGovernance: RoutingGovernanceState = createRoutingGovernanceState({
       runRouting: input.runRouting,
       recoveryBudget,
@@ -593,7 +596,26 @@ export class UnifiedOrchestrator {
     if (input.contextSafety) {
       stageResults.contextBudgetReport = input.contextSafety.report;
       if (!input.contextSafety.ok) {
-        return this.hardBlock(input, "context_safety", `上下文安全阻断：${input.contextSafety.blockReason}`, stageResults);
+        const overflow = input.contextSafety.blockReason === "protected_context_overflow"
+          || input.contextSafety.blockReason === "context_overflow";
+        const overflowFailure = overflow
+          ? buildProtectedContextOverflowFailure(input.contextSafety)
+          : null;
+        return this.hardBlock(
+          input,
+          "context_safety",
+          overflowFailure?.reason ?? `上下文安全阻断：${input.contextSafety.blockReason}`,
+          stageResults,
+          undefined,
+          {
+            gate: overflowFailure?.gate ?? "context_package_validation",
+            recoverable: false,
+            evidence: overflowFailure?.evidence ?? { blockReason: input.contextSafety.blockReason },
+            userActionRequired: overflowFailure?.userActionRequired
+              ?? ["检查硬约束冲突或缩短本章作者契约后重试"],
+            retryPlan: { strategy: "revise_inputs_and_retry_same_chapter", maxAttempts: 1 },
+          },
+        );
       }
     }
     if (input.context.longTermState?.retrievalReport) {
@@ -780,15 +802,7 @@ export class UnifiedOrchestrator {
           modelBudget.capped = true;
           throw new Error(`模型调用达硬上限（${modelCallLog.length}/${HARD}），拒绝本次调用`);
         }
-        // WP-03：分层预算预扣（正常/恢复分离）；不足则阻断，不发起模型调用。
         const govBefore = getGovernanceState(stageResults);
-        let govReserve:
-          | ReturnType<typeof reserveForModelCall>
-          | undefined;
-        // 恢复分类（WP-03 与 BG-01 账本共用）：
-        // 1) 外层 model_timeout 重试（_modelTimeoutRetryAttempt > 0）
-        // 2) 本 run 内已有 failed modelCall（同阶段自动重试）
-        // 3) kind/route 含 retry|recover|timeout
         const outerRetry =
           typeof input._modelTimeoutRetryAttempt === "number"
             ? input._modelTimeoutRetryAttempt
@@ -799,47 +813,81 @@ export class UnifiedOrchestrator {
           /retry|recover|timeout|model_timeout/i.test(kindBlob);
         const isRecoveryCall =
           outerRetry > 0 || priorFailedCalls > 0 || kindLooksRecovery;
-        const retryIndex = isRecoveryCall
-          ? Math.max(outerRetry, priorFailedCalls, 1)
-          : 0;
-        if (govBefore) {
-          govReserve = reserveForModelCall(govBefore, {
-            kind: genInput.kind ?? fnKind,
-            route: genInput.requestedRoute ?? genInput.route,
-            retryIndex,
-            forceBudgetType: isRecoveryCall ? "recovery" : "normal",
-          });
-          if (!govReserve.ok) {
-            throw new Error(
-              `layered budget exhausted: ${govReserve.reason ?? "unknown"}`,
-            );
-          }
-          setGovernanceState(stageResults, govReserve.state);
-          // 同步 legacy recovery 账本，供 hardBlock / 外层重试读取
-          stageResults.recoveryBudget = govReserve.state.layeredBudget.legacyRecovery;
-        }
-        // BG-01：统一预算账本预扣——真实模型调用前 reserve；不足则阻断，不发起调用。
         const ledgerStage: LedgerBudgetStage = (() => {
-          const s = govReserve?.stage;
-          if (s === "authorStyleOptimization") return "styleOptimization";
-          if (s === "storyPreservation") return "storyPreservation";
-          if (s === "finalFactRecheck") return "finalFactRecheck";
-          if (s === "agenticVerification") return "agenticVerification";
-          if (s === "agenticGeneration" || s === "agenticRetrieval") return "agenticDraft";
+          const s = String(genInput.kind ?? fnKind);
+          if (/style|amplif/i.test(s)) return "styleOptimization";
+          if (/preserv/i.test(s)) return "storyPreservation";
+          if (/fact.?recheck/i.test(s)) return "finalFactRecheck";
+          if (/verif/i.test(s)) return "agenticVerification";
+          if (/agentic|raw/i.test(s)) return "agenticDraft";
           return "other";
         })();
-        const ledgerReserve = reserveLedgerBudget(budgetLedgerState, {
-          stage: ledgerStage,
-          budgetType: isRecoveryCall ? "recovery" : "normal",
-          modelCalls: 1,
-        });
-        if (!ledgerReserve.ok || !ledgerReserve.reservationId) {
-          throw new Error(
-            `budget ledger exhausted: ${ledgerReserve.reason ?? "unknown"}`,
+        const layeredStage = (() => {
+          if (ledgerStage === "styleOptimization") return "authorStyleOptimization" as const;
+          if (ledgerStage === "storyPreservation") return "storyPreservation" as const;
+          if (ledgerStage === "finalFactRecheck") return "finalFactRecheck" as const;
+          if (ledgerStage === "agenticVerification") return "agenticVerification" as const;
+          if (ledgerStage === "agenticDraft") return "agenticGeneration" as const;
+          return "other" as const;
+        })();
+        const provider =
+          expectedLock.provider ??
+          input.runRouting?.provider ??
+          genInput.requestedRoute ??
+          "unknown";
+        // 仅 fullPipelinePreview 是零文件副作用的只读预览。qualityExperiment 由
+        // unified-entry 强制要求 fullPipelinePreview=true（co-set），故已被覆盖；
+        // evalMode 是真实评测运行（NovelBench），预算账本仍需落盘，不得跳过。
+        const previewBudgetPath = Boolean(input.fullPipelinePreview);
+        let productionReservation: {
+          reservationId: string;
+          providerReservationId: string | undefined;
+          provider: string;
+          layeredStage: typeof layeredStage;
+          budgetType: "recovery" | "normal";
+        };
+        if (previewBudgetPath) {
+          // 预览路径：预算账本只读，不落盘，避免 budget-ledger.json /
+          // provider-budget-ledger.json 副作用（preview 必须零文件副作用）。
+          productionReservation = {
+            reservationId: "",
+            providerReservationId: undefined,
+            provider,
+            layeredStage,
+            budgetType: isRecoveryCall ? "recovery" : "normal",
+          };
+        } else {
+          seedBudgetLedgerStoreIfAbsent(
+            budgetLedgerState,
+            input.workspaceId,
+            input.projectRoot,
           );
+          const admitted = admitProductionModelCall({
+            workspaceId: input.workspaceId,
+            projectRoot: input.projectRoot,
+            ownerRunId:
+              input.runRouting?.orchestratorRunId ??
+              budgetLedgerState.runIdentity.runId,
+            stage: ledgerStage,
+            budgetType: isRecoveryCall ? "recovery" : "normal",
+            provider,
+            modelCalls: 1,
+          });
+          if (!admitted.ok || !admitted.reservationId) {
+            throw new Error(
+              `budget ledger exhausted: ${admitted.reason ?? "unknown"}`,
+            );
+          }
+          budgetLedgerState = admitted.ledger;
+          stageResults._budgetLedgerState = budgetLedgerState;
+          productionReservation = {
+            reservationId: admitted.reservationId,
+            providerReservationId: admitted.providerReservationId,
+            provider,
+            layeredStage,
+            budgetType: isRecoveryCall ? "recovery" : "normal",
+          };
         }
-        budgetLedgerState = ledgerReserve.ledger;
-        stageResults._budgetLedgerState = budgetLedgerState;
         // AUDIT-1：模型回合 started（细事件；失败不抛）
         const modelTurnStartedId = input.auditSink?.recordModelTurn({
           phase: "started",
@@ -849,11 +897,29 @@ export class UnifiedOrchestrator {
         try {
           const output = await fn(genInput);
           const durationMs = output.durationMs ?? Date.now() - start;
-          // WP-03：调用后结算实际 token/耗时
-          if (govReserve) {
-            const settled = settleModelCall(govReserve.state, {
-              stage: govReserve.stage,
-              budgetType: govReserve.budgetType,
+          const ledgerTokens =
+            output.tokenUsage && output.tokenUsage !== "unknown"
+              ? output.tokenUsage
+              : { in: 0, out: 0 };
+          if (!previewBudgetPath) {
+            budgetLedgerState = settleProductionModelCall({
+              workspaceId: input.workspaceId,
+              projectRoot: input.projectRoot,
+              reservationId: productionReservation.reservationId,
+              providerReservationId: productionReservation.providerReservationId,
+              provider: output.provider ?? productionReservation.provider,
+              modelCalls: 1,
+              inputTokens: ledgerTokens.in,
+              outputTokens: ledgerTokens.out,
+              latencyMs: durationMs,
+              failed: false,
+            });
+            stageResults._budgetLedgerState = budgetLedgerState;
+          }
+          if (govBefore) {
+            const projected = projectModelCall(govBefore, {
+              stage: productionReservation.layeredStage,
+              budgetType: productionReservation.budgetType,
               durationMs,
               tokenUsage: output.tokenUsage ?? "unknown",
               failed: false,
@@ -861,27 +927,14 @@ export class UnifiedOrchestrator {
               provider: output.provider,
               model: output.model,
             });
-            setGovernanceState(stageResults, settled);
-            stageResults.recoveryBudget = settled.layeredBudget.legacyRecovery;
+            setGovernanceState(stageResults, projected);
+            stageResults.recoveryBudget = projected.layeredBudget.legacyRecovery;
           }
-          // BG-01：统一预算账本结算——调用成功后 settle 实际 token/耗时（预扣转实际）
-          const ledgerTokens =
-            output.tokenUsage && output.tokenUsage !== "unknown"
-              ? output.tokenUsage
-              : { in: 0, out: 0 };
-          budgetLedgerState = settleLedgerBudget(
-            budgetLedgerState,
-            ledgerReserve.reservationId,
-            {
-              modelCalls: 1,
-              inputTokens: ledgerTokens.in,
-              outputTokens: ledgerTokens.out,
-              latencyMs: durationMs,
-              failed: false,
-              provider: output.provider ?? expectedLock.provider,
-            },
-          );
-          stageResults._budgetLedgerState = budgetLedgerState;
+          const successCost =
+            !previewBudgetPath && budgetLedgerState?.costSnapshots?.length
+              ? budgetLedgerState.costSnapshots[budgetLedgerState.costSnapshots.length - 1]?.actualCost
+              : undefined;
+          const successRetryIndex = outerRetry + priorFailedCalls;
           modelCallLog.push({
             route: output.route ?? genInput.route,
             kind: genInput.kind ?? fnKind,
@@ -914,7 +967,9 @@ export class UnifiedOrchestrator {
             contextHash: input.runRouting?.contextHash,
             temperature: genInput.temperature ?? input.runRouting?.temperature,
             timeout: genInput.timeoutMs ?? input.runRouting?.timeout,
-            budgetType: govReserve?.budgetType ?? "normal",
+            retryIndex: successRetryIndex,
+            budgetType: productionReservation.budgetType,
+            ...(typeof successCost === "number" ? { cost: successCost } : {}),
           });
           input.auditSink?.recordModelTurn({
             phase: "completed",
@@ -938,11 +993,25 @@ export class UnifiedOrchestrator {
           // deriveProviderFromRoute 返回 "stub"（向后兼容，不锁定即无 provider 证据）。
           const failRequestedRoute = genInput.requestedRoute ?? genInput.route;
           const failDurationMs = Date.now() - start;
-          // WP-03：失败调用也结算成本
-          if (govReserve) {
-            const settled = settleModelCall(govReserve.state, {
-              stage: govReserve.stage,
-              budgetType: govReserve.budgetType,
+          if (!previewBudgetPath) {
+            budgetLedgerState = settleProductionModelCall({
+              workspaceId: input.workspaceId,
+              projectRoot: input.projectRoot,
+              reservationId: productionReservation.reservationId,
+              providerReservationId: productionReservation.providerReservationId,
+              provider: productionReservation.provider,
+              modelCalls: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              latencyMs: failDurationMs,
+              failed: true,
+            });
+            stageResults._budgetLedgerState = budgetLedgerState;
+          }
+          if (govBefore) {
+            const projected = projectModelCall(govBefore, {
+              stage: productionReservation.layeredStage,
+              budgetType: productionReservation.budgetType,
               durationMs: failDurationMs,
               tokenUsage: "unknown",
               failed: true,
@@ -950,23 +1019,14 @@ export class UnifiedOrchestrator {
               provider: expectedLock.provider,
               model: expectedLock.model,
             });
-            setGovernanceState(stageResults, settled);
-            stageResults.recoveryBudget = settled.layeredBudget.legacyRecovery;
+            setGovernanceState(stageResults, projected);
+            stageResults.recoveryBudget = projected.layeredBudget.legacyRecovery;
           }
-          // BG-01：统一预算账本结算——失败调用同样 settle（failedCalls 计数，预扣转实际）
-          budgetLedgerState = settleLedgerBudget(
-            budgetLedgerState,
-            ledgerReserve.reservationId,
-            {
-              modelCalls: 1,
-              inputTokens: 0,
-              outputTokens: 0,
-              latencyMs: failDurationMs,
-              failed: true,
-              provider: expectedLock.provider,
-            },
-          );
-          stageResults._budgetLedgerState = budgetLedgerState;
+          const failCost =
+            !previewBudgetPath && budgetLedgerState?.costSnapshots?.length
+              ? budgetLedgerState.costSnapshots[budgetLedgerState.costSnapshots.length - 1]?.actualCost
+              : undefined;
+          const failRetryIndex = outerRetry + priorFailedCalls;
           modelCallLog.push({
             route: genInput.route ?? "unknown",
             kind: genInput.kind ?? fnKind,
@@ -987,8 +1047,10 @@ export class UnifiedOrchestrator {
             contextHash: input.runRouting?.contextHash,
             temperature: genInput.temperature ?? input.runRouting?.temperature,
             timeout: genInput.timeoutMs ?? input.runRouting?.timeout,
-            budgetType: govReserve?.budgetType ?? "normal",
+            retryIndex: failRetryIndex,
+            budgetType: productionReservation.budgetType,
             failureType: "network_timeout",
+            ...(typeof failCost === "number" ? { cost: failCost } : {}),
           });
           input.auditSink?.recordModelTurn({
             phase: "failed",
@@ -1111,6 +1173,23 @@ export class UnifiedOrchestrator {
         ...orchInput.promptPatternResolution.trace,
         patternIds: orchInput.promptPatternResolution.patternIds,
         consumedByRawPrompt: rawPrompt.consumedFields.includes("promptPatterns"),
+      };
+    }
+    if (orchInput.capabilityActivation) {
+      const selected = orchInput.capabilityActivation.decisions.filter((d) => d.decision === "selected");
+      if (rawPrompt.consumedFields.includes("promptPatterns")) {
+        throw new Error("raw_injection_forbidden:capability_or_pattern");
+      }
+      stageResults.capabilityPackages = {
+        catalogHash: orchInput.capabilityActivation.catalogHash,
+        capabilityPackageSetHash: orchInput.capabilityActivation.capabilityPackageSetHash,
+        manifestHash: orchInput.capabilityActivation.manifestHash,
+        selected: selected.map((decision) => decision.packageId),
+        skipped: orchInput.capabilityActivation.decisions
+          .filter((decision) => decision.decision !== "selected")
+          .map((decision) => ({ packageId: decision.packageId, reasons: decision.reasons })),
+        consumption: [],
+        modelInputHash: null,
       };
     }
     stageResults.chapterIntent = {
@@ -1238,6 +1317,8 @@ export class UnifiedOrchestrator {
             chapterId,
             chapterNumber,
             projectRoot,
+            evidenceSnapshot: input.evidenceSnapshot,
+            contextPackage: input.contextPackage,
             intent,
             context,
             characterNames,
@@ -1260,6 +1341,10 @@ export class UnifiedOrchestrator {
             toolMode: input.toolMode,
             // AUDIT-1：透传细事件 sink（工具授权/结果）
             auditSink: input.auditSink,
+            capabilityActivation: input.capabilityActivation,
+            capabilityPackageSet: input.capabilityPackageSet,
+            capabilityCatalog: input.capabilityCatalog,
+            capabilityConsumptionLedger: input.capabilityConsumptionLedger,
             // MA：run 身份透传给 Agentic 工作包 / 工具门闩
             orchestratorRunId: collabState.orchestratorRunId,
             taskId: collabState.taskId,
@@ -1355,6 +1440,29 @@ export class UnifiedOrchestrator {
         );
       }
 
+      const consumptionEvents = input.capabilityConsumptionLedger?.events() ?? agenticResult.capabilityConsumption ?? [];
+      const deliveredHash = agenticResult.modelInputHash
+        ?? consumptionEvents.find((event) => event.event === "delivered_to_model")?.modelInputHash
+        ?? null;
+      if (stageResults.capabilityPackages) {
+        const capabilityTrace = stageResults.capabilityPackages as {
+          consumption?: unknown;
+          modelInputHash?: string | null;
+        };
+        capabilityTrace.consumption = [...consumptionEvents];
+        capabilityTrace.modelInputHash = deliveredHash;
+      }
+      const leakedPayload = consumptionEvents.some((event) =>
+        event.event === "delivered_to_model" && event.reason === "activation_tool_result",
+      );
+      if (leakedPayload) {
+        return this.hardBlock(
+          input,
+          "capability_package",
+          "candidate-only capability payload entered Agentic draft model input",
+          stageResults,
+        );
+      }
       stageResults.novelos = {
         shadowEnabled: false,
         required: true,
@@ -1467,6 +1575,33 @@ export class UnifiedOrchestrator {
             finalText: agenticCandidate.text,
           },
           blockGuidance,
+        );
+      }
+      // RRB-5.1：候选正文与 candidateId 的 hash 绑定校验（fail-closed）。
+      // candidateId 必须内嵌 hashText(text) 前缀（与 buildCandidateId 口径一致），
+      // 否则候选 lineage/hash 不完整，不得进入后续转换或提交。
+      const hashBinding = checkCandidateTextHashBinding(agenticCandidate);
+      if (!hashBinding.ok) {
+        stageResults.candidateIntegrity = {
+          ok: false,
+          reason: hashBinding.reason,
+          candidateId: agenticCandidate.id,
+        };
+        return this.hardBlock(
+          input,
+          "novelos_agentic_integrity",
+          `NovelOS Agentic 候选正文与 candidateId 的 hash 绑定失败（${hashBinding.reason}）；候选仅作为阻断证据，不可交付或保存`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: agenticCandidate.id,
+            selectedSource: "raw",
+            finalText: agenticCandidate.text,
+          },
         );
       }
       candidates.push(agenticCandidate);
@@ -2654,6 +2789,10 @@ export class UnifiedOrchestrator {
             // Phase 5 受控接入：透传 toolMode（受控接入同样适用于 evalMode 对照实验）
             toolMode: input.toolMode,
             auditSink: input.auditSink,
+            capabilityActivation: input.capabilityActivation,
+            capabilityPackageSet: input.capabilityPackageSet,
+            capabilityCatalog: input.capabilityCatalog,
+            capabilityConsumptionLedger: input.capabilityConsumptionLedger,
           })
         );
         agenticCandidate = agenticResult.candidate;
@@ -2836,6 +2975,10 @@ export class UnifiedOrchestrator {
             // Phase 5 受控接入：透传 toolMode（shadow 路径同样受控）
             toolMode: input.toolMode,
             auditSink: input.auditSink,
+            capabilityActivation: input.capabilityActivation,
+            capabilityPackageSet: input.capabilityPackageSet,
+            capabilityCatalog: input.capabilityCatalog,
+            capabilityConsumptionLedger: input.capabilityConsumptionLedger,
           })
         );
         stageResults.novelos = {
@@ -3675,6 +3818,9 @@ export class UnifiedOrchestrator {
     // P0-3：代理审批 pending 时跳过 commitAndSave（hasPendingProxyDraft 会阻止，直接跳过避免 error path）。
     // FULL-PIPELINE-PREVIEW-1：完整链路预览跳过 commitAndSave（不写章节、不提交状态）。
     let commitOutcome: { ok: boolean; error?: string; stateCommit: { committed: number; rejected: number } | null };
+    // PRODUCTION-ROLLOUT-AUDIT-1（P0-1d）：标记"遗留 raw/judge 分支 commit 被关闭"，
+    // 供下方 chapterFilePath 三元判空（跳过 commit 时不返回章节路径）。
+    let commitSkippedForProduction = false;
     if (input.evalMode || input.fullPipelinePreview) {
       commitOutcome = { ok: true, stateCommit: null };
       stageResults.commitAndSave = {
@@ -3749,11 +3895,24 @@ export class UnifiedOrchestrator {
           },
         );
       }
-      commitOutcome = timeSync("stage7_commitAndSave", () =>
-        commitAndSave(
-          input, selectedCandidateId, finalText, stageResults
-        )
-      );
+      // PRODUCTION-ROLLOUT-AUDIT-1（P0-1d）：遗留 raw/judge 分支（productionFlow 未设置，
+      // 即 orchestrator-direct / 测试 flag 命中）不得提交章节 / 状态 / 生产 trace。
+      // 仅显式授权（qualityExperiment）允许 commit；agentic 生产路径已在 finishWithCollab
+      // 提前返回（line 2585），不会到达此处。evalMode / fullPipelinePreview 已在上方跳过。
+      if (input.productionFlow === "agentic_style" || input.qualityExperiment) {
+        commitOutcome = timeSync("stage7_commitAndSave", () =>
+          commitAndSave(
+            input, selectedCandidateId, finalText, stageResults
+          )
+        );
+      } else {
+        commitOutcome = { ok: true, stateCommit: null };
+        commitSkippedForProduction = true;
+        stageResults.commitAndSave = {
+          skipped: true,
+          reason: "production_raw_commit_forbidden",
+        };
+      }
     }
     if (!commitOutcome.ok) {
       // 正文保存失败 → hard block（状态未提交，无污染）
@@ -3838,7 +3997,7 @@ export class UnifiedOrchestrator {
       // P0-3：代理审批 pending 时 chapterFilePath=null（pending 稿已落盘到
       // chapter-approvals/{approvalId}.draft.md，等用户 finalization 后才写正式章节）。
       // FULL-PIPELINE-PREVIEW-1：预览模式不写章节文件。
-      chapterFilePath: (input.evalMode || input.fullPipelinePreview || proxyApprovalOutcome.shouldSkipCommit)
+      chapterFilePath: (input.evalMode || input.fullPipelinePreview || proxyApprovalOutcome.shouldSkipCommit || commitSkippedForProduction)
         ? null
         : chapterFilePath(input),
       // FULL-PIPELINE-PREVIEW-1：标记本次运行为完整链路只读预览。
@@ -4296,6 +4455,9 @@ export class UnifiedOrchestrator {
     // Eval 模式：跳过 commitAndSave（不写章节文件、不提交状态）
     // FULL-PIPELINE-PREVIEW-1：完整链路预览也跳过 commitAndSave（不写章节、不提交状态）。
     let commitOutcome: { ok: boolean; error?: string; stateCommit: { committed: number; rejected: number } | null };
+    // PRODUCTION-ROLLOUT-AUDIT-1（P0-1d）：标记"遗留 raw/judge 分支 commit 被关闭"，
+    // 供下方 chapterFilePath 三元判空（跳过 commit 时不返回章节路径）。
+    let commitSkippedForProduction = false;
     if (input.evalMode || input.fullPipelinePreview) {
       commitOutcome = { ok: true, stateCommit: null };
       stageResults.commitAndSave = {
@@ -4347,9 +4509,22 @@ export class UnifiedOrchestrator {
           );
         }
       }
-      commitOutcome = commitAndSave(
-        input, rawCandidate.id, rawCandidate.text, stageResults
-      );
+      // PRODUCTION-ROLLOUT-AUDIT-1（P0-1d）：遗留 raw/judge 分支（productionFlow 未设置，
+      // 即 orchestrator-direct / 测试 flag 命中）不得提交章节 / 状态 / 生产 trace。
+      // 仅显式授权（qualityExperiment）或 agentic 生产路径（实际不会到达 deliverRaw）允许 commit。
+      // evalMode / fullPipelinePreview 已在上方跳过；此处兜底关闭"无授权即提交 raw"的泄漏。
+      if (input.productionFlow === "agentic_style" || input.qualityExperiment) {
+        commitOutcome = commitAndSave(
+          input, rawCandidate.id, rawCandidate.text, stageResults
+        );
+      } else {
+        commitOutcome = { ok: true, stateCommit: null };
+        commitSkippedForProduction = true;
+        stageResults.commitAndSave = {
+          skipped: true,
+          reason: "production_raw_commit_forbidden",
+        };
+      }
     }
 
     // 正文保存失败 → hard block（不假装成功）
@@ -4396,7 +4571,7 @@ export class UnifiedOrchestrator {
       stageResults,
       stateCommit: commitOutcome.stateCommit,
       // FULL-PIPELINE-PREVIEW-1：预览模式不写章节文件（与主路径一致）。
-      chapterFilePath: (input.evalMode || input.fullPipelinePreview) ? null : chapterFilePath(input),
+      chapterFilePath: (input.evalMode || input.fullPipelinePreview || commitSkippedForProduction) ? null : chapterFilePath(input),
       // FULL-PIPELINE-PREVIEW-1：标记本次运行为完整链路只读预览。
       isPreviewRun: Boolean(input.fullPipelinePreview),
       // INTENT-COMPLETENESS-1：deliverRaw 路径也透传 under-specified 标记。
@@ -4552,6 +4727,7 @@ export class UnifiedOrchestrator {
           ? `${reason}（重试次数耗尽 attempt=${attempt} max=${guidanceMaxAttempts}）`
           : reason,
       gate: guidance?.gate ?? policyHit?.match.gateIncludes?.[0],
+      evidence: guidance?.evidence,
       severity:
         budgetForceCheckpoint || attemptExhausted
           ? "hard"

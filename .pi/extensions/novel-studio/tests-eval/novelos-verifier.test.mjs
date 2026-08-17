@@ -253,7 +253,7 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
       applied: false,
     };
 
-    const result = patchService.evaluatePatch(originalDraft, patchedText, proposal);
+    const result = patchService.evaluatePatch(originalDraft, patchedText, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "正文大幅缩短应拒绝 patch");
     assert.ok(result.reason.includes("缩短"), "拒绝原因应提及缩短");
     assert.equal(proposal.rejected, true, "proposal 应标记 rejected");
@@ -276,7 +276,7 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
       applied: false,
     };
 
-    const result = patchService.evaluatePatch(originalDraft, patchedText, proposal);
+    const result = patchService.evaluatePatch(originalDraft, patchedText, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "agency 稀释应拒绝 patch");
     assert.ok(
       result.reason.includes("agency") || result.reason.includes("行动词"),
@@ -299,7 +299,7 @@ describe("NovelOS Narrative Verifier（OPT-9.6/9.7）", () => {
       applied: false,
     };
 
-    const result = patchService.evaluatePatch(originalDraft, patchedText, proposal);
+    const result = patchService.evaluatePatch(originalDraft, patchedText, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, true, "非退化 patch 应被接受");
     assert.equal(proposal.rejected, undefined, "非退化时 proposal 不标记 rejected");
   });

@@ -226,8 +226,10 @@ test("TEXT-INTEGRITY-1: 合法短句和开放式问句仍可 raw-only 交付", a
     assert.equal(result.status, "ok");
     assert.equal(result.selectedSource, "raw");
     assert.equal(result.stageResults.finalTextCompleteness?.passed, true);
-    assert.ok(result.chapterFilePath && existsSync(result.chapterFilePath));
-    assert.equal(readFileSync(result.chapterFilePath, "utf8"), VALID_OPEN_HOOK);
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留分支（productionFlow 未设置）raw-only 照常返回，
+    // 但不 commit（无章节文件 / 无状态提交）。
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stateCommit, null);
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

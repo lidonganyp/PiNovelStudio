@@ -913,8 +913,8 @@ test("inc-5 #22：零宽 verbatim 插入完整链路 checker→feedback→select
   assert.equal(merged.length, draft.length + insertText.length,
     `合并后长度应为 draft+插入=${draft.length + insertText.length}，实际：${merged.length}`);
 
-  // 6. Span 不变性验证：evaluatePatch 应通过
-  const evalResult = patchService.evaluatePatch(draft, merged, proposal);
+  // 6. Span 不变性验证：evaluatePatch 应通过（RRB-3.4 新签名：authorizedRanges[] + proposals[]）
+  const evalResult = patchService.evaluatePatch(draft, merged, [proposal.targetSpan], [proposal]);
   assert.equal(evalResult.accepted, true,
     `零宽插入应通过退化检查（span 外不变），实际：${evalResult.reason}`);
   assert.equal(evalResult.metrics.spanImmutabilityPassed, true,

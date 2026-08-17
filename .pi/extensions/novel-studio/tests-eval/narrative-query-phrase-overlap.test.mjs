@@ -27,35 +27,53 @@ function setupWorkspace() {
   const wsDir = join(tmpRoot, "workspaces", workspaceId);
   mkdirSync(wsDir, { recursive: true });
 
-  // LegacyStateAdapter 从 skeleton.json 的 events 构建 canon 条目
-  // （event.summary → canon:event:{eventId}，event.location → canon:location:{location}）
-  writeFileSync(join(wsDir, "skeleton.json"), JSON.stringify({
-    chapterId: "ch2",
-    events: [
+  const now = new Date().toISOString();
+
+  // narrative-state-store.json（统一状态存储，替代 legacy skeleton.json）
+  writeFileSync(join(wsDir, "narrative-state-store.json"), JSON.stringify({
+    schemaVersion: "narrative-state-store-v1",
+    workspaceId,
+    canon: [
       {
-        eventId: "e1",
-        type: "discovery",
-        summary: "青鱼嘴水域有暗流",
-        characters: ["林川"],
-        location: "青鱼嘴",
+        kind: "canon",
+        id: "canon:event:e1",
+        fact: "青鱼嘴水域有暗流",
+        category: "timeline",
+        sourceChapter: "ch2",
+        sourceRef: "skeleton:e1",
+        confidence: 1.0,
+        lastUpdated: now,
       },
       {
-        eventId: "e2",
-        type: "discovery",
-        summary: "老周有潜水装备",
-        characters: ["老周"],
+        kind: "canon",
+        id: "canon:event:e2",
+        fact: "老周有潜水装备",
+        category: "timeline",
+        sourceChapter: "ch2",
+        sourceRef: "skeleton:e2",
+        confidence: 1.0,
+        lastUpdated: now,
+      },
+      {
+        kind: "canon",
+        id: "canon:location:青鱼嘴",
+        fact: "青鱼嘴",
+        category: "location",
+        sourceChapter: "ch2",
+        sourceRef: "skeleton:locations",
+        confidence: 1.0,
+        lastUpdated: now,
       },
     ],
-    locations: ["青鱼嘴"],
+    character: [],
+    promise: [],
+    pattern: [],
+    expectation: [],
+    eventLog: [],
+    quarantine: [],
+    planned: [],
+    updatedAt: now,
   }), "utf-8");
-
-  writeFileSync(join(wsDir, "narrative-state.json"), JSON.stringify({
-    pendingCosts: [],
-    characterUpdates: [],
-  }), "utf-8");
-
-  writeFileSync(join(wsDir, "unsettled-details.json"), JSON.stringify([]), "utf-8");
-  writeFileSync(join(wsDir, "arc-registry.json"), JSON.stringify({ arcs: [] }), "utf-8");
 
   const chapterDir = join(wsDir, "chapters", "chapter-02");
   mkdirSync(chapterDir, { recursive: true });

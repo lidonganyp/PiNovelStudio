@@ -35,8 +35,10 @@ export interface VerificationFeedback {
   span: TextSpan;
   /** 冲突事实描述 */
   conflictFact: string;
-  /** 证据来源引用（fact id / character id / diag id） */
+  /** 证据来源引用（定位符，非权威） */
   sourceRef: string;
+  /** 权威证据引用（EvidenceRecord.evidenceId）；由修订授权策略填充 */
+  evidenceId?: string;
   /** 失败类型 */
   failureType: VerificationFailureType;
   /** 置信度 0-1 */
@@ -142,6 +144,7 @@ export function findingToFeedback(
     span: finding.span,
     conflictFact: finding.conflictFact,
     sourceRef: finding.sourceRef,
+    evidenceId: finding.evidenceId,
     failureType: finding.failureType,
     confidence: finding.confidence,
     allowedRepairRange: finding.allowedRepairRange,

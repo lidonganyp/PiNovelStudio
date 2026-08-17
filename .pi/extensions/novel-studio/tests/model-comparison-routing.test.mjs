@@ -65,15 +65,17 @@ test("gemini31 comparison locks generation to Gemini 3.1 Pro", () => {
   });
 });
 
-test("public chapter tool exposes gemini31 as an explicit comparison route", () => {
+test("public chapter tool no longer exposes modelTestRoute (eval-only comparison route removed from schema)", () => {
   const handlers = new Proxy({}, { get: () => async () => ({}) });
   const chapterTool = registerTools(handlers).find((tool) => tool.name === "novel_generate_chapter");
   assert.ok(chapterTool);
-  const routeSchema = chapterTool.parameters.properties.modelTestRoute;
-  assert.equal(routeSchema.type, "string");
-  assert.match(routeSchema.description, /glm/i);
-  assert.match(routeSchema.description, /gemini31/i);
-  assert.ok(routeSchema.enum.includes("claude48"));
+  // PRODUCTION-ROLLOUT-AUDIT-1 P0-1b/P0-10：modelTestRoute 已从公开 schema 移除。
+  // 显式模型对比路由是 eval-only 能力，生产路径不接受；内部 handler 仍保留供评测入口直调。
+  assert.equal(
+    chapterTool.parameters.properties.modelTestRoute,
+    undefined,
+    "modelTestRoute 已从公开 schema 移除（eval-only 模型对比路由）",
+  );
 });
 
 test("long-form comparison routes receive explicit model-specific output budgets", () => {

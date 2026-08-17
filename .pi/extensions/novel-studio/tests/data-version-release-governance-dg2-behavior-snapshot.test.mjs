@@ -212,11 +212,12 @@ test("DG-2 verify: 运行时版本漂移 → 不可复现", () => {
 // 4. 组件完整性
 // ============================================================================
 
-test("DG-2 snapshot: 产出 8 个组件明细", () => {
+test("DG-2 snapshot: 产出 9 个组件明细", () => {
   const { root } = makeProject();
   const snap = captureBehaviorSnapshot(makeInput(root));
   const names = snap.components.map((c) => c.name).sort();
   assert.deepEqual(names, [
+    "capabilityPackageSet",
     "contextCompiler",
     "knowledgeSnapshot",
     "modelRouting",

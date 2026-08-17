@@ -1,0 +1,11 @@
+{
+  "version": "pbg-2026-08-15",
+  "providers": {
+    "gemini31": { "maxCalls": 80, "maxCost": 20 },
+    "claude": { "maxCalls": 80, "maxCost": 40 },
+    "gpt": { "maxCalls": 40, "maxCost": 20 },
+    "glm": { "maxCalls": 80, "maxCost": 10 },
+    "doubao": { "maxCalls": 80, "maxCost": 10 },
+    "default": { "maxCalls": 80, "maxCost": 20 }
+  }
+}

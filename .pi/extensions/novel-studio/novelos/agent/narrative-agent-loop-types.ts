@@ -27,7 +27,11 @@ import type {
 import type {
   CoverageGate,
   CoverageGateResult,
+  ConfirmedCoverageFact,
 } from "./must-verify-coverage-gate.js";
+import type { EvidenceRecord } from "../../v2/core/evidence-governance-contracts.js";
+import type { RepairStopReason } from "../../v2/core/repair-authorization-contracts.js";
+import type { RepairBudgetConfig, RepairBudgetSnapshot } from "./repair-budget.js";
 
 // ============================================================================
 // 类型
@@ -44,6 +48,18 @@ export interface AgentLoopInput {
   knownCharacterNames?: string[];
   /** M1.1：本章不可违反的必需事实（来自 ChapterIntent.inviolableFacts） */
   inviolableFacts?: string[];
+  /** CEG-5.1：硬覆盖必须属于同一 snapshot。 */
+  snapshotId?: string;
+  /** CEG-5.1：来自 ContextPackage 权威槽的 confirmed + sourceRef 覆盖。 */
+  confirmedCoverage?: ConfirmedCoverageFact[];
+  /**
+   * REASONING-REPAIR-BOUNDARY-1 Wave 3（RRB-3.7）：权威证据记录（按 evidenceId 索引），
+   * 由 orchestrator 从 ContextPackage 权威槽构建并注入。
+   *
+   * verifyAndPatch 逐 finding 用 evaluateRepairAuthorization 做 fail-closed 修订授权；
+   * 未提供（或 finding.evidenceId 不在其中）时，自动修订被拒绝，正文保持不变。
+   */
+  evidenceRecords?: EvidenceRecord[];
   /**
    * R6 修复：前文（eval 模式续写用）。
    * eval 模式下由编排器传入 evalPrefix（reference chapter 的前文），
@@ -79,11 +95,21 @@ export interface AgentLoopInput {
   retrievalPromptOverride?: string;
 }
 
+/**
+ * Agent loop 整体退出原因。
+ *
+ * REASONING-REPAIR-BOUNDARY-1 Wave 4A（RRB-4.4）：
+ * - 修订循环退出原因收敛为 `RepairStopReason`（cleared / budget_exhausted /
+ *   stagnant / no_authorized_action / stale_authorization / comparator_rejected /
+ *   new_hard_finding / request_new_candidate / blocked）；
+ * - 旧 `verifier_cleared` 已统一为 `cleared`；
+ * - 草稿生成阶段仍保留独立原因（model_declares_sufficient / model_error /
+ *   tool_error / must_verify_coverage_failed），供 agentic-raw-candidate-source
+ *   的 classifyFailureKind 识别超时 / 覆盖门负例等恢复责任。
+ */
 export type AgentLoopStopReason =
+  | RepairStopReason
   | "model_declares_sufficient"
-  | "budget_exhausted"
-  | "stagnant"
-  | "verifier_cleared"
   | "model_error"
   | "tool_error"
   | "must_verify_coverage_failed";
@@ -91,14 +117,18 @@ export type AgentLoopStopReason =
 /**
  * 按阶段统计的模型调用次数（AGENTIC-EVIDENCE-MERGE-1 可观测性）。
  * 不区分 provider/具体模型，只按阶段聚合，供 trace 解释 Agentic 实际动作。
- * - draft：Agentic 首轮 ReAct 阶段的模型调用数（每条 assistant 消息计 1）
- * - patch：整章/局部补丁生成的模型调用数
- * - verify：verifier 校验的调用数（可能为本地确定性，非模型）
+ *
+ * REASONING-REPAIR-BOUNDARY-1 Wave 3（RRB-4.1）：
+ * - 旧 verify 口径已删除（本地 verifier 不计入模型调用，走 ValidatorRunMeter）
+ * - 新增 newCandidate（显式全新候选生成）与 authorStyle（作者风格优化）
+ * - draft：Agentic 首轮 ReAct 阶段的模型调用数
+ * - patch：局部/整章补丁生成的模型调用数
  */
 export interface ModelCallsByKind {
   draft: number;
   patch: number;
-  verify: number;
+  newCandidate: number;
+  authorStyle: number;
 }
 
 export interface AgentLoopLineage {
@@ -137,6 +167,14 @@ export interface AgentLoopLineage {
   actualRetrievalCalls: number;
   /** AGENTIC-EVIDENCE-MERGE-1 可观测性：按阶段聚合的模型调用数 */
   modelCallsByKind: ModelCallsByKind;
+  /**
+   * REASONING-REPAIR-BOUNDARY-1 Wave 3（RRB-4.2）：按种类聚合的本地验证器运行数
+   * （narrative_verifier / patch_comparator / span_immutability / ...）。
+   * 本地验证器不计入 modelCallsByKind。
+   */
+  validatorRuns?: Record<string, number>;
+  /** REASONING-REPAIR-BOUNDARY-1 Wave 4A（RRB-4.6）：多维修订预算快照 */
+  repairBudget?: RepairBudgetSnapshot;
   /** mustVerify 覆盖门最近一次结果（若启用） */
   coverageGate?: CoverageGateResult;
   /** 覆盖门触发的有限重试次数 */
@@ -174,6 +212,14 @@ export interface NarrativeAgentLoopOptions {
   maxCoverageRetries?: number;
   /** 最大修复轮数（默认 2，可通过 PINOVEL_NOVELOS_MAX_REPAIR_ROUNDS 环境变量覆盖） */
   maxRepairRounds?: number;
+  /**
+   * REASONING-REPAIR-BOUNDARY-1 Wave 4A（RRB-4.6）：多维修订预算天花板覆盖。
+   *
+   * 未提供的维度由 maxRepairRounds 派生；调用方可单独收紧某一维度（例如
+   * maxCandidates=1）而不必降低轮次，使修订循环在任一维度触顶时以
+   * budget_exhausted 退出。
+   */
+  repairBudget?: Partial<RepairBudgetConfig>;
 }
 
 export interface AgentTurnsResult {
@@ -206,11 +252,14 @@ export interface VerifyPatchResult {
   repairRounds: number;
   verifierCleared: boolean;
   hardFindingCount: number;
-  stopReason?: AgentLoopStopReason;
-  /** AGENTIC-EVIDENCE-MERGE-1：patch 阶段模型调用数 */
-  patchModelCalls: number;
-  /** AGENTIC-EVIDENCE-MERGE-1：verify 阶段调用数 */
-  verifyModelCalls: number;
+  /** REASONING-REPAIR-BOUNDARY-1 Wave 4A（RRB-4.4）：修订循环结构化退出原因。 */
+  stopReason?: RepairStopReason;
+  /** REASONING-REPAIR-BOUNDARY-1 Wave 3：模型调用按阶段分账（draft/patch/newCandidate/authorStyle） */
+  modelCallsByKind: ModelCallsByKind;
+  /** REASONING-REPAIR-BOUNDARY-1 Wave 3：验证器运行按种类分账 */
+  validatorRuns: Record<string, number>;
+  /** REASONING-REPAIR-BOUNDARY-1 Wave 4A（RRB-4.6）：多维修订预算快照 */
+  repairBudget?: RepairBudgetSnapshot;
 }
 
 // 重新导出 VerificationFinding 类型供辅助模块使用

@@ -133,13 +133,17 @@ describe("CandidateWorkspace dryRun", () => {
     // 目录应被创建
     assert.ok(existsSync(sessionDir), "dryRun=false 时应创建 session 目录");
 
-    // writeDraft 应写盘
+    // writeDraft 应写盘（不可变候选 + current pointer；draft.md 覆盖式写路径已删除 RRB-6.6）
     ws.writeDraft("正常模式下的草稿。");
-    const draftPath = join(sessionDir, "draft.md");
-    assert.ok(existsSync(draftPath), "dryRun=false 时 draft.md 应被写入");
+    const currentId = ws.getCurrentCandidateId();
+    assert.ok(currentId, "dryRun=false 时 writeDraft 应推进 current pointer");
+    assert.ok(
+      existsSync(join(sessionDir, "candidates", `${currentId}.md`)),
+      "dryRun=false 时候选正文应写盘",
+    );
 
-    // readDraft 应从磁盘读取
+    // readDraft 应从 current candidate 读取
     const readBack = ws.readDraft();
-    assert.equal(readBack, "正常模式下的草稿。", "dryRun=false 时 readDraft 应从磁盘读取");
+    assert.equal(readBack, "正常模式下的草稿。", "dryRun=false 时 readDraft 应从 current candidate 读取");
   });
 });

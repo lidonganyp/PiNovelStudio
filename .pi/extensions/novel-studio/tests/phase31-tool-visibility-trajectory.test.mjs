@@ -127,7 +127,7 @@ test("Phase 3.1 · 完整 eval-only replay 产出持久化 tool_visibility traje
  * - actualRetrievalCalls 为非负整数（实际检索类工具调用数）
  * - mustVerifyCount / mustVerifyCoveredCount 为非负整数，covered ≤ total
  * - coverageResult 存在（b3 含 coverage gate）
- * - modelCallsByKind 含 draft/patch/verify 三个非负整数
+ * - modelCallsByKind 含 draft/patch/newCandidate/authorStyle 四个非负整数（RRB-4.1：verify 口径已删除）
  */
 test("AGENTIC-EVIDENCE-MERGE-1 · 完整 b3 路径产出可观测聚合 trace 字段", async () => {
   const { projectRoot, workspaceId, cleanup } = setupFixtureWorkspace(fixture);
@@ -162,10 +162,10 @@ test("AGENTIC-EVIDENCE-MERGE-1 · 完整 b3 路径产出可观测聚合 trace �
     assert.ok(result.coverageResult, "b3 路径应返回 coverageResult");
     assert.equal(typeof result.coverageResult.passed, "boolean", "coverageResult.passed 应为布尔");
 
-    // 6. 按阶段模型调用数：draft/patch/verify 三个非负整数，总量 ≥ draft（至少一次 draft 调用）
+    // 6. 按阶段模型调用数：draft/patch/newCandidate/authorStyle 四个非负整数（RRB-4.1 口径）
     const m = result.modelCallsByKind;
     assert.ok(m && typeof m === "object", "modelCallsByKind 应存在");
-    for (const k of ["draft", "patch", "verify"]) {
+    for (const k of ["draft", "patch", "newCandidate", "authorStyle"]) {
       assert.equal(Number.isInteger(m[k]), true, `modelCallsByKind.${k} 应为整数`);
       assert.ok(m[k] >= 0, `modelCallsByKind.${k} 应 ≥ 0`);
     }

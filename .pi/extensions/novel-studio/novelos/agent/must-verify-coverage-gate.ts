@@ -1,10 +1,9 @@
 /**
  * Must-verify coverage gate.
  *
- * This module is still eval-only until the unified production orchestrator
- * explicitly wires it in. The gate itself is deterministic and fail-closed:
- * P0/P1 facts must be covered by compiled context or confirmed trajectory
- * evidence; P2 facts remain advisory.
+ * Production Agentic loop wires the real gate. CEG-5.1：硬覆盖只接受
+ * confirmed + sourceRef + 同一 snapshot；derived/advisory/conflicted
+ * 与 confirmed_state 不计硬覆盖。无 snapshotId 时保留旧 eval 字符串覆盖。
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -18,24 +17,64 @@ export interface ClassifiedMustVerify {
   reason: string;
 }
 
+export interface ConfirmedCoverageFact {
+  statement: string;
+  sourceRef: string;
+  snapshotId: string;
+}
+
 export interface CoverageGateInput {
   evidencePlan: EvidencePlan;
   trajectoryPath: string;
   inviolableFacts: string[];
   contextCoveredFacts: string[];
+  /** CEG-1.6 / CEG-5.1：硬覆盖必须属于同一 snapshot。 */
+  snapshotId?: string;
+  /** CEG-5.1：来自 ContextPackage 权威槽的 confirmed 覆盖。 */
+  confirmedCoverage?: ConfirmedCoverageFact[];
+  /** CEG-4.1 / CEG-5.4：本轮检索结局。 */
+  retrievalOutcomes?: Array<{
+    queryId: string;
+    status: "match" | "no_match" | "retrieval_error" | "truncated";
+    evidence?: unknown[];
+    nextQueryHint?: string | null;
+    budget?: { usedCalls: number; remainingCalls: number };
+  }>;
+  /** CEG-5.3：检索预算快照。 */
+  retrievalBudget?: {
+    usedCalls: number;
+    remainingCalls: number;
+    lastQuery: string | null;
+  };
 }
 
 export interface CoverageGateFailureEnvelope {
   stage: "must_verify_coverage_gate";
-  gate: "unverified_high_risk_facts";
+  gate:
+    | "unverified_high_risk_facts"
+    | "retrieval_budget_exhausted"
+    | "retrieval_error";
+  failureClass: "blocked" | "recoverable";
   severity: "hard";
-  evidence: Array<{
-    item: string;
-    riskLevel: FactRiskLevel;
-    reason: string;
-  }>;
-  recoverable: true;
+  evidence:
+    | Array<{
+        item: string;
+        riskLevel: FactRiskLevel;
+        reason: string;
+      }>
+    | {
+        unverifiedHighRisk: Array<{
+          item: string;
+          riskLevel: FactRiskLevel;
+          reason: string;
+        }>;
+        lastQuery?: string | null;
+        usedCalls?: number;
+        remainingCalls?: number;
+      };
+  recoverable: boolean;
   retryPlan: "agent_loop_retry_with_explicit_must_verify_prompt";
+  userActionRequired?: string[];
 }
 
 export interface CoverageGateResult {
@@ -64,12 +103,11 @@ export interface CoverageGate {
 interface ConfirmedEvidence {
   sourceRef: string;
   excerpt: string;
+  snapshotId?: string;
 }
 
 const CONFIRMED_EVIDENCE_LEVELS = new Set([
   "confirmed",
-  "confirmed_state",
-  "exact_chapter_span",
 ]);
 
 const P0_MARKERS = [
@@ -200,14 +238,18 @@ function readConfirmedEvidence(trajectoryPath: string): ConfirmedEvidence[] {
     const evidence: ConfirmedEvidence[] = [];
     const seen = new Set<string>();
 
-    const addEvidence = (sourceRef: unknown, excerpt: unknown): void => {
+    const addEvidence = (sourceRef: unknown, excerpt: unknown, snapshotId?: unknown): void => {
       if (typeof sourceRef !== "string" || typeof excerpt !== "string" || !excerpt) {
         return;
       }
       const key = `${sourceRef}\u0000${excerpt}`;
       if (seen.has(key)) return;
       seen.add(key);
-      evidence.push({ sourceRef, excerpt });
+      evidence.push({
+        sourceRef,
+        excerpt,
+        snapshotId: typeof snapshotId === "string" ? snapshotId : undefined,
+      });
     };
 
     const visit = (value: unknown): void => {
@@ -216,13 +258,18 @@ function readConfirmedEvidence(trajectoryPath: string): ConfirmedEvidence[] {
       if (record.type === "ranked_evidence") {
         const data = record.data;
         if (data && typeof data === "object") {
-          const evidences = (data as Record<string, unknown>).evidences;
+          const dataRecord = data as Record<string, unknown>;
+          const evidences = dataRecord.evidences ?? dataRecord.rankedEvidences;
           if (Array.isArray(evidences)) {
             for (const item of evidences) {
               if (!item || typeof item !== "object") continue;
               const ranked = item as Record<string, unknown>;
               if (CONFIRMED_EVIDENCE_LEVELS.has(String(ranked.evidenceLevel ?? ""))) {
-                addEvidence(ranked.sourceRef, ranked.excerpt);
+                addEvidence(
+                  ranked.sourceRef,
+                  ranked.excerpt,
+                  ranked.snapshotId ?? dataRecord.snapshotId,
+                );
               }
             }
           }
@@ -231,6 +278,7 @@ function readConfirmedEvidence(trajectoryPath: string): ConfirmedEvidence[] {
       const details = record.details;
       if (details && typeof details === "object") {
         const detailRecord = details as Record<string, unknown>;
+        const inheritedSnapshot = detailRecord.snapshotId;
         if (
           CONFIRMED_EVIDENCE_LEVELS.has(String(detailRecord.evidenceLevel ?? "")) &&
           typeof detailRecord.sourceRef === "string"
@@ -241,7 +289,21 @@ function readConfirmedEvidence(trajectoryPath: string): ConfirmedEvidence[] {
               : typeof record.text === "string"
                 ? record.text
                 : extractText(record.content);
-          addEvidence(detailRecord.sourceRef, excerpt);
+          addEvidence(detailRecord.sourceRef, excerpt, inheritedSnapshot);
+        }
+        const nested = detailRecord.rankedEvidences ?? detailRecord.evidences;
+        if (Array.isArray(nested)) {
+          for (const item of nested) {
+            if (!item || typeof item !== "object") continue;
+            const ranked = item as Record<string, unknown>;
+            if (CONFIRMED_EVIDENCE_LEVELS.has(String(ranked.evidenceLevel ?? ""))) {
+              addEvidence(
+                ranked.sourceRef,
+                ranked.excerpt,
+                ranked.snapshotId ?? inheritedSnapshot,
+              );
+            }
+          }
         }
       }
       for (const child of Object.values(record)) {
@@ -265,10 +327,54 @@ function readConfirmedEvidence(trajectoryPath: string): ConfirmedEvidence[] {
 
 function makeFailureEnvelope(
   unverifiedHighRisk: CoverageGateResult["unverifiedHighRisk"],
+  input?: CoverageGateInput,
 ): CoverageGateFailureEnvelope {
+  const budget = input?.retrievalBudget;
+  const hasRetrievalError = (input?.retrievalOutcomes ?? []).some(
+    (outcome) => outcome.status === "retrieval_error",
+  );
+  if (budget && budget.remainingCalls <= 0 && budget.usedCalls > 0) {
+    return {
+      stage: "must_verify_coverage_gate",
+      gate: "retrieval_budget_exhausted",
+      failureClass: "blocked",
+      severity: "hard",
+      evidence: {
+        unverifiedHighRisk,
+        lastQuery: budget.lastQuery,
+        usedCalls: budget.usedCalls,
+        remainingCalls: budget.remainingCalls,
+      },
+      recoverable: false,
+      retryPlan: "agent_loop_retry_with_explicit_must_verify_prompt",
+      userActionRequired: [
+        "提高本章检索预算或补齐必须验证的事实来源后重试",
+        ...(budget.lastQuery ? [`最后查询：${budget.lastQuery}`] : []),
+        ...unverifiedHighRisk.slice(0, 5).map((item) => `未覆盖：${item.item}`),
+      ],
+    };
+  }
+  if (hasRetrievalError) {
+    const errored = (input?.retrievalOutcomes ?? []).find((outcome) => outcome.status === "retrieval_error");
+    return {
+      stage: "must_verify_coverage_gate",
+      gate: "retrieval_error",
+      failureClass: "recoverable",
+      severity: "hard",
+      evidence: {
+        unverifiedHighRisk,
+        lastQuery: errored?.queryId ?? budget?.lastQuery ?? null,
+        usedCalls: budget?.usedCalls,
+        remainingCalls: budget?.remainingCalls,
+      },
+      recoverable: true,
+      retryPlan: "agent_loop_retry_with_explicit_must_verify_prompt",
+    };
+  }
   return {
     stage: "must_verify_coverage_gate",
     gate: "unverified_high_risk_facts",
+    failureClass: "blocked",
     severity: "hard",
     evidence: unverifiedHighRisk,
     recoverable: true,
@@ -354,22 +460,41 @@ export function checkMustVerifyCoverage(
   const confirmedItems: CoverageGateResult["confirmedItems"] = [];
   const unverifiedHighRisk: CoverageGateResult["unverifiedHighRisk"] = [];
   let contextOnly = true;
+  const snapshotBound = Boolean(input.snapshotId);
 
   for (const item of highRisk) {
-    const contextMatch = input.contextCoveredFacts.find((fact) =>
-      factsMatch(item.item, fact),
-    );
-    if (contextMatch) {
-      confirmedItems.push({
-        item: item.item,
-        matchedEvidence: `context:${contextMatch}`,
-      });
-      continue;
+    if (snapshotBound) {
+      const packaged = (input.confirmedCoverage ?? []).find((fact) =>
+        fact.snapshotId === input.snapshotId
+        && Boolean(fact.sourceRef)
+        && factsMatch(item.item, fact.statement),
+      );
+      if (packaged) {
+        confirmedItems.push({
+          item: item.item,
+          matchedEvidence: packaged.sourceRef,
+        });
+        continue;
+      }
+    } else {
+      const contextMatch = input.contextCoveredFacts.find((fact) =>
+        factsMatch(item.item, fact),
+      );
+      if (contextMatch) {
+        confirmedItems.push({
+          item: item.item,
+          matchedEvidence: `context:${contextMatch}`,
+        });
+        continue;
+      }
     }
 
-    const evidenceMatch = trajectoryEvidence.find((evidence) =>
-      factsMatch(item.item, evidence.excerpt),
-    );
+    const evidenceMatch = trajectoryEvidence.find((evidence) => {
+      if (!factsMatch(item.item, evidence.excerpt)) return false;
+      if (!evidence.sourceRef) return false;
+      if (snapshotBound && evidence.snapshotId !== input.snapshotId) return false;
+      return true;
+    });
     if (evidenceMatch) {
       contextOnly = false;
       confirmedItems.push({
@@ -391,7 +516,7 @@ export function checkMustVerifyCoverage(
       passed: false,
       unverifiedHighRisk,
       confirmedItems,
-      failureEnvelope: makeFailureEnvelope(unverifiedHighRisk),
+      failureEnvelope: makeFailureEnvelope(unverifiedHighRisk, input),
     };
   }
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "workspaceId": "agentic-evidence-merge-trace",
   "chapterId": "ch1",
-  "createdAt": "2026-08-12T06:03:14.268Z",
+  "createdAt": "2026-08-12T06:43:11.524Z",
   "events": [],
   "patches": [],
   "gates": [
@@ -17,7 +17,7 @@
       "revisionHints": [],
       "evidence": {
         "stage": "novelos_agentic_generation",
-        "timestamp": "2026-08-12T06:03:14.268Z",
+        "timestamp": "2026-08-12T06:43:11.524Z",
         "error": {
           "message": "NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）",
           "code": "novelos_agentic_generation",
@@ -76,7 +76,7 @@
                     "reason": "load workspace context: agentic-evidence-merge-trace",
                     "allowed": true,
                     "consumed": false,
-                    "timestamp": "2026-08-12T06:03:13.120Z"
+                    "timestamp": "2026-08-12T06:43:10.385Z"
                   },
                   {
                     "capability": "state.stage",
@@ -86,7 +86,7 @@
                     "reason": "stage narrative state update: ch1",
                     "allowed": true,
                     "consumed": false,
-                    "timestamp": "2026-08-12T06:03:13.122Z"
+                    "timestamp": "2026-08-12T06:43:10.387Z"
                   },
                   {
                     "capability": "model.generate",
@@ -96,7 +96,7 @@
                     "reason": "generationModelGenerate:agentic_raw",
                     "allowed": true,
                     "consumed": false,
-                    "timestamp": "2026-08-12T06:03:13.128Z"
+                    "timestamp": "2026-08-12T06:43:10.393Z"
                   },
                   {
                     "capability": "network.model_call",
@@ -106,7 +106,7 @@
                     "reason": "generationModelGenerate:agentic_raw",
                     "allowed": true,
                     "consumed": false,
-                    "timestamp": "2026-08-12T06:03:13.128Z"
+                    "timestamp": "2026-08-12T06:43:10.393Z"
                   },
                   {
                     "capability": "artifact.export",
@@ -116,7 +116,7 @@
                     "reason": "quality evidence report export",
                     "allowed": true,
                     "consumed": false,
-                    "timestamp": "2026-08-12T06:03:14.267Z"
+                    "timestamp": "2026-08-12T06:43:11.523Z"
                   }
                 ],
                 "denials": [],
@@ -557,8 +557,8 @@
                 {
                   "route": "v2_rawstage2",
                   "kind": "agentic_raw",
-                  "durationMs": 1130,
-                  "ts": 1786514593128,
+                  "durationMs": 1125,
+                  "ts": 1786516990393,
                   "tokenUsage": "unknown",
                   "failed": true,
                   "requestedRoute": "v2_rawstage2_gemini31",
@@ -569,7 +569,7 @@
                 }
               ],
               "stageTiming": {
-                "stage1_novelosAgentic": 1142
+                "stage1_novelosAgentic": 1134
               },
               "modelBudget": {
                 "soft": 6,
@@ -1165,8 +1165,8 @@
               "novelos": {
                 "shadowEnabled": false,
                 "required": true,
-                "sessionId": "novelos-ch1-3c574c4f",
-                "trajectoryPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-trace\\novelos-sessions\\novelos-ch1-3c574c4f\\trajectory.jsonl",
+                "sessionId": "novelos-ch1-1734fb54",
+                "trajectoryPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-trace\\novelos-sessions\\novelos-ch1-1734fb54\\trajectory.jsonl",
                 "candidateId": null,
                 "candidateLength": 0,
                 "stopReason": "model_error",
@@ -1223,7 +1223,7 @@
                   "skippedReason": "hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
                   "scannedCandidateId": "",
                   "scannedTextLength": 0,
-                  "scannedAt": 1786514594267
+                  "scannedAt": 1786516991523
                 }
               },
               "informationReleaseEvidence": {
@@ -1254,7 +1254,7 @@
                   "skippedReason": "hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
                   "scannedCandidateId": "",
                   "scannedTextLength": 0,
-                  "scannedAt": 1786514594267
+                  "scannedAt": 1786516991523
                 }
               },
               "endingCraftEvidence": {
@@ -1295,7 +1295,7 @@
                   "skippedReason": "hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
                   "scannedCandidateId": "",
                   "scannedTextLength": 0,
-                  "scannedAt": 1786514594267
+                  "scannedAt": 1786516991523
                 }
               },
               "craftEvidenceEnvelope": {
@@ -1308,7 +1308,7 @@
                     "evidenceCount": 0,
                     "scannedCandidateId": "",
                     "scannedTextLength": 0,
-                    "scannedAt": 1786514594267
+                    "scannedAt": 1786516991523
                   },
                   {
                     "source": "informationRelease",
@@ -1318,7 +1318,7 @@
                     "evidenceCount": 0,
                     "scannedCandidateId": "",
                     "scannedTextLength": 0,
-                    "scannedAt": 1786514594267
+                    "scannedAt": 1786516991523
                   },
                   {
                     "source": "endingCraft",
@@ -1328,7 +1328,7 @@
                     "evidenceCount": 0,
                     "scannedCandidateId": "",
                     "scannedTextLength": 0,
-                    "scannedAt": 1786514594267
+                    "scannedAt": 1786516991523
                   }
                 ],
                 "findings": [],
@@ -1360,7 +1360,7 @@
                 "meta": {
                   "finalTextLength": 0,
                   "finalCandidateId": "",
-                  "generatedAt": 1786514594267,
+                  "generatedAt": 1786516991523,
                   "skipped": true,
                   "skippedReason": "skipped: hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
                   "missingSources": []
@@ -1400,7 +1400,7 @@
                 "humanReviewFocus": [],
                 "proxyNote": "质量证据运行报告，非改写命令，非质量评分，非 winner 选择依据，非 hard gate",
                 "meta": {
-                  "compiledAt": 1786514594267,
+                  "compiledAt": 1786516991523,
                   "source": "quality_evidence_run_report"
                 }
               },
@@ -1428,8 +1428,8 @@
           {
             "route": "v2_rawstage2",
             "kind": "agentic_raw",
-            "durationMs": 1130,
-            "ts": 1786514593128,
+            "durationMs": 1125,
+            "ts": 1786516990393,
             "tokenUsage": "unknown",
             "failed": true,
             "requestedRoute": "v2_rawstage2_gemini31",
@@ -1440,7 +1440,7 @@
           }
         ],
         "stageTiming": {
-          "stage1_novelosAgentic": 1142
+          "stage1_novelosAgentic": 1134
         },
         "modelBudget": {
           "soft": 6,
@@ -1459,8 +1459,8 @@
     }
   ],
   "buildInfo": {
-    "buildTimestamp": "2026-08-12T05:56:28.281Z",
-    "gitHash": "9f62f2387430e7506cd62ac91e15346f4ff9afc2",
+    "buildTimestamp": "2026-08-12T06:25:27.740Z",
+    "gitHash": "e65184bc69167b30059df90cefc206415bc5959a",
     "nodeVersion": "v25.2.1"
   },
   "failureEnvelopes": [
@@ -1517,7 +1517,7 @@
                 "reason": "load workspace context: agentic-evidence-merge-trace",
                 "allowed": true,
                 "consumed": false,
-                "timestamp": "2026-08-12T06:03:13.120Z"
+                "timestamp": "2026-08-12T06:43:10.385Z"
               },
               {
                 "capability": "state.stage",
@@ -1527,7 +1527,7 @@
                 "reason": "stage narrative state update: ch1",
                 "allowed": true,
                 "consumed": false,
-                "timestamp": "2026-08-12T06:03:13.122Z"
+                "timestamp": "2026-08-12T06:43:10.387Z"
               },
               {
                 "capability": "model.generate",
@@ -1537,7 +1537,7 @@
                 "reason": "generationModelGenerate:agentic_raw",
                 "allowed": true,
                 "consumed": false,
-                "timestamp": "2026-08-12T06:03:13.128Z"
+                "timestamp": "2026-08-12T06:43:10.393Z"
               },
               {
                 "capability": "network.model_call",
@@ -1547,7 +1547,7 @@
                 "reason": "generationModelGenerate:agentic_raw",
                 "allowed": true,
                 "consumed": false,
-                "timestamp": "2026-08-12T06:03:13.128Z"
+                "timestamp": "2026-08-12T06:43:10.393Z"
               },
               {
                 "capability": "artifact.export",
@@ -1557,7 +1557,7 @@
                 "reason": "quality evidence report export",
                 "allowed": true,
                 "consumed": false,
-                "timestamp": "2026-08-12T06:03:14.267Z"
+                "timestamp": "2026-08-12T06:43:11.523Z"
               }
             ],
             "denials": [],
@@ -1998,8 +1998,8 @@
             {
               "route": "v2_rawstage2",
               "kind": "agentic_raw",
-              "durationMs": 1130,
-              "ts": 1786514593128,
+              "durationMs": 1125,
+              "ts": 1786516990393,
               "tokenUsage": "unknown",
               "failed": true,
               "requestedRoute": "v2_rawstage2_gemini31",
@@ -2010,7 +2010,7 @@
             }
           ],
           "stageTiming": {
-            "stage1_novelosAgentic": 1142
+            "stage1_novelosAgentic": 1134
           },
           "modelBudget": {
             "soft": 6,
@@ -2606,8 +2606,8 @@
           "novelos": {
             "shadowEnabled": false,
             "required": true,
-            "sessionId": "novelos-ch1-3c574c4f",
-            "trajectoryPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-trace\\novelos-sessions\\novelos-ch1-3c574c4f\\trajectory.jsonl",
+            "sessionId": "novelos-ch1-1734fb54",
+            "trajectoryPath": "D:\\CODE\\PiNovelStudio\\.pi\\extensions\\novel-studio\\workspaces\\agentic-evidence-merge-trace\\novelos-sessions\\novelos-ch1-1734fb54\\trajectory.jsonl",
             "candidateId": null,
             "candidateLength": 0,
             "stopReason": "model_error",
@@ -2664,7 +2664,7 @@
               "skippedReason": "hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
               "scannedCandidateId": "",
               "scannedTextLength": 0,
-              "scannedAt": 1786514594267
+              "scannedAt": 1786516991523
             }
           },
           "informationReleaseEvidence": {
@@ -2695,7 +2695,7 @@
               "skippedReason": "hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
               "scannedCandidateId": "",
               "scannedTextLength": 0,
-              "scannedAt": 1786514594267
+              "scannedAt": 1786516991523
             }
           },
           "endingCraftEvidence": {
@@ -2736,7 +2736,7 @@
               "skippedReason": "hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
               "scannedCandidateId": "",
               "scannedTextLength": 0,
-              "scannedAt": 1786514594267
+              "scannedAt": 1786516991523
             }
           },
           "craftEvidenceEnvelope": {
@@ -2749,7 +2749,7 @@
                 "evidenceCount": 0,
                 "scannedCandidateId": "",
                 "scannedTextLength": 0,
-                "scannedAt": 1786514594267
+                "scannedAt": 1786516991523
               },
               {
                 "source": "informationRelease",
@@ -2759,7 +2759,7 @@
                 "evidenceCount": 0,
                 "scannedCandidateId": "",
                 "scannedTextLength": 0,
-                "scannedAt": 1786514594267
+                "scannedAt": 1786516991523
               },
               {
                 "source": "endingCraft",
@@ -2769,7 +2769,7 @@
                 "evidenceCount": 0,
                 "scannedCandidateId": "",
                 "scannedTextLength": 0,
-                "scannedAt": 1786514594267
+                "scannedAt": 1786516991523
               }
             ],
             "findings": [],
@@ -2801,7 +2801,7 @@
             "meta": {
               "finalTextLength": 0,
               "finalCandidateId": "",
-              "generatedAt": 1786514594267,
+              "generatedAt": 1786516991523,
               "skipped": true,
               "skippedReason": "skipped: hardBlock at stage=novelos_agentic_generation：NovelOS Agentic 模型超时/连接异常（candidate=null）：agent loop fallback: model_error（Fallback chain timeout: exceeded 100ms total budget）（无 finalText 可扫描）",
               "missingSources": []
@@ -2841,7 +2841,7 @@
             "humanReviewFocus": [],
             "proxyNote": "质量证据运行报告，非改写命令，非质量评分，非 winner 选择依据，非 hard gate",
             "meta": {
-              "compiledAt": 1786514594267,
+              "compiledAt": 1786516991523,
               "source": "quality_evidence_run_report"
             }
           },
@@ -2863,7 +2863,7 @@
         "strategy": "chapter_level_retry",
         "maxAttempts": 1
       },
-      "recordedAt": "2026-08-12T06:03:14.268Z"
+      "recordedAt": "2026-08-12T06:43:11.524Z"
     }
   ],
   "v2Summary": {
@@ -2873,7 +2873,7 @@
     "stages": [
       {
         "stage": "novelos_agentic_generation",
-        "timestamp": "2026-08-12T06:03:14.268Z"
+        "timestamp": "2026-08-12T06:43:11.524Z"
       }
     ]
   }

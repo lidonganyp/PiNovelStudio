@@ -35,6 +35,7 @@ import type {
   SceneContract,
   CompiledContext,
 } from "../core/types.js";
+import { createHash } from "node:crypto";
 import { classifyCandidateSource } from "../core/candidate-source.js";
 import type { ModelCallEntry } from "../core/unified-orchestrator.js";
 
@@ -555,8 +556,8 @@ function buildV2Summary(
 // 辅助：从 CompiledContext 提取 contextHash（供 record.contextHash 用）
 // ============================================================================
 
-export function deriveContextHashFromCompiled(context: CompiledContext): string {
-  // 轻量签名：facts/openLoops/characterStates 数量
+/** 只读兼容：数量签名，明确不是内容 hash。 */
+export function deriveLegacyQuantityContextHash(context: CompiledContext): string {
   return [
     `f${context.facts.length}`,
     `l${context.openLoops.length}`,
@@ -564,4 +565,19 @@ export function deriveContextHashFromCompiled(context: CompiledContext): string 
     `w${context.worldRules.length}`,
     `s${context.styleReferences.length}`,
   ].join("-");
+}
+
+/**
+ * CEG-4.5：生产 context hash 改为内容敏感 SHA-256。
+ * 旧数量签名见 deriveLegacyQuantityContextHash（legacy_non_content_hash）。
+ */
+export function deriveContextHashFromCompiled(context: CompiledContext): string {
+  const payload = JSON.stringify({
+    facts: context.facts,
+    openLoops: context.openLoops,
+    characterStates: context.characterStates,
+    worldRules: context.worldRules,
+    styleReferences: context.styleReferences,
+  });
+  return createHash("sha256").update(payload, "utf-8").digest("hex");
 }

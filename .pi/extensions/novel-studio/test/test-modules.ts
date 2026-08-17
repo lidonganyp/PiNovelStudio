@@ -110,6 +110,16 @@ import "../v2/governance/environment-fingerprint.js";
 // 纯函数模块（仅 node:crypto + sibling canonicalize），不依赖 legacy-index /
 // agents / workflow / lab / novelbench，可安全纳入 dist-test。
 import "../v2/governance/behavior-bundle.js";
+import "../v2/core/methodology-policy.js";
+import "../v2/core/capability-package-contracts.js";
+import "../v2/governance/capability-package-registry.js";
+import "../v2/core/capability-activation-planner.js";
+import "../v2/core/capability-consumption-ledger.js";
+import "../v2/core/capability-package-production.js";
+import "../novelos/agent/capability-package-runtime.js";
+import "../novelos/agent/narrative-tool-registry.js";
+import "../novelos/security/permission-policy.js";
+import "../v2/governance/capability-package-eval-gate.js";
 
 // DATA-VERSION-RELEASE-GOVERNANCE DG-2：生产级行为快照捕获与独立校验。
 // 纯 node 内建（crypto/fs/path/child_process）+ sibling behavior-bundle，
@@ -298,6 +308,15 @@ import "../v2/core/candidate-generator.js";
 import "../v2/core/scene-contract-planner.js";
 import "../craft/anti-ai-auto-patch.js";
 
+// CPG production runtime / planner / frozen-set loader — consumed by
+// capability-package-*.test.mjs via dist-test/.
+import "../v2/core/capability-package-production.js";
+import "../v2/core/capability-activation-planner.js";
+import "../v2/governance/capability-package-registry.js";
+import "../v2/governance/capability-package-eval-gate.js";
+import "../novelos/agent/capability-package-runtime.js";
+import "../v2/core/budget-ledger.js";
+
 // PHASE-0-TOOL-BASELINE-1：工具基线盘点与观测。
 // - tools/tool-capability.ts：纯静态能力清单，无运行时引用，仅被测试消费，故显式纳入 dist-test。
 // - trajectory/tool-metrics-tracer.ts：已由 agentic-raw-candidate-source 进入 prod 闭包，
@@ -315,6 +334,37 @@ import "../v2/core/memory/memory-compression.js";
 import "../v2/core/memory/memory-lifecycle.js";
 import "../v2/core/memory/memory-retrieval.js";
 import "../v2/core/memory/index.js";
+
+// CONTEXT-EVIDENCE-GOVERNANCE-1 Wave 0：契约/映射表/A 基线常量。
+// 纯类型 + 常量，无 I/O；Wave 0 不进入生产读取/排序路径。纳入 dist-test 供契约测试消费。
+import "../v2/core/evidence-governance-contracts.js";
+import "../v2/core/narrative-evidence-snapshot.js";
+import "../v2/core/evidence-eligibility-gate.js";
+import "../v2/core/evidence-record-adapter.js";
+import "../v2/core/context-delivery-ledger.js";
+import "../v2/core/context-package-production.js";
+import "../v2/core/ceg-wave5-metrics.js";
+import "../v2/core/ceg-wave6-longform-fixture.js";
+
+// CEG-3.5 动态工具结果信任（tool-result-evidence）：consumeToolResultAsEvidence /
+// renderToolEvidenceForModel。仅依赖 evidence-governance-contracts + trust/*（均在 dist-test/
+// 或生产闭包）+ novelos/tools/tool-protocol，不含 legacy-index / agents / workflow / lab。
+// ceg-wave3b-trust.test.mjs 从 dist-test/ 直接消费，必须显式纳入 barrel。
+import "../v2/core/tool-result-evidence.js";
+
+// REASONING-REPAIR-BOUNDARY-1：修订授权契约 + 授权策略（Wave 2A / RRB-1.3~1.6）。
+// repair-authorization-contracts 纯类型+常量零运行时依赖（仅 type-only import），
+// repair-authorization-policy 运行时依赖 evidence-governance-contracts（已在 dist-test）
+// 和 repair-authorization-contracts（同闭包），不依赖 legacy-index / agents / workflow / lab。
+// Wave 2A 阶段仅测试消费；生产 orchestrator 接入留待 Wave 3+。
+import "../v2/core/repair-authorization-contracts.js";
+import "../v2/core/repair-authorization-policy.js";
+
+// REASONING-REPAIR-BOUNDARY-1 Wave 2C：模型调用计量 + 验证器运行计量（RRB-4.1~4.3）。
+// 纯模块（仅 node:crypto），不依赖 legacy-index / agents / workflow / lab。
+// Wave 2C 阶段仅测试消费；生产 loop 接入留待 Wave 3+。
+import "../v2/core/model-call-meter.js";
+import "../v2/core/validator-run-meter.js";
 
 // Marker export to prevent tree-shaking from removing side-effect imports
 export const TEST_MODULES_LOADED = true;

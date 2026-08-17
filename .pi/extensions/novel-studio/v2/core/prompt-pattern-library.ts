@@ -6,6 +6,8 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sealCapabilityPackage } from "../governance/capability-package-registry.js";
+import type { CapabilityPackageManifest, CapabilityPayloadRecord } from "./capability-package-contracts.js";
 
 export type PromptPatternStatus = "candidate" | "active" | "dormant" | "retired";
 export type PromptPatternSourceType =
@@ -353,4 +355,67 @@ function isConfidence(value: unknown): value is PromptPatternConfidence {
 function isAuditableSourceLocator(value: string): boolean {
   return /^https:\/\//u.test(value)
     || /^reports\/[a-z0-9][a-z0-9_./-]*\.(?:json|md)$/u.test(value);
+}
+
+function mapPromptPatternStatus(status: PromptPatternStatus): CapabilityPackageManifest["status"] {
+  if (status === "active") return "active";
+  if (status === "retired") return "retired";
+  if (status === "dormant") return "held";
+  return "eval";
+}
+
+/** Read-only one-shot adapter. Package status is the runtime truth after migration. */
+export function adaptPromptPatternToPackage(
+  pattern: PromptPattern,
+): { manifest: CapabilityPackageManifest; payload: CapabilityPayloadRecord } {
+  return sealCapabilityPackage({
+    schemaVersion: "capability-package-v1",
+    packageId: `prompt_pattern.${pattern.id}`,
+    version: "1.0.0",
+    slot: `prompt_pattern.${pattern.id}`,
+    kind: "prompt_pattern",
+    purpose: pattern.title,
+    applicableWhen: [],
+    excludedWhen: [],
+    requiredInputs: [],
+    outputArtifacts: [{ kind: "candidate_guidance", schemaId: "prompt-pattern-guidance-v1" }],
+    payloadRef: {
+      mediaType: "application/json",
+      payloadHash: "",
+      sourceRef: `prompt-pattern:${pattern.id}`,
+    },
+    targetStages: ["style_optimization"],
+    allowedTools: [],
+    stopConditions: [{ kind: "max_output_artifacts", value: 1 }],
+    budgetPolicy: {
+      maxCalls: 0,
+      maxInputTokens: 400,
+      maxOutputTokens: 0,
+      maxLatencyMs: 0,
+      maxCost: 0,
+    },
+    authority: "methodology",
+    enforcement: "candidate_only",
+    dependencies: [],
+    conflicts: [],
+    modelCapabilityRequirements: [],
+    provenance: pattern.sources.map((source) => ({
+      sourceId: source.sourceId,
+      sourceType: source.sourceType,
+      accessedAt: source.accessedAt,
+    })),
+    evalManifestId: `prompt-pattern:${pattern.id}`,
+    admissionEvidence: [{
+      evalManifestId: `prompt-pattern:${pattern.id}`,
+      sampleSize: pattern.admission.sampleSize,
+      validatedWinRate: pattern.admission.validatedWinRate,
+      reason: pattern.admission.reason,
+    }],
+    status: mapPromptPatternStatus(pattern.status),
+    criticality: "optional",
+  }, {
+    guidance: pattern.guidance,
+    requiredMoves: pattern.requiredMoves,
+    avoidPatterns: pattern.avoidPatterns,
+  });
 }

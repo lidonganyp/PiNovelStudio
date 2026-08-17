@@ -124,7 +124,11 @@ export class CandidatePatchService {
    * P0-3 修复：
    * - 传播 certainty（deterministic/corroborated/heuristic）
    * - 标记 isSemantic（heuristic intent_omission / 语义类，受1轮预算约束）
-   * - 标记 localReplacement（span 精确且非整章时，只输出 span 内替换文本）
+   * - 标记 localReplacement（span 有效且非整章时，只输出 span 内替换文本）
+   *
+   * REASONING-REPAIR-BOUNDARY-1 Wave 3（RRB-3.3）：
+   * - 删除 40% 阈值：不再根据 span 大小隐式升级为整章重写
+   * - 整章范围 [0, draft.length] 走显式 new_candidate，不通过 patch 隐式升级
    */
   proposePatch(
     draft: string,
@@ -133,11 +137,11 @@ export class CandidatePatchService {
     const type = this.inferPatchType(feedback.failureType);
     const repairDirection = this.buildRepairDirection(feedback);
     const isSemantic = this.isSemanticFailureType(feedback.failureType, feedback.certainty);
-    // P0-3：span 精确（非 [0, draft.length] 整章）且长度 < 40% 时使用局部 replacement
-    const spanLength = feedback.allowedRepairRange.end - feedback.allowedRepairRange.start;
+    // RRB-3.3：span 为有效部分范围（非整章）时使用局部 replacement。
+    // 整章 [0, draft.length] 应走显式 new_candidate，不通过 patch 隐式升级。
     const isFullChapter = feedback.allowedRepairRange.start === 0
       && feedback.allowedRepairRange.end === draft.length;
-    const localReplacement = !isFullChapter && spanLength < draft.length * 0.4;
+    const localReplacement = !isFullChapter;
 
     return {
       findingId: feedback.findingId,
@@ -179,23 +183,28 @@ export class CandidatePatchService {
   }
 
   /**
-   * 评估 patch 是否退化。
+   * 评估 patch 是否退化（REASONING-REPAIR-BOUNDARY-1 Wave 3 / RRB-3.4）。
    *
    * 退化条件（M1 启发式）：
-   * - patch 修改了目标 span 外的正文 → span 违规 → 退化
+   * - patch 修改了授权范围外的正文 → span 违规 → 退化
    * - patch 后正文长度大幅缩短（> 30%）→ 退化
    * - patch 后行动词密度下降（< 80%）→ agency 稀释 → 退化
    *
-   * 退化时 accepted=false，原 candidate 保留，patch 标记 rejected。
+   * 退化时 accepted=false，原 candidate 保留，所有相关 proposal 标记 rejected。
+   *
+   * RRB-3.4：authorizedRanges 是**本轮全部授权 span 的规范化并集**，
+   * 一次性联合校验，不再逐 proposal 独立校验同一 patchedText。
    *
    * @param originalDraft 原 draft 文本
    * @param patchedText patch 后的文本
-   * @param proposal 对应的 patch proposal
+   * @param authorizedRanges 本轮全部授权修复范围（规范化后）
+   * @param proposals 本轮关联的 patch proposals（退化时全部标记 rejected）
    */
   evaluatePatch(
     originalDraft: string,
     patchedText: string,
-    proposal: PatchProposal,
+    authorizedRanges: TextSpan[],
+    proposals?: PatchProposal[],
   ): PatchEvaluationResult {
     const originalLength = originalDraft.length;
     const patchedLength = patchedText.length;
@@ -207,7 +216,7 @@ export class CandidatePatchService {
       originalAgencyCount > 0 ? patchedAgencyCount / originalAgencyCount : 1;
 
     // span 外不变性检查（先于其他退化判定：span 违规是最严重的暗改）
-    const spanCheck = this.checkSpanImmutability(originalDraft, patchedText, [proposal.targetSpan]);
+    const spanCheck = this.checkSpanImmutability(originalDraft, patchedText, authorizedRanges);
 
     const metrics = {
       originalLength,
@@ -220,37 +229,34 @@ export class CandidatePatchService {
       ...(spanCheck.detail ? { spanViolationDetail: spanCheck.detail } : {}),
     };
 
+    const rejectAll = (reason: string) => {
+      if (proposals) {
+        for (const p of proposals) {
+          p.rejected = true;
+          p.rejectionReason = reason;
+        }
+      }
+    };
+
     // 退化判定 0：span 外不变性违规
     if (!spanCheck.passed) {
-      proposal.rejected = true;
-      proposal.rejectionReason = `patch 修改了目标 span 外的正文：${spanCheck.detail}`;
-      return {
-        accepted: false,
-        reason: proposal.rejectionReason,
-        metrics,
-      };
+      const reason = `patch 修改了授权范围外的正文：${spanCheck.detail}`;
+      rejectAll(reason);
+      return { accepted: false, reason, metrics };
     }
 
     // 退化判定 1：正文大幅缩短
     if (lengthRatio < 0.7) {
-      proposal.rejected = true;
-      proposal.rejectionReason = `patch 导致正文大幅缩短（${originalLength}→${patchedLength}，ratio=${lengthRatio.toFixed(2)}），视为退化`;
-      return {
-        accepted: false,
-        reason: proposal.rejectionReason,
-        metrics,
-      };
+      const reason = `patch 导致正文大幅缩短（${originalLength}→${patchedLength}，ratio=${lengthRatio.toFixed(2)}），视为退化`;
+      rejectAll(reason);
+      return { accepted: false, reason, metrics };
     }
 
     // 退化判定 2：agency 稀释
     if (agencyRatio < 0.8) {
-      proposal.rejected = true;
-      proposal.rejectionReason = `patch 导致行动词密度下降（${originalAgencyCount}→${patchedAgencyCount}，ratio=${agencyRatio.toFixed(2)}），agency 稀释，视为退化`;
-      return {
-        accepted: false,
-        reason: proposal.rejectionReason,
-        metrics,
-      };
+      const reason = `patch 导致行动词密度下降（${originalAgencyCount}→${patchedAgencyCount}，ratio=${agencyRatio.toFixed(2)}），agency 稀释，视为退化`;
+      rejectAll(reason);
+      return { accepted: false, reason, metrics };
     }
 
     return {
@@ -287,19 +293,21 @@ export class CandidatePatchService {
     patchedText: string,
     repairRanges: TextSpan[],
   ): { passed: boolean; detail?: string } {
-    // 1. 范围校验：拒绝非法/重叠/越界（不再静默合并）
-    // inc-3 修复：零宽 span [n, n] 是合法插入点，不过滤、不拒绝（仅拒绝 start > end 倒置）
-    const sortedRanges = [...repairRanges]
-      .filter((r) => r.end >= r.start)  // 允许零宽（start === end），仅过滤倒置
-      .sort((a, b) => a.start - b.start);
-    for (let i = 0; i < sortedRanges.length; i++) {
-      const r = sortedRanges[i];
+    // 1. 范围校验：拒绝倒置/越界/重叠（RRB T11 整轮拒绝，不静默过滤或合并）。
+    //    inc-3：零宽 span [n, n] 是合法插入点，允许但不参与重叠检查。
+    //    RRB-6.1 修复：倒置 span（start > end）必须 fail-closed 拒绝，不得被
+    //    .filter 静默丢弃（否则 T11「倒置 → 整轮拒绝」失效）。
+    for (const r of repairRanges) {
       if (r.start < 0 || r.end > originalDraft.length || r.start > r.end) {
         return {
           passed: false,
           detail: `非法 span [${r.start}, ${r.end}]（越界或倒置，原文长度=${originalDraft.length}）`,
         };
       }
+    }
+    const sortedRanges = [...repairRanges].sort((a, b) => a.start - b.start);
+    for (let i = 0; i < sortedRanges.length; i++) {
+      const r = sortedRanges[i];
       // 零宽插入点不参与重叠检查（start === end 的 span 不与相邻 span 重叠）
       if (r.start === r.end) continue;
       if (i > 0 && r.start < sortedRanges[i - 1].end) {
@@ -336,10 +344,13 @@ export class CandidatePatchService {
       };
     }
 
-    // 5. 中间不可变段（多 span 之间）按序精确匹配，禁止 span 间插入未授权内容
-    //    构造不可变段序列：prefix, gap1, gap2, ..., suffix
-    //    patched 去掉 prefix 和 suffix 后，剩余中间部分必须按序包含每个 gap，
-    //    且 gap 前不得有多余内容（pos > cursor 表示 span 间插入了未授权内容）
+    // 5. 中间不可变段（gap）按序精确匹配。
+    //    middle = R0 + G1 + R1 + G2 + ... + R_k（Ri 为 span 内替换，任意长度/内容；
+    //    Gi 为不可变 gap）。gap 必须按序出现在 middle 中，内容缺失即拒绝。
+    //    RRB-6.1 修复：删除 pos > cursor 拒绝——首个 span 的替换内容 R0 合法地
+    //    位于首个 gap 之前，原检查把 R0 误判为「span 间插入未授权内容」，
+    //    导致所有首个 span 非空替换的多 span 修订被整体拒绝（T10 失效）。
+    //    gap 内容被篡改由 pos < 0（gap 缺失）拒绝；gap 按序匹配由 cursor 推进保证。
     const middle = patchedText.slice(prefix.length, patchedText.length - suffix.length);
     let cursor = 0;
     for (let i = 0; i < sortedRanges.length - 1; i++) {
@@ -355,18 +366,9 @@ export class CandidatePatchService {
           detail: `span 间不可变段被修改/缺失（期望保留 "${preview}"）`,
         };
       }
-      if (pos > cursor) {
-        const gapPreview = gap.length > 30 ? `${gap.slice(0, 30)}...` : gap;
-        const inserted = middle.slice(cursor, pos);
-        const insertedPreview = inserted.length > 30 ? `${inserted.slice(0, 30)}...` : inserted;
-        return {
-          passed: false,
-          detail: `span 间插入了未授权内容（在不可变段 "${gapPreview}" 前多出 "${insertedPreview}"）`,
-        };
-      }
       cursor = pos + gap.length;
     }
-    // 6. 单 span 场景：cursor 仍为 0，middle 全部是 span 内修改 → 通过
+    // 6. 单 span 场景：无 gap，middle 全部是 span 内修改 → 通过
     return { passed: true };
   }
 

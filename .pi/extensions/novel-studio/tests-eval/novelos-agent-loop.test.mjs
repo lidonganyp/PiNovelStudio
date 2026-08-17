@@ -5,7 +5,7 @@
  * 1. 正常流程：stub 发 <tool_call> → 工具派发 → 证据回灌 → 生成 draft → fallback=false
  * 2. 模型异常 fallback：modelGenerate 抛错 → fallback=true + stopReason=model_error
  * 3. 预算耗尽 fallback：maxToolCalls=1 → 第一次 tool call 耗尽 → fallback=true + stopReason=budget_exhausted
- * 4. CandidateWorkspace 文件验证（evidence-plan/tool-events/draft/lineage）
+ * 4. CandidateWorkspace 文件验证（evidence-plan/tool-events/lineage；无 verifier 不得写 current-candidate.json）
  * 5. trajectory 回放：含 evidence_plan + tool_event + budget + output
  * 6. lineage 记录完整 sourceRefs + toolCalls + evidenceFacts
  *
@@ -22,7 +22,7 @@
 
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createNovelOSRuntime } from "../dist/novelos/runtime/runtime.js";
@@ -344,8 +344,20 @@ describe("NovelOS Narrative Agent Loop（ReAct 架构）", () => {
     const dir = candidateWorkspace.getDir();
     assert.ok(existsSync(join(dir, "evidence-plan.json")), "evidence-plan.json 应存在");
     assert.ok(existsSync(join(dir, "tool-events.jsonl")), "tool-events.jsonl 应存在");
-    assert.ok(existsSync(join(dir, "draft.md")), "draft.md 应存在");
     assert.ok(existsSync(join(dir, "lineage.json")), "lineage.json 应存在");
+    // fail-closed：无 verifier 只允许 append-only 初稿，不得推进 current pointer
+    assert.equal(
+      existsSync(join(dir, "current-candidate.json")),
+      false,
+      "无 verifier 时不得生成 current-candidate.json",
+    );
+    const candidatesDir = join(dir, "candidates");
+    assert.ok(existsSync(candidatesDir), "candidates/ 应写入不可变初稿");
+    const candidateFiles = readdirSync(candidatesDir);
+    assert.ok(
+      candidateFiles.some((name) => name.endsWith(".md")),
+      "无 verifier 仍应保存不可变初稿 artifact",
+    );
 
     // evidence-plan.json 内容合法
     const plan = JSON.parse(readFileSync(join(dir, "evidence-plan.json"), "utf-8"));

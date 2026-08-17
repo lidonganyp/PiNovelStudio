@@ -60,6 +60,13 @@ export type EvidenceEpistemicStatus =
   | "advisory"
   | "conflicted";
 
+export interface EvidenceLineage {
+  sourceChapter?: string;
+  chapterNumber?: number | null;
+  runId?: string | null;
+  candidateId?: string | null;
+}
+
 export interface EvidenceRecord {
   evidenceId: string;
   statement: string;
@@ -76,6 +83,8 @@ export interface EvidenceRecord {
   retrievalQueryId: string | null;
   snapshotId: string;
   traceable: boolean;
+  /** chapter/run/candidate 血缘。缺绑定时不得参与提交、修复授权或策略学习。 */
+  lineage?: EvidenceLineage;
 }
 
 // ============================================================================

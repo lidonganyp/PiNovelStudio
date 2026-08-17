@@ -11,6 +11,7 @@ import { createNarrativeTools } from "../dist/novelos/tools/narrative-tools.js";
 test("search_narrative_evidence falls back to meaningful query tokens", async () => {
   const calls = [];
   const searchService = {
+    getSnapshotId() { return undefined; },
     searchRanked(query) {
       calls.push(query);
       if (query === "苏明") {

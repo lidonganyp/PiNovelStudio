@@ -31,82 +31,77 @@ function setupWorkspace() {
   const wsDir = join(tmpRoot, "workspaces", workspaceId);
   mkdirSync(wsDir, { recursive: true });
 
-  // skeleton.json（LegacyStateAdapter 需要）
-  writeFileSync(
-    join(wsDir, "skeleton.json"),
-    JSON.stringify({
-      chapterId: "ch2",
-      events: [
-        {
-          eventId: "evt-001",
-          type: "discovery",
-          summary: "林川在青鱼嘴水下发现暗流",
-          characters: ["林川"],
-          location: "青鱼嘴",
-        },
-      ],
-      locations: ["青鱼嘴", "镇上"],
-    }),
-    "utf-8",
-  );
+  const now = new Date().toISOString();
 
-  // narrative-state.json（含 canon 条目：location + timeline 类别）
+  // narrative-state-store.json（统一状态存储，替代 legacy skeleton.json + narrative-state.json）
   writeFileSync(
-    join(wsDir, "narrative-state.json"),
+    join(wsDir, "narrative-state-store.json"),
     JSON.stringify({
+      schemaVersion: "narrative-state-store-v1",
+      workspaceId,
       canon: [
         {
+          kind: "canon",
+          id: "event:evt-001",
+          fact: "林川在青鱼嘴水下发现暗流",
+          category: "timeline",
+          sourceChapter: "ch2",
+          sourceRef: "skeleton:evt-001",
+          confidence: 1.0,
+          lastUpdated: now,
+        },
+        {
+          kind: "canon",
           id: "canon:location-linchuan-ch2",
           fact: "第2章结尾林川位置：青鱼嘴水下",
           category: "location",
           sourceChapter: "ch2",
           sourceRef: "ch2#final.md",
           confidence: 0.9,
+          lastUpdated: now,
         },
         {
+          kind: "canon",
           id: "canon:location-suwan-ch2",
           fact: "第2章结尾苏婉位置：镇上",
           category: "location",
           sourceChapter: "ch2",
           sourceRef: "ch2#final.md",
           confidence: 0.9,
+          lastUpdated: now,
         },
         {
+          kind: "canon",
           id: "canon:timeline-ch2",
           fact: "第2章时间：上午十点到中午十二点",
           category: "timeline",
           sourceChapter: "ch2",
           sourceRef: "ch2#final.md",
           confidence: 0.9,
+          lastUpdated: now,
         },
       ],
       character: [
         {
-          characterId: "char:linchuan",
-          name: "林川",
+          kind: "character",
+          id: "character:linchuan:location",
+          characterId: "林川",
           field: "location",
           value: "青鱼嘴水下",
           sourceChapter: "ch2",
           sourceRef: "ch2#final.md",
+          confidence: 0.9,
+          lastUpdated: now,
         },
       ],
       promise: [],
       pattern: [],
+      expectation: [],
+      eventLog: [],
+      quarantine: [],
+      planned: [],
+      updatedAt: now,
     }),
-    "utf-8",
-  );
-
-  // unsettled-details.json
-  writeFileSync(
-    join(wsDir, "unsettled-details.json"),
-    JSON.stringify([]),
-    "utf-8",
-  );
-
-  // arc-registry.json
-  writeFileSync(
-    join(wsDir, "arc-registry.json"),
-    JSON.stringify({ arcs: [] }),
     "utf-8",
   );
 

@@ -47,6 +47,31 @@ function loadRouting() {
   return JSON.parse(readFileSync(ROUTING_PATH, "utf8"));
 }
 
+// Providers whose env-key names and URL shape diverge from the generic
+// `<PROVIDERKEY>_BASE_URL` / `<PROVIDERKEY>_MODEL` convention. These mirror the
+// authoritative maps in .pi/extensions/novel-studio/utils/config.ts (configMap +
+// modelOverrideEnvMap) so the healthcheck probes the same endpoint production uses.
+// gemini31's base-URL key is GOOGLE_GEMINI_BASE_URL (not GEMINI31_BASE_URL) and its
+// OpenAI-compatible root needs a /v1 prefix (the proxy serves an HTML landing page
+// at the bare host, not the chat-completions API).
+const BASE_URL_ENV_OVERRIDES = { gemini31: "GOOGLE_GEMINI_BASE_URL" };
+const MODEL_ENV_OVERRIDES = { gemini31: "GEMINI_MODEL" };
+
+function normalizeProviderBaseUrl(providerKey, baseUrl) {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  if (providerKey !== "gemini31") return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname === "" || parsed.pathname === "/") {
+      parsed.pathname = "/v1";
+      return parsed.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    // keep invalid/custom values unchanged so the request layer reports its own error
+  }
+  return trimmed;
+}
+
 async function pingOpenAICompat(baseUrl, apiKey, model) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -127,8 +152,11 @@ async function main() {
 
     const apiKeyEnv = provider.api_key_env;
     const apiKey = env[apiKeyEnv];
-    const baseUrl = env[`${providerKey.toUpperCase()}_BASE_URL`] || provider.base_url;
-    const model = env[`${providerKey.toUpperCase()}_MODEL`] || provider.model;
+    const baseUrl = normalizeProviderBaseUrl(
+      providerKey,
+      env[BASE_URL_ENV_OVERRIDES[providerKey] ?? `${providerKey.toUpperCase()}_BASE_URL`] || provider.base_url,
+    );
+    const model = env[MODEL_ENV_OVERRIDES[providerKey] ?? `${providerKey.toUpperCase()}_MODEL`] || provider.model;
     const protocol = provider.protocol || (providerKey === "claude" ? "anthropic" : "openai");
 
     if (!apiKey) {

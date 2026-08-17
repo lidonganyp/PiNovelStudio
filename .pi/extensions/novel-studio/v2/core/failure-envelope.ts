@@ -267,12 +267,14 @@ export function toUnifiedFailureEnvelope(
   causedByEventId?: string | null;
   chapterBudgetUsed?: Partial<RecoveryBudget>;
   completedWork?: string[];
+  evidence?: unknown;
 } {
   return {
     stage: env.stage,
     severity: env.severity,
     gate: env.gate,
     reason: env.reason,
+    evidence: env.evidence,
     recoverable: env.recoverable,
     degradedTo: "hard_block",
     candidateDisposition: env.candidateDisposition,

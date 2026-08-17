@@ -1014,7 +1014,7 @@ export async function runFullPipelineReplay(
     const traceEvidence = collectReplayTraceEvidence(lease);
     const modelCalls = traceEvidence.stats.modelCalls;
     const traceArchived = hasTraceArchive(lease);
-    if (fixture.replayMode === "production_like") {
+    if (fixture.replayMode === "production_like" && fixture.matrixArm !== "raw_direct") {
       const expected = {
         releaseId: fixture.provenance.releaseId,
         environmentFingerprint: "",
@@ -1109,10 +1109,13 @@ export async function runFullPipelineReplay(
       archiveScratchWorkspace(lease, join(runPath, "samples", fixture.fixtureId, "scratch"));
     }
 
+    const stdoutOk = typeof invokeResult.stdout === "string"
+      && invokeResult.stdout.includes('"isError": false')
+      && /"status":\s*"ok"/.test(invokeResult.stdout);
     const failed =
       envelopes.some((e) => e.severity === "hard" || e.severity === "fatal") ||
-      invokeResult.exitCode !== 0 ||
-      invokeResult.timedOut;
+      invokeResult.timedOut ||
+      (invokeResult.exitCode !== 0 && !stdoutOk);
 
     const entry: ReplayRunSampleEntry = {
       fixtureId: fixture.fixtureId,

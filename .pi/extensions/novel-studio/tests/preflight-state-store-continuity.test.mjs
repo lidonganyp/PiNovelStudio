@@ -22,6 +22,8 @@
  *  6. hash-mismatch     — state store hash 与 ch{N-1}.md 实际 hash 不符 → 阻断
  *  7. workspace-mismatch— state store workspaceId 与实际不符 → 阻断
  *  8. chapter-file-missing — state store 声称 ch{N-1} committed 但 chapters/{N-1}.md 缺失 → 阻断
+ *  9. committed-no-entries — lastCommittedChapter=ch{N-1} 但权威数组全空（干净 workspace 首章常见）→ 不阻断
+ * 10. committed-no-entries-chapter-missing — 同上但 chapters/{N-1}.md 缺失 → 阻断
  */
 
 import { describe, it, before, after } from "node:test";
@@ -492,6 +494,67 @@ describe("PREFLIGHT-STATE-STORE-CONTINUITY-1: 前章连续性预检（state stor
     assert.equal(report.passed, false, "state store JSON 损坏应阻断");
     const stateBlock = report.blockingItems.find(b => b.check === "previous_state_store_invalid");
     assert.ok(stateBlock, "state store 解析失败应阻断 previous_state_store_invalid");
+    cleanupTestWorkspace();
+  });
+
+  it("11. committed-no-entries: lastCommittedChapter=ch{N-1} 但权威状态数组全空 → 不阻断", () => {
+    const chapterNumber = 3;
+    const prevText = "第二章正文，所有 seed 派生的状态条目均被 reanchor 拒绝。";
+    setupBaseWorkspace();
+    writePrevChapterFile(chapterNumber - 1, prevText);
+    // 干净 workspace 首章提交：lastCommittedChapter 前进但权威数组全空（真实 FinalStateCommit 行为）
+    writeStateStore({
+      schemaVersion: 1,
+      workspaceId: testWorkspaceId,
+      canon: [],
+      character: [],
+      promise: [],
+      pattern: [],
+      expectation: [],
+      lastCommittedChapter: `ch${chapterNumber - 1}`,
+      updatedAt: "2026-07-15T19:57:41.523Z",
+    });
+    // 不写 skeleton
+
+    const report = runPreflight(chapterNumber);
+
+    const stateBlock = report.blockingItems.find(b => b.check === "previous_state_store_invalid");
+    assert.equal(stateBlock, undefined, "已提交但无权威状态条目时不应阻断（连续性由 lastCommittedChapter + 章节文件证明）");
+    assert.equal(report.checks.previousSkeleton.passed, true);
+    assert.equal(
+      report.checks.previousSkeleton.detail.source,
+      "state-store-committed-no-entries",
+      "应记录连续性来源为 state-store-committed-no-entries",
+    );
+    cleanupTestWorkspace();
+  });
+
+  it("12. committed-no-entries-chapter-missing: lastCommittedChapter=ch{N-1} 但 chapters/{N-1}.md 缺失 → 阻断", () => {
+    const chapterNumber = 3;
+    setupBaseWorkspace();
+    // 故意不写 chapters/2.md
+    writeStateStore({
+      schemaVersion: 1,
+      workspaceId: testWorkspaceId,
+      canon: [],
+      character: [],
+      promise: [],
+      pattern: [],
+      expectation: [],
+      lastCommittedChapter: `ch${chapterNumber - 1}`,
+      updatedAt: "2026-07-15T19:57:41.523Z",
+    });
+    // 不写 skeleton
+
+    const report = runPreflight(chapterNumber);
+
+    assert.equal(report.passed, false, "已提交但章节文件缺失应阻断");
+    const stateBlock = report.blockingItems.find(b => b.check === "previous_state_store_invalid");
+    assert.ok(stateBlock, "章节文件缺失应阻断 previous_state_store_invalid");
+    assert.ok(
+      stateBlock.reason.includes("chapter") || stateBlock.reason.includes("missing"),
+      "阻断原因应说明章节文件缺失",
+    );
     cleanupTestWorkspace();
   });
 });

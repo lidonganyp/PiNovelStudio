@@ -16,7 +16,8 @@
  *   7. agentic_raw 候选不参与 selection（selectedSource 只能是 "raw" | "editorial"）
  *   8. Shadow 默认 OFF（无 PINOVEL_NOVELOS_SHADOW 环境变量 → shadowEnabled=false）
  *   9. Shadow ON + agentic 成功 → agentic_raw 候选进入 candidates（供 trace 审计）但不被选中
- *  10. 只有最终选中结果执行 FinalStateCommit（agentic_raw 不触发状态提交，交付正文是 raw）
+ *  10. 未设 productionFlow 的遗留 raw/shadow 路径不得提交状态或写章节；
+ *      交付正文仍是 raw，agentic_raw 不得被选中或单独触发 commit
  *
  * 设计说明：
  *   - 静态断言与 dependency-boundary.test.mjs 同模式（readFileSync + 字符串/正则断言）
@@ -456,7 +457,7 @@ describe("NovelOS Step 5.6 行为边界（shadow 模式）", () => {
     }
   });
 
-  it("只有最终选中结果执行 FinalStateCommit（agentic_raw 不触发状态提交，交付正文是 raw）", async () => {
+  it("未设 productionFlow 的 raw/shadow 路径不得提交状态；交付正文仍是 raw", async () => {
     process.env.PINOVEL_NOVELOS_SHADOW = "1";
     const agenticText = "NovelOS agentic 正文（不应触发 FinalStateCommit，不应被交付）。";
     const input = makeOrchestratorInput({
@@ -466,17 +467,18 @@ describe("NovelOS Step 5.6 行为边界（shadow 模式）", () => {
       const orch = createUnifiedOrchestrator();
       const result = await orch.orchestrate(input);
       assert.equal(result.status, "ok");
-      // 状态提交应基于最终选中的 raw 候选，不是 agentic_raw
       assert.equal(result.selectedSource, "raw");
-      assert.ok(result.stateCommit !== null, "应有状态提交结果（即便无 stagedStateUpdate 也返回 {0,0}）");
-      // 最终正文应是 raw（HIGH_QUALITY_RAW），不是 agenticText
+      // PRODUCTION-ROLLOUT-AUDIT-1：遗留 raw/judge 分支未设 productionFlow 时
+      // 不得提交状态或写章节。agentic_raw 仍不得被选中。
+      assert.equal(result.stateCommit, null, "未设 productionFlow 不得提交状态");
+      assert.equal(result.chapterFilePath, null, "未设 productionFlow 不得写章节文件");
+      assert.equal(
+        result.stageResults?.commitAndSave?.reason,
+        "production_raw_commit_forbidden",
+        "commit 跳过原因必须是 production_raw_commit_forbidden",
+      );
       assert.equal(result.text, HIGH_QUALITY_RAW, "交付正文应是 raw，不是 agentic_raw");
       assert.notEqual(result.text, agenticText, "交付正文不得是 agentic_raw");
-      // 章节文件保存的是 raw 正文
-      assert.ok(result.chapterFilePath, "应有章节文件路径");
-      assert.ok(existsSync(result.chapterFilePath), "章节文件应已保存");
-      const saved = readFileSync(result.chapterFilePath, "utf-8");
-      assert.equal(saved, HIGH_QUALITY_RAW, "保存的章节文件应是 raw 正文，不是 agentic_raw");
     } finally {
       rmSync(input.projectRoot, { recursive: true, force: true });
     }

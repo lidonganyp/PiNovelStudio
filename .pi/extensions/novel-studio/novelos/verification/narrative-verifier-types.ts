@@ -58,8 +58,10 @@ export interface VerificationFinding {
   span: TextSpan;
   /** 冲突事实描述 */
   conflictFact: string;
-  /** 证据来源引用（fact id / character id / diag id） */
+  /** 证据来源引用（定位符，非权威；仅标识来源 guard/fact/character/outline） */
   sourceRef: string;
+  /** 权威证据引用（EvidenceRecord.evidenceId）；由修订授权策略（Phase 2A）解析填充 */
+  evidenceId?: string;
   /** 置信度 0-1（M1 启发式：硬验证 1.0，软验证 0.5） */
   confidence: number;
   /** 允许修改范围（span 级，默认等于 span；空范围 start===end 表示诊断 only） */

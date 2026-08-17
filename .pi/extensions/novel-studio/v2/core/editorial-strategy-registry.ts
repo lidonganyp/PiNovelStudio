@@ -6,6 +6,8 @@
  * concrete edit and every candidate remains subject to chapter-specific review.
  */
 
+import { sealCapabilityPackage } from "../governance/capability-package-registry.js";
+import type { CapabilityPackageManifest, CapabilityPayloadRecord } from "./capability-package-contracts.js";
 import type {
   EditorialHypothesis,
   EditorialOpportunityType,
@@ -98,4 +100,56 @@ export class EditorialStrategyRegistry {
 
 export function createEditorialStrategyRegistry(): EditorialStrategyRegistry {
   return new EditorialStrategyRegistry();
+}
+
+/** Read-only adapter. Strategy selection stays in EditorialStrategyRegistry. */
+export function adaptEditorialStrategyToPackage(
+  strategy: EditorialStrategyDef,
+): { manifest: CapabilityPackageManifest; payload: CapabilityPayloadRecord } {
+  return sealCapabilityPackage({
+    schemaVersion: "capability-package-v1",
+    packageId: `editorial_strategy.${strategy.strategyId}`,
+    version: "1.0.0",
+    slot: `editorial_strategy.${strategy.strategyId}`,
+    kind: "editorial_strategy",
+    purpose: strategy.objective ?? strategy.label ?? strategy.strategyId,
+    applicableWhen: [],
+    excludedWhen: [],
+    requiredInputs: [],
+    outputArtifacts: [{ kind: "candidate_guidance", schemaId: "editorial-strategy-boundary-v1" }],
+    payloadRef: {
+      mediaType: "application/json",
+      payloadHash: "",
+      sourceRef: `editorial-strategy:${strategy.strategyId}`,
+    },
+    targetStages: ["style_optimization"],
+    allowedTools: [],
+    stopConditions: [{ kind: "max_output_artifacts", value: 1 }],
+    budgetPolicy: {
+      maxCalls: 0,
+      maxInputTokens: 200,
+      maxOutputTokens: 0,
+      maxLatencyMs: 0,
+      maxCost: 0,
+    },
+    authority: "methodology",
+    enforcement: "candidate_only",
+    dependencies: [],
+    conflicts: [],
+    modelCapabilityRequirements: [],
+    provenance: [{ sourceId: strategy.strategyId, sourceType: "editorial_strategy_registry" }],
+    evalManifestId: `editorial-strategy:${strategy.strategyId}`,
+    admissionEvidence: [{
+      evalManifestId: `editorial-strategy:${strategy.strategyId}`,
+      sampleSize: 0,
+      validatedWinRate: null,
+      reason: "registry_boundary_only",
+    }],
+    status: "eval",
+    criticality: "optional",
+    }, {
+    strategyId: strategy.strategyId,
+    opportunityType: strategy.opportunityType,
+    candidateOnly: strategy.candidateOnly === true,
+  });
 }

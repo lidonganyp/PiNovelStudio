@@ -33,6 +33,16 @@ import {
   isChapterAlreadyCompleted,
 } from "./batch-generation-job-store.js";
 import { renewBatchLock, readBatchLock, LOCK_TIMEOUT_MS } from "./batch-generation-lock.js";
+import {
+  createBudgetLedger,
+  admitBatchChapter,
+  expireReservations,
+} from "./budget-ledger.js";
+import type { BudgetLedger } from "./budget-types.js";
+import {
+  loadBudgetLedgerStore,
+  saveBudgetLedgerStore,
+} from "./budget-ledger-store.js";
 
 // ============================================================================
 // 类型
@@ -59,6 +69,7 @@ export interface BatchOrchestratorInput {
     chapterId: string;
     chapterNumber: number;
     _projectRoot?: string;
+    _priorBudgetLedger?: BudgetLedger;
   }) => Promise<any>;
 }
 
@@ -367,6 +378,52 @@ export async function runBatchGeneration(
       continue;
     }
 
+    // 2b. Batch 预算准入：剩余章节/调用/recovery/等待/费用不足则 checkpoint，不启动下一章
+    const chapterCount = state.endChapter - state.startChapter + 1;
+    const storedLedger = loadBudgetLedgerStore(workspaceId, projectRoot);
+    let jobLedger: BudgetLedger = state.budgetLedger
+      ? createBudgetLedger(state.budgetLedger)
+      : storedLedger.usage.batchChaptersUsed > 0 || storedLedger.usage.totalModelCalls > 0
+        ? storedLedger
+        : createBudgetLedger({
+            runIdentity: {
+              runId: jobId,
+              releaseId: "batch",
+              modelVersion: "batch",
+              bundleId: "batch",
+              budgetGrantId: jobId,
+            },
+            hardBudget: {
+              maxBatchChapters: chapterCount,
+              maxModelCalls: 25 * chapterCount,
+              maxRecoveryModelCalls: 6 * chapterCount,
+              maxProviderCost: 2.0 * chapterCount,
+              maxTotalWaitMs: 45 * 60 * 1000 * chapterCount,
+            },
+          });
+    jobLedger = expireReservations(jobLedger);
+    const admitted = admitBatchChapter(jobLedger, { chapterNumber: state.frontier });
+    if (!admitted.ok) {
+      state.budgetLedger = admitted.ledger;
+      saveBudgetLedgerStore(admitted.ledger, workspaceId, projectRoot);
+      state.status = "paused";
+      state.interruptReason = "budget_exhausted";
+      state.checkpointChapter = state.frontier;
+      state.updatedAt = new Date().toISOString();
+      (state as BatchJobState & { failureEnvelope?: unknown }).failureEnvelope = {
+        stage: "batch_budget",
+        gate: "budget_ledger",
+        severity: "recoverable",
+        reason: `Batch 预算准入失败（${admitted.reason}）。已 checkpoint 在第 ${state.frontier} 章，未启动生成。`,
+        recoverable: true,
+        code: admitted.reason,
+      };
+      if (saveStateCas(state, workspaceId, jobId, projectRoot, `budget_checkpoint_ch${state.frontier}`) === "blocked") break;
+      break;
+    }
+    state.budgetLedger = admitted.ledger;
+    saveBudgetLedgerStore(admitted.ledger, workspaceId, projectRoot);
+
     // 3. 标记当前章节 running
     const slotIndex = state.frontier - state.startChapter;
     const chapterResult: BatchChapterResult = {
@@ -387,6 +444,7 @@ export async function runBatchGeneration(
       chapterId: String(state.frontier),
       chapterNumber: state.frontier,
       _projectRoot: projectRoot,
+      _priorBudgetLedger: state.budgetLedger,
     };
     const heartbeat = startLockHeartbeat(workspaceId, jobId, projectRoot, input.lock?.lockId);
     let result: any;
@@ -414,6 +472,11 @@ export async function runBatchGeneration(
       heartbeat.stop();
     }
     const heartbeatFailure = heartbeat.getFailure();
+    const chapterLedger = result?.stageResults?.budgetLedger as BudgetLedger | undefined;
+    if (chapterLedger) {
+      state.budgetLedger = createBudgetLedger(chapterLedger);
+      saveBudgetLedgerStore(state.budgetLedger, workspaceId, projectRoot);
+    }
 
     // 5. P0-FIX-4 + P1-C：先从磁盘合并最新 cancelRequested
     //    章节执行期间 cancel action 可能被外部设置到磁盘。

@@ -219,8 +219,38 @@ test("public chapter tool exposes writerModel without widening modelTestRoute", 
   const writerSchema = chapterTool.parameters.properties.writerModel;
   assert.deepEqual(writerSchema.enum, ["gemini31", "claude"]);
   assert.equal(writerSchema.default, "gemini31");
-  assert.equal(chapterTool.parameters.properties.boundedBestOf3.type, "boolean");
-  assert.match(chapterTool.parameters.properties.boundedBestOf3.description, /退出生产主链路/);
+  // EXPERIMENTAL-FIELDS-REJECT-1：旧 raw/judge 分支的实验字段已从公开 schema 移除。
+  assert.equal(
+    chapterTool.parameters.properties.boundedBestOf3,
+    undefined,
+    "boundedBestOf3 已从公开 schema 移除（旧固定场景多候选评测）",
+  );
+  assert.equal(
+    chapterTool.parameters.properties.qualityExperiment,
+    undefined,
+    "qualityExperiment 已从公开 schema 移除（eval-only 质量天花板样本）",
+  );
+  assert.equal(
+    chapterTool.parameters.properties.recoverBlockedRaw,
+    undefined,
+    "recoverBlockedRaw 已从公开 schema 移除（旧 raw 恢复分支）",
+  );
+  assert.equal(
+    chapterTool.parameters.properties.previewOnly,
+    undefined,
+    "previewOnly 已从公开 schema 移除（旧字段）",
+  );
+  // PRODUCTION-ROLLOUT-AUDIT-1 P0-1b/P0-10：eval knobs 已从公开 schema 移除。
+  assert.equal(
+    chapterTool.parameters.properties.modelTestRoute,
+    undefined,
+    "modelTestRoute 已从公开 schema 移除（eval-only 模型对比路由）",
+  );
+  assert.equal(
+    chapterTool.parameters.properties.fullPipelinePreview,
+    undefined,
+    "fullPipelinePreview 已从公开 schema 移除（只读预览为 eval/开发能力）",
+  );
   assert.match(writerSchema.description, /Gemini 3\.1 Pro/);
   assert.match(writerSchema.description, /仅当用户明确要求 Claude/);
   assert.match(writerSchema.description, /fallback=\[\]/);

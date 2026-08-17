@@ -276,6 +276,12 @@ export function collectEvidenceRecordsFromPackage(
         retrievalQueryId: null,
         snapshotId,
         traceable: Boolean(sourceRef),
+        lineage: {
+          sourceChapter: sourceRef,
+          chapterNumber: null,
+          runId: pkg.contextHash ?? null,
+          candidateId: null,
+        },
       });
     }
   }

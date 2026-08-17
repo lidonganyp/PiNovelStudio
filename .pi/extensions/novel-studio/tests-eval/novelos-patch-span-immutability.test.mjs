@@ -60,7 +60,7 @@ describe("CandidatePatchService — span 外不变性检查", () => {
     // patch 只改 span 内内容
     const patched = "前面这段正文保持不变。已经修复好的新内容。后面这段也保持不变。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, true, "span 外不变应接受");
     assert.equal(result.metrics.spanImmutabilityPassed, true, "spanImmutabilityPassed 应为 true");
     assert.equal(result.metrics.spanViolationDetail, undefined, "无违规详情");
@@ -76,7 +76,7 @@ describe("CandidatePatchService — span 外不变性检查", () => {
     // patch 暗改了 span 外内容（"前面这段正文保持不变" → "前面这段正文被暗改了"）
     const patched = "前面这段正文被暗改了。已经修复好的新内容。后面这段也保持不变。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "span 外被改应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
     assert.ok(result.metrics.spanViolationDetail, "spanViolationDetail 应非空");
@@ -101,7 +101,7 @@ describe("CandidatePatchService — span 外不变性检查", () => {
     // patch 在 span 内大幅增加内容（长度从 9 → 50），span 外不变
     const patched = "前面这段正文保持不变。这里是修复后大幅扩展的新内容增加了许多文字保持语义完整。后面这段也保持不变。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, true, "span 内长度变化应接受");
     assert.equal(result.metrics.spanImmutabilityPassed, true, "span 外不变 → true");
     assert.ok(result.metrics.lengthRatio > 0.7, "长度比应 > 0.7（span 内增加不影响）");
@@ -120,7 +120,7 @@ describe("CandidatePatchService — span 外不变性检查", () => {
     // patch 删除了尾部 span 外内容
     const patched = "开头正文。已修复好的新内容。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "span 外尾部被删应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
     assert.ok(result.metrics.spanViolationDetail, "应有违规详情");
@@ -133,7 +133,7 @@ describe("CandidatePatchService — span 外不变性检查", () => {
 
     const patched = "完全不同的正文。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     // 空 range → 整个原文都是不可变段，但 patched 完全不同 → 应拒绝
     // 实际上空 range 会被 filter(r => r.end > r.start) 过滤掉
     // 所以整个原文成为一个不可变段
@@ -167,7 +167,7 @@ describe("CandidatePatchService — span 不变性加固（段落顺序防护）
     //   找 C：从 searchFrom=A 结尾，C 必须在 A 之后 → C 在 A 之前 → 找不到 → rejected
     const patched = cContent + bContent + aContent;
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "段落顺序倒置应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
     assert.ok(result.metrics.spanViolationDetail, "应有违规详情");
@@ -187,7 +187,7 @@ describe("CandidatePatchService — span 不变性加固（段落顺序防护）
     // 正常 patch：只改 span 内 B 内容，A 和 C 保留且顺序不变
     const patched = aContent + "这是修复后的新B内容。" + cContent;
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, true, "正常 patch 应接受");
     assert.equal(result.metrics.spanImmutabilityPassed, true, "span 外不变 → true");
   });
@@ -206,7 +206,7 @@ describe("CandidatePatchService — span 不变性加固（段落顺序防护）
     // 不可变段 [A, C]，A 在 patched 中找不到 → rejected
     const patched = "这是修复后的新B内容。" + cContent;
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.metrics.spanImmutabilityPassed, false, "A 被删除应触发 span 违规");
     assert.equal(result.accepted, false, "应拒绝");
   });
@@ -229,7 +229,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     // patched 在 span 外前缀前新增了 "新增的前缀文字。"
     const patched = "新增的前缀文字。前面这段保持不变。已经修复好的新内容。后面这段也保持不变。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "span 外新增前缀应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
     assert.ok(
@@ -248,7 +248,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     // patched 在 span 外后缀后新增了 "这是新增的后缀文字。"
     const patched = "前面这段保持不变。已经修复好的新内容。后面这段也保持不变。这是新增的后缀文字。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "span 外新增后缀应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
     assert.ok(
@@ -273,7 +273,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     // 无 gap 检查，middle 全是 span 内修改 → 通过
     const patched = a + "新B内容。插入的额外内容。" + c;
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, true, "单 span 场景 span 内修改应通过");
     assert.equal(result.metrics.spanImmutabilityPassed, true, "span 外不变 → true");
   });
@@ -293,7 +293,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     // suffix = "后面段C。" 但 patched 不以它结尾 → 拒绝
     const patched = a + "新B内容。" + "后面段C被改了。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "span 外文本 C 被修改应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
   });
@@ -308,7 +308,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     // patched 删除了后缀 "后面这段也保持不变。"
     const patched = "前面这段保持不变。已经修复好的新内容。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "删除 span 外后缀应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
   });
@@ -323,7 +323,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     // patched 把后缀 "后面这段也保持不变。" 移到前面
     const patched = "后面这段也保持不变。前面这段保持不变。已经修复好的新内容。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "移动 span 外文本应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
   });
@@ -335,7 +335,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     const proposal = makeProposal(2, 100);
 
     const patched = "短文本。";
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, false, "越界 span 应拒绝");
     assert.equal(result.metrics.spanImmutabilityPassed, false, "spanImmutabilityPassed 应为 false");
     assert.ok(
@@ -344,17 +344,21 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     );
   });
 
-  test("倒置 span（start >= end）→ 被过滤为空 range，全文不可变", () => {
+  test("倒置 span（start >= end）→ rejected（RRB-6.1 范围校验 fail-closed）", () => {
     const service = createCandidatePatchService();
     const original = "前面这段正文。需要修复的目标。后面这段正文。";
-    // span start >= end → 被 filter(r => r.end > r.start) 过滤
+    // span start >= end → 被 checkSpanImmutability 范围校验拒绝（不再是静默过滤）
     const proposal = makeProposal(15, 10);
 
     const patched = "前面这段正文。需要修复的目标。后面这段正文。";
-    const result = service.evaluatePatch(original, patched, proposal);
-    // 空 range → 全文不可变 → patched === original → 通过
-    assert.equal(result.metrics.spanImmutabilityPassed, true, "倒置 span 被过滤，全文不变 → 通过");
-    assert.equal(result.accepted, true, "全文不变应接受");
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
+    // RRB-6.1：倒置 span 必须 fail-closed 拒绝，不得被 .filter 静默丢弃
+    assert.equal(result.metrics.spanImmutabilityPassed, false, "倒置 span 应被拒绝");
+    assert.equal(result.accepted, false, "倒置 span 应拒绝");
+    assert.ok(
+      result.metrics.spanViolationDetail?.includes("非法 span"),
+      `违规详情应说明 span 非法（倒置/越界），实际：${result.metrics.spanViolationDetail}`,
+    );
   });
 
   test("仅 span 内增删 → accepted=true（回归保护）", () => {
@@ -367,7 +371,7 @@ describe("CandidatePatchService — P0-3 严格 span 不变性", () => {
     // patched 只在 span 内大幅增加内容，span 外不变
     const patched = "前面这段保持不变。这里是修复后大幅扩展的新内容增加了许多文字保持语义完整。后面这段也保持不变。";
 
-    const result = service.evaluatePatch(original, patched, proposal);
+    const result = service.evaluatePatch(original, patched, [proposal.targetSpan], [proposal]);
     assert.equal(result.accepted, true, "span 内长度变化应接受");
     assert.equal(result.metrics.spanImmutabilityPassed, true, "span 外不变 → true");
     assert.ok(result.metrics.lengthRatio > 0.7, "长度比应 > 0.7（span 内增加不影响）");

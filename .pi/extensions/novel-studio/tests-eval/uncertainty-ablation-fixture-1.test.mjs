@@ -232,7 +232,7 @@ describe("UNCERTAINTY-ABLATION-FIXTURE-1：setupAblationWorkspace 创建临时�
     assert.ok(text.includes("林默"), "chapter-6/final.md 应含林默");
   });
 
-  it("创建 workspaces/{workspaceId}/skeleton.json 含 canonEvents", async () => {
+  it("创建 workspaces/{workspaceId}/narrative-state-store.json 含 canon", async () => {
     const mod = await importFixtureModule();
     const cases = loadR2Cases();
     const c = findCase(cases.cases, "high-xuanhuan-1");
@@ -241,14 +241,14 @@ describe("UNCERTAINTY-ABLATION-FIXTURE-1：setupAblationWorkspace 创建临时�
       arm: "A",
       parentProjectRoot: tempProjectRoot,
     });
-    const skeletonPath = join(projectRoot, "workspaces", workspaceId, "skeleton.json");
-    assert.ok(existsSync(skeletonPath), "应创建 skeleton.json");
-    const skeleton = JSON.parse(readFileSync(skeletonPath, "utf-8"));
-    assert.ok(Array.isArray(skeleton.events), "skeleton 应有 events 数组");
-    assert.ok(skeleton.events.length > 0, "events 应非空");
+    const storePath = join(projectRoot, "workspaces", workspaceId, "narrative-state-store.json");
+    assert.ok(existsSync(storePath), "应创建 narrative-state-store.json");
+    const store = JSON.parse(readFileSync(storePath, "utf-8"));
+    assert.ok(Array.isArray(store.canon), "state store 应有 canon 数组");
+    assert.ok(store.canon.length > 0, "canon 应非空");
   });
 
-  it("创建 workspaces/{workspaceId}/narrative-state.json 含 characterStates", async () => {
+  it("创建 workspaces/{workspaceId}/narrative-state-store.json 含 character", async () => {
     const mod = await importFixtureModule();
     const cases = loadR2Cases();
     const c = findCase(cases.cases, "high-xuanhuan-1");
@@ -257,14 +257,13 @@ describe("UNCERTAINTY-ABLATION-FIXTURE-1：setupAblationWorkspace 创建临时�
       arm: "A",
       parentProjectRoot: tempProjectRoot,
     });
-    const statePath = join(projectRoot, "workspaces", workspaceId, "narrative-state.json");
-    assert.ok(existsSync(statePath), "应创建 narrative-state.json");
-    const state = JSON.parse(readFileSync(statePath, "utf-8"));
-    assert.ok(Array.isArray(state.characterUpdates), "narrative-state 应有 characterUpdates");
-    assert.ok(state.characterUpdates.length > 0, "characterUpdates 应非空");
+    const storePath = join(projectRoot, "workspaces", workspaceId, "narrative-state-store.json");
+    const store = JSON.parse(readFileSync(storePath, "utf-8"));
+    assert.ok(Array.isArray(store.character), "state store 应有 character 数组");
+    assert.ok(store.character.length > 0, "character 应非空");
   });
 
-  it("创建 workspaces/{workspaceId}/arc-registry.json 含 promises", async () => {
+  it("创建 workspaces/{workspaceId}/narrative-state-store.json 含 promise", async () => {
     const mod = await importFixtureModule();
     const cases = loadR2Cases();
     const c = findCase(cases.cases, "high-xuanhuan-1");
@@ -273,10 +272,10 @@ describe("UNCERTAINTY-ABLATION-FIXTURE-1：setupAblationWorkspace 创建临时�
       arm: "A",
       parentProjectRoot: tempProjectRoot,
     });
-    const arcPath = join(projectRoot, "workspaces", workspaceId, "arc-registry.json");
-    assert.ok(existsSync(arcPath), "应创建 arc-registry.json");
-    const arc = JSON.parse(readFileSync(arcPath, "utf-8"));
-    assert.ok(Array.isArray(arc.foreshadowings) || Array.isArray(arc.arcs), "arc-registry 应有 arcs 或 foreshadowings");
+    const storePath = join(projectRoot, "workspaces", workspaceId, "narrative-state-store.json");
+    const store = JSON.parse(readFileSync(storePath, "utf-8"));
+    assert.ok(Array.isArray(store.promise), "state store 应有 promise 数组");
+    assert.ok(store.promise.length > 0, "promise 应非空");
   });
 
   it("workspaceId 含 caseId 和 arm（A/B 隔离）", async () => {
@@ -439,11 +438,10 @@ describe("UNCERTAINTY-ABLATION-FIXTURE-1：NarrativeSearchService 正向命中 c
     });
     const canon = service.queryCanon();
     assert.ok(canon.length > 0, "queryCanon 应返回非空 canon events");
-    // LegacyStateAdapter 把 skeleton.events 转换为 category=timeline 的 canon
-    // （fixture.canonEvents.category 字段不保留，因 LegacyStateAdapter 只产生 timeline/location）
+    // canon 条目来自 narrative-state-store.json，category 字段保留（timeline/location/entity/ability_rule）
     const categories = new Set(canon.map((e) => e.category));
     assert.ok(categories.has("timeline") || categories.has("location"),
-      "canon 应含 timeline 或 location 类别（LegacyStateAdapter 转换后）");
+      "canon 应含 timeline 或 location 类别");
   });
 
   it("high-xuanhuan-1：queryCharacterState('林默') 返回 character states", async () => {

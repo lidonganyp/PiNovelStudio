@@ -12,6 +12,7 @@
 
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
+  REASONING_CHAIN_OF_THOUGHT_BANNED_FIELDS,
   type AuditActor,
   type AuditCapability,
   type AuditEvent,
@@ -121,6 +122,8 @@ export function createAuditEvent(input: CreateAuditEventInput): AuditEvent {
     attempt: input.attempt,
     maxAttempts: input.maxAttempts,
     userActionRequired: input.userActionRequired,
+    action: input.action,
+    stopReason: input.stopReason,
     payload: input.payload,
   };
 
@@ -256,6 +259,18 @@ export function validateAuditEvent(event: unknown): AuditEventValidationResult {
     issues.push({ path: "eventType", message: "empty eventType", severity: "error" });
   }
 
+  // RRB-5.4 / T26：payload 禁止原始思维链字段（含嵌套）。
+  if (e.payload !== undefined && e.payload !== null) {
+    const banned = findBannedReasoningFieldPaths(e.payload);
+    for (const path of banned) {
+      issues.push({
+        path: `payload.${path}`,
+        message: "禁止记录原始思维链字段",
+        severity: "error",
+      });
+    }
+  }
+
   const hasError = issues.some((i) => i.severity === "error");
   return { ok: !hasError, issues };
 }
@@ -350,3 +365,38 @@ export function defaultStageForEventType(eventType: AuditEventType): AuditStage 
 }
 
 export type { AuditCapability };
+
+// ============================================================================
+// 原始思维链字段扫描（RRB-5.4 / T26）
+// ============================================================================
+
+/**
+ * 递归查找 payload 中命中的思维链字段路径（最多 8 层，防环）。
+ * 返回相对 payload 的路径（如 `nested.reasoning_content`）。
+ */
+export function findBannedReasoningFieldPaths(
+  payload: unknown,
+  maxDepth = 8,
+): string[] {
+  const paths: string[] = [];
+  const seen = new Set<object>();
+
+  function walk(value: unknown, prefix: string, depth: number): void {
+    if (depth > maxDepth || value === null || typeof value !== "object") return;
+    if (seen.has(value as object)) return;
+    seen.add(value as object);
+
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if ((REASONING_CHAIN_OF_THOUGHT_BANNED_FIELDS as readonly string[]).includes(key)) {
+        paths.push(path);
+      }
+      if (child !== null && typeof child === "object") {
+        walk(child, path, depth + 1);
+      }
+    }
+  }
+
+  walk(payload, "", 0);
+  return paths;
+}

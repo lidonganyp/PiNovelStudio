@@ -22,6 +22,7 @@
 
 import { createHash } from "node:crypto";
 import { localizeLlmText } from "../../utils/llm-language-guard.js";
+import { renderToolEvidenceForModel } from "../../v2/core/tool-result-evidence.js";
 
 // ============================================================================
 // 类型
@@ -248,16 +249,10 @@ function parseToolCallJson(
  * text-only 模型看不到结构化 toolResult 消息，streamFn 必须把 turn 内的 toolResult
  * 回灌到 userPrompt，模型才能基于证据继续生成。
  *
- * 格式：
- * ```
- * 已检索到的证据：
- * [工具 search_chapter_span 结果]
- * {content text}
- * (结果类型: {resultKind}, 数量: {returnedCount}, 截断: {是/否})
- * (来源: {sourceRef}, 等级: {evidenceLevel})
- * (下一查询提示: {nextQueryHint})
- * ...
- * ```
+ * CEG-3.5（2026-08-16）：改为委托 v2/core/tool-result-evidence.js 的
+ * `renderToolEvidenceForModel`，统一走「无指令权」renderer——工具正文只能作为
+ * reference 证据回灌，不得升权为硬约束。保留旧格式的富细节（类型/数量/截断/
+ * 下一查询提示/等级）折叠进 `note`，避免信息丢失。
  *
  * @param toolResults turn 内的 toolResult 消息列表
  * @returns 序列化后的证据块（无结果时返回空字符串）
@@ -265,52 +260,48 @@ function parseToolCallJson(
 export function formatToolResultsForPrompt(toolResults: ToolResultView[]): string {
   if (toolResults.length === 0) return "";
 
-  const lines: string[] = ["已检索到的证据："];
-
-  for (const result of toolResults) {
-    lines.push(`[工具 ${toChineseToolName(result.toolName)} 结果]`);
+  const blocks = toolResults.map((result) => {
     const textContent = result.content
       .filter((c) => c.type === "text" && typeof c.text === "string")
       .map((c) => c.text)
       .join("\n");
-    lines.push(localizeLlmText(textContent || "（无文本内容）"));
 
-    const resultKind = toChineseResultKind(result.details?.resultKind);
+    const resultKind = result.details?.resultKind;
+    const statusLabel = resultKind === "no_match" ? "无匹配" : "命中";
+
+    const noteParts: string[] = [`类型：${toChineseResultKind(resultKind)}`];
     const returnedCount = result.details?.returnedCount;
-    const truncated = result.details?.truncated;
-    const countText =
-      typeof returnedCount === "number" ? String(returnedCount) : "未知";
-    const truncatedText = truncated === true ? "是" : "否";
-    lines.push(`（结果类型：${resultKind}，数量：${countText}，截断：${truncatedText}）`);
-
-    const sourceRef = toChineseSourceRef(result.details?.sourceRef);
-    const evidenceLevel = toChineseEvidenceLevel(result.details?.evidenceLevel);
-    lines.push(`（来源：${sourceRef}，等级：${evidenceLevel}）`);
-
+    if (typeof returnedCount === "number") {
+      noteParts.push(`数量：${returnedCount}`);
+    }
+    if (result.details?.truncated === true) {
+      noteParts.push("截断：是");
+    }
     const hint = result.details?.nextQueryHint;
     if (typeof hint === "string" && hint.length > 0) {
-      lines.push(`（下一查询提示：${hint}）`);
+      noteParts.push(`下一查询提示：${hint}`);
     }
-    lines.push("");
-  }
+    noteParts.push(`等级：${toChineseEvidenceLevel(result.details?.evidenceLevel)}`);
 
-  return lines.join("\n").trimEnd();
+    return {
+      toolName: result.toolName,
+      body: localizeLlmText(textContent || "（无文本内容）"),
+      statusLabel,
+      sourceRef: result.details?.sourceRef,
+      note: noteParts.join("；"),
+    };
+  });
+
+  return renderToolEvidenceForModel({
+    header: "已检索到的证据",
+    blocks,
+  });
 }
 
 function translateArgumentNames(args: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(args).map(([key, value]) => [CHINESE_PARAMETER_NAME_MAP[key] ?? key, value]),
   );
-}
-
-function toChineseToolName(name: string): string {
-  const entry = Object.entries(CHINESE_TOOL_NAME_MAP).find(([, internal]) => internal === name);
-  return entry?.[0] ?? "叙事证据工具";
-}
-
-function toChineseSourceRef(sourceRef: string | undefined): string {
-  if (!sourceRef) return "未知";
-  return /[A-Za-z]/.test(sourceRef) ? "已记录" : sourceRef;
 }
 
 function toChineseResultKind(kind: string | undefined): string {

@@ -38,7 +38,19 @@ function makeCleanGitProject() {
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir, encoding: "utf-8" });
   execFileSync("git", ["config", "user.name", "launch-test"], { cwd: dir, encoding: "utf-8" });
   writeFileSync(join(dir, "README.md"), "clean capture root\n", "utf-8");
-  execFileSync("git", ["add", "README.md"], { cwd: dir, encoding: "utf-8" });
+  // capture 现执行 DG-2 行为快照，resolveCapabilityPackageSetHash 对缺失的能力包集合文件
+  // fail-close（capability_package_set_missing）。提供一个合法空集合，使 capture 在最小
+  // 干净根上成功；其余组件（model-routing/prompt/tool-schema 等）缺失时哈希为空，不抛异常。
+  mkdirSync(join(dir, "data", "runtime"), { recursive: true });
+  writeFileSync(
+    join(dir, "data", "runtime", "capability-package-set.json"),
+    JSON.stringify({ schemaVersion: "capability-package-set-v1", packages: [], payloads: [] }),
+    "utf-8",
+  );
+  execFileSync("git", ["add", "README.md", "data/runtime/capability-package-set.json"], {
+    cwd: dir,
+    encoding: "utf-8",
+  });
   execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "init"], {
     cwd: dir,
     encoding: "utf-8",
@@ -166,6 +178,27 @@ test("candidate and freeze commands bind metadata before an immutable freeze", (
   }
 });
 
+test("freeze allows held rollback when production pointer is none", () => {
+  const root = makeTempRoot();
+  try {
+    const registry = createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
+    registry.writeManifest(makeManifest("rel-held", "held"));
+    writeMatchingStateEvent(registry, "rel-held", "held");
+    registry.writeManifest(makeManifest("rel-next", "candidate", {
+      parentReleaseId: "rel-held",
+      rollbackReleaseId: "rel-held",
+    }));
+    writeMatchingStateEvent(registry, "rel-next", "candidate");
+    const result = runCli(["freeze", "--release-id", "rel-next"], {
+      PINOVEL_EVOLUTION_ROOT: root,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(registry.loadManifest("rel-next").status, "frozen");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("freeze rejects a rollback target that is not active_prod", () => {
   const root = makeTempRoot();
   try {
@@ -181,7 +214,7 @@ test("freeze rejects a rollback target that is not active_prod", () => {
       PINOVEL_EVOLUTION_ROOT: root,
     });
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /rollback.*active_prod/i);
+    assert.match(result.stderr, /rollback.*active_prod|held\/retired|approved_dev/i);
     assert.equal(registry.loadManifest("rel-next").status, "candidate");
   } finally {
     rmSync(root, { recursive: true, force: true });

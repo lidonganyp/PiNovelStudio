@@ -144,7 +144,36 @@ export function buildLocalReplacementPrompt(
 }
 
 /**
- * 构造 patch prompt（完整正文模式，含整章范围或混合场景）。
+ * 显式 new_candidate 生成 prompt。不是对原稿做整章 rewrite fallback。
+ */
+export function buildNewCandidatePrompt(
+  originalDraft: string,
+  findings: VerificationFinding[],
+): string {
+  const specs = findings.map((finding, index) => [
+    `[硬伤${index + 1}] findingId=${finding.id}`,
+    `类型：${finding.failureType}`,
+    `证据：${finding.sourceRef}`,
+    `必须解决：${finding.conflictFact}`,
+    `要求：${finding.description}`,
+  ].join("\n")).join("\n\n");
+
+  return [
+    "请根据下列硬伤生成一个新的完整章节候选。",
+    "这是一次显式 new_candidate 生成，不是对原稿做整章 rewrite fallback，也不要只输出局部替换块。",
+    "不要调用工具。不要使用 Markdown 代码块。直接输出完整正文。",
+    "",
+    "上一候选（仅作对照，不得当作可覆盖的 patch 底稿）：",
+    originalDraft,
+    "",
+    "必须解决的硬伤：",
+    specs,
+  ].join("\n");
+}
+
+/**
+ * 已退役的整章 rewrite prompt。生产路径不得再调用。
+ * @deprecated 使用 buildNewCandidatePrompt 或 buildLocalReplacementPrompt
  */
 export function buildFullRewritePrompt(
   originalDraft: string,

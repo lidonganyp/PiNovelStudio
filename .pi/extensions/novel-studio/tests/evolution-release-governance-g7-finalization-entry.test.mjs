@@ -232,6 +232,52 @@ test("entry accept_with_edits: 真实 FactGuard 通过 -> commitAndSave 写入 e
 });
 
 // ============================================================================
+// 2b. accept_with_edits -> 真实 checkCandidateFactGuard 失败 -> 阻断提交 + 保留 pending
+// ============================================================================
+
+test("entry accept_with_edits: 真实 FactGuard 失败（用户引入未登记实体）-> 不 commit + 不 clear pending + 不复用旧审批", () => {
+  const { projectRoot, workspaceId, workspacePath } = makeTempWorkspace();
+  try {
+    setupPendingDraft(workspacePath);
+    const orchestratorInput = makeMinimalOrchestratorInput(projectRoot, workspaceId, "1");
+    // 用户在原审批稿上引入一个不在角色档案中的名字（"张远"），且作为言说主语出现 3 次，
+    // 触发真实 checkCandidateFactGuard 的 entity_checker 硬阻断。原稿本可通过 FactGuard，
+    // 但用户编辑后必须重新事实检查，旧 hash/审批结果不可直接复用。
+    const editedText = "张远问。张远问。张远问。";
+
+    const result = runFinalization({
+      workspacePath,
+      chapterId: "1",
+      approvalId: "cpa-entry-001",
+      action: "accept_with_edits",
+      editedText,
+      orchestratorInput,
+    });
+
+    // 真实 checkCandidateFactGuard 在用户稿上运行并失败 → 阻断定稿
+    assert.equal(result.finalization.action, "accept_with_edits");
+    assert.equal(result.finalization.factGuardPassed, false, "真实 FactGuard 应失败");
+    assert.equal(result.finalization.blockReason, "factguard_failed");
+    assert.ok(
+      Array.isArray(result.finalization.factGuardErrors) && result.finalization.factGuardErrors.length > 0,
+      "应返回具体事实错误",
+    );
+
+    // 不 commit、不 clear pending（用户可继续修改后重试；旧审批结果未被消费）
+    assert.equal(result.finalization.canCommit, false);
+    assert.equal(result.finalization.clearedPending, false);
+    assert.equal(result.commit, undefined, "FactGuard 失败不得调用 commitAndSave");
+    assert.equal(hasPendingProxyDraft(workspacePath, "1"), true, "pending 应保留（不复用旧审批）");
+    assert.equal(existsSync(join(workspacePath, "chapters", "1.md")), false, "不得写入章节正文");
+
+    // 不记录 accept 成功反馈（避免污染策略信誉）
+    assert.equal(result.feedbackRecorded, undefined);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
 // 3. reject -> 不 commitAndSave + feedback action=reject
 // ============================================================================
 

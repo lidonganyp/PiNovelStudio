@@ -253,11 +253,10 @@ test("UnifiedOrchestrator: 成功路径 → 交付 editorial", async () => {
     assert.ok(result.candidates.length >= 2, "应有 raw + editorial 候选");
     assert.ok(result.judgeResult, "应有裁判结果");
     assert.equal(result.judgeResult.finalSelectedCandidateId, result.selectedCandidateId);
-    // 章节文件已保存
-    assert.ok(result.chapterFilePath);
-    assert.ok(existsSync(result.chapterFilePath), "章节文件应已保存");
-    const saved = readFileSync(result.chapterFilePath, "utf-8");
-    assert.equal(saved, EDITORIAL_TEXT_STRONG_HOOK);
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留 raw/judge 分支（productionFlow 未设置）
+    // 照常返回 editorial 供观测，但不 commit（无章节文件 / 无状态提交）。
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stateCommit, null);
   } finally {
     rmSync(input.projectRoot, { recursive: true, force: true });
   }
@@ -390,8 +389,9 @@ test("UnifiedOrchestrator: editorial 生成异常 → 交付 raw + warning", asy
     assert.equal(result.selectedSource, "raw");
     assert.equal(result.text, RAW_TEXT_WEAK_END);
     assert.ok(result.warnings.some((w) => w.includes("editorial")), `应有 editorial 失败 warning：${result.warnings.join(";")}`);
-    // 章节文件仍保存（raw）
-    assert.ok(existsSync(result.chapterFilePath));
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留分支（productionFlow 未设置）不 commit raw。
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stateCommit, null);
   } finally {
     rmSync(input.projectRoot, { recursive: true, force: true });
   }
@@ -571,12 +571,13 @@ test("UnifiedOrchestrator: 最终正文原子保存到章节文件", async () =>
   try {
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
-    assert.ok(result.chapterFilePath);
-    assert.ok(existsSync(result.chapterFilePath), "章节文件应存在");
-    const saved = readFileSync(result.chapterFilePath, "utf-8");
-    assert.equal(saved, result.text, "保存内容应等于最终正文");
-    // 不应有 .tmp 残留
-    assert.ok(!existsSync(result.chapterFilePath + ".tmp"), "不应有 .tmp 残留");
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留 raw/judge 分支（productionFlow 未设置）
+    // 不再原子保存章节——commit 仅限 agentic 生产路径或 qualityExperiment。
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stateCommit, null);
+    const chapterPath = join(input.projectRoot, "workspaces", "test-ws", "chapters", "ch-test.md");
+    assert.equal(existsSync(chapterPath), false, "遗留分支不得落盘章节文件");
+    assert.equal(existsSync(chapterPath + ".tmp"), false, "不应有 .tmp 残留");
   } finally {
     rmSync(input.projectRoot, { recursive: true, force: true });
   }
@@ -596,7 +597,8 @@ test("UnifiedOrchestrator: stageResults 记录各阶段产物（trace 审计）"
     assert.ok(result.stageResults.editorialCandidateGeneration, "应有 editorialCandidateGeneration 阶段产物");
     assert.ok(result.stageResults.judgeArbitration, "应有 judgeArbitration 阶段产物");
     assert.ok(result.stageResults.finalSelection, "应有 finalSelection 阶段产物");
-    assert.ok(result.stageResults.atomicSave, "应有 atomicSave 阶段产物");
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留分支不 commit → 无 atomicSave 阶段产物。
+    assert.equal(result.stageResults.atomicSave, undefined, "遗留分支不应有 atomicSave 阶段产物");
     assert.equal(result.stageResults.rawPromptConstraintAudit.type, "editorial");
     assert.deepEqual(result.stageResults.methodologyPolicy.violations, []);
     assert.deepEqual(result.stageResults.constitutionConsumption, {
@@ -655,9 +657,11 @@ test("UnifiedOrchestrator: stagedStateUpdate 与最终候选不匹配时整次�
   try {
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
-    assert.equal(result.status, "blocked");
-    assert.equal(result.failureEnvelope.stage, "atomic_save");
-    assert.ok(result.stageResults.stateCommit?.error);
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留分支不 commit，stagedStateUpdate 不匹配
+    // 不再触发 atomic_save 阻断（commit 已关闭）。路径照常运行，零落盘。
+    assert.equal(result.status, "ok");
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stateCommit, null);
     assert.equal(existsSync(join(dir, "workspaces", "test-ws-state", "chapters", "ch-state.md")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -931,16 +935,12 @@ test("P0-4: 正文原子保存失败 → hard block（不假装成功）", async
   try {
     const orch = createUnifiedOrchestrator();
     const result = await orch.orchestrate(input);
-    // 正文保存失败 → hard block，不假装 ok
-    assert.equal(result.status, "blocked", "正文保存失败应 hard block");
-    assert.ok(result.failureEnvelope, "应有 failureEnvelope");
-    assert.equal(result.failureEnvelope.degradedTo, "hard_block");
-    assert.ok(
-      result.failureEnvelope.stage === "atomic_save",
-      `stage 应为 atomic_save，实际为 ${result.failureEnvelope.stage}`
-    );
-    // 状态不应被提交（无污染）
-    assert.equal(result.stateCommit, null, "正文保存失败时状态不应提交");
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：遗留分支不 commit → 不触发 atomic_save。
+    // 正文质量证据扫描仍在 commit 前运行（供观测），但 commit 已关闭，零落盘。
+    assert.equal(result.status, "ok", "遗留分支不 commit → 无 atomic_save 失败");
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stateCommit, null);
+    assert.equal(result.failureEnvelope, null);
     assert.ok(result.stageResults.chapterQualityEvidence, "structural evidence must run before save");
     assert.ok(result.stageResults.informationReleaseEvidence, "information evidence must run before save");
     assert.ok(result.stageResults.endingCraftEvidence, "ending evidence must run before save");

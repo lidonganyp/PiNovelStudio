@@ -2,7 +2,8 @@
  * NovelOS Narrative Search Service（OPT-9.3）
  *
  * 统一的按需检索服务，供所有叙事工具调用。
- * - 复用 LegacyStateAdapter 只读导入 NarrativeStateStore（canon/character/promise/pattern）
+ * - 优先消费 NarrativeEvidenceSnapshot；无快照时只读正式 NarrativeStateStore
+ * - 不再从 LegacyStateAdapter 组装第二套生产真相
  * - 复用 workspace/manager.ts 的章节目录结构读取历史章节正文
  * - 不新建并行数据层，不反向写回 legacy 文件
  *
@@ -14,7 +15,11 @@
 
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
-import { createLegacyStateAdapter } from "../../v2/adapters/legacy-state-adapter.js";
+import { loadStateStore } from "../../v2/core/final-state-commit.js";
+import {
+  readFrozenChapterText,
+  type NarrativeEvidenceSnapshotRuntime,
+} from "../../v2/core/narrative-evidence-snapshot.js";
 import type { NarrativeStateStore, CanonEntry, CharacterStateEntry, PromiseEntry, PatternEntry } from "../../v2/core/final-state-commit.js";
 import type { EvidenceLevel } from "../tools/tool-protocol.js";
 
@@ -104,21 +109,31 @@ function matchesQuery(query: string, text: string): boolean {
 export interface NarrativeSearchServiceOptions {
   projectRoot: string;
   workspaceId: string;
-  /** 来源章节标记（如 "ch17"，用于 LegacyStateAdapter） */
+  /** 来源章节标记（如 "ch17"） */
   sourceChapter: string;
+  /** CEG-1.4：同一 run 的冻结快照。 */
+  evidenceSnapshot?: NarrativeEvidenceSnapshotRuntime;
 }
 
 export class NarrativeSearchService {
   private readonly projectRoot: string;
   private readonly workspaceId: string;
   private readonly sourceChapter: string;
+  private readonly evidenceSnapshot?: NarrativeEvidenceSnapshotRuntime;
   private storeCache: NarrativeStateStore | null = null;
   private storeSources: string[] = [];
+  private readonly liveChapterFreeze = new Map<number, string>();
 
   constructor(options: NarrativeSearchServiceOptions) {
     this.projectRoot = options.projectRoot;
     this.workspaceId = options.workspaceId;
     this.sourceChapter = options.sourceChapter;
+    this.evidenceSnapshot = options.evidenceSnapshot;
+  }
+
+  /** CEG-5.1：工具结果必须回写同一 snapshot，否则 CoverageGate 不能计硬覆盖。 */
+  getSnapshotId(): string | undefined {
+    return this.evidenceSnapshot?.snapshotId;
   }
 
   // ── NarrativeStateStore 访问 ──────────────────────────────────────────
@@ -131,15 +146,15 @@ export class NarrativeSearchService {
     if (this.storeCache) {
       return { store: this.storeCache, sources: this.storeSources };
     }
-    const adapter = createLegacyStateAdapter();
-    const result = adapter.importFromLegacy(
-      this.workspaceId,
-      this.projectRoot,
-      this.sourceChapter,
-    );
-    this.storeCache = result.store;
-    this.storeSources = result.sources;
-    return { store: result.store, sources: result.sources };
+    if (this.evidenceSnapshot) {
+      this.storeCache = this.evidenceSnapshot.narrativeState;
+      this.storeSources = [`snapshot:${this.evidenceSnapshot.snapshotId}`];
+      return { store: this.storeCache, sources: this.storeSources };
+    }
+    const store = loadStateStore(this.workspaceId, this.projectRoot);
+    this.storeCache = store;
+    this.storeSources = ["narrative-state-store.json"];
+    return { store, sources: this.storeSources };
   }
 
   /** 查询 canon 条目（可按 category 过滤） */
@@ -198,6 +213,9 @@ export class NarrativeSearchService {
 
   /** 列出所有已生成章节的编号（升序） */
   listChapterNumbers(): number[] {
+    if (this.evidenceSnapshot) {
+      return this.evidenceSnapshot.frozenChapterTexts.map((chapter) => chapter.chapterNumber);
+    }
     const dir = this.getChaptersDir();
     if (!existsSync(dir)) return [];
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -215,18 +233,24 @@ export class NarrativeSearchService {
 
   /** 读取指定章节的正文（final.md） */
   readChapterText(chapterNumber: number): string | null {
+    if (this.evidenceSnapshot) {
+      return readFrozenChapterText(this.evidenceSnapshot, chapterNumber);
+    }
+    const cached = this.liveChapterFreeze.get(chapterNumber);
+    if (cached !== undefined) return cached;
     const chapterDir = join(
       this.getChaptersDir(),
       `chapter-${String(chapterNumber).padStart(2, "0")}`,
     );
-    // 同时尝试 chapter-N 和 chapter-0N 两种格式
     const candidates = [
       join(this.getChaptersDir(), `chapter-${chapterNumber}`, "final.md"),
       join(chapterDir, "final.md"),
     ];
     for (const p of candidates) {
       if (existsSync(p)) {
-        return readFileSync(p, "utf-8");
+        const text = readFileSync(p, "utf-8");
+        this.liveChapterFreeze.set(chapterNumber, text);
+        return text;
       }
     }
     return null;

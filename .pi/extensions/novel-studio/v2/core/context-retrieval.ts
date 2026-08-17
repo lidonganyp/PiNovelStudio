@@ -241,7 +241,8 @@ export function retrieveNarrativeContext(input: ContextRetrievalInput): ContextR
   const scored = eligible
     .map((entry) => scoreEntry(entry, input))
     .sort((left, right) =>
-      right.score - left.score
+      authorityRank(right.entry) - authorityRank(left.entry)
+      || right.score - left.score
       || chapterNumber(right.entry.sourceChapter) - chapterNumber(left.entry.sourceChapter)
       || left.entry.id.localeCompare(right.entry.id)
     );
@@ -483,6 +484,21 @@ export function computeOverdueAlertsFromRetrievalState(
     }
   }
   return alerts;
+}
+
+function authorityRank(entry: AnyEntry): number {
+  switch (entry.memory?.authorityClass) {
+    case "author_declaration":
+      return 4;
+    case "final_text_explicit":
+      return 3;
+    case "committed_state":
+      return 2;
+    case "system_derived":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 function scoreEntry(entry: AnyEntry, input: ContextRetrievalInput): { entry: AnyEntry; score: number; reasons: string[] } {

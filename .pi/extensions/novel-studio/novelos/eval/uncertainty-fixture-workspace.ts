@@ -5,18 +5,13 @@
  * 使 NarrativeSearchService 的 searchRanked / searchChapterSpan / queryCanon /
  * queryCharacterState / queryPromiseLedger 正向命中 confirmed 证据。
  *
- * 数据布局（对齐 LegacyStateAdapter 期望的 legacy 文件格式）：
+ * 数据布局（对齐 loadStateStore 期望的 narrative-state-store.json 统一格式）：
  * - {projectRoot}/workspaces/{workspaceId}/chapters/chapter-{N}/final.md
  *     ← historicalChapters[].text（被 search_chapter_span 检索，evidenceLevel="exact_chapter_span"）
- * - {projectRoot}/workspaces/{workspaceId}/skeleton.json
- *     ← canonEvents 转换为 events[]（summary=fact, characters, location）
- *     LegacyStateAdapter 把 events[].summary 转换为 canon.fact (category=timeline)
- * - {projectRoot}/workspaces/{workspaceId}/narrative-state.json
- *     ← characterStates 转换为 characterUpdates[]（name=characterId, field, value）
- *     LegacyStateAdapter 把 characterUpdates 转换为 character entries (confirmed_state)
- * - {projectRoot}/workspaces/{workspaceId}/arc-registry.json
- *     ← promises 转换为 foreshadowings[]（id, description, level, status）
- *     LegacyStateAdapter 把 foreshadowings 转换为 promise entries (confirmed_state)
+ * - {projectRoot}/workspaces/{workspaceId}/narrative-state-store.json
+ *     ← canonEvents 转换为 canon[]（kind=canon, fact, category=timeline）
+ *     ← characterStates 转换为 character[]（kind=character, characterId, field, value）
+ *     ← promises 转换为 promise[]（kind=promise, promiseId, description, status, currentHeat）
  *
  * 设计原则：
  * - 临时目录隔离：每个 case × arm 用独立 projectRoot，A/B 互不干扰
@@ -206,13 +201,11 @@ export function setupAblationWorkspace(
 // ============================================================================
 
 /**
- * 把 fixture 数据写入临时 workspace 目录，对齐 LegacyStateAdapter 期望的格式。
+ * 把 fixture 数据写入临时 workspace 目录，对齐 loadStateStore 期望的 narrative-state-store.json 格式。
  *
  * 文件布局：
  * - workspaces/{id}/chapters/chapter-{N}/final.md
- * - workspaces/{id}/skeleton.json
- * - workspaces/{id}/narrative-state.json
- * - workspaces/{id}/arc-registry.json
+ * - workspaces/{id}/narrative-state-store.json
  */
 function writeFixtureFiles(
   projectRoot: string,
@@ -230,56 +223,55 @@ function writeFixtureFiles(
     writeFileSync(join(chapterDir, "final.md"), ch.text, "utf-8");
   }
 
-  // 2. canonEvents → skeleton.json
-  // LegacyStateAdapter 期望 skeleton: { events: [{ eventId, summary, characters, location }], chapterId, locations }
-  // convertSkeleton 把 events[].summary 转换为 canon.fact (category=timeline)
-  const skeleton = {
-    chapterId: sourceChapter,
-    events: (fixture.canonEvents ?? []).map((ev) => ({
-      eventId: ev.id,
-      summary: ev.fact,
-      characters: ev.characters ?? [],
-      location: ev.location,
-    })),
-    locations: (fixture.canonEvents ?? [])
-      .map((ev) => ev.location)
-      .filter((loc): loc is string => typeof loc === "string" && loc.length > 0),
-  };
-  writeFileSync(join(workspaceDir, "skeleton.json"), JSON.stringify(skeleton, null, 2), "utf-8");
+  const now = new Date().toISOString();
 
-  // 3. characterStates → narrative-state.json
-  // LegacyStateAdapter 期望 narrativeState: { pendingCosts, characterUpdates: [{ name, field, value }] }
-  // convertNarrativeState 把 characterUpdates 转换为 character entries (characterId=name)
-  const narrativeState = {
-    pendingCosts: [],
-    characterUpdates: (fixture.characterStates ?? []).map((cs) => ({
-      name: cs.characterId,
+  // 2. narrative-state-store.json（统一状态存储，替代 legacy skeleton.json + narrative-state.json + arc-registry.json）
+  const stateStore = {
+    schemaVersion: "narrative-state-store-v1",
+    workspaceId,
+    canon: (fixture.canonEvents ?? []).map((ev) => ({
+      kind: "canon" as const,
+      id: ev.id,
+      fact: ev.fact,
+      category: (ev.category as "timeline" | "location" | "entity" | "ability_rule") ?? "timeline",
+      sourceChapter,
+      sourceRef: `skeleton:${ev.id}`,
+      confidence: 1.0,
+      lastUpdated: now,
+    })),
+    character: (fixture.characterStates ?? []).map((cs) => ({
+      kind: "character" as const,
+      id: `character:${cs.characterId}:${cs.field}`,
+      characterId: cs.characterId,
       field: cs.field,
       value: cs.value,
+      sourceChapter,
+      sourceRef: `narrative-state:${sourceChapter}`,
+      confidence: 1.0,
+      lastUpdated: now,
     })),
-  };
-  writeFileSync(
-    join(workspaceDir, "narrative-state.json"),
-    JSON.stringify(narrativeState, null, 2),
-    "utf-8",
-  );
-
-  // 4. promises → arc-registry.json
-  // LegacyStateAdapter 期望 arcRegistry: { arcs: [{ arcId, name, coreQuestion, priority, status }],
-  //   foreshadowings: [{ id, description, level, status }] }
-  // convertArcRegistry 把 foreshadowings 转换为 promise entries
-  const arcRegistry = {
-    arcs: [],
-    foreshadowings: (fixture.promises ?? []).map((p) => ({
-      id: p.id,
+    promise: (fixture.promises ?? []).map((p) => ({
+      kind: "promise" as const,
+      id: `promise:${p.id}`,
+      promiseId: p.id,
       description: p.description,
-      level: p.level ?? "medium",
-      status: p.status ?? "open",
+      status: (p.status as "open" | "advancing" | "fulfilled" | "broken") ?? "open",
+      currentHeat: p.level === "high" ? 0.8 : p.level === "low" ? 0.3 : 0.5,
+      sourceChapter,
+      sourceRef: `arc-registry:${p.id}`,
+      confidence: 1.0,
+      lastUpdated: now,
     })),
+    pattern: [],
+    expectation: [],
+    eventLog: [],
+    quarantine: [],
+    planned: [],
+    updatedAt: now,
   };
   writeFileSync(
-    join(workspaceDir, "arc-registry.json"),
-    JSON.stringify(arcRegistry, null, 2),
+    join(workspaceDir, "narrative-state-store.json"),
+    JSON.stringify(stateStore, null, 2),
     "utf-8",
   );
 }

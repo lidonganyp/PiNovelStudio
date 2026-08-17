@@ -21,6 +21,8 @@
   "exclude": [
     "node_modules",
     "dist",
+    "dist-eval",
+    "dist-test",
     "tests"
   ]
 }

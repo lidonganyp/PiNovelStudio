@@ -411,4 +411,38 @@ describe("CONCURRENCY 跨进程互斥：Wave1 原子租约锁 / Wave2 状态 CAS
     // 清理 tombstone，避免污染后续测试
     for (const t of tombstones ?? []) rmSync(join(PROJECT_ROOT, "workspaces", LOCK_WS, "batch-jobs", t), { force: true });
   });
+
+  it("BudgetLedger: 4 个进程并发 reserve 最后 1 次调用，恰好 1 个成功", async () => {
+    const ws = "concurrency-xproc-budget";
+    createBatchWorkspace(ws);
+    const { createBudgetLedger } = await import(
+      pathToFileURL(join(EXT_ROOT, "dist", "v2", "core", "budget-ledger.js")).href
+    );
+    const { saveBudgetLedgerStore, loadBudgetLedgerStore } = await import(
+      pathToFileURL(join(EXT_ROOT, "dist", "v2", "core", "budget-ledger-store.js")).href
+    );
+    saveBudgetLedgerStore(
+      createBudgetLedger({ hardBudget: { maxModelCalls: 1 } }),
+      ws,
+      PROJECT_ROOT,
+    );
+
+    const { results } = await runDrivers({
+      mode: "budget-reserve",
+      workspaceId: ws,
+      count: 4,
+      extraFactory: (i) => ({ reservationId: `xproc-budget-${i}` }),
+    });
+
+    const winners = results.filter((r) => r.ok === true);
+    const denied = results.filter((r) => r.ok === false);
+    assert.equal(winners.length, 1, `恰好 1 个 reserve 成功，实际 ${JSON.stringify(results)}`);
+    assert.equal(denied.length, 3);
+    assert.ok(denied.every((r) => r.reason === "hard_model_calls_exceeded"));
+
+    const disk = loadBudgetLedgerStore(ws, PROJECT_ROOT);
+    assert.equal(disk.usage.totalModelCalls, 1);
+    assert.equal(Object.keys(disk.reservations).length, 1);
+    cleanupWorkspace(ws);
+  });
 });

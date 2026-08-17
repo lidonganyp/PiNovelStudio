@@ -28,12 +28,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 import { ChapterIntentBuilder } from "../dist-test/v2/core/chapter-intent-builder.js";
 import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = join(__filename, "..");
+
+// 预算账本按 projectRoot/workspaceId 落盘。生产/eval orchestrator 测试改用独立临时
+// projectRoot，避免共享 workspace 的 budget-ledger.json 跨轮累积耗尽（测试隔离问题）。
+function isolatedProjectRoot() {
+  return mkdtempSync(join(tmpdir(), "intent-completeness-"));
+}
 
 // ── 测试用最小输入 ──────────────────────────────────────────────────────
 // 关键：所有关键字段（focusCharacterGoals/choicesAndCosts/expectedIrreversibleChange/
@@ -262,33 +270,38 @@ test("INTENT-COMPLETENESS-1 · evalMode 不因 under-specified 旧模板字段�
     ],
   };
 
-  const result = await orch.orchestrate({
-    workspaceId: "intent-completeness-test",
-    chapterId: "test-eval-1",
-    chapterNumber: 1,
-    projectRoot: process.cwd(),
-    intent: intentWithUnderSpecified,
-    context: {
-      facts: [],
-      characterStates: [],
-      openLoops: [],
-      worldRules: [],
-      styleReferences: [],
-      sourceMap: [],
-    },
-    constitution: null,
-    characterNames: ["林轩"],
-    modelGenerate: async () => ({
-      text: "stub raw text",
-      finishReason: "stop",
-    }),
-    evalMode: "B0",
-  });
+  const projectRoot = isolatedProjectRoot();
+  try {
+    const result = await orch.orchestrate({
+      workspaceId: "intent-completeness-test",
+      chapterId: "test-eval-1",
+      chapterNumber: 1,
+      projectRoot,
+      intent: intentWithUnderSpecified,
+      context: {
+        facts: [],
+        characterStates: [],
+        openLoops: [],
+        worldRules: [],
+        styleReferences: [],
+        sourceMap: [],
+      },
+      constitution: null,
+      characterNames: ["林轩"],
+      modelGenerate: async () => ({
+        text: "stub raw text",
+        finishReason: "stop",
+      }),
+      evalMode: "B0",
+    });
 
-  assert.equal(result.status, "ok");
-  assert.equal(result.failureEnvelope, null);
-  assert.equal(result.stageResults.intentCompleteness.advisoryOnly, true);
-  assert.equal(result.stageResults.intentCompleteness.blocking, false);
+    assert.equal(result.status, "ok");
+    assert.equal(result.failureEnvelope, null);
+    assert.equal(result.stageResults.intentCompleteness.advisoryOnly, true);
+    assert.equal(result.stageResults.intentCompleteness.blocking, false);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 });
 
 test("INTENT-COMPLETENESS-1 · 生产 orchestrator 将旧模板缺项保持为 advisory", async () => {
@@ -321,31 +334,40 @@ test("INTENT-COMPLETENESS-1 · 生产 orchestrator 将旧模板缺项保持为 a
     underSpecifiedFields: ["focusCharacterGoals", "choicesAndCosts"],
   };
 
-  const result = await orch.orchestrate({
-    workspaceId: "intent-completeness-test",
-    chapterId: "test-normal-1",
-    chapterNumber: 1,
-    projectRoot: process.cwd(),
-    intent: intentWithUnderSpecified,
-    context: {
-      facts: [],
-      characterStates: [],
-      openLoops: [],
-      worldRules: [],
-      styleReferences: TEST_STYLE_REFERENCES,
-      sourceMap: [],
-    },
-    constitution: null,
-    characterNames: ["林轩"],
-    modelGenerate: async () => ({
-      text: "stub raw text for normal mode",
-      finishReason: "stop",
-    }),
-    // 不传 evalMode → 普通生成模式
-  });
+  const projectRoot = isolatedProjectRoot();
+  try {
+    const result = await orch.orchestrate({
+      workspaceId: "intent-completeness-test",
+      chapterId: "test-normal-1",
+      chapterNumber: 1,
+      projectRoot,
+      intent: intentWithUnderSpecified,
+      context: {
+        facts: [],
+        characterStates: [],
+        openLoops: [],
+        worldRules: [],
+        styleReferences: TEST_STYLE_REFERENCES,
+        sourceMap: [],
+      },
+      constitution: null,
+      characterNames: ["林轩"],
+      modelGenerate: async () => ({
+        text: "stub raw text for normal mode",
+        finishReason: "stop",
+      }),
+      // 不传 evalMode → 普通生成模式
+    });
 
-  assert.equal(result.status, "ok");
-  assert.equal(result.failureEnvelope, null);
-  assert.equal(result.stageResults.intentCompleteness.advisoryOnly, true);
-  assert.equal(result.stageResults.intentCompleteness.blocking, false);
+    // 旧模板缺项仍保持 advisory（不阻断），路径照常运行返回 ok。
+    // PRODUCTION-ROLLOUT-AUDIT-1 P0-1d：此 orchestrator-direct 调用（productionFlow 未设置）
+    // 命中遗留 raw/judge 分支——照常返回 raw 供观测，但 commit 被关闭（chapterFilePath=null）。
+    assert.equal(result.status, "ok");
+    assert.equal(result.failureEnvelope, null);
+    assert.equal(result.chapterFilePath, null);
+    assert.equal(result.stageResults.intentCompleteness.advisoryOnly, true);
+    assert.equal(result.stageResults.intentCompleteness.blocking, false);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 });

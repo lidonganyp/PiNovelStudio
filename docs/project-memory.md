@@ -1,8 +1,39 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-15（第二轮核验整改完成：FP-GIT-1 根因修复、rel-prod-111 可复现基线重建并晋级唯一 active_prod、trace 污染根因查明、干净 workspace 真实回放证据落地）
-**代码基线**：当前工作树已切换到 Agentic-Style 生产链路（NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存）；旧裁判链仅保留隔离评测。
-**用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准，任务状态仍以 `remaining-development-dispatch-plan-20260715.md` 为准。
+**快照日期**：2026-08-17（rel-prod-122 晋级到 candidate_prod）
+**代码基线**：工作树主链路仍是 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存；旧裁判链仅保留隔离评测。
+**用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写“当前唯一 active_prod”，一律以本节为准。
+
+## 现行发布状态（2026-08-17，唯一当前声明）
+
+**生产指针：无。`rel-prod-122` 已到 `candidate_prod`，不得自动切 `active_prod`。**
+
+| 项 | 现行事实 |
+|---|---|
+| `active-production.json` | 无 pointer |
+| 最新 release | `rel-prod-122`，状态 **`candidate_prod`** |
+| 干净冻结树 | `D:\CODE\pns-eval-122` @ `2c868e6`，`worktreeDirty=false` |
+| verify | **YES**（fpHash `e3a18115…`，bundleId `15ca74b4…`，modelVersion `gemini31`，prompt hash `2909e82c…`） |
+| 真实审批 | gpt5.6-sol 网络双向 `APPROVE_DEV`，`reviewTransport=network`，`approval-rel-prod-122-1786954695948-a93adc2e` |
+| development pointer | **`rel-prod-122`**（已从 held 的 `rel-prod-120` 切走） |
+| promote | `approved_dev → active_dev → candidate_prod` 已完成 |
+| `active_prod` | **未切**。必须用户再次明确批准 |
+| 文学结论 | 本包是 R1 治理封口，不声称文学收益 |
+
+证据：`.pi/extensions/novel-studio/eval/fixtures/closure-20260817-121/`（verification-report、human-verdict-summary、binding）。
+
+`rel-prod-110`～`120` 的 capture / 回放 / HOLD 记录仍是历史过程，不是现行生产证书。恢复生产必须新建或继续审批链，且需要用户明确授权切 pointer；1-1-1 盲评本身不构成该授权。
+
+## REASONING-REPAIR-BOUNDARY-1（2026-08-16）
+
+**状态：Wave 0–4 代码已接线，不是发布完成。Wave 5 未完成，Wave 6 未开始，不得宣称生产发布验收通过。**
+
+计划：`docs/model-reasoning-external-verification-minimal-revision-development-plan-20260816.md`（v1.1，已从「待排期」更正）
+
+- 已接线：修订授权 policy、一次性 reservation、`expiresAt` persist/consume、初稿 `createCandidate`、无 verifier 不写 `current-candidate.json`、整章 range 升 `new_candidate`、删除 full-chapter rewrite fallback
+- **不是 Wave 5 证据**：`reports/rrb-real-replay/rrb-real-replay.json` 为 `verifyOnly: true` 的两条正常样本，未覆盖完整 repair/阻断
+- **simplicity-gate**：2026-08-17 已通过（0 违规 / 37 豁免）；不得再用“20 个超长文件未过门”作为当前阻断
+- 下一未完成：Wave 5 矩阵/故障注入/授权真实 replay；Wave 6 清理与 clean checkout 全量验收。发布指针见文首「现行发布状态」
 
 ## CONTEXT-EVIDENCE-GOVERNANCE-1（2026-08-15，v1.1）
 
@@ -14,15 +45,15 @@
 - 用户授权真实调用后：`rel-prod-112`、`rel-prod-113` 均在干净树 `D:\CODE\pns-ceg-prod@c4a2c0e` capture（verify YES），真实 gpt5.6-sol 两次都是 forward=HOLD / reverse=APPROVE_DEV，状态 **held**，**未切换 active_prod**
 - OpenAI `json_object` 需消息含字面量 `json`；中文化会吃掉该词。已在 HTTP 适配层 localize 之后注入，提交为 `02dc97c`
 - 干净树重跑：`recorded` / `synthetic` PASS（runId `closure-*-c4a2c0e`，P6 approved）；`production_like` 读到 `rel-prod-111` 后 fingerprint mismatch（`a43509f0…` vs `7b48cb05…`），零模型调用
-- 唯一 `active_prod` 仍是 **rel-prod-111**
-- **当前标记**：唯一 active_prod=`rel-prod-115`（`f8e0040`）。`eeaf704` 修复回放误选仓库根 invoke 脚本后，`production_like` 已走 Gemini 生产路由并 PASS（`v2_rawstage2_gemini31` + `v2_amplified_gemini31`，completed=1，isolation=0，P6 approved）
+- **历史（已失效）**：曾短暂把 rel-prod-111 / rel-prod-115 写成“唯一 active_prod”。二者均已 held 或被后续 revoke 取代，**不是 2026-08-17 现行生产指针**
+- **历史过程**：`eeaf704` 后 `rel-prod-115` 的 `production_like` 曾走过 Gemini 生产路由（completed=1）。该记录不得覆盖文首现行状态
 - HOLD 根因（不得再换号重试）：112/113 评审包把 `rel-prod-111/112` 和提交号写进正文，破坏匿名；中文化后变成 `未戊丑-巳未辰丁-112`，正反序冲突。包还把「替换现行有效生产指针」和「production_like 仍 fail-closed」绑在一起问，forward 暂缓是正确结论
 - 下一未阻断工作包：Wave 3B 动态工具信任消费；Wave 3C hash/trace 单一化收口；Wave 7 旧路径删除需人工正收益决策
 - 下一审批工作包：先冻结最终源码提交，用匿名评审包（只比路径解析这一唯一变量，不声称生产等价）重新 capture/评审；获批准并切换指针后再跑 `production_like`，证据必须绑定该最终 commit。禁止对同一基线再开 `rel-prod-114`
 
 ## GOVERNANCE-CLOSEOUT：发布治理核验收口（2026-08-15，第二轮修订）
 
-**状态：第一轮「五项核验全部关闭 / rel-prod-110 verify YES」的声明经外部核验否定，已撤回。第二轮整改完成：FP-GIT-1 根因修复（cf372b8）→ rel-prod-111 干净 capture 前向修复 → 真实网络评审晋级唯一 active_prod；trace 污染根因已查明；干净 workspace 严格生产回放证据落地（run2 status=ok 13/13 PASS）。**
+**状态（历史过程，2026-08-15）：第一轮「五项核验全部关闭 / rel-prod-110 verify YES」已撤回。当时 forward-fix 曾把 rel-prod-111 晋级为 active_prod。该指针其后已被后续 release / revoke 取代。2026-08-17 现行生产指针为无，见文首。**
 
 外部核验（2026-08-15）否定的两项及本轮处置：
 
@@ -31,7 +62,7 @@
 
 第二轮 forward-fix（2026-08-15）：
 
-- **rel-prod-111（唯一 active_prod）**：干净 worktree `D:\CODE\pns-verify111`@`cf372b86`（PINOVEL_PROJECT_ROOT 指向干净树 + git 在 PATH）capture：fpHash `a43509f0…`、codeCommit `cf372b86…`（真实 HEAD）、worktreeDirty=false → capture 后同环境自验 **reproducible YES** → `proxy-review --real` 真实网络评审（gpt5.6-sol forward+reverse 双向 APPROVE_DEV，reviewTransport=network，artifact `approval-rel-prod-111-1786762094245-6ced203a`）→ promote 链 active_dev→candidate_prod→active_prod（--confirm-prod --actor user；晋级时命中 active_prod 单例约束，先 hold rel-prod-110 再晋级，符合 fail-closed）→ **rel-prod-110 转 held（证据全部保留，未删除）**。changeClass=R1（治理守卫修复，零文学行为漂移，supersedesRef=rel-prod-110）。
+- **rel-prod-111（历史 active_prod，现已不是现行指针）**：干净 worktree `D:\CODE\pns-verify111`@`cf372b86`（PINOVEL_PROJECT_ROOT 指向干净树 + git 在 PATH）capture：fpHash `a43509f0…`、codeCommit `cf372b86…`（真实 HEAD）、worktreeDirty=false → capture 后同环境自验 **reproducible YES** → `proxy-review --real` 真实网络评审（gpt5.6-sol forward+reverse 双向 APPROVE_DEV，reviewTransport=network，artifact `approval-rel-prod-111-1786762094245-6ced203a`）→ promote 链 active_dev→candidate_prod→active_prod（--confirm-prod --actor user；晋级时命中 active_prod 单例约束，先 hold rel-prod-110 再晋级，符合 fail-closed）→ **rel-prod-110 转 held（证据全部保留，未删除）**。changeClass=R1（治理守卫修复，零文学行为漂移，supersedesRef=rel-prod-110）。
 - **干净 workspace 严格生产回放（B6，证据原位保留于 `D:\CODE\pns-verify111`）**：干净 xinmo（ch22 前置、零 23 号 trace 残留）+ `PINOVEL_DEV_MODE=0` + `PINOVEL_EVOLUTION_ROOT` 指向主仓治理数据，在 pns-verify111 跑 `phase9-production-acceptance.mjs xinmo 23`：
   - **run1（blocked，门禁 fail-closed 证据）**：Agentic 初稿 323s（含 2 次 524 网关重试）引入未授权高影响新设定「法宝」，agentic_fact_guard 13ms 本地检出 hard_block，零 silent degrade（章节未写、narrative-state 未推进）。trace 完全干净：createdAt=本次、buildInfo.gitHash=`cf372b86…`、releaseGovernance 携带完整生产身份（devMode=false / releaseId=rel-prod-111 / 指纹 `a43509f0…` 与 manifest 一致 / approvalRef 绑定）——G6 生产门禁对 rel-prod-111 真实校验通过。
   - **run2（ok，成功保存证据）**：**13/13 PASS，status=ok**；2 次 Gemini 调用（Agentic 59.2s + 风格优化 49.5s，各一次成功、无漂移重试）；narrative-state ch22→ch23；selectedSource=editorial；原子保存成功；trace append 合并形态如实：createdAt 保留 run1 值（同日 append 语义）、run1 blocked envelope 留存、run2 三个 PASS gate 追加（时间戳 05:35 可区分）。证据原位：`D:\CODE\pns-verify111\workspaces\xinmo\traces\23-*`、`D:\CODE\pns-verify111\reports\phase9-prompt-registry\production-acceptance-xinmo-ch23.json`、`chapters/23.md`；run1 blocked 证据副本 `D:\CODE\PiNovelStudio\reports\rel-prod-111-replay\*-run1-blocked.json`。
@@ -70,12 +101,11 @@
 
 layered-budget / recovery-budget 文件仍在，仅作结算后兼容投影（`projectModelCall`），不得单独阻断生产调用。
 
-当前生产元数据（以运行时文件为准，2026-08-15 第二轮核验）：
+当前生产元数据（2026-08-17 以运行时 pointer 为准）：
 
-- 唯一 `active_prod` = **rel-prod-111**（fpHash `a43509f0…`、codeCommit `cf372b86…`、approvalRef `approval-rel-prod-111-1786762094245-6ced203a`、reviewTransport=network、changeClass=R1、supersedesRef=rel-prod-110）
-- rel-prod-110 → **held**（不可复现基线退役，证据保留）；rel-prod-109 → held（脏主树 freeze，从未严格可复现，fpHash `e2e2046f…` ≠ recorded `53ff62dd…`）
-- 旧基线：rel-000 / rel-prod-100 / 101 / 102 → retired；rel-phase5b / rel-prod-103 / 104 / 106 / 108 → held（仅审计读取）；rel-prod-107 → draft
-- 回滚链已被状态机 + CLI 双层阻断；复验 rel-prod-111 需 `D:\CODE\pns-verify111`（@cf372b86）+ `PINOVEL_EVOLUTION_ROOT` 指向主仓 `config/evolution-release`（治理数据不入 git，worktree 内无副本）
+- **无 active_prod**。最新候选 `rel-prod-121` 为 `approved_dev`，P6 已批准，人工盲评 1-1-1，未 promote
+- 历史曾生效后又失效的 pointer：rel-prod-111 / 115 / 120 等，现均为 held 或已 revoke，仅审计读取
+- 回滚链仍阻断 held→active_prod；恢复生产只能新建或继续审批链并经用户明确授权切 pointer
 
 ## RUN-LIFECYCLE P7：历史数据迁移与发布收口（2026-08-14）
 
@@ -107,9 +137,9 @@ layered-budget / recovery-budget 文件仍在，仅作结算后兼容投影（`p
 **代码闭包变化**：DG-6 使 `release-lifecycle-permissions` 进入生产闭包（经 registry），`dist/` JS 311→312；`dependency-boundary.test.mjs` 阈值相应上调到 `< 313`。
 
 **生产操作项（2026-08-15 GOVERNANCE-CLOSEOUT 更新，原「未完成」清单部分已收敛）**：
-- ~~P0-2：真实生产 manifest rel-prod-106 行为身份字段为空~~ → 已被 rel-prod-109 取代：rel-prod-109 携带完整行为身份并 active_prod；rel-prod-106 保持 held 仅审计读取，其身份缺失不再可经回滚重新激活（rollback 路径已阻断）。
-- ~~真实数据存在多个 active_prod（rel-000 / rel-prod-100 / 101 / 102 / 106）~~ → 已收敛：旧 active 全部 retired/held；经 2026-08-15 第二轮 forward-fix 后唯一 active_prod = rel-prod-111（前序：rel-prod-109 → rel-prod-110 → rel-prod-111，前两者均因不可复现转 held）。
-- ~~仍待办：rel-prod-109 真实 workspace 回放证据；干净基线复现验证（或重新 capture）~~ → 已由第二轮 forward-fix 收敛：rel-prod-109/110 均 held，唯一 active_prod = rel-prod-111（干净 capture 自验 reproducible YES + 干净 workspace 严格生产回放 run2 status=ok）。详见本文档顶部 GOVERNANCE-CLOSEOUT 节。
+- ~~P0-2：真实生产 manifest rel-prod-106 行为身份字段为空~~ → 历史收敛：rel-prod-106 held，仅审计读取。
+- ~~真实数据存在多个 active_prod~~ → 历史曾收敛到单一 pointer，后又 revoke。**2026-08-17 无 active_prod**，见文首。
+- ~~仍待办：rel-prod-109 真实 workspace 回放~~ → 历史过程见 GOVERNANCE-CLOSEOUT；不得再写成“唯一 active_prod = rel-prod-111”。
 
 **验收表述修正**：DG-7 原「旧可执行分支被移除」仅为状态机退役（`retired` 终态），不删除真实可执行文件；物理删除属生产操作。已在测试注释与本文档中将「代码完成」与「生产操作完成」明确分开，不再把状态机退役表述为「可执行分支被移除」。
 
@@ -200,14 +230,12 @@ layered-budget / recovery-budget 文件仍在，仅作结算后兼容投影（`p
 
 **结论**：P-B 被新门禁第一层**绝对安全门 reject**（prematureDone=1.0 + coverage 降级 + sourceRef 降级）。旧门禁同样 FAIL。**确认「专属 Prompt 未胜出」**，保持通用 Prompt 为唯一生产 Bundle。生产无变更，无需真人盲评（被 reject 的候选不进入第三层）。报告存于 `reports/prompt-evolution-eval/eval-real-*.md`。
 
-## Phase 9 生产运营期 active_prod（2026-08-11）
+## Phase 9 生产运营期（历史记录，2026-08-11）
 
-> **【真相源修正 2026-08-13 / DG-0】** 本节开头"active production pointer 已切换到 rel-prod-103"是**过时记录**。实际唯一生产基线已前向切换，见 `config/evolution-release/rollback-history-production.jsonl`：
-> `rel-prod-102 → rel-prod-103 → rel-prod-104 → rel-prod-106`（跳过 rel-prod-105）。
-> **当前唯一生产指针**：`active-production.json → rel-prod-106`（codeCommit=eeb0ed3，审批 `approval-rel-prod-106-1786453322293-39a4f675`，reviewTransport=network，changeClass=R1）。开发指针 `active-development.json` 亦指向 rel-prod-106（actor=system，版本收敛同步）。
-> 另有 `rel-prod-107`（draft，codeCommit=750ea4d，supersedesRef=rel-prod-106）已建立但**未激活**。唯一真相源见 `docs/data-version-release-governance-wave0-baseline-20260813.md`。以下 rel-prod-103 叙述保留为历史验收记录，非当前基线声明。
+> **【真相源修正 2026-08-17】** 本节以及 2026-08-13 的“当前唯一生产指针 = rel-prod-106”均为**过时记录**。2026-08-17 现行生产指针为无，最新候选是 `rel-prod-121` / `approved_dev`，见文首。
+> 历史切换链曾为 `rel-prod-102 → 103 → 104 → 106`，其后还有 111 / 115 / 120，均已 held 或 revoke。以下 rel-prod-103/106 叙述只作验收档案，不是现行基线。
 
-**当前状态：生产运营期，稳定生产基线运行中。** 项目已从"开发/验收阶段"转入"生产运营与按需迭代"。active production pointer 已切换到 `rel-prod-106`（`active-production.json → rel-prod-106`），`PINOVEL_DEV_MODE=0`，不启动 canary，不开放新的 Prompt/Native 实验。本节的 rel-prod-103 细节为 2026-08-10/11 的历史基线验收记录，其结论已被 rel-prod-106（memory 层版本收敛）继承遗传。
+**历史状态（2026-08-11，已失效）：** 当时曾进入生产运营期，pointer 指向 `rel-prod-106`。该声明不得覆盖文首现行状态。
 
 - **`rel-prod-103` 是当前正式生产审批**：`reviewTransport=network`、真实 `releaseManifestHash`、目标环境 `environmentFingerprint=57abb60c…`，审批 artifact 绑定 `approval-rel-prod-103-1786379908606-42cfb37a`（reviewerModel=gpt5.6-sol，finalVerdict=APPROVE_DEV）。rel-prod-103 解除 rel-prod-102 因 `evolution-cli` .env 加载修复提交（c9ef8ef）导致的 codeCommit 指纹漂移，重新捕获并与当前生产运行时指纹一致。
 - **真实生产基线（xinmo ch19，2026-08-10）**：关闭 `PINOVEL_DEV_MODE` 后 `novel_generate_chapter` 完整主链路 150.5s，4 次模型调用（Gemini 3.1 Pro Preview），release gate 通过，trace 完整，narrative-state 推进到 ch19（hash 217 处引用），原子保存成功，无 silent degrade。此基线在 rel-prod-101 下验证，已由 rel-prod-103 继承遗传。

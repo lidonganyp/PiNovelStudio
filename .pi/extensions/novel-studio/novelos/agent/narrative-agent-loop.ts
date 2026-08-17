@@ -40,12 +40,36 @@ import type {
   NarrativeVerifierReport,
   VerificationFinding,
 } from "../verification/narrative-verifier-suite.js";
-import type { CandidatePatchService, PatchProposal } from "./candidate-patch-service.js";
+import type { CandidatePatchService, PatchProposal, PatchType } from "./candidate-patch-service.js";
 import { findingToFeedback } from "../verification/verification-feedback-compiler.js";
 import {
   createEvidencePlan,
   type EvidencePlan,
 } from "./evidence-plan.js";
+
+// REASONING-REPAIR-BOUNDARY-1 Wave 3：修订授权 + 候选谱系 + 计量接线
+import { evaluateRepairAuthorization } from "../../v2/core/repair-authorization-policy.js";
+import { createRepairAuthorizationLedger } from "../../v2/core/repair-authorization-ledger.js";
+import { hashText } from "../../v2/core/candidate-revision-store.js";
+import { createModelCallMeter } from "../../v2/core/model-call-meter.js";
+import { createValidatorRunMeter, type ValidatorRunMeter } from "../../v2/core/validator-run-meter.js";
+import type {
+  CandidateDerivationType,
+  CandidateRevisionManifest,
+  RepairAuthorization,
+  RepairReasonCode,
+  RepairStopReason,
+} from "../../v2/core/repair-authorization-contracts.js";
+import type { EvidenceRecord } from "../../v2/core/evidence-governance-contracts.js";
+import type { TextSpan } from "../../v2/core/types.js";
+import {
+  type RepairBudgetConfig,
+  type RepairBudgetCounts,
+  type RepairBudgetSnapshot,
+  buildRepairBudgetSnapshot,
+  checkRepairBudget,
+  deriveRepairBudgetConfig,
+} from "./repair-budget.js";
 
 // 公共 API：从拆分模块 re-export 类型，保持下游 import 路径稳定
 export type {
@@ -76,12 +100,11 @@ import {
   DEFAULT_REPAIR_BATCH_SIZE,
   isSemanticFinding,
   selectRepairFindings,
-  findingIds,
 } from "./narrative-repair-selector.js";
 import {
   applyLocalReplacements,
   buildLocalReplacementPrompt,
-  buildFullRewritePrompt,
+  buildNewCandidatePrompt,
 } from "./narrative-patch-merger.js";
 
 // ============================================================================
@@ -125,12 +148,15 @@ export class NarrativeAgentLoop {
   private readonly coverageGate?: CoverageGate;
   private readonly maxCoverageRetries: number;
   private readonly maxRepairRounds: number;
+  /** RRB-4.6：多维修订预算天花板（模型调用/授权/候选/validator runs）。 */
+  private readonly repairBudgetConfig: RepairBudgetConfig;
   /**
    * P0-3：per-finding semantic 修复次数追踪。
    * key=findingId, value=已修复轮数。
    * 语义类 finding（intent_omission）最多修复1轮，避免同一语义 finding 连续重写整章。
    */
   private readonly semanticRepairTracker: Map<string, number> = new Map();
+  private readonly authorizationLedger = createRepairAuthorizationLedger();
 
   constructor(options: NarrativeAgentLoopOptions) {
     this.runtime = options.runtime as NovelOSRuntime;
@@ -152,6 +178,11 @@ export class NarrativeAgentLoop {
         : 1;
     const envRounds = Number(process.env.PINOVEL_NOVELOS_MAX_REPAIR_ROUNDS);
     this.maxRepairRounds = options.maxRepairRounds ?? (Number.isFinite(envRounds) && envRounds >= 0 ? envRounds : 2);
+    // RRB-4.6：多维修订预算天花板默认由 maxRepairRounds 派生，调用方可覆盖单维度。
+    this.repairBudgetConfig = {
+      ...deriveRepairBudgetConfig(this.maxRepairRounds, DEFAULT_REPAIR_BATCH_SIZE),
+      ...(options.repairBudget ?? {}),
+    };
 
     // 订阅 runtime 事件流 → 转发工具事件到 candidateWorkspace.tool-events.jsonl。
     // ReAct 架构下工具由 Agent 原生派发（非 loop 程序化调用），runtime 已把事件写入
@@ -205,12 +236,15 @@ export class NarrativeAgentLoop {
           trajectoryPath: this.trajectory.getDetailOutputPath(),
           inviolableFacts: input.inviolableFacts ?? [],
           contextCoveredFacts: this.collectContextCoveredFacts(input),
+          snapshotId: input.snapshotId,
+          confirmedCoverage: input.confirmedCoverage,
         });
         if (coverageGateResult.passed) break;
 
         this.trajectory.recordFailure({
           stage: "must_verify_coverage_gate",
           severity: "hard",
+          failureClass: "blocked",
           reason: "P0/P1 mustVerify facts remain uncovered after Agentic retrieval",
           evidence:
             coverageGateResult.failureEnvelope?.evidence ??
@@ -306,8 +340,10 @@ export class NarrativeAgentLoop {
       );
     }
 
-    // ── 3. 写 draft.md ──────────────────────────────────────────────────
-    this.candidateWorkspace.writeDraft(turns.draftText);
+    // ── 3. 写初稿候选（不可变，append-only）。初验通过前不得推进 current。 ──
+    const draftManifest = this.candidateWorkspace.createCandidate({
+      text: turns.draftText,
+    });
 
     // ── 4. verifyAndPatch（若 verifier+patchService 已提供） ─────────────
     let finalText = turns.draftText;
@@ -317,12 +353,21 @@ export class NarrativeAgentLoop {
     let verifierCleared = false;
     let hardFindingCount = 0;
     let repairStopReason: AgentLoopStopReason | undefined;
-    let patchModelCalls = 0;
-    let verifyModelCalls = 0;
+    // RRB-4.1：模型调用按阶段分账（draft 来自 ReAct 阶段，patch/newCandidate/authorStyle 来自 verifyAndPatch）
+    let modelCallsByKind: ModelCallsByKind = {
+      draft: turns.draftModelCalls,
+      patch: 0,
+      newCandidate: 0,
+      authorStyle: 0,
+    };
+    // RRB-4.2：本地验证器运行分账（narrative_verifier / patch_comparator / span_immutability / ...）
+    let validatorRuns: Record<string, number> = {};
+    // RRB-4.6：多维修订预算快照（verifyAndPatch 返回，无修订时 undefined）。
+    let repairBudget: RepairBudgetSnapshot | undefined;
 
     if (this.verifier && this.patchService) {
       try {
-        const vp = await this.verifyAndPatch(turns.draftText, input, plan);
+        const vp = await this.verifyAndPatch(turns.draftText, input, plan, draftManifest);
         finalText = vp.text;
         verifierReport = vp.verifierReport;
         patchProposals = vp.patchProposals;
@@ -330,12 +375,14 @@ export class NarrativeAgentLoop {
         verifierCleared = vp.verifierCleared;
         hardFindingCount = vp.hardFindingCount;
         repairStopReason = vp.stopReason;
-        patchModelCalls = vp.patchModelCalls;
-        verifyModelCalls = vp.verifyModelCalls;
-        // 若 patch 修改了正文，更新 draft.md
-        if (finalText !== turns.draftText) {
-          this.candidateWorkspace.writeDraft(finalText);
-        }
+        modelCallsByKind = {
+          draft: turns.draftModelCalls,
+          patch: vp.modelCallsByKind.patch,
+          newCandidate: vp.modelCallsByKind.newCandidate,
+          authorStyle: vp.modelCallsByKind.authorStyle,
+        };
+        validatorRuns = vp.validatorRuns;
+        repairBudget = vp.repairBudget;
       } catch (err) {
         // verify/patch 失败 → 保留原 draft，不 fallback
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -355,7 +402,7 @@ export class NarrativeAgentLoop {
 
     // ── 5. 记录 lineage + output ────────────────────────────────────────
     const stopReason: AgentLoopStopReason = verifierCleared
-      ? "verifier_cleared"
+      ? "cleared"
       : repairStopReason ?? turns.stopReason;
 
     const lineage: AgentLoopLineage = {
@@ -369,11 +416,9 @@ export class NarrativeAgentLoop {
       hardFindingCount,
       firstAction: turns.firstAction,
       actualRetrievalCalls: turns.actualRetrievalCalls,
-      modelCallsByKind: {
-        draft: turns.draftModelCalls,
-        patch: patchModelCalls,
-        verify: verifyModelCalls,
-      },
+      modelCallsByKind,
+      validatorRuns,
+      ...(repairBudget ? { repairBudget } : {}),
       ...(coverageGateResult ? { coverageGate: coverageGateResult } : {}),
       ...(coverageGateRetries > 0 ? { coverageGateRetries } : {}),
     };
@@ -609,30 +654,32 @@ export class NarrativeAgentLoop {
     draftText: string,
     input: AgentLoopInput,
     plan: EvidencePlan,
+    draftManifest: CandidateRevisionManifest,
   ): Promise<VerifyPatchResult> {
-    const verifier = this.verifier!;
     const patchService = this.patchService!;
     // Phase 2C：从 plan 读取停滞阈值（默认与 MAX_STAGNANT_REPAIR_ROUNDS 一致）
     const maxStagnant = plan.stopConditions.maxStagnantRounds;
 
-    // AGENTIC-EVIDENCE-MERGE-1 可观测性：按阶段累计模型调用数
-    let verifyModelCalls = 0;
-    let patchModelCalls = 0;
+    // RRB-4.1 / RRB-4.2：模型调用与本地验证器运行分账。本地 verifier.verify()
+    // 不计入 modelCalls，走 ValidatorRunMeter；模型 wrapper 是 model call 唯一计数点。
+    const modelMeter = createModelCallMeter();
+    const validatorMeter = createValidatorRunMeter();
+
+    // RRB-3.7：权威证据记录由 orchestrator 注入；缺省为空 → 自动修订 fail-closed。
+    const evidenceRecords: ReadonlyArray<EvidenceRecord> = input.evidenceRecords ?? [];
+
+    // 当前已接受候选身份来自初稿 manifest；current pointer 仅在验证通过后推进。
+    let acceptedText = draftText;
+    let acceptedManifest: CandidateRevisionManifest | null = draftManifest;
 
     // 1. 初次 verify
-    verifyModelCalls += 1;
-    let report = verifier.verify({
-      text: draftText,
-      context: input.context,
-      chapterIntent: input.chapterIntent,
-      knownCharacterNames: input.knownCharacterNames,
-      inviolableFacts: input.inviolableFacts,
-    });
+    let report = this.verifyText(draftText, input, validatorMeter, acceptedManifest?.candidateId);
     this.candidateWorkspace.saveVerifierReport(report);
     this.trajectory.recordVerifierReport(report);
 
-    // 2. 无硬失败 → 直接清零
+    // 2. 无硬失败 → 初稿被接受，此时才推进 current
     if (!report.hasHardFailure) {
+      this.candidateWorkspace.advanceCurrentCandidate(draftManifest);
       return {
         text: draftText,
         verifierReport: report,
@@ -640,31 +687,96 @@ export class NarrativeAgentLoop {
         repairRounds: 0,
         verifierCleared: true,
         hardFindingCount: 0,
-        patchModelCalls: 0,
-        verifyModelCalls,
+        modelCallsByKind: modelMeter.getModelCallsByKind(),
+        validatorRuns: validatorMeter.getValidatorRunsByKind(),
+        // RRB-4.6：无修订发生时的预算快照（modelCalls/authorizations/candidates 均为 0）。
+        repairBudget: buildRepairBudgetSnapshot(
+          {
+            modelCalls: modelMeter.getTotalModelCalls(),
+            authorizations: 0,
+            candidates: 0,
+            validatorRuns: validatorMeter.getTotalValidatorRuns(),
+          },
+          this.repairBudgetConfig,
+        ),
       };
     }
 
     // 3. 每轮只修有限批次，避免把整章所有约束一次性压给模型。
     // P0-3：传入 semanticRepairTracker，过滤已达 semantic 修复预算的 finding。
     let selectedFindings = selectRepairFindings(report.hardFindings, DEFAULT_REPAIR_BATCH_SIZE, this.semanticRepairTracker);
-    let feedbacks = selectedFindings.map(findingToFeedback);
-    let proposals = patchService.proposePatches(draftText, feedbacks);
-    this.candidateWorkspace.savePatchProposals(proposals);
-    for (const p of proposals) this.trajectory.recordPatchProposal(p);
-
-    let currentText = draftText;
     let repairRounds = 0;
     let stagnantRounds = 0;
-    let stopReason: AgentLoopStopReason | undefined;
+    // RRB-4.4：修订循环退出原因收敛为 RepairStopReason（不再把所有失败折叠成 stagnant）。
+    let stopReason: RepairStopReason | undefined;
+    let proposals: PatchProposal[] = [];
+    // RRB-4.6：多维修订预算累计计数。modelCalls/validatorRuns 从 meter 读（RRB-4.3 唯一计数点），
+    // authorizations/candidates 无独立 meter，由 loop 在签发授权 / 创建子候选的计数点本地累加。
+    let authorizationCount = 0;
+    let candidateCount = 0;
+    const repairCounts = (): RepairBudgetCounts => ({
+      modelCalls: modelMeter.getTotalModelCalls(),
+      authorizations: authorizationCount,
+      candidates: candidateCount,
+      validatorRuns: validatorMeter.getTotalValidatorRuns(),
+    });
 
     // 4. 修复循环
     while (repairRounds < this.maxRepairRounds) {
-      if (this.budget.isExhausted()) break;
-      if (proposals.filter((p) => !p.rejected).length === 0) break;
+      if (this.budget.isExhausted()) {
+        stopReason = "budget_exhausted";
+        break;
+      }
+      // RRB-4.6：多维修订预算——任一维度触顶即 budget_exhausted 退出（防止只限轮次）。
+      const budgetCheck = checkRepairBudget(repairCounts(), this.repairBudgetConfig);
+      if (budgetCheck.exhausted) {
+        stopReason = "budget_exhausted";
+        this.trajectory.recordFailure({
+          stage: "novelos_repair_budget",
+          severity: "blocked",
+          failureClass: "blocked",
+          reason: `修订预算耗尽（${budgetCheck.exhaustedDimension}），保留最后已接受候选`,
+          evidence: { ...repairCounts(), exhaustedDimension: budgetCheck.exhaustedDimension },
+          recoverable: false,
+        });
+        break;
+      }
+      if (selectedFindings.length === 0) {
+        stopReason = "stagnant";
+        break;
+      }
+
+      // RRB-3.7：逐 finding 授权，仅放行通过全部准入条件的 finding。
+      const { authorizations, denyReasonCodes } = this.authorizeRepairFindings(
+        selectedFindings,
+        acceptedText,
+        evidenceRecords,
+        input.snapshotId,
+        acceptedManifest,
+        repairRounds,
+      );
+      const authorizedFindings = selectedFindings.filter((f) => authorizations.has(f.id));
+
+      if (authorizedFindings.length === 0) {
+        // 无授权动作 → fail-closed 停止，正文保持不变（RRB-3.7）。
+        // RRB-4.4：按拒绝理由码给出可解释的单一退出原因，不再一律 stagnant。
+        stopReason = classifyNoAuthorizationStopReason(denyReasonCodes);
+        this.trajectory.recordFailure({
+          stage: "novelos_repair_authorization",
+          severity: "blocked",
+          failureClass: "blocked",
+          reason: `全部候选 finding 未通过修订授权（${stopReason}），自动修订被拒绝`,
+          evidence: { deniedFindingIds: selectedFindings.map((f) => f.id), denyReasonCodes },
+          recoverable: false,
+        });
+        break;
+      }
+
+      // RRB-4.6：累计本轮签发的修订授权（按 finding 计），供多维修订预算约束。
+      authorizationCount += authorizedFindings.length;
 
       // P0-3：本轮修复前标记 semantic finding 已修复（避免下轮重复修同一 finding）
-      for (const finding of selectedFindings) {
+      for (const finding of authorizedFindings) {
         if (isSemanticFinding(finding)) {
           this.semanticRepairTracker.set(
             finding.id,
@@ -674,91 +786,182 @@ export class NarrativeAgentLoop {
       }
 
       repairRounds++;
-      // 生成 patched text
+
+      // RRB-3.4：本轮全部授权 span（联合校验用，来自签发授权 authorizedRanges）
+      const authorizedRanges = this.collectAuthorizedRanges(authorizedFindings, authorizations);
+
+      // 仅为授权 finding 产生 patch proposals
+      const feedbacks = authorizedFindings.map(findingToFeedback);
+      proposals = patchService.proposePatches(acceptedText, feedbacks);
+      this.candidateWorkspace.savePatchProposals(proposals);
+      for (const p of proposals) this.trajectory.recordPatchProposal(p);
+
+      const consumeResult = this.consumeAuthorizedReservations(
+        authorizations,
+        authorizedFindings,
+        acceptedText,
+        input.snapshotId,
+      );
+      if (!consumeResult.ok) {
+        stopReason = "stale_authorization";
+        this.trajectory.recordFailure({
+          stage: "novelos_repair_authorization",
+          severity: "blocked",
+          failureClass: "blocked",
+          reason: `授权 reservation 执行校验失败（${consumeResult.reasonCode}）：${consumeResult.reason}`,
+          evidence: { reasonCode: consumeResult.reasonCode },
+          recoverable: false,
+        });
+        break;
+      }
+
+      const wantsNewCandidate = this.shouldGenerateNewCandidate(
+        authorizedFindings,
+        authorizations,
+        proposals,
+        acceptedText,
+      );
+
+      // 生成修订文本：局部 patch 或显式 new_candidate，禁止整章 rewrite fallback
       let patchedText: string;
+      const generateKind = wantsNewCandidate ? "newCandidate" : "patch";
       try {
-        patchModelCalls += 1;
-        patchedText = await this.generatePatchedText(
-          currentText,
-          proposals,
-          selectedFindings,
-        );
+        patchedText = wantsNewCandidate
+          ? await this.generateNewCandidate(acceptedText, authorizedFindings)
+          : await this.generatePatchedText(
+            acceptedText,
+            proposals,
+            authorizedFindings,
+          );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
+        modelMeter.recordModelCall({ kind: generateKind, success: false });
+        for (const proposal of proposals) {
+          proposal.rejected = true;
+          proposal.rejectionReason = errMsg;
+        }
+        this.candidateWorkspace.savePatchProposals(proposals);
         this.trajectory.recordFailure({
-          stage: "novelos_patch_generation",
+          stage: wantsNewCandidate ? "novelos_new_candidate_generation" : "novelos_patch_generation",
           severity: "recoverable",
           failureClass: "recoverable",
           recoveryAction: "retry_gate",
-          reason: `patch 生成失败：${errMsg}`,
+          reason: `${generateKind} 生成失败：${errMsg}`,
           recoverable: true,
           retryPlan: "保留原 draft，verifierCleared=false",
         });
         break;
       }
+      modelMeter.recordModelCall({ kind: generateKind, success: true });
 
-      // 评估退化（对每个未 rejected proposal）
-      const acceptedProposals = proposals.filter((p) => !p.rejected);
-      let hasAccepted = false;
-      for (const proposal of acceptedProposals) {
-        const evalResult = patchService.evaluatePatch(currentText, patchedText, proposal);
-        if (evalResult.accepted) {
-          hasAccepted = true;
-        } else {
-          proposal.rejected = true;
-          proposal.rejectionReason = evalResult.reason;
+      // RRB-3.4：局部 patch 做联合 span 校验。纯 new_candidate 只做退化长度检查。
+      const onlyNewCandidate = authorizedFindings.every(
+        (finding) => authorizations.get(finding.id)?.action === "new_candidate",
+      );
+      if (!onlyNewCandidate) {
+        const evalResult = patchService.evaluatePatch(acceptedText, patchedText, authorizedRanges, proposals);
+        validatorMeter.recordValidatorRun({
+          kind: "patch_comparator",
+          candidateId: acceptedManifest?.candidateId,
+          outcome: evalResult.accepted ? "passed" : "failed",
+        });
+        this.candidateWorkspace.savePatchProposals(proposals);
+
+        if (!evalResult.accepted) {
+          // 退化 → 保留上一候选，不移动 current pointer（RRB-3.6）
+          stopReason = "comparator_rejected";
+          break;
         }
+      } else {
+        const lengthRatio = acceptedText.length > 0 ? patchedText.length / acceptedText.length : 1;
+        if (lengthRatio < 0.7) {
+          const reason = `new_candidate 正文大幅缩短（ratio=${lengthRatio.toFixed(2)}），视为退化`;
+          for (const proposal of proposals) {
+            proposal.rejected = true;
+            proposal.rejectionReason = reason;
+          }
+          this.candidateWorkspace.savePatchProposals(proposals);
+          stopReason = "comparator_rejected";
+          break;
+        }
+        this.candidateWorkspace.savePatchProposals(proposals);
       }
-      this.candidateWorkspace.savePatchProposals(proposals);
 
-      if (!hasAccepted) {
-        // 所有 patch 退化 → 保留上一候选
+      // reverify（本地 validator，不计入模型调用）
+      const nextReport = this.verifyText(patchedText, input, validatorMeter, undefined);
+      this.candidateWorkspace.saveVerifierReport(nextReport);
+      this.trajectory.recordVerifierReport(nextReport);
+
+      // RRB-4.5：身份级进展判断（比较 finding identity，非数量）。
+      const identityCheck = this.compareFindingIdentity(report.hardFindings, nextReport.hardFindings);
+
+      // RRB-3.6：新增 hard finding（identity 换新）→ 整轮拒绝，current pointer 保持不变
+      if (identityCheck.newFindingIds.length > 0) {
+        this.trajectory.recordFailure({
+          stage: "novelos_post_verification_gate",
+          severity: "blocked",
+          failureClass: "blocked",
+          reason: `修订引入了新的 hard finding（identity 换新）：${identityCheck.newFindingIds.join(",")}，整轮拒绝`,
+          evidence: {
+            newFindingIds: identityCheck.newFindingIds,
+            previousFindingIds: report.hardFindings.map((f) => f.id),
+          },
+          recoverable: false,
+        });
+        // RRB-4.4：修订引入新 hard finding 是独立退出原因。
+        stopReason = "new_hard_finding";
         break;
       }
 
-      const previousFindingIds = findingIds(report.hardFindings);
-
-      // reverify patchedText
-      verifyModelCalls += 1;
-      report = verifier.verify({
-        text: patchedText,
-        context: input.context,
-        chapterIntent: input.chapterIntent,
-        knownCharacterNames: input.knownCharacterNames,
-        inviolableFacts: input.inviolableFacts,
+      // 生成不可变 child candidate（RRB-2.3）：gate 通过才创建并推进 pointer
+      const derivationType = wantsNewCandidate
+        ? "new_candidate"
+        : this.deriveTypeForAuthorizedFindings(proposals);
+      const authorizationId = this.pickAuthorizationId(authorizedFindings, authorizations);
+      const childManifest = this.candidateWorkspace.deriveChildCandidate({
+        parentManifest: acceptedManifest,
+        childText: patchedText,
+        derivationType,
+        authorizationId,
       });
-      this.candidateWorkspace.saveVerifierReport(report);
-      this.trajectory.recordVerifierReport(report);
-      currentText = patchedText;
 
-      const nextFindingIds = findingIds(report.hardFindings);
-      const resolvedFindingIds = [...previousFindingIds].filter((id) => !nextFindingIds.has(id));
-      const remainingFindingIds = [...nextFindingIds];
-      const madeProgress = nextFindingIds.size < previousFindingIds.size;
-      stagnantRounds = madeProgress ? 0 : stagnantRounds + 1;
+      // 已通过 post-verification gate 的候选成为新的当前候选
+      acceptedText = patchedText;
+      acceptedManifest = childManifest;
+      this.candidateWorkspace.advanceCurrentCandidate(childManifest);
+      // RRB-4.6：累计创建的子候选数，供多维修订预算约束。
+      candidateCount++;
+      report = nextReport;
+
       this.trajectory.recordRepairRound({
         round: repairRounds,
-        hardFindingsBefore: previousFindingIds.size,
-        hardFindingsAfter: nextFindingIds.size,
-        selectedFindingIds: selectedFindings.map((finding) => finding.id),
-        resolvedFindingIds,
-        remainingFindingIds,
+        hardFindingsBefore: identityCheck.previousCount,
+        hardFindingsAfter: identityCheck.nextCount,
+        selectedFindingIds: authorizedFindings.map((finding) => finding.id),
+        resolvedFindingIds: identityCheck.resolvedIds,
+        remainingFindingIds: identityCheck.remainingIds,
         stagnantRounds,
+        derivationType,
+        authorizationId,
       });
 
-      if (!report.hasHardFailure) {
-        // 清零 → 用 patchedText 替换
+      if (!nextReport.hasHardFailure) {
+        // 清零 → 用 patchedText 返回
         return {
           text: patchedText,
-          verifierReport: report,
+          verifierReport: nextReport,
           patchProposals: proposals,
           repairRounds,
           verifierCleared: true,
           hardFindingCount: 0,
-          patchModelCalls,
-          verifyModelCalls,
+          modelCallsByKind: modelMeter.getModelCallsByKind(),
+          validatorRuns: validatorMeter.getValidatorRunsByKind(),
+          repairBudget: buildRepairBudgetSnapshot(repairCounts(), this.repairBudgetConfig),
         };
       }
+
+      // 仍有硬失败 → 身份级进展决定停滞计数（RRB-4.5）
+      stagnantRounds = identityCheck.madeProgress ? 0 : stagnantRounds + 1;
 
       if (stagnantRounds >= maxStagnant) {
         stopReason = "stagnant";
@@ -768,29 +971,239 @@ export class NarrativeAgentLoop {
       // 仍有硬失败 → 选择下一有限批次进入下轮
       // P0-3：传入 semanticRepairTracker，过滤已达 semantic 修复预算的 finding
       selectedFindings = selectRepairFindings(report.hardFindings, DEFAULT_REPAIR_BATCH_SIZE, this.semanticRepairTracker);
-      // 若所有 semantic finding 已达预算且无 deterministic finding 可修 → 停止
-      if (selectedFindings.length === 0) {
-        stopReason = "stagnant";
-        break;
-      }
-      feedbacks = selectedFindings.map(findingToFeedback);
-      proposals = patchService.proposePatches(currentText, feedbacks);
-      for (const p of proposals) this.trajectory.recordPatchProposal(p);
     }
 
-    // 5. 循环结束仍有硬失败 → 保留最后一个通过退化检查的候选供诊断。
+    // 5. 循环结束仍有硬失败 → 保留最后一个通过 gate 的候选供诊断。
     // 上层仍以 verifierCleared=false hard block，候选不会保存为正式章节。
     return {
-      text: currentText,
+      text: acceptedText,
       verifierReport: report,
       patchProposals: proposals,
       repairRounds,
       verifierCleared: false,
       hardFindingCount: report.hardFindings.length,
-      patchModelCalls,
-      verifyModelCalls,
+      modelCallsByKind: modelMeter.getModelCallsByKind(),
+      validatorRuns: validatorMeter.getValidatorRunsByKind(),
+      repairBudget: buildRepairBudgetSnapshot(repairCounts(), this.repairBudgetConfig),
       ...(stopReason ? { stopReason } : {}),
     };
+  }
+
+  // ── 内部：Wave 3 授权 / 候选谱系 / 计量辅助方法 ──────────────────────
+
+  /**
+   * 本地 verifier 运行（RRB-4.2）：不计入模型调用，走 ValidatorRunMeter。
+   * 只有 verifier 运行计数点；禁止调用方手工 `+= 1`（RRB-4.3）。
+   */
+  private verifyText(
+    text: string,
+    input: AgentLoopInput,
+    validatorMeter: ValidatorRunMeter,
+    candidateId?: string,
+  ): NarrativeVerifierReport {
+    const report = this.verifier!.verify({
+      text,
+      context: input.context,
+      chapterIntent: input.chapterIntent,
+      knownCharacterNames: input.knownCharacterNames,
+      inviolableFacts: input.inviolableFacts,
+    });
+    validatorMeter.recordValidatorRun({
+      kind: "narrative_verifier",
+      candidateId,
+      outcome: report.hasHardFailure ? "failed" : "passed",
+    });
+    return report;
+  }
+
+  /** 读取当前候选 manifest（无则 null）。 */
+  private readCurrentManifest(): CandidateRevisionManifest | null {
+    const currentId = this.candidateWorkspace.getCurrentCandidateId();
+    if (currentId === null) return null;
+    return this.candidateWorkspace.readCandidateManifest(currentId);
+  }
+
+  /**
+   * 逐 finding 授权（RRB-3.7）：调用 evaluateRepairAuthorization 做 §3.2 全部
+   * 准入条件 fail-closed 评估，返回 findingId → RepairAuthorization 的 Map。
+   *
+   * fail-closed 前置：无 current candidate（缺候选身份）或 snapshotId 缺失时，
+   * 无法把授权绑定到候选/snapshot，直接拒绝全部（返回空 Map）。
+   */
+  private authorizeRepairFindings(
+    findings: VerificationFinding[],
+    acceptedText: string,
+    evidenceRecords: ReadonlyArray<EvidenceRecord>,
+    snapshotId: string | undefined,
+    acceptedManifest: CandidateRevisionManifest | null,
+    roundIndex: number,
+  ): { authorizations: Map<string, RepairAuthorization>; denyReasonCodes: RepairReasonCode[] } {
+    const authorizations = new Map<string, RepairAuthorization>();
+    const denyReasonCodes: RepairReasonCode[] = [];
+    if (!acceptedManifest || !snapshotId) {
+      return { authorizations, denyReasonCodes };
+    }
+    const candidateId = acceptedManifest.candidateId;
+    const candidateTextHash = hashText(acceptedText);
+    for (const finding of findings) {
+      const decision = evaluateRepairAuthorization({
+        finding,
+        evidenceRecords,
+        candidateId,
+        candidateTextHash,
+        candidateTextLength: acceptedText.length,
+        snapshotId,
+        budgetAvailable: !this.budget.isExhausted(),
+        orchestratorDecisionId: `decision-${candidateId}-r${roundIndex}`,
+      });
+      if (decision.decision === "authorized" && decision.authorization) {
+        authorizations.set(
+          finding.id,
+          this.authorizationLedger.register(decision.authorization),
+        );
+      } else {
+        // RRB-4.4：保留拒绝理由码，供上层把「无授权动作」细分为
+        // stale_authorization / blocked / request_new_candidate / no_authorized_action。
+        denyReasonCodes.push(decision.reasonCode);
+      }
+    }
+    return { authorizations, denyReasonCodes };
+  }
+
+  /**
+   * RRB-4.5：身份级进展判断。比较 finding identity（failureType + span），
+   * 而非数量。madeProgress = 有 resolved 且无新增（identity 换新）。
+   */
+  private compareFindingIdentity(
+    previous: VerificationFinding[],
+    next: VerificationFinding[],
+  ): {
+    previousCount: number;
+    nextCount: number;
+    resolvedIds: string[];
+    remainingIds: string[];
+    newFindingIds: string[];
+    madeProgress: boolean;
+  } {
+    const prevKeys = new Set(previous.map((f) => this.findingIdentityKey(f)));
+    const nextKeys = new Set(next.map((f) => this.findingIdentityKey(f)));
+    const resolvedIds: string[] = [];
+    const remainingIds: string[] = [];
+    for (const f of previous) {
+      if (nextKeys.has(this.findingIdentityKey(f))) remainingIds.push(f.id);
+      else resolvedIds.push(f.id);
+    }
+    const newFindingIds = next
+      .filter((f) => !prevKeys.has(this.findingIdentityKey(f)))
+      .map((f) => f.id);
+    const madeProgress = resolvedIds.length > 0 && newFindingIds.length === 0;
+    return {
+      previousCount: previous.length,
+      nextCount: next.length,
+      resolvedIds,
+      remainingIds,
+      newFindingIds,
+      madeProgress,
+    };
+  }
+
+  /** finding identity key（RRB-4.5）：failureType + span。 */
+  private findingIdentityKey(finding: VerificationFinding): string {
+    return `${finding.failureType}:${finding.span.start}:${finding.span.end}`;
+  }
+
+  /** RRB-3.4：收集本轮全部授权范围（来自签发授权 authorizedRanges）。 */
+  private collectAuthorizedRanges(
+    findings: VerificationFinding[],
+    authorizations: Map<string, RepairAuthorization>,
+  ): TextSpan[] {
+    const ranges: TextSpan[] = [];
+    for (const finding of findings) {
+      const auth = authorizations.get(finding.id);
+      if (!auth) continue;
+      ranges.push(...auth.authorizedRanges);
+    }
+    return ranges;
+  }
+
+  /** 由 patch proposals 推导子候选派生类型（RRB-2.3），取最高干预级。 */
+  private deriveTypeForAuthorizedFindings(
+    proposals: PatchProposal[],
+  ): CandidateDerivationType {
+    const priorities: Record<CandidateDerivationType, number> = {
+      agentic_generation: 0,
+      span_patch: 1,
+      paragraph_patch: 2,
+      bridge_patch: 3,
+      new_candidate: 4,
+      author_style_transform: 0,
+      user_edit: 0,
+    };
+    let best: CandidateDerivationType = "span_patch";
+    for (const p of proposals) {
+      const t = patchTypeToDerivationType(p.type);
+      if (priorities[t] > priorities[best]) best = t;
+    }
+    return best;
+  }
+
+  private shouldGenerateNewCandidate(
+    findings: VerificationFinding[],
+    authorizations: Map<string, RepairAuthorization>,
+    proposals: PatchProposal[],
+    draftText: string,
+  ): boolean {
+    if (findings.some((finding) => authorizations.get(finding.id)?.action === "new_candidate")) {
+      return true;
+    }
+    return proposals.some((proposal) => !isLocalReplacementProposal(proposal, draftText.length));
+  }
+
+  private consumeAuthorizedReservations(
+    authorizations: Map<string, RepairAuthorization>,
+    findings: VerificationFinding[],
+    acceptedText: string,
+    snapshotId: string | undefined,
+  ): { ok: boolean; reasonCode?: string; reason?: string } {
+    if (!snapshotId) {
+      return { ok: false, reasonCode: "stale_authorization", reason: "执行时 snapshotId 缺失" };
+    }
+    const currentHash = hashText(acceptedText);
+    for (const finding of findings) {
+      const authorization = authorizations.get(finding.id);
+      if (!authorization) continue;
+      const consumed = this.authorizationLedger.consume(authorization, currentHash, snapshotId);
+      if (!consumed.ok) {
+        return consumed;
+      }
+    }
+    return { ok: true };
+  }
+
+  private async generateNewCandidate(
+    originalDraft: string,
+    findings: VerificationFinding[],
+  ): Promise<string> {
+    const userPrompt = buildNewCandidatePrompt(originalDraft, findings);
+    await this.runtime.prompt(userPrompt);
+    await this.runtime.waitForIdle();
+    const modelOutput = extractLastAssistantText(this.runtime);
+    if (modelOutput.trim().length === 0) {
+      throw new Error("new_candidate 模型未返回有效文本");
+    }
+    return modelOutput;
+  }
+
+  /** 从授权 findings 中取一个 authorizationId（子候选关联授权，RRB-2.3）。 */
+  private pickAuthorizationId(
+    findings: VerificationFinding[],
+    authorizations: Map<string, RepairAuthorization>,
+  ): string | null {
+    for (const finding of findings) {
+      const auth = authorizations.get(finding.id);
+      if (auth) return auth.authorizationId;
+    }
+    return null;
   }
 
   /**
@@ -812,17 +1225,15 @@ export class NarrativeAgentLoop {
 
     // P0-3：判断是否使用局部 replacement 模式
     const allLocalReplacement = activeProposals.length > 0
-      && activeProposals.every((p) => p.localReplacement === true);
+      && activeProposals.every((p) => isLocalReplacementProposal(p, originalDraft.length));
 
-    let userPrompt: string;
-    if (allLocalReplacement) {
-      // P1-4 修复：局部 replacement 模式 — 只输出 span 内替换文本
-      // prompt 构造委托给 narrative-patch-merger.ts
-      userPrompt = buildLocalReplacementPrompt(originalDraft, activeProposals, findings);
-    } else {
-      // 完整正文模式（含整章范围或混合场景）
-      userPrompt = buildFullRewritePrompt(originalDraft, activeProposals, findings);
+    if (!allLocalReplacement) {
+      throw new Error(
+        "整章 rewrite fallback 已禁用；非整章局部修复必须走显式 new_candidate",
+      );
     }
+
+    const userPrompt = buildLocalReplacementPrompt(originalDraft, activeProposals, findings);
 
     await this.runtime.prompt(userPrompt);
     await this.runtime.waitForIdle();
@@ -932,7 +1343,8 @@ export class NarrativeAgentLoop {
       modelCallsByKind: {
         draft: observed?.draftModelCalls ?? 0,
         patch: 0,
-        verify: 0,
+        newCandidate: 0,
+        authorStyle: 0,
       },
       ...(coverageGate ? { coverageGate } : {}),
       ...(coverageGateRetries > 0 ? { coverageGateRetries } : {}),
@@ -958,6 +1370,30 @@ export class NarrativeAgentLoop {
 }
 
 // ============================================================================
+// PatchType → CandidateDerivationType（RRB-2.3）
+// ============================================================================
+
+/**
+ * 把 patch 类型映射为候选派生类型：
+ * - bridge_patch → bridge_patch
+ * - paragraph_patch / event_patch → paragraph_patch
+ * - sentence_patch → span_patch
+ */
+function patchTypeToDerivationType(type: PatchType): CandidateDerivationType {
+  switch (type) {
+    case "bridge_patch":
+      return "bridge_patch";
+    case "paragraph_patch":
+    case "event_patch":
+      return "paragraph_patch";
+    case "sentence_patch":
+      return "span_patch";
+    default:
+      return "span_patch";
+  }
+}
+
+// ============================================================================
 // 工厂
 // ============================================================================
 
@@ -965,4 +1401,65 @@ export function createNarrativeAgentLoop(
   options: NarrativeAgentLoopOptions,
 ): NarrativeAgentLoop {
   return new NarrativeAgentLoop(options);
+}
+
+// ============================================================================
+// 无授权动作 → RepairStopReason 细分（RRB-4.4）
+// ============================================================================
+
+/**
+ * RRB-4.4：当所有候选 finding 都未通过修订授权时，按拒绝理由码把退出原因
+ * 细分为单一可解释枚举，而不是一律 stagnant：
+ *
+ * - stale_authorization  命中 snapshot 过期 / 父候选 hash 变化 / evidence hash 不匹配
+ * - blocked              命中 require_block / require_input_revision（如作者输入自相矛盾）
+ * - request_new_candidate 命中 require_new_candidate（灾难级契约失败需重生成）
+ * - no_authorized_action  其余（缺权威证据 / 确定性不足 / span 非法 / 非编排器签发等）
+ */
+export function classifyNoAuthorizationStopReason(
+  denyReasonCodes: readonly RepairReasonCode[],
+): RepairStopReason {
+  if (
+    denyReasonCodes.some(
+      (c) =>
+        c === "deny_stale_snapshot" ||
+        c === "deny_stale_candidate_hash" ||
+        c === "deny_evidence_hash_mismatch",
+    )
+  ) {
+    return "stale_authorization";
+  }
+  if (denyReasonCodes.some((c) => c === "require_block" || c === "require_input_revision")) {
+    return "blocked";
+  }
+  if (denyReasonCodes.some((c) => c === "require_new_candidate")) {
+    return "request_new_candidate";
+  }
+  return "no_authorized_action";
+}
+
+function isLocalReplacementProposal(proposal: PatchProposal, draftLength: number): boolean {
+  if (proposal.localReplacement === true) return true;
+  if (proposal.localReplacement === false) return false;
+  const span = proposal.targetSpan;
+  if (!span) return false;
+  return !(span.start === 0 && span.end === draftLength);
+}
+
+function extractLastAssistantText(runtime: NovelOSRuntime): string {
+  const messages = runtime.agent.state.messages;
+  let lastAssistant: { role?: string; content?: unknown } | undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if ((messages[i] as { role?: string }).role === "assistant") {
+      lastAssistant = messages[i] as { role?: string; content?: unknown };
+      break;
+    }
+  }
+  const content = lastAssistant?.content;
+  const contentArr = Array.isArray(content) ? content : [];
+  const textBlocks = contentArr.filter(
+    (c: { type?: string; text?: string }) =>
+      c.type === "text" && typeof c.text === "string" && c.text.length > 0,
+  ) as Array<{ type: "text"; text: string }>;
+  return textBlocks.map((b) => b.text).join("");
 }

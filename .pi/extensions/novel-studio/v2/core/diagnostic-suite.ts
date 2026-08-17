@@ -174,18 +174,3 @@ export class DiagnosticSuite {
 export function createDiagnosticSuite(): DiagnosticSuite {
   return new DiagnosticSuite();
 }
-
-// ============================================================================
-// 工具：断言 provider 不改文不触发重写
-// ============================================================================
-
-/**
- * 校验 Diagnostic 不含 text 修改字段（suggestedRepair 只能是 no_op 或 patch，不能是 chapter_rewrite）。
- * chapter_rewrite 只允许由 RepairPlanner 在 catastrophic 证据下产出，不由 diagnostic 直接携带。
- */
-export function assertDiagnosticNoChapterRewrite(d: Diagnostic): boolean {
-  if (d.suggestedRepair && d.suggestedRepair.kind === "chapter_rewrite") {
-    return false;
-  }
-  return true;
-}

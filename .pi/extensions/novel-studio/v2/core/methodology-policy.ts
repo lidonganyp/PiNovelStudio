@@ -12,7 +12,8 @@ export type MethodologyEnforcement =
   | "generation_context"
   | "candidate_only"
   | "review_only"
-  | "excluded_from_raw";
+  | "excluded_from_raw"
+  | "eval_only";
 
 export interface MethodologyRule {
   id: string;
@@ -132,6 +133,7 @@ export function compileMethodologyApplicationReport(
       rule.enforcement === "candidate_only"
       || rule.enforcement === "review_only"
       || rule.enforcement === "excluded_from_raw"
+      || rule.enforcement === "eval_only"
     ))
     .map((rule) => `${rule.id}:${rule.matchedFields.join(",")}`);
 

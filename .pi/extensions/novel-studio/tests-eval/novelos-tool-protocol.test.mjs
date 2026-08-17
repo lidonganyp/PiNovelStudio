@@ -35,82 +35,101 @@ function setupWorkspace() {
   const wsDir = join(tmpRoot, "workspaces", workspaceId);
   mkdirSync(wsDir, { recursive: true });
 
-  // skeleton.json
+  const now = new Date().toISOString();
+
+  // narrative-state-store.json（统一状态存储，替代 legacy skeleton/narrative-state/arc-registry）
   writeFileSync(
-    join(wsDir, "skeleton.json"),
+    join(wsDir, "narrative-state-store.json"),
     JSON.stringify({
-      chapterId: "ch1",
-      events: [
+      schemaVersion: "narrative-state-store-v1",
+      workspaceId,
+      canon: [
         {
-          eventId: "evt-001",
-          type: "discovery",
-          summary: "主角发现复苏之眼能力",
-          characters: ["林默", "苏雨"],
-          location: "青鱼嘴",
+          kind: "canon",
+          id: "canon:evt-001",
+          fact: "主角发现复苏之眼能力",
+          category: "timeline",
+          sourceChapter: "ch1",
+          sourceRef: "skeleton:evt-001",
+          confidence: 1.0,
+          lastUpdated: now,
         },
         {
-          eventId: "evt-002",
-          type: "conflict",
-          summary: "林默与黑影对峙",
-          characters: ["林默"],
-          location: "水下洞穴",
+          kind: "canon",
+          id: "canon:evt-002",
+          fact: "林默与黑影对峙",
+          category: "timeline",
+          sourceChapter: "ch1",
+          sourceRef: "skeleton:evt-002",
+          confidence: 1.0,
+          lastUpdated: now,
+        },
+        {
+          kind: "canon",
+          id: "canon:loc-001",
+          fact: "青鱼嘴",
+          category: "location",
+          sourceChapter: "ch1",
+          sourceRef: "skeleton:locations",
+          confidence: 1.0,
+          lastUpdated: now,
+        },
+        {
+          kind: "canon",
+          id: "canon:loc-002",
+          fact: "水下洞穴",
+          category: "location",
+          sourceChapter: "ch1",
+          sourceRef: "skeleton:locations",
+          confidence: 1.0,
+          lastUpdated: now,
         },
       ],
-      locations: ["青鱼嘴", "水下洞穴"],
-    }),
-    "utf-8",
-  );
-
-  // unsettled-details.json
-  writeFileSync(
-    join(wsDir, "unsettled-details.json"),
-    JSON.stringify([
-      {
-        id: "detail-001",
-        type: "foreshadow",
-        description: "复苏之眼的代价尚未揭示",
-        chapterId: "ch1",
-        status: "open",
-      },
-    ]),
-    "utf-8",
-  );
-
-  // narrative-state.json
-  writeFileSync(
-    join(wsDir, "narrative-state.json"),
-    JSON.stringify({
-      pendingCosts: [
-        { action: "使用复苏之眼", cost: "精神力透支", chapterIncurred: 1 },
-      ],
-      characterUpdates: [
-        { name: "林默", field: "knowledgeBoundary", value: "知道黑影弱点但不知道来源" },
-      ],
-    }),
-    "utf-8",
-  );
-
-  // arc-registry.json
-  writeFileSync(
-    join(wsDir, "arc-registry.json"),
-    JSON.stringify({
-      arcs: [
+      character: [
         {
-          arcId: "arc-001",
-          name: "复苏之眼觉醒",
-          coreQuestion: "林默能否控制这份力量？",
-          priority: "high",
+          kind: "character",
+          id: "character:林默:knowledgeBoundary",
+          characterId: "林默",
+          field: "knowledgeBoundary",
+          value: "知道黑影弱点但不知道来源",
+          sourceChapter: "ch1",
+          sourceRef: "narrative-state:ch1",
+          confidence: 1.0,
+          lastUpdated: now,
+        },
+      ],
+      promise: [
+        {
+          kind: "promise",
+          id: "promise:arc-001",
+          promiseId: "arc-001",
+          description: "复苏之眼觉醒",
           status: "advancing",
+          currentHeat: 0.7,
+          sourceChapter: "ch1",
+          sourceRef: "arc-registry:arc-001",
+          confidence: 1.0,
+          lastUpdated: now,
         },
-      ],
-      foreshadowings: [
         {
-          id: "fore-001",
+          kind: "promise",
+          id: "promise:fore-001",
+          promiseId: "fore-001",
           description: "苏雨的真实身份",
-          level: "high",
           status: "open",
+          currentHeat: 0.5,
+          sourceChapter: "ch1",
+          sourceRef: "arc-registry:fore-001",
+          confidence: 1.0,
+          lastUpdated: now,
         },
       ],
+      pattern: [],
+      expectation: [],
+      eventLog: [],
+      quarantine: [],
+      planned: [],
+      updatedAt: now,
     }),
     "utf-8",
   );
@@ -426,19 +445,35 @@ describe("Phase 3 统一工具结果格式（resultKind/returnedCount/truncated/
     const bigRoot = mkdtempSync(join(tmpdir(), "novelos-big-canon-"));
     const wsDir = join(bigRoot, "workspaces", "big-ws");
     mkdirSync(wsDir, { recursive: true });
-    const events = [];
+    const now = new Date().toISOString();
+    const canonEntries = [];
     for (let i = 1; i <= 55; i++) {
-      events.push({
-        eventId: `evt-${String(i).padStart(3, "0")}`,
-        type: "discovery",
-        summary: `事件条目 ${i}`,
-        characters: ["角色A"],
-        location: "地点",
+      canonEntries.push({
+        kind: "canon",
+        id: `canon:evt-${String(i).padStart(3, "0")}`,
+        fact: `事件条目 ${i}`,
+        category: "timeline",
+        sourceChapter: "ch1",
+        sourceRef: `skeleton:evt-${String(i).padStart(3, "0")}`,
+        confidence: 1.0,
+        lastUpdated: now,
       });
     }
     writeFileSync(
-      join(wsDir, "skeleton.json"),
-      JSON.stringify({ chapterId: "ch1", events, locations: ["地点"] }),
+      join(wsDir, "narrative-state-store.json"),
+      JSON.stringify({
+        schemaVersion: "narrative-state-store-v1",
+        workspaceId: "big-ws",
+        canon: canonEntries,
+        character: [],
+        promise: [],
+        pattern: [],
+        expectation: [],
+        eventLog: [],
+        quarantine: [],
+        planned: [],
+        updatedAt: now,
+      }),
       "utf-8",
     );
     const bigService = createNarrativeSearchService({

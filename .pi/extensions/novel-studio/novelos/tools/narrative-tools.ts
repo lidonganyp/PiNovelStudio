@@ -25,6 +25,33 @@ import type { ToolProtocol, NarrativeToolResultDetails } from "./tool-protocol.j
 import { makeNarrativeToolResult, withToolTimeout } from "./tool-protocol.js";
 import type { NarrativeSearchService } from "../agent/narrative-search-service.js";
 
+function stampSnapshot(
+  searchService: NarrativeSearchService,
+  details: NarrativeToolResultDetails,
+): NarrativeToolResultDetails {
+  const snapshotId = searchService.getSnapshotId();
+  if (!snapshotId) return details;
+  const stamped: NarrativeToolResultDetails = { ...details, snapshotId };
+  for (const key of ["rankedEvidences", "evidences", "spans", "entries"] as const) {
+    const value = stamped[key];
+    if (!Array.isArray(value)) continue;
+    stamped[key] = value.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const record = item as Record<string, unknown>;
+      return record.snapshotId ? item : { ...record, snapshotId };
+    });
+  }
+  return stamped;
+}
+
+function emitNarrativeToolResult(
+  searchService: NarrativeSearchService,
+  text: string,
+  details: NarrativeToolResultDetails,
+) {
+  return makeNarrativeToolResult(text, stampSnapshot(searchService, details));
+}
+
 /** facade runtime 变体工具名（单一来源；query-narrative-facade.ts 从这引用，避免环形依赖） */
 export const QUERY_NARRATIVE_PRODUCTION_NAME = "query_narrative_production";
 
@@ -223,7 +250,7 @@ const searchNarrativeEvidenceFactory: ToolFactory = (ctx) => ({
     );
     const { items, truncated } = probeLimit(evidences, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         `未找到与 "${query}" 相关的结构化证据。`,
         {
           sourceRef: "ranked:no-match",
@@ -241,7 +268,7 @@ const searchNarrativeEvidenceFactory: ToolFactory = (ctx) => ({
         `[${i + 1}] (${e.evidenceLevel}, score=${e.relevanceScore.toFixed(2)}, origin=${e.origin})\n` +
         `  ${e.sourceRef}\n  ${e.excerpt.replace(/\n/g, " ")}`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 条排序证据${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -296,7 +323,7 @@ const searchChapterSpanFactory: ToolFactory = (ctx) => ({
     );
     const { items, truncated } = probeLimit(spans, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         `未在历史章节中找到包含 "${query}" 的原文。`,
         {
           sourceRef: "search:chapter_span:no-match",
@@ -313,7 +340,7 @@ const searchChapterSpanFactory: ToolFactory = (ctx) => ({
       (s) =>
         `[${s.chapterId}] ${s.sourceRef}\n  ...${s.excerpt.replace(/\n/g, " ")}...`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 处匹配${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -358,7 +385,7 @@ const queryCanonFactory: ToolFactory = (ctx) => ({
     const entries = ctx.searchService.queryCanon(category as any);
     const { items, truncated } = probeLimit(entries, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         `未找到 canon 事实${category ? `（category=${category}）` : ""}。`,
         {
           sourceRef: "canon:empty",
@@ -374,7 +401,7 @@ const queryCanonFactory: ToolFactory = (ctx) => ({
     const lines = items.map(
       (e) => `[${e.category}] ${e.fact} (来源: ${e.sourceRef}, 置信度: ${e.confidence})`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 条 canon 事实${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -416,7 +443,7 @@ const queryCharacterStateFactory: ToolFactory = (ctx) => ({
     const entries = ctx.searchService.queryCharacterState(characterId);
     const { items, truncated } = probeLimit(entries, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         `未找到角色状态${characterId ? `（characterId=${characterId}）` : ""}。`,
         {
           sourceRef: "character:empty",
@@ -432,7 +459,7 @@ const queryCharacterStateFactory: ToolFactory = (ctx) => ({
     const lines = items.map(
       (e) => `[${e.characterId}] ${e.field}: ${e.value} (来源: ${e.sourceRef})`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 条角色状态${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -469,7 +496,7 @@ const queryTimelineFactory: ToolFactory = (ctx) => ({
     const entries = ctx.searchService.queryTimeline();
     const { items, truncated } = probeLimit(entries, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         "未找到时间线事件。",
         {
           sourceRef: "timeline:empty",
@@ -484,7 +511,7 @@ const queryTimelineFactory: ToolFactory = (ctx) => ({
     const lines = items.map(
       (e) => `${e.fact} (来源: ${e.sourceRef}, 章节: ${e.sourceChapter})`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 条时间线事件${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -525,7 +552,7 @@ const queryCharacterKnowledgeBoundaryFactory: ToolFactory = (ctx) => ({
     const entries = ctx.searchService.queryCharacterKnowledgeBoundary(characterId);
     const { items, truncated } = probeLimit(entries, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         `未找到角色知识边界${characterId ? `（characterId=${characterId}）` : ""}。可能 legacy 状态未记录知识边界字段。`,
         {
           sourceRef: "knowledge_boundary:empty",
@@ -541,7 +568,7 @@ const queryCharacterKnowledgeBoundaryFactory: ToolFactory = (ctx) => ({
     const lines = items.map(
       (e) => `[${e.characterId}] ${e.field}: ${e.value} (来源: ${e.sourceRef})`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 条知识边界${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -586,7 +613,7 @@ const queryPromiseLedgerFactory: ToolFactory = (ctx) => ({
     const entries = ctx.searchService.queryPromiseLedger(status as any);
     const { items, truncated } = probeLimit(entries, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         `未找到 promise 条目${status ? `（status=${status}）` : ""}。`,
         {
           sourceRef: "promise:empty",
@@ -602,7 +629,7 @@ const queryPromiseLedgerFactory: ToolFactory = (ctx) => ({
     const lines = items.map(
       (e) => `[${e.status}] ${e.description} (热度: ${e.currentHeat}, 来源: ${e.sourceRef})`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 条 promise${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -647,7 +674,7 @@ const queryPatternMemoryFactory: ToolFactory = (ctx) => ({
     const entries = ctx.searchService.queryPatternMemory(patternType as any);
     const { items, truncated } = probeLimit(entries, limit);
     if (items.length === 0) {
-      return makeNarrativeToolResult(
+      return emitNarrativeToolResult(ctx.searchService,
         `未找到 pattern 条目${patternType ? `（patternType=${patternType}）` : ""}。legacy 状态无直接对应的 pattern memory，Phase 6 在线学习填充。`,
         {
           sourceRef: "pattern:empty",
@@ -663,7 +690,7 @@ const queryPatternMemoryFactory: ToolFactory = (ctx) => ({
     const lines = items.map(
       (e) => `[${e.patternType}] ${e.description} (出现 ${e.occurrenceCount} 次, 来源: ${e.sourceRef})`,
     );
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `找到 ${items.length} 条 pattern${truncated ? "（已截断）" : ""}：\n${lines.join("\n")}`,
       {
         sourceRef: items[0].sourceRef,
@@ -686,7 +713,7 @@ const queryPatternMemoryFactory: ToolFactory = (ctx) => ({
 // 8. query_voice_evidence（M1 降级 profile_only）
 // ============================================================================
 
-const queryVoiceEvidenceFactory: ToolFactory = (_ctx) => ({
+const queryVoiceEvidenceFactory: ToolFactory = (ctx) => ({
   name: "query_voice_evidence",
   description:
     "查询角色/叙述声音证据（voice evidence）。M1 无 Voice Foundation，降级为 profile_only 证据等级。不冒充确定事实。用于获取风格档案中的声音参考。",
@@ -702,7 +729,7 @@ const queryVoiceEvidenceFactory: ToolFactory = (_ctx) => ({
   async execute(_toolCallId, params) {
     const { characterId } = params as { characterId?: string };
     // M1 降级：无 Voice Foundation，返回 profile_only 证据
-    return makeNarrativeToolResult(
+    return emitNarrativeToolResult(ctx.searchService,
       `声音证据降级（M1 无 Voice Foundation）：${
         characterId ? `角色 ${characterId} 的` : ""
       }声音特征仅来自风格档案，无正文 span 证据。请勿将此结果当作确定事实使用。`,

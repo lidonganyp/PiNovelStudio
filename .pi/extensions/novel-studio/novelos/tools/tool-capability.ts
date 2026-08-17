@@ -228,6 +228,40 @@ export const TOOL_CAPABILITIES: Record<string, ToolCapability> = {
    * - 仅当 registry `enableFacade=true`（workspace canary opt-in）时注册；默认生产不注册。
    *   故本条目属于 OPTIONAL_CAPABILITIES：幻影检查不会因它缺席而报错。
    */
+  activate_capability_package: {
+    name: "activate_capability_package",
+    domain: "evidence",
+    requiredInputs: ["activationId"],
+    optionalInputs: [],
+    defaultReturnCount: 1,
+    maxReturnCount: 1,
+    estimatedResponseTokens: 400,
+    evidenceLevel: "confirmed",
+    sourceRefRule: "capability:{activationId}；未授权时 capability:denied",
+    timeoutMs: 10_000,
+    sideEffect: "read_only",
+    requiredPermission: "workspace_read",
+    canReturnFullData: false,
+    emptyResultSemantics: "activationId 未授权或 Payload 缺失时 no_match",
+    failureSemantics: "未授权 activation / hash 漂移 / 越权工具一律拒绝，不回退旧包",
+  },
+  submit_capability_output: {
+    name: "submit_capability_output",
+    domain: "evidence",
+    requiredInputs: ["activationId", "outputKind", "artifacts", "sourceRefs"],
+    optionalInputs: [],
+    defaultReturnCount: 1,
+    maxReturnCount: 1,
+    estimatedResponseTokens: 200,
+    evidenceLevel: "confirmed",
+    sourceRefRule: "capability:{activationId}；schema/authority 失败时 capability:denied",
+    timeoutMs: 10_000,
+    sideEffect: "read_only",
+    requiredPermission: "workspace_read",
+    canReturnFullData: false,
+    emptyResultSemantics: "未授权 activation 或 artifact schema 失败时 no_match",
+    failureSemantics: "Output Contract 失败只重试 Package 输出，不触发正文重写",
+  },
   query_narrative_production: {
     name: "query_narrative_production",
     domain: "evidence",
@@ -264,6 +298,8 @@ export const TOOL_CAPABILITIES: Record<string, ToolCapability> = {
  */
 export const OPTIONAL_CAPABILITIES: ReadonlySet<string> = new Set([
   "query_narrative_production",
+  "activate_capability_package",
+  "submit_capability_output",
 ]);
 
 /**

@@ -49,6 +49,7 @@ function makeComponents(overrides = {}) {
     recoveryPolicyHash: "sha256:v1",
     knowledgeSnapshotHash: "sha256:k1",
     runtimeFingerprint: "sha256:rf1",
+    capabilityPackageSetHash: "sha256:cp1",
     evalProtocolVersion: "2026-08-01",
     ...overrides,
   };
@@ -106,6 +107,7 @@ test("DG-1 bundleId: 组件字段顺序不影响结果（规范化）", () => {
   const a = computeBehaviorBundleId(makeComponents());
   const reordered = computeBehaviorBundleId({
     evalProtocolVersion: "2026-08-01",
+    capabilityPackageSetHash: "sha256:cp1",
     runtimeFingerprint: "sha256:rf1",
     knowledgeSnapshotHash: "sha256:k1",
     recoveryPolicyHash: "sha256:v1",

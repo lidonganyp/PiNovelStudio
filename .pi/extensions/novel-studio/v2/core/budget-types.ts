@@ -81,16 +81,6 @@ export interface BudgetReservation {
   createdAt: number;
 }
 
-/** 累计用量 */
-export interface BudgetUsage {
-  totalModelCalls: number;
-  totalTokensInput: number;
-  totalTokensOutput: number;
-  totalLatencyMs: number;
-  totalCost: number;
-  failedCalls: number;
-}
-
 /** 成本快照（阶段结算时追加；货币字段按结算时价格表版本解释） */
 export interface BudgetCostSnapshot {
   timestamp: number;
@@ -104,15 +94,66 @@ export interface BudgetCostSnapshot {
   provider?: string;
 }
 
-/** 账本决策记录（预约创建 / 结算） */
+/** 用户追加授权 */
+export interface UserBudgetExtension {
+  extraCalls: number;
+  extraCost: number;
+  extraRecoveryCalls: number;
+  grantedBy: string;
+  reason: string;
+  grantedAt: number;
+}
+
+/** 耗尽原因 */
+export type ExhaustionReason =
+  | "hard_model_calls_exceeded"
+  | "hard_input_tokens_exceeded"
+  | "hard_output_tokens_exceeded"
+  | "hard_provider_cost_exceeded"
+  | "hard_wait_exceeded"
+  | "mandatory_reserve_depleted"
+  | "recovery_exhausted"
+  | "batch_chapters_remaining_zero"
+  | "provider_quota_exceeded"
+  | "no_progress";
+
+/** 动态预算决策 */
+export type BudgetAction = "continue" | "stop" | "request_additional";
+
+/** 账本决策记录 */
 export interface BudgetDecision {
   timestamp: number;
-  type: "budget_reservation_created" | "budget_settled";
-  reservationId: string;
+  type:
+    | "budget_reservation_created"
+    | "budget_settled"
+    | "budget_released"
+    | "budget_expired"
+    | "budget_request_additional"
+    | "budget_user_extension"
+    | "budget_decision_made"
+    | "budget_batch_admitted"
+    | "budget_exhausted";
+  reservationId?: string;
   stage?: BudgetStage;
   reservedCalls?: number;
   actualCalls?: number;
   actualCost?: number;
+  reason?: string;
+  action?: BudgetAction;
+}
+
+/** 累计用量 */
+export interface BudgetUsage {
+  totalModelCalls: number;
+  totalTokensInput: number;
+  totalTokensOutput: number;
+  totalLatencyMs: number;
+  totalCost: number;
+  failedCalls: number;
+  recoveryModelCalls: number;
+  batchChaptersUsed: number;
+  lastAdmittedChapter?: number;
+  providerUsage?: Record<string, { calls: number; cost: number; inputTokens: number; outputTokens: number }>;
 }
 
 /** 统一预算账本 */
@@ -124,6 +165,7 @@ export interface BudgetLedger {
   optionalExploration: number;
   recoveryReserve: RecoveryReserve;
   unitPriceScheduleVersion: string;
+  userExtension?: UserBudgetExtension;
   reservations: Record<string, BudgetReservation>;
   usage: BudgetUsage;
   costSnapshots: BudgetCostSnapshot[];

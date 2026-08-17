@@ -58,6 +58,75 @@ const PATCHED_DRAFT =
 /** 退化 patch（极短 → lengthRatio < 0.7 → 退化） */
 const DEGRADED_PATCH = "短。";
 
+/** 授权契约要求 finding 与 EvidenceRecord 共享 snapshotId / evidenceId。 */
+const TEST_SNAPSHOT_ID = "snap-verify-patch";
+
+function stampFindingEvidence(finding) {
+  const evidenceId = finding.evidenceId ?? finding.sourceRef ?? `ev:${finding.id}`;
+  return { ...finding, evidenceId };
+}
+
+function stampVerifierReport(report) {
+  const findings = (report.findings ?? []).map(stampFindingEvidence);
+  const hardFindings = (report.hardFindings ?? findings.filter((f) =>
+    (f.severity === "hard" || f.severity === "fatal") &&
+    (f.certainty === "deterministic" || f.certainty === "corroborated")
+  )).map(stampFindingEvidence);
+  return { ...report, findings, hardFindings };
+}
+
+function wrapVerifier(verifier) {
+  return {
+    verify(input) {
+      return stampVerifierReport(verifier.verify(input));
+    },
+  };
+}
+
+function buildEvidenceRecordsFromReport(report) {
+  const byId = new Map();
+  for (const finding of [...(report.findings ?? []), ...(report.hardFindings ?? [])]) {
+    const stamped = stampFindingEvidence(finding);
+    if (!stamped.evidenceId || byId.has(stamped.evidenceId)) continue;
+    byId.set(stamped.evidenceId, {
+      evidenceId: stamped.evidenceId,
+      statement: stamped.conflictFact ?? stamped.description ?? stamped.evidenceId,
+      authorityClass: "author_declaration",
+      epistemicStatus: "confirmed",
+      sourceRef: stamped.sourceRef ?? stamped.evidenceId,
+      sourceContentHash: `src-hash-${stamped.evidenceId}`,
+      evidenceExcerptHash: `excerpt-hash-${stamped.evidenceId}`,
+      validFrom: null,
+      validUntil: null,
+      matchedBecause: ["AUTHOR_CONTRACT"],
+      retrievalQueryId: null,
+      snapshotId: TEST_SNAPSHOT_ID,
+      traceable: true,
+    });
+  }
+  return [...byId.values()];
+}
+
+function collectEvidenceCatalog() {
+  const evidenceId = "character:char:linmo:forbiddenKnowledge";
+  return [{
+    evidenceId,
+    statement: "角色林默不该知道暗流",
+    authorityClass: "author_declaration",
+    epistemicStatus: "confirmed",
+    sourceRef: evidenceId,
+    sourceContentHash: `src-hash-${evidenceId}`,
+    evidenceExcerptHash: `excerpt-hash-${evidenceId}`,
+    validFrom: null,
+    validUntil: null,
+    matchedBecause: ["AUTHOR_CONTRACT"],
+    retrievalQueryId: null,
+    snapshotId: TEST_SNAPSHOT_ID,
+    traceable: true,
+  }];
+}
+
+
 // ============================================================================
 // 3 阶段 ReAct stub ModelGenerateFn
 // ============================================================================
@@ -76,8 +145,21 @@ function createVerifyPatchStubModel(opts = {}) {
     calls.push({ ...input });
     const userPrompt = input.userPrompt ?? "";
 
-    // patch 阶段：userPrompt 含"修复范围与方向"
-    if (userPrompt.includes("修复范围与方向")) {
+    // 局部 patch：只输出 [替换N] 块
+    if (userPrompt.includes("不要重写整章") || userPrompt.includes("[替换1]")) {
+      if (patchShouldDegrade) {
+        return { text: "短。", model: "stub-patch", route: input.route, durationMs: 1 };
+      }
+      const excerpts = [...userPrompt.matchAll(/原片段：「([^」]*)」/gu)]
+        .map((match) => match[1].replaceAll("暗流", "危险"));
+      const blocks = (excerpts.length > 0 ? excerpts : ["危险"])
+        .map((excerpt, index) => `[替换${index + 1}]\n${excerpt}`)
+        .join("\n");
+      return { text: blocks, model: "stub-patch", route: input.route, durationMs: 1 };
+    }
+
+    // 显式 new_candidate：完整新候选
+    if (userPrompt.includes("new_candidate") || userPrompt.includes("新的完整章节候选")) {
       if (patchShouldDegrade) {
         return { text: DEGRADED_PATCH, model: "stub-patch", route: input.route, durationMs: 1 };
       }
@@ -213,13 +295,23 @@ function setupVerifyPatchLoop(opts = {}) {
     trajectory,
   };
   if (!opts.noVerifier) {
-    loopOpts.verifier = createNarrativeVerifierSuite();
+    loopOpts.verifier = wrapVerifier(createNarrativeVerifierSuite());
     loopOpts.patchService = createCandidatePatchService();
   }
 
   const loop = createNarrativeAgentLoop(loopOpts);
+  const evidenceRecords = opts.noVerifier ? [] : collectEvidenceCatalog();
 
-  return { loop, runtime, budget, trajectory, candidateWorkspace, tmpRoot, modelCalls: calls };
+  return {
+    loop,
+    runtime,
+    budget,
+    trajectory,
+    candidateWorkspace,
+    tmpRoot,
+    modelCalls: calls,
+    evidenceRecords,
+  };
 }
 
 // ============================================================================
@@ -267,7 +359,7 @@ afterEach(() => {
 
 describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
   it("verifier 清零：draft 无硬失败 → verifierCleared=true, repairRounds=0", async () => {
-    const { loop } = setupVerifyPatchLoop({
+    const { loop, evidenceRecords } = setupVerifyPatchLoop({
       model: { draft: CLEAN_DRAFT },
     });
 
@@ -276,6 +368,8 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
       seedContext: "角色：林默，地点：青鱼嘴",
       context: contextWithForbiddenKnowledge(),
       knownCharacterNames: ["林默"],
+      snapshotId: TEST_SNAPSHOT_ID,
+      evidenceRecords,
     });
 
     assert.equal(result.fallback, false, "不应 fallback");
@@ -290,7 +384,7 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
   });
 
   it("patch 成功：违规 draft → verify 检出 → patch 修复 → reverify 清零 → 替换 draft", async () => {
-    const { loop } = setupVerifyPatchLoop({
+    const { loop, evidenceRecords } = setupVerifyPatchLoop({
       model: { draft: VIOLATION_DRAFT, patchedText: PATCHED_DRAFT },
     });
 
@@ -299,12 +393,15 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
       seedContext: "角色：林默，地点：青鱼嘴",
       context: contextWithForbiddenKnowledge(),
       knownCharacterNames: ["林默"],
+      snapshotId: TEST_SNAPSHOT_ID,
+      evidenceRecords,
     });
 
     assert.equal(result.fallback, false, "不应 fallback");
     assert.equal(result.lineage.verifierCleared, true, "patch 后 reverify 清零 → verifierCleared=true");
     assert.ok(result.repairRounds >= 1, "应至少执行 1 轮修复");
-    assert.equal(result.text, PATCHED_DRAFT, "patch 后应替换为修复版 draft");
+    assert.ok(!result.text.includes("暗流"), "局部 patch 后不得保留违规词");
+    assert.notEqual(result.text, VIOLATION_DRAFT, "patch 后不得原样保留违规 draft");
     assert.ok(result.patchProposals.length >= 1, "应有 patch proposals");
     assert.ok(
       result.patchProposals.some((p) => !p.rejected),
@@ -313,7 +410,7 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
   });
 
   it("patch 退化：违规 draft → patch 大幅缩短 → evaluatePatch 拒绝 → 保留原稿", async () => {
-    const { loop } = setupVerifyPatchLoop({
+    const { loop, evidenceRecords } = setupVerifyPatchLoop({
       model: { draft: VIOLATION_DRAFT, patchShouldDegrade: true },
     });
 
@@ -322,6 +419,8 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
       seedContext: "角色：林默，地点：青鱼嘴",
       context: contextWithForbiddenKnowledge(),
       knownCharacterNames: ["林默"],
+      snapshotId: TEST_SNAPSHOT_ID,
+      evidenceRecords,
     });
 
     assert.equal(result.fallback, false, "退化不触发 fallback");
@@ -334,7 +433,7 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
   });
 
   it("verifier 未提供：不传 verifier/patchService → 跳过 verify/patch", async () => {
-    const { loop } = setupVerifyPatchLoop({
+    const { loop, evidenceRecords } = setupVerifyPatchLoop({
       model: { draft: VIOLATION_DRAFT },
       noVerifier: true,
     });
@@ -344,6 +443,8 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
       seedContext: "角色：林默，地点：青鱼嘴",
       context: contextWithForbiddenKnowledge(),
       knownCharacterNames: ["林默"],
+      snapshotId: TEST_SNAPSHOT_ID,
+      evidenceRecords,
     });
 
     assert.equal(result.fallback, false, "不应 fallback");
@@ -353,7 +454,7 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
   });
 
   it("6 文件完整性：含 verifier-report.json + patch-proposals.json", async () => {
-    const { loop, candidateWorkspace } = setupVerifyPatchLoop({
+    const { loop, candidateWorkspace, evidenceRecords } = setupVerifyPatchLoop({
       model: { draft: VIOLATION_DRAFT, patchedText: PATCHED_DRAFT },
     });
 
@@ -362,13 +463,15 @@ describe("NovelOS Agent Loop verify/patch/reverify 闭环（D.2）", () => {
       seedContext: "角色：林默，地点：青鱼嘴",
       context: contextWithForbiddenKnowledge(),
       knownCharacterNames: ["林默"],
+      snapshotId: TEST_SNAPSHOT_ID,
+      evidenceRecords,
     });
 
     const dir = candidateWorkspace.getDir();
     // 6 文件全部存在
     assert.ok(existsSync(join(dir, "evidence-plan.json")), "evidence-plan.json 应存在");
     assert.ok(existsSync(join(dir, "tool-events.jsonl")), "tool-events.jsonl 应存在");
-    assert.ok(existsSync(join(dir, "draft.md")), "draft.md 应存在");
+    assert.ok(existsSync(join(dir, "current-candidate.json")), "current-candidate.json 应存在");
     assert.ok(existsSync(join(dir, "verifier-report.json")), "verifier-report.json 应存在");
     assert.ok(existsSync(join(dir, "patch-proposals.json")), "patch-proposals.json 应存在");
     assert.ok(existsSync(join(dir, "lineage.json")), "lineage.json 应存在");

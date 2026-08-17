@@ -188,33 +188,66 @@ export interface HistoricalContextOverrides {
   pattern?: { maxEntries?: number; maxChars?: number; inject?: boolean };
 }
 
+export interface HistoricalRendererDrop {
+  evidenceId: string;
+  reason: "renderer_entry_budget" | "renderer_char_budget" | "not_relevant_character";
+}
+
 export function buildHistoricalContext(
   input: UnifiedOrchestratorInput,
   overrides?: HistoricalContextOverrides,
 ): Pick<
   ChapterContract,
   "historicalContinuity" | "historicalCharacterState" | "recentPatternMemory"
-> {
+> & { rendererDrops: HistoricalRendererDrop[] } {
   const state = input.context.longTermState;
   if (!state) {
-    return { historicalContinuity: [], historicalCharacterState: [], recentPatternMemory: [] };
+    return {
+      historicalContinuity: [],
+      historicalCharacterState: [],
+      recentPatternMemory: [],
+      rendererDrops: [],
+    };
   }
   const relevantNames = new Set(compact([
     ...(input.intent.relevantCharacters ?? []),
     ...(input.intent.focusCharacterGoals ?? []).map((entry) => entry.character),
   ]));
-  const newestFirst = <T extends { sourceChapter: string }>(entries: ReadonlyArray<T>): T[] =>
+  const newestFirst = <T extends { sourceChapter: string; id: string }>(entries: ReadonlyArray<T>): T[] =>
     [...entries].sort((left, right) => chapterNumber(right.sourceChapter) - chapterNumber(left.sourceChapter));
 
   const canonCfg = overrides?.canon ?? {};
   const characterCfg = overrides?.character ?? {};
   const patternCfg = overrides?.pattern ?? {};
+  const rendererDrops: HistoricalRendererDrop[] = [];
+
+  const takeBounded = <T extends { id: string }>(
+    entries: ReadonlyArray<T>,
+    lines: string[],
+    maxEntries: number,
+    maxChars: number,
+  ): string[] => {
+    entries.forEach((entry, index) => {
+      if (index >= maxEntries) {
+        rendererDrops.push({ evidenceId: entry.id, reason: "renderer_entry_budget" });
+      }
+    });
+    return boundedEntries(lines, maxEntries, maxChars);
+  };
+
+  const relevantCharacters = newestFirst(state.character).filter((entry) => relevantNames.has(entry.characterId));
+  for (const entry of state.character) {
+    if (!relevantNames.has(entry.characterId)) {
+      rendererDrops.push({ evidenceId: entry.id, reason: "not_relevant_character" });
+    }
+  }
 
   return {
     historicalContinuity:
       canonCfg.inject === false
         ? []
-        : boundedEntries(
+        : takeBounded(
+            newestFirst(state.canon),
             newestFirst(state.canon).map((entry) => `${entry.sourceChapter}｜${entry.fact}`),
             canonCfg.maxEntries ?? 4,
             canonCfg.maxChars ?? 2400,
@@ -222,22 +255,23 @@ export function buildHistoricalContext(
     historicalCharacterState:
       characterCfg.inject === false
         ? []
-        : boundedEntries(
-            newestFirst(state.character)
-              .filter((entry) => relevantNames.has(entry.characterId))
-              .map((entry) => `${entry.sourceChapter}｜${entry.characterId}.${entry.field}：${entry.value}`),
+        : takeBounded(
+            relevantCharacters,
+            relevantCharacters.map((entry) => `${entry.sourceChapter}｜${entry.characterId}.${entry.field}：${entry.value}`),
             characterCfg.maxEntries ?? 6,
             characterCfg.maxChars ?? 1800,
           ),
     recentPatternMemory:
       patternCfg.inject === false
         ? []
-        : boundedEntries(
+        : takeBounded(
+            newestFirst(state.pattern),
             newestFirst(state.pattern).map((entry) =>
               `${entry.sourceChapter}｜${entry.patternType}：${entry.description}（累计 ${entry.occurrenceCount} 次）`),
             patternCfg.maxEntries ?? 4,
             patternCfg.maxChars ?? 1000,
           ),
+    rendererDrops,
   };
 }
 
