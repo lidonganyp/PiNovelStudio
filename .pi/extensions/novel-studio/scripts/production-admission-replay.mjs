@@ -1,21 +1,18 @@
 /**
- * Production-admission replay for novel_generate_chapter.
+ * Production-admission failure/recovery replay.
  *
- * Isolated workspace only. Default invoker is scripts/production-generate-chapter.mjs.
- * --stub uses V2_FORCE_STUB (deterministic, not production-submit evidence).
- * --real uses default Gemini production routing.
+ * Uses the registered production-generate-chapter invoker only.
+ * Isolated project root. Default Gemini routing unless --stub.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = resolve(__dirname, "..");
 const PROJECT_ROOT = resolve(EXT_ROOT, "..", "..", "..");
 const INVOKER = join(EXT_ROOT, "scripts", "production-generate-chapter.mjs");
-
 const REAL = process.argv.includes("--real");
 const OUT_DIR = resolve(
   PROJECT_ROOT,
@@ -52,19 +49,26 @@ function scaffoldWorkspace(root, workspaceId, extras = {}) {
   }, null, 2)}\n`, "utf8");
   writeFileSync(join(ws, "characters", "yechen.md"), "# 叶尘\n外门杂役，持残破玉简。\n", "utf8");
   writeFileSync(join(ws, "styles", "profile.json"), `${JSON.stringify({
-    kind: "fingerprint",
+    kind: extras.styleKind ?? "fingerprint",
     author: `${workspaceId}-author`,
-    guidance: "短句，少比喻，不写内心独白口号。",
+    usagePolicy: extras.usagePolicy ?? { fullChapterOptimization: "required" },
+    editorialGuidance: extras.editorialGuidance ?? ["短句，少比喻。"],
+    characterVoiceGuidance: {},
   }, null, 2)}\n`, "utf8");
   writeFileSync(join(ws, "series", "outline.md"), "# 高层背景\n外门试炼。\n", "utf8");
   if (extras.narrativeState) {
-    writeFileSync(
-      join(ws, "narrative-state-store.json"),
-      `${JSON.stringify(extras.narrativeState, null, 2)}\n`,
-      "utf8",
-    );
+    writeFileSync(join(ws, "narrative-state-store.json"), `${JSON.stringify(extras.narrativeState, null, 2)}\n`, "utf8");
   }
   return ws;
+}
+
+function findTrace(ws, chapterId) {
+  const tracesDir = join(ws, "traces");
+  if (!existsSync(tracesDir)) return null;
+  const hit = readdirSync(tracesDir).find((name) =>
+    name.includes(String(chapterId)) && name.endsWith("-quality-trace.json"),
+  );
+  return hit ? join(tracesDir, hit) : null;
 }
 
 function invokeChapter(projectRoot, workspaceId, chapterId, chapterNumber, env = {}) {
@@ -82,9 +86,10 @@ function invokeChapter(projectRoot, workspaceId, chapterId, chapterNumber, env =
       V2_FORCE_STUB: REAL ? "0" : "1",
       PINOVEL_DEV_MODE: "0",
       PROJECT_ROOT: projectRoot,
+      PINOVEL_PROJECT_ROOT: projectRoot,
       ...env,
     },
-    timeout: REAL ? 900000 : 120000,
+    timeout: REAL ? 900000 : 180000,
   });
   return {
     status: result.status,
@@ -94,19 +99,24 @@ function invokeChapter(projectRoot, workspaceId, chapterId, chapterNumber, env =
   };
 }
 
-function findTrace(ws, chapterId) {
-  const tracesDir = join(ws, "traces");
-  if (!existsSync(tracesDir)) return null;
-  const hit = readdirSync(tracesDir).find((name) =>
-    name.includes(String(chapterId)) && name.endsWith("-quality-trace.json"),
-  );
-  return hit ? join(tracesDir, hit) : null;
+function chapterSaved(ws, chapterId) {
+  return existsSync(join(ws, "chapters", `${chapterId}.md`));
+}
+
+function stateAdvanced(ws) {
+  const path = join(ws, "narrative-state-store.json");
+  if (!existsSync(path)) return false;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    return Boolean(raw.lastCommittedChapter || raw.lastChapter || (raw.canon && raw.canon.length > 1));
+  } catch {
+    return false;
+  }
 }
 
 mkdirSync(OUT_DIR, { recursive: true });
 const scratch = join(OUT_DIR, "scratch");
 mkdirSync(scratch, { recursive: true });
-
 const samples = [];
 
 function record(sample) {
@@ -114,17 +124,17 @@ function record(sample) {
   console.log(`[${sample.passed ? "PASS" : "FAIL"}] ${sample.id}: ${sample.detail}`);
 }
 
-const successWs = scaffoldWorkspace(scratch, "padm-success");
-const success = invokeChapter(scratch, "padm-success", "1", 1);
-const successTrace = findTrace(successWs, "1");
+const timeoutWs = scaffoldWorkspace(scratch, "padm-timeout");
+const timeout = invokeChapter(scratch, "padm-timeout", "1", 1, {
+  PINOVEL_MODEL_REQUEST_TIMEOUT_MS: "1",
+});
 record({
-  id: "success",
-  scenario: "正常成功",
-  passed: REAL ? success.status === 0 && Boolean(successTrace) : success.status !== 2,
-  detail: `exit=${success.status} trace=${successTrace ?? "none"}`,
-  tracePath: successTrace,
+  id: "timeout",
+  scenario: "模型 timeout",
+  passed: timeout.status !== 0 && !chapterSaved(timeoutWs, "1") && !stateAdvanced(timeoutWs),
+  detail: `exit=${timeout.status} saved=${chapterSaved(timeoutWs, "1")} state=${stateAdvanced(timeoutWs)}`,
+  tracePath: findTrace(timeoutWs, "1"),
   layer: REAL ? "real-gemini" : "stub",
-  stdoutTail: success.stdout.slice(-400),
 });
 
 const factWs = scaffoldWorkspace(scratch, "padm-factguard", {
@@ -147,33 +157,45 @@ const fact = invokeChapter(scratch, "padm-factguard", "1", 1);
 record({
   id: "factguard",
   scenario: "FactGuard 阻断",
-  passed: fact.status !== 2 && !existsSync(join(factWs, "chapters", "1.md")),
-  detail: `exit=${fact.status} chapterSaved=${existsSync(join(factWs, "chapters", "1.md"))}`,
+  passed: fact.status !== 0 && !chapterSaved(factWs, "1") && !stateAdvanced(factWs),
+  detail: `exit=${fact.status} saved=${chapterSaved(factWs, "1")}`,
   tracePath: findTrace(factWs, "1"),
   layer: REAL ? "real-gemini" : "stub",
 });
 
-const timeout = invokeChapter(scratch, "padm-success", "2", 2, {
-  PINOVEL_MODEL_REQUEST_TIMEOUT_MS: "1",
+const styleWs = scaffoldWorkspace(scratch, "padm-style", {
+  editorialGuidance: [],
+  usagePolicy: { fullChapterOptimization: "required" },
+});
+const style = invokeChapter(scratch, "padm-style", "1", 1);
+record({
+  id: "style-fail",
+  scenario: "风格优化失败",
+  passed: style.status !== 0 && !chapterSaved(styleWs, "1"),
+  detail: `exit=${style.status} saved=${chapterSaved(styleWs, "1")}`,
+  tracePath: findTrace(styleWs, "1"),
+  layer: REAL ? "real-gemini" : "stub",
+});
+
+const emptyWs = scaffoldWorkspace(scratch, "padm-empty");
+const empty = invokeChapter(scratch, "padm-empty", "1", 1, {
+  PINOVEL_EVAL_SYNTHETIC_FAULTS: "empty_output",
 });
 record({
-  id: "timeout",
-  scenario: "模型 timeout",
-  passed: timeout.status !== 0,
-  detail: `exit=${timeout.status}`,
+  id: "empty",
+  scenario: "空结果/模型错误",
+  passed: empty.status !== 0 && !chapterSaved(emptyWs, "1"),
+  detail: `exit=${empty.status} saved=${chapterSaved(emptyWs, "1")}`,
+  tracePath: findTrace(emptyWs, "1"),
   layer: REAL ? "real-gemini" : "stub",
-  stdoutTail: timeout.stdout.slice(-400),
 });
 
 const report = {
   generatedAt: new Date().toISOString(),
   real: REAL,
   productionComplete: false,
-  note: REAL
-    ? "Real Gemini production-like samples. Success is not literary approval."
-    : "Stub harness only. Not production-submit evidence.",
   samples,
-  traceRetention: samples.every((s) => !s.tracePath || existsSync(s.tracePath)),
+  traceRetention: samples.every((s) => Boolean(s.tracePath) && existsSync(s.tracePath)),
 };
 writeJson(join(OUT_DIR, "production-admission-replay.json"), report);
 writeFileSync(join(OUT_DIR, "production-admission-replay.md"), [
@@ -181,7 +203,7 @@ writeFileSync(join(OUT_DIR, "production-admission-replay.md"), [
   "",
   `- real: ${REAL}`,
   `- productionComplete: false`,
-  ...samples.map((s) => `- ${s.passed ? "PASS" : "FAIL"} ${s.id}: ${s.detail}`),
+  ...samples.map((s) => `- ${s.passed ? "PASS" : "FAIL"} ${s.id}: ${s.detail} trace=${s.tracePath ?? "none"}`),
   "",
 ].join("\n"), "utf8");
 
