@@ -2,11 +2,12 @@
  * EXPERIMENTAL-FIELDS-REJECT-1
  *
  * 公开生产入口 novel_generate_chapter 的 handleGenerateChapter 拒绝旧 raw/judge 分支
- * 实验字段（recoverBlockedRaw / boundedBestOf3 / qualityExperiment / previewOnly）。
+ * 实验字段（recoverBlockedRaw / boundedBestOf3 / qualityExperiment / previewOnly /
+ * modelTestRoute / fullPipelinePreview / _mockGenerateChapter）。
  *
  * 这些字段仅 eval/评测（NovelBench）使用；生产路径不含 PairwiseJudge /
  * SelectionPolicy / EditorialOpportunityJudge，raw 候选不经过编辑/风格优化后交付。
- * 如需评测请走 eval 入口；如需只读预览请使用 fullPipelinePreview。
+ * 如需评测请走 eval 入口（runUnifiedPipeline 直调）；这些字段不通过生产公开工具暴露。
  *
  * Source-level，无模型调用，无需真实 workspace：guard 在任何副作用（getProjectRoot /
  * clearUnhealthyProviders / runUnifiedPipeline）之前同步拒绝。

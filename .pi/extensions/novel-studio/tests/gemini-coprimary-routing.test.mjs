@@ -268,12 +268,12 @@ test("public chapter tool forwards an explicit scene solution into the unified p
   const chapterTool = registerTools(handlers).find((tool) => tool.name === "novel_generate_chapter");
   const sceneSolution = { id: "scene-1", unknowns: ["门后身份"], newRuleOrInformation: "声音只能复述听过的记忆" };
   await chapterTool.execute("call-1", {
-    workspaceId: "w", chapterId: "1", chapterNumber: 1, fullPipelinePreview: true, sceneSolution,
+    workspaceId: "w", chapterId: "1", chapterNumber: 1, sceneSolution,
   }, undefined, undefined, { cwd: process.cwd() });
   assert.deepEqual(captured.sceneSolution, sceneSolution);
 });
 
-test("read-only full pipeline previews do not retry an entire chapter after model timeout", async () => {
+test("public chapter tool rejects fullPipelinePreview instead of running a preview retry path", async () => {
   let calls = 0;
   const handlers = new Proxy({}, {
     get: (_target, key) => key === "handleGenerateChapter"
@@ -287,10 +287,12 @@ test("read-only full pipeline previews do not retry an entire chapter after mode
       : async () => ({}),
   });
   const chapterTool = registerTools(handlers).find((tool) => tool.name === "novel_generate_chapter");
-  await chapterTool.execute("preview-timeout", {
+  const response = await chapterTool.execute("preview-timeout", {
     workspaceId: "w", chapterId: "1", chapterNumber: 1, fullPipelinePreview: true,
   }, undefined, undefined, { cwd: process.cwd() });
-  assert.equal(calls, 1);
+  assert.equal(calls, 0, "生产入口必须在 handler 前拒绝 fullPipelinePreview");
+  assert.equal(response.isError, true);
+  assert.match(String(response.details?.error ?? response.content?.[0]?.text ?? ""), /fullPipelinePreview/);
 });
 
 test("blocked chapter generation restores the pre-call chapter file and warns PI not to write the draft", async () => {

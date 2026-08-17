@@ -241,14 +241,11 @@ describe("MODEL-ROUTING-CLAUDE46-1A：modelTestRoute=glm 锁定全部 generation
     delete process.env.V2_FORCE_STUB;
   });
 
-  test("modelTestRoute=glm：所有 modelCalls provider=glm，requestedRoute=nb4_*_glm，无 GPT/Claude/Doubao fallback", async () => {
+  test("公开生产入口拒绝 modelTestRoute；GLM 锁定只走隔离 runUnifiedPipeline", async () => {
     const tool = await loadGenerateChapterTool();
     assert.ok(tool, "novel_generate_chapter 应注册");
-
-    // Phase 2A：chapterNumber=1 避免触发 Preflight 前章连续性检查（ch1 state store 不存在）。
-    // trace 路径由 chapterId 决定，与 chapterNumber 无关。
-    const result = await tool.execute(
-      "test-routing-glm-lock",
+    const rejected = await tool.execute(
+      "test-routing-glm-lock-rejected",
       {
         workspaceId: "phase5-routing-split",
         chapterId: "routing-glm-1",
@@ -261,10 +258,24 @@ describe("MODEL-ROUTING-CLAUDE46-1A：modelTestRoute=glm 锁定全部 generation
       undefined,
       { cwd: PROJECT_ROOT },
     );
+    assert.equal(rejected.isError, true, "生产入口必须拒绝 modelTestRoute");
+    assert.match(String(rejected.details?.error ?? rejected.content?.[0]?.text ?? ""), /modelTestRoute/);
 
-    const modelCalls = extractModelCalls(result);
+    const { runUnifiedPipeline } = await import(
+      pathToFileURL(join(EXT_ROOT, "dist", "v2", "core", "unified-entry.js")).href
+    );
+    const result = await runUnifiedPipeline({
+      workspaceId: "phase5-routing-split",
+      chapterId: "routing-glm-1",
+      chapterNumber: 1,
+      projectRoot: PROJECT_ROOT,
+      previousChapterSummary: "前章摘要",
+      modelTestRoute: "glm",
+    });
+
+    const modelCalls = extractModelCalls({ details: result });
     assert.ok(modelCalls.length > 0,
-      `modelCalls 应非空，实际: ${JSON.stringify(modelCalls).slice(0, 200)}`);
+      `隔离 eval 路径 modelCalls 应非空，实际: ${JSON.stringify(modelCalls).slice(0, 200)}`);
 
     // 所有调用 provider 必须为 glm
     for (const call of modelCalls) {

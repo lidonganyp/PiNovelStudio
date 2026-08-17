@@ -462,15 +462,17 @@ test("Contract v1 · 非 model_timeout 失败不触发章节级重试（只允�
   assert.equal(calls.length, 1, "非 model_timeout 失败必须原样返回，只调用一次");
 });
 
-test("Contract v1 · fullPipelinePreview 预览不触发章节级重试（纯只读）", async () => {
+test("Contract v1 · 生产入口拒绝 fullPipelinePreview，handler 零调用", async () => {
   const { tool, calls } = makeChapterTool(() => ({
     status: "blocked",
     failureEnvelope: MODEL_TIMEOUT_ENVELOPE,
   }));
-  await tool.execute("recover-preview", {
+  const response = await tool.execute("recover-preview", {
     workspaceId: "w", chapterId: "1", chapterNumber: 1, fullPipelinePreview: true,
   }, undefined, undefined, { cwd: process.cwd() });
-  assert.equal(calls.length, 1, "预览路径不得重试整章");
+  assert.equal(calls.length, 0, "生产入口必须在 handler 前拒绝 fullPipelinePreview");
+  assert.equal(response.isError, true);
+  assert.match(String(response.details?.error ?? response.content?.[0]?.text ?? ""), /fullPipelinePreview/);
 });
 
 // ============================================================================
