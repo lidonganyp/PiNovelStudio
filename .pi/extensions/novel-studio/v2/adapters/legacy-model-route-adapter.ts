@@ -25,6 +25,7 @@ import { join } from "path";
 import type { Candidate } from "../core/types.js";
 import { loadModelRoutingSync } from "../../utils/config.js";
 import { localizeLlmMessages } from "../../utils/llm-language-guard.js";
+import { getModelRequestTimeoutMs } from "../../api/request-timeout.js";
 
 // ============================================================================
 // ModelGenerateFn — 模型调用统一接口
@@ -729,7 +730,7 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
     const start = Date.now();
     // 动态 import legacy fallback-manager，避免 V2 typecheck 依赖 legacy 内部类型
     const fallbackMod: any = await import("../../api/fallback-manager.js");
-    const candidateTimeoutMs = input.timeoutMs ?? 600000;
+    const candidateTimeoutMs = input.timeoutMs ?? getModelRequestTimeoutMs();
     const judgeMaxRetries = resolveJudgeMaxRetries(input.route);
     const manager = fallbackMod.createAPIFallbackManager({
       totalTimeoutMs: candidateTimeoutMs,

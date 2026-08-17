@@ -528,6 +528,8 @@ export interface V2Input {
   projectRoot: string;
   /** 批量/重试延续的统一预算账本 */
   _priorBudgetLedger?: import("./budget-types.js").BudgetLedger;
+  /** 工具层 model_timeout 重试序号（0=首次，1=第一次重试） */
+  _modelTimeoutRetryAttempt?: number;
   /** Production-eligible prose writer. Undefined uses the configured Gemini default. */
   writerModel?: "claude" | "gemini31";
   modelTestRoute?: string;

@@ -104,6 +104,8 @@ export async function handleGenerateChapter(input: {
   seed?: number;
   /** 批量任务跨章延续的统一预算账本 */
   _priorBudgetLedger?: import("../v2/core/budget-types.js").BudgetLedger;
+  /** 工具层 model_timeout 重试序号（0=首次，1=第一次重试） */
+  _modelTimeoutRetryAttempt?: number;
 }) {
   const {
     workspaceId, chapterId, chapterNumber,
@@ -196,6 +198,7 @@ export async function handleGenerateChapter(input: {
       seed,
       onUpdate: (input as any).__onUpdate,
       _priorBudgetLedger: input._priorBudgetLedger,
+      _modelTimeoutRetryAttempt: input._modelTimeoutRetryAttempt,
     });
     return _unifiedResult as any;
   } catch (e: any) {

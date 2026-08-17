@@ -300,6 +300,7 @@ import {
   formatCollaborationFailureReason,
 } from "./agent-collaboration-fail-closed.js";
 import { buildAgentLineageIndex } from "./agent-lineage-index.js";
+import { getModelRequestTimeoutMs } from "../../api/request-timeout.js";
 
 // ============================================================================
 // 类型与常量（行为保持重构 Step 1：已抽出到 orchestrator-types.ts）
@@ -894,6 +895,15 @@ export class UnifiedOrchestrator {
           kind: genInput.kind ?? fnKind,
           requestedRoute: genInput.requestedRoute ?? genInput.route,
         }) ?? null;
+        const resolvedTimeoutMs =
+          genInput.timeoutMs
+          ?? input.timeoutMs
+          ?? input.runRouting?.timeout
+          ?? getModelRequestTimeoutMs();
+        genInput = {
+          ...genInput,
+          timeoutMs: resolvedTimeoutMs,
+        };
         try {
           const output = await fn(genInput);
           const durationMs = output.durationMs ?? Date.now() - start;

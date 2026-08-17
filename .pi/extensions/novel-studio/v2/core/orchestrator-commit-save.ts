@@ -124,6 +124,12 @@ import {
   CommitSlotBusyError,
 } from "./submission-queue.js";
 
+function injectCommitFault(point: "after_chapter_save" | "state_commit"): void {
+  if (process.env.PINOVEL_COMMIT_FAULT === point) {
+    throw new Error(`[commit-fault] injected at ${point}`);
+  }
+}
+
 export interface CommitAndSaveResult {
   ok: boolean;
   error?: string;
@@ -717,6 +723,14 @@ function commitAndSaveInner(
       stateCommit: { committed: 0, rejected: 0, error: stateError },
     };
   };
+
+  try {
+    injectCommitFault("after_chapter_save");
+    injectCommitFault("state_commit");
+  } catch (faultErr: unknown) {
+    const faultMsg = faultErr instanceof Error ? faultErr.message : String(faultErr);
+    return rollbackChapter(faultMsg);
+  }
 
   let committed = 0;
   let rejected = 0;

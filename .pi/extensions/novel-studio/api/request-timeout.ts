@@ -35,12 +35,19 @@ export async function fetchWithTimeout(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
+    // Race the aborting fetch against a caller-side deadline. Some Node/proxy
+    // paths ignore AbortSignal and would otherwise wait for Cloudflare 524.
+    return await withTimeout(
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutMs,
+      options.label,
+    );
   } catch (error) {
-    if (controller.signal.aborted) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (controller.signal.aborted || message.includes("timed out after")) {
       throw new Error(`${options.label} timed out after ${timeoutMs}ms`, {
         cause: error,
       });

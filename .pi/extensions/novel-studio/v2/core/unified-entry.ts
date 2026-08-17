@@ -81,6 +81,7 @@ import {
   resolveRouteCapabilityKey,
 } from "./capability-package-production.js";
 import { createBudgetLedger } from "./budget-ledger.js";
+import { getModelRequestTimeoutMs } from "../../api/request-timeout.js";
 import { defaultCapabilityRegistry } from "../../novelos/protocol/capability-registry.js";
 import { NARRATIVE_TOOL_NAMES } from "../../novelos/tools/narrative-tools.js";
 import { ACTIVATE_CAPABILITY_PACKAGE_TOOL } from "../../novelos/agent/capability-package-runtime.js";
@@ -1594,12 +1595,10 @@ export async function runUnifiedPipeline(
     throw new Error("recoverBlockedRaw 要求显式 writerModel，以确保冻结 raw 与当前正文模型一致");
   }
 
-  // ── bounded 超时预算（与 v2-orchestrator 一致，仅当用户未显式设置时提升） ──
-  const BOUNDED_TIMEOUT_DEFAULT_MS = 600000;
+  // ── bounded 超时预算：未显式传入时消费 PINOVEL_MODEL_REQUEST_TIMEOUT_MS ──
+  const resolvedTimeoutMs = candidateTimeoutMs ?? getModelRequestTimeoutMs();
   if (!process.env.PINOVEL_MODEL_TOTAL_TIMEOUT_MS) {
-    process.env.PINOVEL_MODEL_TOTAL_TIMEOUT_MS = String(
-      candidateTimeoutMs ?? BOUNDED_TIMEOUT_DEFAULT_MS
-    );
+    process.env.PINOVEL_MODEL_TOTAL_TIMEOUT_MS = String(resolvedTimeoutMs);
   }
 
   // ── Eval 模式：跳过 ContextCompiler/IntentBuilder，使用调用方传入值 ──
@@ -1669,7 +1668,7 @@ export async function runUnifiedPipeline(
       characterNames: evalCharacterNames ?? [],
       modelGenerate: lockedEvalGenerate,
       arbitratorModelGenerate: evalArbitratorModelGenerate,
-      timeoutMs: candidateTimeoutMs,
+      timeoutMs: resolvedTimeoutMs,
       evalMode,
       evalPrefix,
       retrievalPromptOverride,
@@ -2392,7 +2391,8 @@ export async function runUnifiedPipeline(
     // 不传 arbitratorModelGenerate：编排器 fallback 到 judgeModelGenerate（仲裁也走 nb4_judge_glm）。
     generationModelGenerate: effectiveGenerationModelGenerate,
     judgeModelGenerate,
-    timeoutMs: candidateTimeoutMs,
+    timeoutMs: resolvedTimeoutMs,
+    _modelTimeoutRetryAttempt: input._modelTimeoutRetryAttempt,
     stagedStateUpdate,
     policyStore,
     strategySelector,
