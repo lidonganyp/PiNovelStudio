@@ -110,6 +110,8 @@ data/runtime/*
 !data/runtime/p42-candidate-collocation-rules.json
 !data/runtime/p42-candidate-focus-rules.json
 !data/runtime/p42-candidate-detail-function-rules.json
+# CPG-1.4/1.5 冻结能力包集合（behavior-snapshot 需要，空集合基线纳入版本控制）
+!data/runtime/capability-package-set.json
 
 # NovelBench 语料审计产物（仅元数据，无正文，可提交）
 !data/novelbench/
