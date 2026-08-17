@@ -1854,7 +1854,8 @@ export async function runUnifiedPipeline(
     });
   }
 
-  const useStub = process.env.V2_FORCE_STUB === "1";
+  const useStub =
+    process.env.V2_FORCE_STUB === "1" || process.env.PINOVEL_ADMISSION_STUB === "1";
   // F4-4：eval 回放传输解析（recorded > synthetic > stub > legacy）。
   // PINOVEL_EVAL_REPLAY_TRANSPORT 是模式声明（由 buildReplayIsolationEnv 携带）：
   // 声明了 recorded/synthetic 却缺少对应传输 env 时 fail-closed 抛错，

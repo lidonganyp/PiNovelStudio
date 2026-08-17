@@ -256,7 +256,7 @@ function record(sample) {
   const id = "timeout";
   const ws = scaffoldWorkspace(scratch, id);
   const result = invokeChapter(scratch, id, "1", 1, {
-    PINOVEL_MODEL_REQUEST_TIMEOUT_MS: "1",
+    PINOVEL_FORCE_REQUEST_TIMEOUT_MS: "1",
     PINOVEL_MODEL_MAX_RETRIES: "0",
   });
   const calls = collectModelCalls(ws, "1");
@@ -287,7 +287,7 @@ function record(sample) {
   const id = "retry";
   const ws = scaffoldWorkspace(scratch, id);
   const result = invokeChapter(scratch, id, "1", 1, {
-    PINOVEL_MODEL_REQUEST_TIMEOUT_MS: "1",
+    PINOVEL_FORCE_REQUEST_TIMEOUT_MS: "1",
     PINOVEL_MODEL_MAX_RETRIES: "0",
   });
   const calls = collectModelCalls(ws, "1");
@@ -315,7 +315,7 @@ function record(sample) {
   const id = "atomic-rollback";
   const ws = scaffoldWorkspace(scratch, id);
   const result = invokeChapter(scratch, id, "1", 1, {
-    V2_FORCE_STUB: "1",
+    PINOVEL_ADMISSION_STUB: "1",
     PINOVEL_COMMIT_FAULT: "after_chapter_save",
   });
   const save = atomicSaveEvidence(ws, "1");
@@ -348,7 +348,7 @@ function record(sample) {
     },
   });
   const result = invokeChapter(scratch, id, "1", 1, {
-    V2_FORCE_STUB: "1",
+    PINOVEL_ADMISSION_STUB: "1",
     PINOVEL_COMMIT_FAULT: "state_commit",
   });
   const save = atomicSaveEvidence(ws, "1");

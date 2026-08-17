@@ -12,6 +12,14 @@ export interface RequestTimeoutOptions {
 }
 
 export function getModelRequestTimeoutMs(): number {
+  const forced = process.env.PINOVEL_FORCE_REQUEST_TIMEOUT_MS;
+  if (forced) {
+    const forcedParsed = Number.parseInt(forced, 10);
+    if (Number.isFinite(forcedParsed) && forcedParsed > 0) {
+      return forcedParsed;
+    }
+  }
+
   const raw = process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS;
   if (!raw) {
     return DEFAULT_MODEL_REQUEST_TIMEOUT_MS;

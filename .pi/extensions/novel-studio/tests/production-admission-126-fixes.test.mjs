@@ -29,12 +29,19 @@ function readSrc(relPath) {
 
 test("getModelRequestTimeoutMs honors PINOVEL_MODEL_REQUEST_TIMEOUT_MS", () => {
   const prev = process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS;
+  const prevForce = process.env.PINOVEL_FORCE_REQUEST_TIMEOUT_MS;
   try {
+    delete process.env.PINOVEL_FORCE_REQUEST_TIMEOUT_MS;
     process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS = "1";
     assert.equal(getModelRequestTimeoutMs(), 1);
+    process.env.PINOVEL_FORCE_REQUEST_TIMEOUT_MS = "25";
+    process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS = "300000";
+    assert.equal(getModelRequestTimeoutMs(), 25);
   } finally {
     if (prev === undefined) delete process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS;
     else process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS = prev;
+    if (prevForce === undefined) delete process.env.PINOVEL_FORCE_REQUEST_TIMEOUT_MS;
+    else process.env.PINOVEL_FORCE_REQUEST_TIMEOUT_MS = prevForce;
   }
 });
 
@@ -156,5 +163,9 @@ test("production-admission harness must not bypass G6 or hardcode productionComp
   assert.doesNotMatch(harness, /productionComplete:\s*true/);
   assert.match(harness, /retryIndex/);
   assert.match(harness, /PINOVEL_COMMIT_FAULT/);
+  assert.match(harness, /PINOVEL_FORCE_REQUEST_TIMEOUT_MS/);
+  assert.match(harness, /PINOVEL_ADMISSION_STUB/);
+  assert.doesNotMatch(harness, /PINOVEL_MODEL_REQUEST_TIMEOUT_MS:\s*["']1["']/);
+  assert.doesNotMatch(harness, /V2_FORCE_STUB:\s*["']1["']/);
   assert.match(harness, /durationMs|bounded/);
 });
