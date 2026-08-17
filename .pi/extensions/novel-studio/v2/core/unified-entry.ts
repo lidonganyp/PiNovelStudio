@@ -570,7 +570,7 @@ export function resolveModelTestRouteLock(
       generateRoute: "nb4_generate_gemini31",
       judgeRoute: "v2_opportunity_judge",
       provider: "gemini31",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
     };
   }
   return null;
@@ -605,7 +605,7 @@ export function resolveWriterModelRouteLock(
       amplifiedRoute: "v2_amplified_gemini31",
       judgeRoute: "v2_opportunity_judge",
       provider: "gemini31",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       promptProfile: "gemini_writer_v2",
     };
   }

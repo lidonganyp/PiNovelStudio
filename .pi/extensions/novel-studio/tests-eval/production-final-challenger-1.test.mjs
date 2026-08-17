@@ -75,7 +75,7 @@ function preview(writerModel, options = {}) {
         requestedRoute: claude ? "v2_rawstage2" : "v2_rawstage2_gemini31",
         kind: "raw_chapter",
         actualProvider: claude ? "claude" : "gemini31",
-        actualModel: claude ? "claude-opus-4-6" : "gemini-3.1-pro-preview",
+        actualModel: claude ? "claude-opus-4-6" : "gemini-3.1-pro",
         finishReason: "stop",
         durationMs: claude ? 100 : 80,
         ts: 1,

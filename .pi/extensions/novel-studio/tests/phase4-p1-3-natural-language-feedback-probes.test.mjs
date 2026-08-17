@@ -201,7 +201,7 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
     try {
       const result = await handleStrategyFeedback({
         workspaceId,
-        modelVersion: "gemini-3.1-pro-preview",
+        modelVersion: "gemini-3.1-pro",
         naturalLanguageFeedback: "太啰嗦了，指导太多",
         sourceChapter: "ch17",
         ...COMPLETE_LINEAGE,
@@ -223,8 +223,8 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
       // 验证策略信誉库已写入
       const store = readStrategyPolicy(dir, workspaceId);
       assert.ok(store, "strategy-policy.json 应已落盘");
-      const partition = store.partitions?.["gemini-3.1-pro-preview"];
-      assert.ok(partition, "应有 gemini-3.1-pro-preview 分区");
+      const partition = store.partitions?.["gemini-3.1-pro"];
+      assert.ok(partition, "应有 gemini-3.1-pro 分区");
       const rep = partition?.["guidance_reduction"];
       assert.ok(rep, "应有 guidance_reduction 信誉记录");
       assert.ok(rep.sampleCount >= 1, "sampleCount 应 >= 1");
@@ -239,7 +239,7 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
     try {
       const result = await handleStrategyFeedback({
         workspaceId,
-        modelVersion: "gemini-3.1-pro-preview",
+        modelVersion: "gemini-3.1-pro",
         naturalLanguageFeedback: "角色不像，语气不对",
         sourceChapter: "ch18",
         _projectRoot: dir,
@@ -259,7 +259,7 @@ describe("P1-3 handler：自然语言反馈自动记录 outcome", () => {
     try {
       const result = await handleStrategyFeedback({
         workspaceId,
-        modelVersion: "gemini-3.1-pro-preview",
+        modelVersion: "gemini-3.1-pro",
         naturalLanguageFeedback: "太短了，细节太少",
         sourceChapter: "ch19",
         ...COMPLETE_LINEAGE,
@@ -287,7 +287,7 @@ describe("P1-3 handler：无法映射的自然语言反馈不记录 outcome", ()
     try {
       const result = await handleStrategyFeedback({
         workspaceId,
-        modelVersion: "gemini-3.1-pro-preview",
+        modelVersion: "gemini-3.1-pro",
         naturalLanguageFeedback: "我觉得还可以吧",
         sourceChapter: "ch20",
         _projectRoot: dir,
@@ -302,8 +302,8 @@ describe("P1-3 handler：无法映射的自然语言反馈不记录 outcome", ()
 
       // 策略信誉库不应有 evidence（无法映射时不记录）
       const store = readStrategyPolicy(dir, workspaceId);
-      if (store?.partitions?.["gemini-3.1-pro-preview"]) {
-        const reps = store.partitions["gemini-3.1-pro-preview"];
+      if (store?.partitions?.["gemini-3.1-pro"]) {
+        const reps = store.partitions["gemini-3.1-pro"];
         for (const [, rep] of Object.entries(reps)) {
           assert.equal(rep.evidence?.length ?? 0, 0, "不应有 evidence");
         }
@@ -326,7 +326,7 @@ describe("P1-3 handler：显式 action 路径向后兼容", () => {
         workspaceId,
         action: "choice",
         strategyId: "voice_emphasis",
-        modelVersion: "gemini-3.1-pro-preview",
+        modelVersion: "gemini-3.1-pro",
         sourceChapter: "ch21",
         chosen: "editorial",
         opportunityType: "author_style",
@@ -359,7 +359,7 @@ describe("P1-3 handler：显式 action 路径向后兼容", () => {
           handleStrategyFeedback({
             workspaceId,
             action: "choice",
-            modelVersion: "gemini-3.1-pro-preview",
+            modelVersion: "gemini-3.1-pro",
             chosen: "editorial",
             sourceChapter: "ch22",
             _projectRoot: dir,

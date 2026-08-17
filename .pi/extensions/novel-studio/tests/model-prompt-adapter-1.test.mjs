@@ -183,7 +183,7 @@ describe("MODEL-PROMPT-ADAPTER-1", () => {
     assert.equal(resolveWriterPromptProfile({ route: "v2_rawstage2", provider: "claude", model: "claude-opus-4-6" }), "claude_writer_v1");
     assert.equal(resolveWriterPromptProfile({ route: "nb4_generate_gpt56", provider: "gpt", model: "gpt-5.6-sol" }), "gpt_writer_v1");
     assert.equal(resolveWriterPromptProfile({ route: "nb4_generate_doubao", provider: "doubao", model: "doubao-seed" }), "chinese_writer_v1");
-    assert.equal(resolveWriterPromptProfile({ route: "nb4_generate_gemini31", provider: "gemini31", model: "gemini-3.1-pro-preview" }), "gemini_writer_v2");
+    assert.equal(resolveWriterPromptProfile({ route: "nb4_generate_gemini31", provider: "gemini31", model: "gemini-3.1-pro" }), "gemini_writer_v2");
     assert.equal(resolveWriterPromptProfile({ route: "v2_rawstage2" }), "claude_writer_v1");
     assert.throws(
       () => resolveWriterPromptProfile({ route: "unknown_generation_route" }),

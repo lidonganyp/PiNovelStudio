@@ -60,7 +60,7 @@ function fakeComparison(winner, chapterId) {
     contractEqual: true, contextEqual: true, reverseConsistent: winner !== null,
     candidates: {
       claude: candidate("claude-opus-4-6", "claude"),
-      gemini31: candidate("gemini-3.1-pro-preview", "gemini31"),
+      gemini31: candidate("gemini-3.1-pro", "gemini31"),
     },
     judge: { route: "v2_literary_judge", reverseReviewed: true, conflicted: false, degraded: false, roundCount: 2, auditSummaryHash: null },
     admission: { sampleCount: 1, requiredSampleCount: 3, requiredWinRate: 0.55, defaultSwitchEligible: false },
@@ -173,7 +173,7 @@ test("failed preview summaries are sanitized and excluded from controlled sample
         stage: "raw_fact_guard",
         gate: "text_integrity",
         reason: leakedReason,
-        modelCalls: [{ actualProvider: "gemini31", actualModel: "gemini-3.1-pro-preview", durationMs: 80 }],
+        modelCalls: [{ actualProvider: "gemini31", actualModel: "gemini-3.1-pro", durationMs: 80 }],
       },
     },
   });
@@ -360,7 +360,7 @@ test("search-depth defaults to Gemini and keeps Claude as an explicit comparison
   assert.deepEqual(resolveSearchDepthWriter([]), {
     writerModel: "gemini31",
     provider: "gemini31",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     reportGroup: "gemini-bounded-best-of3",
   });
   assert.deepEqual(resolveSearchDepthWriter(["--writer=claude"]), {
@@ -384,7 +384,7 @@ test("saved-pair rejudge can isolate GPT and Gemini reader judges", () => {
     id: "gemini31-reader",
     route: "v2_reader_experience_judge_gemini31",
     provider: "gemini31",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     strictSchema: false,
   });
   assert.throws(() => resolveReaderJudge(["--judge=unknown"]), /judge/i);
@@ -510,7 +510,7 @@ test("user-requested prose export requires read-only FactGuard-passing route tel
         route: "v2_rawstage2",
         requestedRoute: "v2_rawstage2_gemini31",
         actualProvider: "gemini31",
-        actualModel: "gemini-3.1-pro-preview",
+        actualModel: "gemini-3.1-pro",
         durationMs: 123,
         finishReason: "stop",
       }],
@@ -519,7 +519,7 @@ test("user-requested prose export requires read-only FactGuard-passing route tel
   const extracted = extractVerifiedPreviewText(output, {
     requestedRoute: "v2_rawstage2_gemini31",
     provider: "gemini31",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
   });
   assert.equal(extracted.text, "这是经统一主链路生成的预览正文。");
   assert.equal(extracted.promptProfile, "gemini_writer_v1");
@@ -530,7 +530,7 @@ test("user-requested prose export requires read-only FactGuard-passing route tel
   assert.throws(() => extractVerifiedPreviewText(unsafe, {
     requestedRoute: "v2_rawstage2_gemini31",
     provider: "gemini31",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
   }), /FactGuard/i);
 });
 

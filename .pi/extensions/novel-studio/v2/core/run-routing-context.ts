@@ -156,7 +156,7 @@ export function resolveWriterRoutes(
     amplifiedRoute: "v2_amplified_gemini31",
     judgeRoute: "v2_opportunity_judge",
     provider: "gemini31",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     explicit: writerModel === "gemini31",
     writerModel: "gemini31",
   };
@@ -188,7 +188,7 @@ export function resolveRunRouting(input: ResolveRunRoutingInput): RunRoutingCont
       doubao: { generate: "nb4_generate_doubao", provider: "doubao", model: "doubao-seed-2-1-pro-260628" },
       gpt: { generate: "nb4_generate_gpt56", provider: "gpt", model: "gpt-5.6-sol" },
       claude: { generate: "v2_rawstage2", provider: "claude", model: "claude-opus-4-6" },
-      gemini31: { generate: "nb4_generate_gemini31", provider: "gemini31", model: "gemini-3.1-pro-preview" },
+      gemini31: { generate: "nb4_generate_gemini31", provider: "gemini31", model: "gemini-3.1-pro" },
       deepseek: { generate: "narrator_testing_deepseek", provider: "deepseek", model: "deepseek-v4-flash" },
     };
     const locked = testMap[input.modelTestRoute];

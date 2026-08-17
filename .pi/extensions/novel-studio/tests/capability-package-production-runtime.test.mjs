@@ -49,7 +49,7 @@ import { PermissionPolicy } from "../dist-test/novelos/security/permission-polic
 import { captureBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
 
 function geminiRouting() {
-  return { provider: "gemini31", model: "gemini-3.1-pro-preview" };
+  return { provider: "gemini31", model: "gemini-3.1-pro" };
 }
 
 function sealActiveWorkflow(overrides = {}) {
@@ -123,7 +123,7 @@ test("E2E CapabilityKey: gemini31 and claude resolve to registered endpoints", (
   const gemini = resolveRouteCapabilityKey(geminiRouting());
   assert.equal(gemini.provider, "gemini");
   assert.equal(gemini.endpoint, "openai-compat");
-  assert.equal(gemini.model, "gemini-3.1-pro-preview");
+  assert.equal(gemini.model, "gemini-3.1-pro");
   assert.equal(gemini.protocol, "react-text");
   assert.equal(gemini.adapterVersion, "react-text-v1");
   assert.equal(defaultCapabilityRegistry.hasEndpointEntry(gemini), true);
@@ -140,7 +140,7 @@ test("E2E required Package: unregistered endpoint fail-closes instead of skippin
     key: {
       provider: "gemini31",
       endpoint: "gemini31-default",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     },
@@ -265,7 +265,7 @@ test("E2E snapshot parse failure does not collapse to empty-set hash", () => {
   try {
     assert.throws(() => captureBehaviorSnapshot({
       projectRoot: root,
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
       evalProtocolVersion: "2026-08-01",
       capabilityPackageSetPaths: ["capability-package-set.json"],
       mockRuntimeVersions: { node: "v25.2.1", npm: "10.9.0" },
@@ -319,7 +319,7 @@ test("E2E snapshot missing Package Set file does not collapse to empty-set hash"
   try {
     assert.throws(() => captureBehaviorSnapshot({
       projectRoot: root,
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
       evalProtocolVersion: "2026-08-01",
       capabilityPackageSetPaths: ["data/runtime/capability-package-set.json"],
       mockRuntimeVersions: { node: "v25.2.1", npm: "10.9.0" },
@@ -782,7 +782,7 @@ test("P2 optional unavailable is written by planner and runtime, not by the test
     key: {
       provider: "gemini31",
       endpoint: "gemini31-default",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     },

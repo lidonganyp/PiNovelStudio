@@ -65,7 +65,7 @@ function routeKey(overrides = {}) {
   return {
     provider: "gemini",
     endpoint: "google-ai-native",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
     ...overrides,
@@ -343,7 +343,7 @@ test("T12 / T13: payload or rule changes move contentHash, set hash, and bundleI
   const hashB = computeCapabilityPackageSetHash(setB);
   assert.notEqual(hashA, hashB);
   const base = {
-    modelVersion: "gemini-3.1-pro-preview",
+    modelVersion: "gemini-3.1-pro",
     promptBundleHash: "a".repeat(64),
     modelRoutingHash: "b".repeat(64),
     toolSchemaHash: "c".repeat(64),
@@ -598,7 +598,7 @@ test("CPG-6 eval gate can only recommend and keeps sample floor", () => {
     evalManifestId: "eval-promise-1",
     packageId: pkg.manifest.packageId,
     packageVersion: pkg.manifest.version,
-    modelVersion: "gemini-3.1-pro-preview",
+    modelVersion: "gemini-3.1-pro",
     bundleId: "b",
     scenarios: ["T28"],
     minSampleSize: 3,

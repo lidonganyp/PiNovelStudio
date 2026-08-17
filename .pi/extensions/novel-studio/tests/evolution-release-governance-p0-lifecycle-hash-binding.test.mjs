@@ -245,7 +245,7 @@ test("P0-lifecycle-2: evaluated → runStubProxyReview → approved_dev → acti
     const evolutionRegistry = createEvolutionReleaseRegistry({ releasesDir });
     const proxyRegistry = createProxyApprovalRegistry({ approvalsDir });
 
-    const snap = captureDefaultBehaviorSnapshot(PROJECT_ROOT, "gemini-3.1-pro-preview", "2026-08-01");
+    const snap = captureDefaultBehaviorSnapshot(PROJECT_ROOT, "gemini-3.1-pro", "2026-08-01");
     const evaluatedManifest = {
       ...makeManifest(releaseId, "evaluated", fpHash),
       bundleId: snap.bundleId,

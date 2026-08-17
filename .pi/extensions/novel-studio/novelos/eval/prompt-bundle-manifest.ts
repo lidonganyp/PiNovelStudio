@@ -42,7 +42,7 @@ export type BundleStatus =
 export interface PromptBundleManifest {
   /** 唯一 Bundle ID：由全部组成 hash + 模型版本 + provider + route + profileId + 请求参数派生 */
   bundleId: string;
-  /** 模型版本（如 "gemini-3.1-pro-preview"） */
+  /** 模型版本（如 "gemini-3.1-pro"） */
   modelVersion: string;
   /** provider 名（如 "gemini"） */
   provider: string;

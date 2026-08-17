@@ -40,7 +40,7 @@ import {
 
 function makeComponents(overrides = {}) {
   return {
-    modelVersion: "gemini-3.1-pro-preview",
+    modelVersion: "gemini-3.1-pro",
     promptBundleHash: "sha256:p1",
     modelRoutingHash: "sha256:r1",
     toolSchemaHash: "sha256:t1",
@@ -116,7 +116,7 @@ test("DG-1 bundleId: 组件字段顺序不影响结果（规范化）", () => {
     toolSchemaHash: "sha256:t1",
     modelRoutingHash: "sha256:r1",
     promptBundleHash: "sha256:p1",
-    modelVersion: "gemini-3.1-pro-preview",
+    modelVersion: "gemini-3.1-pro",
   });
   assert.equal(a, reordered);
 });
@@ -135,7 +135,7 @@ test("DG-1 extract: 完整 manifest 提取全部组件", () => {
   const m = makeManifest();
   const components = extractBehaviorComponents(m);
   assert.ok(components !== null);
-  assert.equal(components.modelVersion, "gemini-3.1-pro-preview");
+  assert.equal(components.modelVersion, "gemini-3.1-pro");
   assert.equal(components.promptBundleHash, "sha256:p1");
 });
 

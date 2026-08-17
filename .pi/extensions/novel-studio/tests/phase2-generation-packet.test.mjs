@@ -194,7 +194,7 @@ function createMockModelGenerate(capturedRef) {
       if (capturedRef) capturedRef.stylePrompt = input.userPrompt;
       return {
         text: STYLED_TEXT,
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3.1-pro",
         route: input.route,
         durationMs: 2,
         finishReason: "stop",
@@ -407,7 +407,7 @@ test("P1-5 生产探针：source 代码捕获真实模型名（不再固定 nove
 test("P1-5 生产探针：detectModelVersion 对不同模型名产生不同版本键", () => {
   // 验证 detectModelVersion 能区分 Gemini / Claude / 模型升级
   // 这是 P1-5 修复的核心目标：策略信誉按真实版本隔离
-  const geminiKey = detectModelVersion("gemini-3.1-pro-preview");
+  const geminiKey = detectModelVersion("gemini-3.1-pro");
   const claudeKey = detectModelVersion("claude-opus-4.6");
   const geminiUpgradeKey = detectModelVersion("gemini-3.2-pro-preview");
 

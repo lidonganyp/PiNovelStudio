@@ -144,7 +144,7 @@ export interface EvolutionReleaseManifest {
   // ==========================================================================
   /** 完整行为集合的确定性 bundle 标识（由全部行为组成项派生，见 behavior-bundle.ts） */
   bundleId?: string;
-  /** 模型版本（生产写作模型身份，如 "gemini-3.1-pro-preview"） */
+  /** 模型版本（生产写作模型身份，如 "gemini-3.1-pro"） */
   modelVersion?: string;
   /** Prompt Bundle 规范化 hash */
   promptBundleHash?: string;

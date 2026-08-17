@@ -55,7 +55,7 @@
       ]
     },
     "gemini31": {
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "strengths": [
         "long-context synthesis",
         "scene continuity",
@@ -178,9 +178,9 @@
     }
   },
   "model_strategy": {
-    "narrator_primary": "gemini-3.1-pro-preview",
+    "narrator_primary": "gemini-3.1-pro",
     "explicit_writer_models": [
-      "gemini-3.1-pro-preview",
+      "gemini-3.1-pro",
       "claude-opus-4-6"
     ],
     "writer_admission": {
@@ -435,7 +435,7 @@
       "name": "Gemini 3.1 Pro writer",
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
       "api_key_env": "GEMINI_API_KEY",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "protocol": "openai",
       "temperature": {
         "nb4_generate_gemini31": 0.72,
@@ -679,7 +679,7 @@
     },
     "stage2_narrator": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "note": "GEMINI-DEFAULT-WRITER-1: Stage 2 production default is Gemini 3.1 Pro Preview via the isolated Gemini raw/editorial routes and gemini_writer_v1. fallback=[] hard blocks failures; Claude remains explicit-only and is never a silent prose fallback."
     },
     "stage3_skeleton": {
@@ -766,7 +766,7 @@
     },
     "narrator_primary": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "fallback": [],
       "note": "GEMINI-DEFAULT-WRITER-1: Production prose default selected by explicit human comparison. Uses Gemini-specific routes and prompt profile; fallback=[] prevents silent replacement by Claude, GPT, Doubao, or GLM."
     },
@@ -1000,7 +1000,7 @@
     },
     "v2_rawstage2_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
@@ -1009,7 +1009,7 @@
     },
     "v2_amplified_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
@@ -1018,7 +1018,7 @@
     },
     "v2_reader_experience_judge_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
@@ -1152,7 +1152,7 @@
     },
     "nb4_generate_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro-preview",
+      "model": "gemini-3.1-pro",
       "base_url_env": "GEMINI31_BASE_URL",
       "api_key_env": "GEMINI31_API_KEY",
       "model_env": "GEMINI31_MODEL",
@@ -1193,7 +1193,7 @@
       "runtime_status": "retired_from_production",
       "public_flag": "boundedBestOf3",
       "enabled_by_default": false,
-      "writer_model": "gemini-3.1-pro-preview",
+      "writer_model": "gemini-3.1-pro",
       "candidate_layout": {
         "baseline": "raw",
         "max_scene_candidates": 2,
@@ -1230,7 +1230,7 @@
         ]
       },
       "current_default_writer_evidence": {
-        "evidence_model": "gemini-3.1-pro-preview",
+        "evidence_model": "gemini-3.1-pro",
         "applies_to_current_default_writer": true,
         "attempted_comparisons": 4,
         "controlled_comparisons": 2,
@@ -1255,7 +1255,7 @@
       }
     },
     "models": [
-      "gemini-3.1-pro-preview",
+      "gemini-3.1-pro",
       "claude-opus-4-6"
     ],
     "n_candidates": {

@@ -52,7 +52,7 @@ import {
 
 function makeContent(overrides = {}) {
   return {
-    modelVersion: "gemini-3.1-pro-preview",
+    modelVersion: "gemini-3.1-pro",
     provider: "gemini",
     route: "gemini_writer_v2",
     profileId: "gemini_writer_v2",
@@ -233,7 +233,7 @@ describe("t4: 候选差异与隔离", () => {
     const base = computeBundleManifest(makeContent(), "active");
     const candidate = computeBundleManifest(makeContent({ userPromptRenderer: "B2" }), "draft");
     const diff = diffManifests(base, candidate, "x");
-    assert.equal(diff.modelVersion, "gemini-3.1-pro-preview");
+    assert.equal(diff.modelVersion, "gemini-3.1-pro");
     assert.equal(diff.provider, "gemini");
     assert.equal(diff.route, "gemini_writer_v2");
   });

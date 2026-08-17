@@ -21,7 +21,7 @@ test("主 trace flush 连续失败时写 reports/traces 备用归档并返回路
           stage: "final_selected",
           timestamp: "2026-08-01T00:00:00.000Z",
           strategyContext: {
-            modelVersion: "gemini-3.1-pro-preview",
+            modelVersion: "gemini-3.1-pro",
             selectedStrategyIds: ["voice_emphasis"],
             sourceChapter: "ch9",
             opportunityType: "author_style",

@@ -47,15 +47,15 @@ describe("GEMINI-DEFAULT-WRITER-1 Gemini primary routing and rhythm adapter over
   test("生产 config 使用 Gemini 3.1 Pro 主路由（无 env override 时）", () => {
     const routing = loadModelRoutingSync();
     // Gemini 负责默认正文，Claude 4.6 继续负责 style_shaper。
-    assert.equal(routing.model_strategy.narrator_primary, "gemini-3.1-pro-preview");
+    assert.equal(routing.model_strategy.narrator_primary, "gemini-3.1-pro");
     assert.equal(routing.model_strategy.narrator_backup, null);
     assert.equal(routing.model_strategy.style_shaper, "claude-opus-4-6");
     assert.equal(routing.stage_routing.stage2_narrator.provider, "gemini31");
-    assert.equal(routing.stage_routing.stage2_narrator.model, "gemini-3.1-pro-preview");
+    assert.equal(routing.stage_routing.stage2_narrator.model, "gemini-3.1-pro");
     assert.equal(routing.stage_routing.stage5_style_shaper.provider, "claude");
     assert.equal(routing.stage_routing.stage5_style_shaper.model, "claude-opus-4-6");
     assert.equal(routing.agent_routing.narrator_primary.provider, "gemini31");
-    assert.equal(routing.agent_routing.narrator_primary.model, "gemini-3.1-pro-preview");
+    assert.equal(routing.agent_routing.narrator_primary.model, "gemini-3.1-pro");
     assert.deepEqual(routing.agent_routing.narrator_primary.fallback, []);
     assert.equal(routing.agent_routing.narrator_backup, undefined);
     assert.equal(routing.agent_routing.narrator_testing_claude.provider, "claude");
@@ -100,7 +100,7 @@ describe("GEMINI-DEFAULT-WRITER-1 Gemini primary routing and rhythm adapter over
     // GEMINI-COPRIMARY-1: 正文模型目录包含 Claude 与显式可选 Gemini；
     // Doubao 仍不在正文模型集合中，只保留为受限中文校准器。
     assert.deepEqual(routing.best_of_n_config.models, [
-      "gemini-3.1-pro-preview",
+      "gemini-3.1-pro",
       "claude-opus-4-6",
     ]);
   });

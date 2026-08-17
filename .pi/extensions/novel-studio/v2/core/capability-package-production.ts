@@ -48,7 +48,7 @@ export function resolveRouteCapabilityKey(routing: {
     return {
       provider: "gemini",
       endpoint: "openai-compat",
-      model: routing.model || "gemini-3.1-pro-preview",
+      model: routing.model || "gemini-3.1-pro",
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     };

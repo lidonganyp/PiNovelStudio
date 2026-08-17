@@ -31,7 +31,7 @@ import {
   WEAK_PRIOR_BETA,
 } from "../dist-test/v2/learning/strategy-policy-store.js";
 
-const MODEL_VERSION = "gemini-3.1-pro-preview";
+const MODEL_VERSION = "gemini-3.1-pro";
 const STRATEGY_ID = "editorial-strategy-dg4";
 
 const BUNDLE_A = "a".repeat(64);

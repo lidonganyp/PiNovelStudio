@@ -36,7 +36,7 @@ export interface CapabilityKey {
   provider: string;
   /** endpoint 标识（如 "google-ai-native" / "openai-compat" / "anthropic-native"） */
   endpoint: string;
-  /** model 名（如 "gemini-3.1-pro-preview" / "claude-opus-4-6"） */
+  /** model 名（如 "gemini-3.1-pro" / "claude-opus-4-6"） */
   model: string;
   /** 协议类型 */
   protocol: ProtocolKind;
@@ -313,7 +313,7 @@ export function initializeDefaultCapabilities(): void {
     key: {
       provider: "gemini",
       endpoint: "openai-compat",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     },
@@ -352,7 +352,7 @@ export function initializeDefaultCapabilities(): void {
     key: {
       provider: "gemini",
       endpoint: "google-ai-native",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "native-function-calling",
       adapterVersion: "native-fc-v1",
     },

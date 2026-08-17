@@ -90,11 +90,11 @@ test("正式回归：fingerprint mismatch 必须带字段级差异", () => {
   const reason = explainFingerprintMismatch(
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    [{ field: "generationModel", recorded: "recorded-model", actual: "gemini-3.1-pro-preview" }],
+    [{ field: "generationModel", recorded: "recorded-model", actual: "gemini-3.1-pro" }],
   );
   assert.match(reason, /generationModel/);
   assert.match(reason, /recorded-model/);
-  assert.match(reason, /gemini-3.1-pro-preview/);
+  assert.match(reason, /gemini-3.1-pro/);
 });
 
 test("正式回归：held 不得迁回 evaluated / approved_dev / active_prod", () => {

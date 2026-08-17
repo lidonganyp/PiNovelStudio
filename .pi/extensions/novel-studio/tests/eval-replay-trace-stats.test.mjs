@@ -46,7 +46,7 @@ test("count: 真实 v2_final_selected evidence.modelCalls → 3/gemini31=3/raw=1
               approvalRef: "apr",
               behaviorIdentity: {
                 bundleId: "bundle",
-                modelVersion: "gemini-3.1-pro-preview",
+                modelVersion: "gemini-3.1-pro",
               },
             },
           },
@@ -131,7 +131,7 @@ test("identity: releaseGovernance.devMode=true 必须被生产等价检查拒绝
       environmentFingerprint: "fp",
       approvalRef: "apr",
       bundleId: "bundle",
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
     },
     modelRoute: "v2_rawstage2_gemini31",
   });
@@ -159,14 +159,14 @@ test("identity: 候选 draft 无 approvalRef 时不得要求审批", () => {
       environmentFingerprint: "fp",
       approvalRef: null,
       bundleId: "bundle",
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
     },
     expectedRelease: {
       releaseId: "rel-prod-118",
       environmentFingerprint: "fp",
       approvalRef: "",
       bundleId: "bundle",
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
     },
     modelRoute: "v2_rawstage2_gemini31",
   });

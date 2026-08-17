@@ -149,7 +149,7 @@ test("生产主链路强制执行 Agentic + 作者风格优化，且不调用机
     stylePrompt = input.userPrompt;
     return {
       text: STYLED_TEXT,
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       route: input.route,
       durationMs: 2,
       finishReason: "stop",

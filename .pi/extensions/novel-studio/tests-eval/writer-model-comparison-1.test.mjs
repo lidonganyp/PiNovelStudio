@@ -38,10 +38,10 @@ function preview(writerModel, options = {}) {
   const isClaude = writerModel === "claude";
   const requestedRoute = isClaude ? "v2_rawstage2" : "v2_rawstage2_gemini31";
   const actualProvider = isClaude ? "claude" : "gemini31";
-  const actualModel = isClaude ? "claude-opus-4-6" : "gemini-3.1-pro-preview";
+  const actualModel = isClaude ? "claude-opus-4-6" : "gemini-3.1-pro";
   const raw = candidate(
     isClaude ? "他抬手敲门，门后的呼吸停了。" : "他没有退，指节落在门上。门后忽然安静。",
-    isClaude ? "claude-opus-4-6" : "gemini-3.1-pro-preview",
+    isClaude ? "claude-opus-4-6" : "gemini-3.1-pro",
     isClaude ? "claude_writer_v1" : "gemini_writer_v1",
   );
   raw.model = "unified";
@@ -100,8 +100,8 @@ test("runs both writers through full read-only preview and declares only a rever
   assert.equal(result.candidates.gemini31.promptProfile, "gemini_writer_v1");
   assert.equal(result.candidates.gemini31.requestedRoute, "v2_rawstage2_gemini31");
   assert.equal(result.candidates.gemini31.actualProvider, "gemini31");
-  assert.equal(result.candidates.gemini31.actualModel, "gemini-3.1-pro-preview");
-  assert.equal(result.candidates.gemini31.model, "gemini-3.1-pro-preview");
+  assert.equal(result.candidates.gemini31.actualModel, "gemini-3.1-pro");
+  assert.equal(result.candidates.gemini31.model, "gemini-3.1-pro");
   assert.equal(result.candidates.gemini31.durationMs, 80);
   assert.equal(result.candidates.gemini31.finishReason, "stop");
 });

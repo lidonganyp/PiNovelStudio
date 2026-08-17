@@ -118,8 +118,8 @@ test("explicit recovery returns frozen raw without a raw network call and preser
 
 test("explicit Gemini recovery reuses only a frozen Gemini raw without a raw network call", async () => {
   const fixture = makeFixture({
-    rawModel: "gemini-3.1-pro-preview",
-    modelVersion: "gemini-3.1-pro-preview",
+    rawModel: "gemini-3.1-pro",
+    modelVersion: "gemini-3.1-pro",
     rawFinishReason: "stop",
   });
   try {
@@ -131,7 +131,7 @@ test("explicit Gemini recovery reuses only a frozen Gemini raw without a raw net
         calls.push(input.kind);
         return {
           text: "editorial response",
-          model: "gemini-3.1-pro-preview",
+          model: "gemini-3.1-pro",
           provider: "gemini31",
           route: input.route,
           durationMs: 12,
@@ -148,7 +148,7 @@ test("explicit Gemini recovery reuses only a frozen Gemini raw without a raw net
     });
 
     assert.equal(raw.text, fixture.storedText);
-    assert.equal(raw.model, "gemini-3.1-pro-preview");
+    assert.equal(raw.model, "gemini-3.1-pro");
     assert.equal(raw.provider, "gemini31");
     assert.deepEqual(calls, []);
   } finally {

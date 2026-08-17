@@ -198,7 +198,7 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
     assert.ok(styleModelCall, "默认路径必须记录作者风格整章优化调用");
     assert.equal(styleModelCall.route, "v2_amplified_gemini31");
     assert.equal(styleModelCall.expectedProvider, "gemini31");
-    assert.equal(styleModelCall.expectedModel, "gemini-3.1-pro-preview");
+    assert.equal(styleModelCall.expectedModel, "gemini-3.1-pro");
 
     // 固定场景候选源已退出生产；trace 必须明确记录退休状态。
     assert.ok(

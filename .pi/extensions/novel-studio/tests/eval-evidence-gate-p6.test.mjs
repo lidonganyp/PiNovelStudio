@@ -103,7 +103,7 @@ function makeManifest(releaseId, status, opts = {}) {
     activatedAt: null,
     // 行为身份（DG-1）：fixture capture 的 provenance 来源
     bundleId: opts.bundleId ?? "bundle-test-001",
-    modelVersion: opts.modelVersion ?? "gemini-3.1-pro-preview",
+    modelVersion: opts.modelVersion ?? "gemini-3.1-pro",
     promptBundleHash: opts.promptBundleHash ?? "0123456789abcdef",
     modelRoutingHash: opts.modelRoutingHash ?? "0123456789abcdef",
     toolSchemaHash: opts.toolSchemaHash ?? "0123456789abcdef",
@@ -151,9 +151,9 @@ function pipelineTraceFor(kind) {
               {
                 requestedRoute: "v2_rawstage2_gemini31",
                 actualProvider: "gemini31",
-                actualModel: "gemini-3.1-pro-preview",
+                actualModel: "gemini-3.1-pro",
                 expectedProvider: "gemini31",
-                expectedModel: "gemini-3.1-pro-preview",
+                expectedModel: "gemini-3.1-pro",
                 kind: "raw_direct",
                 tokenUsage: { in: 1600, out: 2600 },
               },
@@ -174,18 +174,18 @@ function pipelineTraceFor(kind) {
               {
                 requestedRoute: "v2_rawstage2_gemini31",
                 actualProvider: "gemini31",
-                actualModel: "gemini-3.1-pro-preview",
+                actualModel: "gemini-3.1-pro",
                 expectedProvider: "gemini31",
-                expectedModel: "gemini-3.1-pro-preview",
+                expectedModel: "gemini-3.1-pro",
                 kind: "agentic_raw",
                 tokenUsage: { in: 1600, out: 2600 },
               },
               {
                 requestedRoute: "v2_amplified_gemini31",
                 actualProvider: "gemini31",
-                actualModel: "gemini-3.1-pro-preview",
+                actualModel: "gemini-3.1-pro",
                 expectedProvider: "gemini31",
-                expectedModel: "gemini-3.1-pro-preview",
+                expectedModel: "gemini-3.1-pro",
                 kind: "author_style_optimization",
                 tokenUsage: { in: 1700, out: 4700 },
               },
@@ -238,7 +238,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
         toolSchemaHash: "0123456789abcdef",
         contextCompilerHash: "0123456789abcdef",
         budgetHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        modelVersion: "gemini-3.1-pro-preview",
+        modelVersion: "gemini-3.1-pro",
         modelRoute: "v2_rawstage2_gemini31",
         provider: "gemini",
         graderVersion: "deterministic-v1",
@@ -393,19 +393,19 @@ function writeLyingProductionLikeArm(evalRunRoot, releaseId, bundleId) {
             {
               requestedRoute: "v2_rawstage2_gemini31",
               actualProvider: "gemini31",
-              actualModel: "gemini-3.1-pro-preview",
+              actualModel: "gemini-3.1-pro",
               tokenUsage: { in: 100, out: 200 },
             },
             {
               requestedRoute: "v2_amplified_gemini31",
               actualProvider: "gemini31",
-              actualModel: "gemini-3.1-pro-preview",
+              actualModel: "gemini-3.1-pro",
               tokenUsage: { in: 100, out: 200 },
             },
             {
               requestedRoute: "v2_amplified_gemini31",
               actualProvider: "gemini31",
-              actualModel: "gemini-3.1-pro-preview",
+              actualModel: "gemini-3.1-pro",
               tokenUsage: { in: 100, out: 200 },
             },
           ],
@@ -1216,7 +1216,7 @@ test("gate: production_like 在 modelCalls=0 / devMode / 身份缺失 / 路由�
       environmentFingerprint: "fp-116",
       approvalRef: "apr-116",
       bundleId: "bundle-116",
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
     },
   };
   const zeroCalls = evaluateReplayCliSuccess({ ...base, modelCalls: 0 });
@@ -1232,7 +1232,7 @@ test("gate: production_like 在 modelCalls=0 / devMode / 身份缺失 / 路由�
       environmentFingerprint: "fp-116",
       approvalRef: "apr-116",
       bundleId: "bundle-116",
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
     },
   });
   assert.equal(devMode.ok, false);
@@ -1258,7 +1258,7 @@ test("gate: production_like 在 modelCalls=0 / devMode / 身份缺失 / 路由�
       environmentFingerprint: "fp-116",
       approvalRef: "apr-116",
       bundleId: "bundle-116",
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
     },
   });
   assert.equal(drifted.ok, false);
@@ -1279,7 +1279,7 @@ test("gate: production_like 在 modelCalls=0 / devMode / 身份缺失 / 路由�
       environmentFingerprint: "fp-116",
       approvalRef: "apr-116",
       bundleId: "bundle-116",
-      modelVersion: "gemini-3.1-pro-preview",
+      modelVersion: "gemini-3.1-pro",
     },
   });
   assert.equal(pass.ok, true, JSON.stringify(pass.reasons));

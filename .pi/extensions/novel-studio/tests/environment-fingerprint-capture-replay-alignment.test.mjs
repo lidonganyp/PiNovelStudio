@@ -108,7 +108,7 @@ test("evaluateProductionReleaseGate / explainFingerprintMismatch 必须带字段
   const reason = explainFingerprintMismatch(
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    [{ field: "generationModel", recorded: "recorded-model", actual: "gemini-3.1-pro-preview" }],
+    [{ field: "generationModel", recorded: "recorded-model", actual: "gemini-3.1-pro" }],
   );
   assert.match(reason, /generationModel/);
   assert.match(reason, /recorded-model/);

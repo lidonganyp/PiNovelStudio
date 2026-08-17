@@ -44,7 +44,7 @@ const EVAL_NATIVE_ROUTES: RouteAdapterConfig[] = [
     capabilityKey: {
       provider: "gemini",
       endpoint: "google-ai-native",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "native-function-calling",
       adapterVersion: "native-fc-v1",
     },

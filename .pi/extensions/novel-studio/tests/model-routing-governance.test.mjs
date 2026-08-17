@@ -41,7 +41,7 @@ describe("WP-01 路由契约与运行锁", () => {
     const mod = await importDist("v2/core/run-routing-context.js");
     const ctx = mod.resolveRunRouting({});
     assert.equal(ctx.provider, "gemini31");
-    assert.equal(ctx.model, "gemini-3.1-pro-preview");
+    assert.equal(ctx.model, "gemini-3.1-pro");
     assert.equal(ctx.generationRoute, "v2_rawstage2_gemini31");
     assert.equal(ctx.editorialRoute, "v2_amplified_gemini31");
     assert.equal(ctx.routeClass, "production");
@@ -137,14 +137,14 @@ describe("WP-02 生产/评测隔离", () => {
     const mod = await importDist("v2/core/route-catalog.js");
     assert.equal(
       mod.isSameModelVersionBucket(
-        { provider: "gemini31", modelVersion: "gemini-3.1-pro-preview" },
-        { provider: "gemini31", modelVersion: "gemini-3.1-pro-preview" },
+        { provider: "gemini31", modelVersion: "gemini-3.1-pro" },
+        { provider: "gemini31", modelVersion: "gemini-3.1-pro" },
       ),
       true,
     );
     assert.equal(
       mod.isSameModelVersionBucket(
-        { provider: "gemini31", modelVersion: "gemini-3.1-pro-preview" },
+        { provider: "gemini31", modelVersion: "gemini-3.1-pro" },
         { provider: "claude", modelVersion: "claude-opus-4-6" },
       ),
       false,
@@ -315,8 +315,8 @@ describe("WP-05 Trace/成本/延迟观测", () => {
         stage: "agentic",
         route: "v2_rawstage2_gemini31",
         provider: "gemini31",
-        model: "gemini-3.1-pro-preview",
-        modelVersion: "gemini-3.1-pro-preview",
+        model: "gemini-3.1-pro",
+        modelVersion: "gemini-3.1-pro",
         promptBundleHash: "b",
         contextHash: "c",
         temperature: 0.7,
@@ -344,7 +344,7 @@ describe("WP-05 Trace/成本/延迟观测", () => {
     const report = mod.buildRoutingStabilityReport({
       runId: "r1",
       expectedProvider: "gemini31",
-      expectedModel: "gemini-3.1-pro-preview",
+      expectedModel: "gemini-3.1-pro",
       calls: [
         {
           runId: "r1",
@@ -425,7 +425,7 @@ describe("WP-07 质量-成本联合指标", () => {
         recoveryAssisted: false,
         latencyMs: 1000,
         longTail: false,
-        modelVersion: "gemini-3.1-pro-preview",
+        modelVersion: "gemini-3.1-pro",
         provider: "gemini31",
       },
     ]);

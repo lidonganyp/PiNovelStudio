@@ -164,7 +164,7 @@ test("novel_strategy_feedback 可凭 chapterId 从成功 trace 推断模型与�
           evidence: {
             stage: "final_selected",
             strategyContext: {
-              modelVersion: "gemini-3.1-pro-preview",
+              modelVersion: "gemini-3.1-pro",
               selectedStrategyIds: ["voice_emphasis"],
               sourceChapter: "ch17",
               opportunityType: "author_style",
@@ -192,7 +192,7 @@ test("novel_strategy_feedback 可凭 chapterId 从成功 trace 推断模型与�
     });
 
     assert.equal(result.status, "ok");
-    assert.equal(result.modelVersion, "gemini-3.1-pro-preview");
+    assert.equal(result.modelVersion, "gemini-3.1-pro");
     assert.equal(result.strategyId, "voice_emphasis");
     assert.equal(result.action, "choice");
     assert.equal(result.result?.recorded, true);
@@ -203,7 +203,7 @@ test("novel_strategy_feedback 可凭 chapterId 从成功 trace 推断模型与�
       join(projectRoot, "workspaces", workspaceId, "strategy-policy.json"),
       "utf8",
     ));
-    assert.ok(store.partitions?.["gemini-3.1-pro-preview"]?.voice_emphasis);
+    assert.ok(store.partitions?.["gemini-3.1-pro"]?.voice_emphasis);
 
     const ledgerPath = join(
       projectRoot,

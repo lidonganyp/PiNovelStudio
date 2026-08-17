@@ -61,7 +61,7 @@ test("gemini31 comparison locks generation to Gemini 3.1 Pro", () => {
     generateRoute: "nb4_generate_gemini31",
     judgeRoute: "v2_opportunity_judge",
     provider: "gemini31",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
   });
 });
 
@@ -124,7 +124,7 @@ test("new comparison routes use isolated model env overrides", () => {
   });
   assert.deepEqual(routing.agent_routing.nb4_generate_gemini31, {
     provider: "gemini31",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     base_url_env: "GEMINI31_BASE_URL",
     api_key_env: "GEMINI31_API_KEY",
     model_env: "GEMINI31_MODEL",

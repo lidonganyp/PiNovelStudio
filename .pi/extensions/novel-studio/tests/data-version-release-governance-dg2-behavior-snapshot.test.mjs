@@ -61,7 +61,7 @@ function makeProject() {
 function makeInput(root, overrides = {}) {
   return {
     projectRoot: root,
-    modelVersion: "gemini-3.1-pro-preview",
+    modelVersion: "gemini-3.1-pro",
     evalProtocolVersion: "2026-08-01",
     modelRoutingPaths: ["model-routing.json"],
     promptBundlePaths: ["prompt-registry.json"],

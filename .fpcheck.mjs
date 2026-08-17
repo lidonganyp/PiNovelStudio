@@ -41,7 +41,7 @@ const base = {
   budgetMaxCalls: 10,
   timeoutMs: 300000,
   fallbackPolicy: "hard_block",
-  generationModel: "gemini-3.1-pro-preview",
+  generationModel: "gemini-3.1-pro",
   judgeModel: "gpt5.6-sol",
   proxyApprovalModel: "gpt5.6-sol",
   envSwitchNames: ["V2_FORCE_STUB","NOVEL_TEST_TOOLS","NOVEL_DEBUG_TOOLS","PINOVEL_UNIFIED_PIPELINE","PINOVEL_DISABLE_FALLBACK"],

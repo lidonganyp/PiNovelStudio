@@ -194,7 +194,7 @@ for (const route of PRODUCTION_ROUTES) {
         provider: route.includes("gemini") ? "gemini" : "claude",
         endpoint: route.includes("gemini") ? "openai-compat" : "anthropic-native",
         model: route.includes("gemini")
-          ? "gemini-3.1-pro-preview"
+          ? "gemini-3.1-pro"
           : "claude-opus-4-6",
         protocol: "react-text",
         adapterVersion: "react-text-v1",

@@ -59,7 +59,7 @@ export interface PromptCandidateDiff {
   changes: PromptCandidateChange[];
   /** 进化假设（hypothesis） */
   hypothesis: string;
-  /** 模型版本（如 gemini-3.1-pro-preview） */
+  /** 模型版本（如 gemini-3.1-pro） */
   modelVersion: string;
   /** provider（如 gemini） */
   provider: string;

@@ -73,14 +73,14 @@ import {
 // ============================================================================
 
 test("ModelTurn · createTextTurn 构造纯文本 turn", () => {
-  const turn = createTextTurn("章节正文内容", { model: "gemini-3.1-pro-preview" });
+  const turn = createTextTurn("章节正文内容", { model: "gemini-3.1-pro" });
   assert.equal(turn.text, "章节正文内容");
   assert.equal(turn.toolCalls.length, 0);
   assert.equal(turn.finishReason, "stop");
   assert.equal(turn.parseStatus, "ok");
   assert.equal(turn.protocol, "react-text");
   assert.equal(turn.adapterVersion, "react-text-v1");
-  assert.equal(turn.model, "gemini-3.1-pro-preview");
+  assert.equal(turn.model, "gemini-3.1-pro");
 });
 
 test("ModelTurn · createToolCallTurn 构造工具调用 turn", () => {
@@ -160,7 +160,7 @@ test("CapabilityRegistry · endpoint 级声明独立于 provider 级", () => {
     key: {
       provider: "gemini",
       endpoint: "google-ai-native",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "native-function-calling",
       adapterVersion: "native-fc-v1",
     },
@@ -176,7 +176,7 @@ test("CapabilityRegistry · endpoint 级声明独立于 provider 级", () => {
   const endpointCap = registry.lookup({
     provider: "gemini",
     endpoint: "google-ai-native",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "native-function-calling",
     adapterVersion: "native-fc-v1",
   });
@@ -186,7 +186,7 @@ test("CapabilityRegistry · endpoint 级声明独立于 provider 级", () => {
   const otherCap = registry.lookup({
     provider: "gemini",
     endpoint: "openai-compat",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
   });
@@ -201,7 +201,7 @@ test("CapabilityRegistry · 更换 endpoint 后不复用错误 capability", () =
     key: {
       provider: "gemini",
       endpoint: "endpoint-a",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "native-function-calling",
       adapterVersion: "native-fc-v1",
     },
@@ -214,7 +214,7 @@ test("CapabilityRegistry · 更换 endpoint 后不复用错误 capability", () =
     key: {
       provider: "gemini",
       endpoint: "endpoint-b",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "native-function-calling",
       adapterVersion: "native-fc-v1",
     },
@@ -224,11 +224,11 @@ test("CapabilityRegistry · 更换 endpoint 后不复用错误 capability", () =
   });
 
   const capA = registry.lookup({
-    provider: "gemini", endpoint: "endpoint-a", model: "gemini-3.1-pro-preview",
+    provider: "gemini", endpoint: "endpoint-a", model: "gemini-3.1-pro",
     protocol: "native-function-calling", adapterVersion: "native-fc-v1",
   });
   const capB = registry.lookup({
-    provider: "gemini", endpoint: "endpoint-b", model: "gemini-3.1-pro-preview",
+    provider: "gemini", endpoint: "endpoint-b", model: "gemini-3.1-pro",
     protocol: "native-function-calling", adapterVersion: "native-fc-v1",
   });
 
@@ -256,7 +256,7 @@ test("CapabilityRegistry · validate 检查缺失字段", () => {
     key: {
       provider: "gemini",
       endpoint: "",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     },
@@ -272,7 +272,7 @@ test("CapabilityRegistry · 默认 registry 已初始化生产声明", () => {
   const geminiCap = defaultCapabilityRegistry.lookup({
     provider: "gemini",
     endpoint: "openai-compat",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
   });
@@ -282,7 +282,7 @@ test("CapabilityRegistry · 默认 registry 已初始化生产声明", () => {
   const nativeCap = defaultCapabilityRegistry.lookup({
     provider: "gemini",
     endpoint: "google-ai-native",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "native-function-calling",
     adapterVersion: "native-fc-v1",
   });
@@ -307,7 +307,7 @@ test("CapabilityRegistry · lookupStrict 未命中 endpoint 级时 fail-closed�
   const strictCap = registry.lookupStrict({
     provider: "gemini",
     endpoint: "openai-compat",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
   });
@@ -323,7 +323,7 @@ test("CapabilityRegistry · lookupStrict 命中 endpoint 级时返回准确能�
     key: {
       provider: "gemini",
       endpoint: "openai-compat",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     },
@@ -338,7 +338,7 @@ test("CapabilityRegistry · lookupStrict 命中 endpoint 级时返回准确能�
   const strictCap = registry.lookupStrict({
     provider: "gemini",
     endpoint: "openai-compat",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
   });
@@ -358,7 +358,7 @@ test("CapabilityRegistry · lookup vs lookupStrict 行为差异", () => {
   const key = {
     provider: "gemini",
     endpoint: "unregistered-endpoint",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
   };
@@ -378,14 +378,14 @@ test("CapabilityRegistry · hasEndpointEntry 准确反映 endpoint 级注册状�
   const registeredKey = {
     provider: "gemini",
     endpoint: "openai-compat",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
   };
   const unregisteredKey = {
     provider: "gemini",
     endpoint: "unknown-endpoint",
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.1-pro",
     protocol: "react-text",
     adapterVersion: "react-text-v1",
   };
@@ -405,7 +405,7 @@ test("CapabilityRegistry · 默认 registry 生产 route 全部命中 endpoint �
   // 验证所有生产 route 的 capabilityKey 都在 endpoint 级注册
   // 这是 PROTOCOL-LAYER-2 的核心约束：生产 route 不依赖 provider 级回退
   const productionKeys = [
-    { provider: "gemini", endpoint: "openai-compat", model: "gemini-3.1-pro-preview", protocol: "react-text", adapterVersion: "react-text-v1" },
+    { provider: "gemini", endpoint: "openai-compat", model: "gemini-3.1-pro", protocol: "react-text", adapterVersion: "react-text-v1" },
     { provider: "claude", endpoint: "anthropic-native", model: "claude-opus-4-6", protocol: "react-text", adapterVersion: "react-text-v1" },
   ];
 
@@ -429,7 +429,7 @@ test("ReactTextAdapter · parseResponse 解析工具调用", () => {
   const response = {
     body: {
       text: '检索一下<tool_call>{"name":"search_chapter_span","arguments":{"query":"角色A"}}</tool_call>',
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
     },
     status: 200,
   };
@@ -544,7 +544,7 @@ test("NativeFunctionCallingAdapter · parseResponse 解析原生工具调用", (
         },
         finish_reason: "tool_calls",
       }],
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
     },
     status: 200,

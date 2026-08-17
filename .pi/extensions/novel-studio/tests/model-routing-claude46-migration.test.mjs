@@ -94,7 +94,7 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
       const route = config.stage_routing.stage2_narrator;
       assert.ok(route);
       assert.equal(route.provider, "gemini31");
-      assert.equal(route.model, "gemini-3.1-pro-preview");
+      assert.equal(route.model, "gemini-3.1-pro");
       assert.equal(config.agent_routing.v2_rawstage2.provider, "claude");
       assert.equal(config.agent_routing.v2_rawstage2.model, EXPECTED_CLAUDE_MODEL);
     });
@@ -115,7 +115,7 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
   describe("Gemini 默认主写与 Claude 风格职责分离", () => {
     test("model_strategy.narrator_primary 为 Gemini 3.1 Pro", () => {
       const config = loadRoutingConfig();
-      assert.equal(config.model_strategy.narrator_primary, "gemini-3.1-pro-preview");
+      assert.equal(config.model_strategy.narrator_primary, "gemini-3.1-pro");
     });
 
     test("model_strategy.style_shaper 为 claude-opus-4-6", () => {
@@ -126,7 +126,7 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
     test("agent_routing.narrator_primary.provider 为 gemini31", () => {
       const config = loadRoutingConfig();
       assert.equal(config.agent_routing.narrator_primary.provider, "gemini31");
-      assert.equal(config.agent_routing.narrator_primary.model, "gemini-3.1-pro-preview");
+      assert.equal(config.agent_routing.narrator_primary.model, "gemini-3.1-pro");
     });
   });
 
@@ -167,7 +167,7 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
   describe("model-routing.recommendation.json 当前态不声明 claude-opus-4-8 / Doubao 主写", () => {
     test("productionCurrent.narrator_primary 为 Gemini 3.1 Pro", () => {
       const rec = loadRecommendation();
-      assert.equal(rec.productionCurrent?.narrator_primary, "gemini-3.1-pro-preview");
+      assert.equal(rec.productionCurrent?.narrator_primary, "gemini-3.1-pro");
     });
 
     test("productionCurrent.style_shaper 不为 claude-opus-4-8", () => {

@@ -58,7 +58,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = resolve(__dirname, "..");
 const PROJECT_ROOT = resolve(__dirname, "..", "..", "..", "..");
 
-const TEST_MODEL_VERSION = "gemini-3.1-pro-preview";
+const TEST_MODEL_VERSION = "gemini-3.1-pro";
 const TEST_EVAL_PROTOCOL_VERSION = "2026-08-01";
 
 // ============================================================================

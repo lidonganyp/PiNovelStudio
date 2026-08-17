@@ -224,7 +224,7 @@ test("ordinary editorial generation sends Gemini profiles to the Gemini route", 
     strategyRegistry: createEditorialStrategyRegistry(),
     modelGenerate: async (input) => {
       requestedRoute = input.route;
-      return { text: RAW, model: "gemini-3.1-pro-preview", route: input.route, durationMs: 1 };
+      return { text: RAW, model: "gemini-3.1-pro", route: input.route, durationMs: 1 };
     },
   });
 

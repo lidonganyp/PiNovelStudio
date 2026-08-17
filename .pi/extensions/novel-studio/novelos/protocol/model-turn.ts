@@ -171,7 +171,7 @@ export interface ModelTurn {
   protocol: ProtocolKind;
   /** 产生此 turn 的适配器版本 */
   adapterVersion: string;
-  /** 模型标识（如 "gemini-3.1-pro-preview"） */
+  /** 模型标识（如 "gemini-3.1-pro"） */
   model?: string;
 }
 

@@ -183,7 +183,7 @@ test("editorial candidate receives the selected strategy without a cinematic che
       sentPrompt = input.userPrompt;
       return {
         text: RAW,
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3.1-pro",
         route: input.route,
         durationMs: 1,
       };

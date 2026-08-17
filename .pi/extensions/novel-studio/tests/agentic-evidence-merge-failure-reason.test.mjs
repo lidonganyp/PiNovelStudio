@@ -23,7 +23,7 @@ import { classifyFailureKind } from "../dist/novelos/agent/agentic-raw-candidate
 // ============================================================================
 
 test("classifyFailureKind：'timed out' 关键词识别为 model_timeout", () => {
-  const reason = "OpenAI-compatible:gemini-3.1-pro-preview timed out after 100ms";
+  const reason = "OpenAI-compatible:gemini-3.1-pro timed out after 100ms";
   const kind = classifyFailureKind(reason, "model_error", "model_error");
   assert.equal(kind, "model_timeout", "含 'timed out' 的 reason 应识别为 model_timeout");
 });
@@ -81,7 +81,7 @@ test("classifyFailureKind：empty_draft 作为 defaultKind 时返回 empty_draft
 
 test("failureReason 传递：catch 块 errMsg 附加到 fallbackReason 后能识别超时", () => {
   // 模拟 narrative-agent-loop.ts catch 块的行为：
-  // const errMsg = err.message; // 例如 "OpenAI-compatible:gemini-3.1-pro-preview timed out after 100ms"
+  // const errMsg = err.message; // 例如 "OpenAI-compatible:gemini-3.1-pro timed out after 100ms"
   // return this.makeFallback(plan, [], "model_error", [], 0, ..., errMsg);
   //
   // 模拟 agentic-raw-candidate-source.ts 的行为：
@@ -89,7 +89,7 @@ test("failureReason 传递：catch 块 errMsg 附加到 fallbackReason 后能识
   // const fallbackReason = `agent loop fallback: ${stopReason}（${loopFailureReason}）`;
   // const fallbackKind = classifyFailureKind(fallbackReason, stopReason, defaultKind);
 
-  const errMsg = "OpenAI-compatible:gemini-3.1-pro-preview timed out after 100ms";
+  const errMsg = "OpenAI-compatible:gemini-3.1-pro timed out after 100ms";
   const stopReason = "model_error";
   const loopFailureReason = errMsg; // lineage.failureReason = errMsg（修复后）
   const fallbackReason = `agent loop fallback: ${stopReason}（${loopFailureReason}）`;
@@ -147,7 +147,7 @@ test("failureReason 传递：modelErrorMessage 从 assistant 消息提取后进�
       role: "assistant",
       content: [],
       stopReason: "error",
-      errorMessage: "OpenAI-compatible:gemini-3.1-pro-preview timed out after 100ms",
+      errorMessage: "OpenAI-compatible:gemini-3.1-pro timed out after 100ms",
     },
   ];
 
@@ -181,7 +181,7 @@ test("failureReason 传递：streamFn catch 设置 errorMessage 到 assistant �
   //   error.errorMessage = errMsg;
   //   stream.push({ type: "error", reason: "error", error });
   // }
-  const originalError = new Error("OpenAI-compatible:gemini-3.1-pro-preview timed out after 100ms");
+  const originalError = new Error("OpenAI-compatible:gemini-3.1-pro timed out after 100ms");
   const errMsg = originalError.message;
   const assistantMsg = {
     role: "assistant",
@@ -193,7 +193,7 @@ test("failureReason 传递：streamFn catch 设置 errorMessage 到 assistant �
   // 验证 errorMessage 被正确设置
   assert.equal(
     assistantMsg.errorMessage,
-    "OpenAI-compatible:gemini-3.1-pro-preview timed out after 100ms",
+    "OpenAI-compatible:gemini-3.1-pro timed out after 100ms",
   );
   assert.match(assistantMsg.errorMessage, /timed out/);
 });
@@ -204,7 +204,7 @@ test("failureReason 传递：streamFn catch 设置 errorMessage 到 assistant �
 
 test("综合链路：streamFn error → modelErrorMessage → failureReason → classifyFailureKind → model_timeout", () => {
   // 1. streamFn catch 捕获 fetchWithTimeout 抛出的超时错误
-  const fetchError = new Error("OpenAI-compatible:gemini-3.1-pro-preview timed out after 100ms");
+  const fetchError = new Error("OpenAI-compatible:gemini-3.1-pro timed out after 100ms");
 
   // 2. streamFn 设置 errorMessage 到 assistant 消息
   const errMsg = fetchError.message;
