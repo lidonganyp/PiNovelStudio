@@ -145,6 +145,61 @@ function parseRealProxyVerdictOutput(text: string): RealProxyVerdictOutput {
   };
 }
 
+/**
+ * Bind model-provided evidence references back to the exact anonymous packet.
+ *
+ * A release approval must never carry invented span ids or evidence assigned
+ * to the opposite side of the comparison.  Invalid evidence is converted to
+ * HOLD (and removed from the artifact) so a malformed model response cannot
+ * become an APPROVE_DEV decision or a misleading audit record.
+ */
+function validateRealProxyEvidence(
+  output: RealProxyVerdictOutput,
+  comparison: AnonymousApprovalPacket["forward"],
+  candidateLabel: "A" | "B",
+): RealProxyVerdictOutput {
+  const spanSides = new Map(comparison.spans.map((span) => [span.id, span.side]));
+  const losingLabel = candidateLabel === "A" ? "B" : "A";
+  const validWinningSpans = output.winningSpans.filter(
+    (id) => spanSides.get(id) === candidateLabel,
+  );
+  const validLosingSpans = output.losingSpans.filter(
+    (id) => spanSides.get(id) === losingLabel,
+  );
+  const invalidWinningSpans = output.winningSpans.filter(
+    (id) => spanSides.get(id) !== candidateLabel,
+  );
+  const invalidLosingSpans = output.losingSpans.filter(
+    (id) => spanSides.get(id) !== losingLabel,
+  );
+  const missingApprovalEvidence =
+    output.verdict === "APPROVE_DEV" &&
+    (validWinningSpans.length === 0 || validLosingSpans.length === 0);
+  const invalidEvidence =
+    invalidWinningSpans.length > 0 || invalidLosingSpans.length > 0 || missingApprovalEvidence;
+
+  if (!invalidEvidence) {
+    return {
+      ...output,
+      winningSpans: [...new Set(validWinningSpans)],
+      losingSpans: [...new Set(validLosingSpans)],
+    };
+  }
+
+  const evidenceRisks = ["invalid_review_span_evidence"];
+  if (invalidWinningSpans.length > 0) evidenceRisks.push("invalid_winning_span_reference");
+  if (invalidLosingSpans.length > 0) evidenceRisks.push("invalid_losing_span_reference");
+  if (missingApprovalEvidence) evidenceRisks.push("approval_missing_valid_span_evidence");
+
+  return {
+    verdict: "HOLD",
+    rationale: `${output.rationale}; HOLD: review evidence references are not bound to the anonymous packet`,
+    winningSpans: [...new Set(validWinningSpans)],
+    losingSpans: [...new Set(validLosingSpans)],
+    risks: [...output.risks, ...evidenceRisks],
+  };
+}
+
 /** Create the release-level real reviewer from trusted NOVELOS_JUDGE_* environment config. */
 export function createRealGpt56SolReleaseProxyApprovalCallerFromEnv(): ProxyApprovalCaller {
   const apiKey = process.env.NOVELOS_JUDGE_API_KEY;
@@ -201,7 +256,11 @@ export function createRealGpt56SolReleaseProxyApprovalCallerFromEnv(): ProxyAppr
           timeoutMs: opts.budget.timeoutMs,
           responseFormat: "json_object",
         });
-        return { output: parseRealProxyVerdictOutput(response.text), model: response.model };
+        const parsed = parseRealProxyVerdictOutput(response.text);
+        return {
+          output: validateRealProxyEvidence(parsed, comparison, candidateLabel),
+          model: response.model,
+        };
       };
 
       const forward = await review("A", packet.forward);

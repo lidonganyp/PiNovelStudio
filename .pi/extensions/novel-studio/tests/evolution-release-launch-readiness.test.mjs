@@ -521,3 +521,76 @@ test("runRealProxyReview consumes a real card and performs bounded forward/rever
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("runRealProxyReview fails closed when the reviewer returns unknown or wrong-side spans", async () => {
+  const root = makeTempRoot();
+  const previousFetch = globalThis.fetch;
+  const previousEnv = {
+    key: process.env.NOVELOS_JUDGE_API_KEY,
+    base: process.env.NOVELOS_JUDGE_BASE_URL,
+    model: process.env.NOVELOS_JUDGE_MODEL,
+  };
+  try {
+    const releaseId = "rel-real-invalid-spans";
+    const evolutionRegistry = createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
+    evolutionRegistry.writeManifest(makeManifest(releaseId, "evaluated", {
+      rollbackReleaseId: "rel-base",
+      changeClass: "R2",
+    }));
+    writeMatchingStateEvent(evolutionRegistry, releaseId, "evaluated");
+    const proxyRegistry = createProxyApprovalRegistry({ approvalsDir: join(root, "approvals") });
+    const cardPath = join(root, "authorization-card.json");
+    writeFileSync(cardPath, JSON.stringify({
+      schemaId: "pinovel.evolution-authorization-card",
+      schemaVersion: 1,
+      cardId: "card-invalid-spans",
+      cardType: "real_gpt56sol",
+      model: "gpt5.6-sol",
+      allowedReleaseIds: [releaseId],
+      budget: { maxCalls: 2, timeoutMs: 60_000 },
+      modelVersion: "gpt-5.6-sol-test",
+      issuedAt: "2026-07-17T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      issuer: "authorized-user",
+      authorizationProof: "explicit user authorization",
+    }), "utf-8");
+
+    process.env.NOVELOS_JUDGE_API_KEY = "test-secret";
+    process.env.NOVELOS_JUDGE_BASE_URL = "https://judge.example.test/v1";
+    process.env.NOVELOS_JUDGE_MODEL = "gpt-5.6-sol-test";
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      model: "gpt-5.6-sol-test",
+      choices: [{ message: { content: JSON.stringify({
+        verdict: "APPROVE_DEV",
+        rationale: "apparently stronger",
+        winningSpans: ["unknown-span"],
+        losingSpans: ["candidate-green"],
+        risks: [],
+      }) } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+
+    const result = await runRealProxyReview({
+      proxyRegistry,
+      evolutionRegistry,
+      releaseId,
+      packetInput: makePacketInputBody(),
+      authorizationCardPath: cardPath,
+    });
+
+    assert.equal(result.finalVerdict, "HOLD");
+    assert.equal(result.canPromote, false);
+    assert.match(result.blockReason || "", /HOLD|APPROVE_DEV/i);
+    assert.ok(result.artifact.risks.some((risk) => /span/i.test(risk)));
+    assert.deepEqual(result.artifact.winningSpans, []);
+    assert.deepEqual(result.artifact.losingSpans, []);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousEnv.key === undefined) delete process.env.NOVELOS_JUDGE_API_KEY;
+    else process.env.NOVELOS_JUDGE_API_KEY = previousEnv.key;
+    if (previousEnv.base === undefined) delete process.env.NOVELOS_JUDGE_BASE_URL;
+    else process.env.NOVELOS_JUDGE_BASE_URL = previousEnv.base;
+    if (previousEnv.model === undefined) delete process.env.NOVELOS_JUDGE_MODEL;
+    else process.env.NOVELOS_JUDGE_MODEL = previousEnv.model;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
