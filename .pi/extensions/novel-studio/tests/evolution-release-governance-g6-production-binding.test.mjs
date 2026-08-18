@@ -325,7 +325,7 @@ test("gate: 无 active production release 且非 dev mode → blocked (g6_releas
   const prev = clearDevMode();
   try {
     const result = evaluateProductionReleaseGate({
-      projectRoot: PROJECT_ROOT,
+      projectRoot: root,
       evolutionRoot: root,
       currentFingerprintHash: "fake-hash",
     });
