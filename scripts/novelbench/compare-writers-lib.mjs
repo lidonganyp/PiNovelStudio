@@ -366,7 +366,7 @@ export function resolveSearchDepthWriter(args) {
     return {
       writerModel: "gemini31",
       provider: "gemini31",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       reportGroup: "gemini-bounded-best-of3",
     };
   }
@@ -397,7 +397,7 @@ export function resolveReaderJudge(args) {
       id: "gemini31-reader",
       route: "v2_reader_experience_judge_gemini31",
       provider: "gemini31",
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3.1-pro",
       strictSchema: false,
     };
   }

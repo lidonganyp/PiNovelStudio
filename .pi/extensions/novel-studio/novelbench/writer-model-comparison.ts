@@ -115,7 +115,7 @@ const WRITER_SPECS: Record<ComparedWriterModel, WriterComparisonSpec> = {
     invocation: { writerModel: "gemini31" },
     expectedRoute: "v2_rawstage2_gemini31",
     expectedProvider: "gemini31",
-    expectedModel: "gemini-3.1-pro-preview",
+    expectedModel: "gemini-3.1-pro",
   },
   claude48: {
     id: "claude48",

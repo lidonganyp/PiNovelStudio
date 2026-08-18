@@ -400,7 +400,7 @@ async function verifyGeminiConnectivity(modelGenerate) {
     userPrompt: "Connectivity check. Return GEMINI_OK and nothing else.",
     timeoutMs: 120000,
   });
-  if (output.provider !== "gemini31" || output.model !== "gemini-3.1-pro-preview") {
+  if (output.provider !== "gemini31" || output.model !== "gemini-3.1-pro") {
     throw new Error(`Gemini connectivity route mismatch: provider=${output.provider ?? "missing"}, model=${output.model}`);
   }
   return {
