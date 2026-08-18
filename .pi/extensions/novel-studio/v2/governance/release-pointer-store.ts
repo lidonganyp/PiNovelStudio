@@ -488,18 +488,24 @@ export function createReleasePointerStore(
   function rollback(kind: PointerKind, opts: RollbackOptions): ReleasePointer | null {
     assertActorCanModify(kind, opts.actor);
 
-    const history = loadAllHistory(kind);
-    if (history.length === 0) {
-      throw new Error(`rollback 失败：${kind} pointer 无历史可回滚`);
-    }
-
     const current = readActive(kind);
     if (!current) {
       throw new Error(`rollback 失败：当前 ${kind} 无 active pointer`);
     }
 
+    const history = loadAllHistory(kind);
+    // P0-3 修复：clean-deploy 注入 pack 后无 history，但 designatedTargetReleaseId 可指定回滚目标。
+    if (history.length === 0 && !opts.designatedTargetReleaseId) {
+      throw new Error(
+        `rollback 失败：${kind} pointer 无历史可回滚` +
+          `（clean-deploy 需提供 designatedTargetReleaseId）`,
+      );
+    }
+
     // P1-1 修复：用括号匹配 consume 跟踪找目标
-    let { target: targetFromId } = computeRollbackTarget(kind, history, current);
+    let { target: targetFromId } = history.length > 0
+      ? computeRollbackTarget(kind, history, current)
+      : { target: null };
     if (targetFromId === null && opts.designatedTargetReleaseId) {
       targetFromId = opts.designatedTargetReleaseId;
     }

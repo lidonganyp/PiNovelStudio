@@ -134,6 +134,40 @@ function makeRegistry(root) {
   return createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
 }
 
+const ADMISSION_REPLAY_REQUIRED_SAMPLE_IDS = [
+  "timeout",
+  "retry",
+  "factguard-block",
+  "atomic-rollback",
+  "state-commit-fail",
+];
+
+function makeAdmissionReport(root, releaseId) {
+  const reportPath = join(root, "admission.json");
+  const samples = ADMISSION_REPLAY_REQUIRED_SAMPLE_IDS.map((id) => ({
+    id,
+    passed: true,
+    releaseGovernance: { devMode: false, releaseId },
+    timestamp: "2026-08-18T00:00:00.000Z",
+  }));
+  const reportBody = {
+    schemaId: "pinovel.production-admission-replay",
+    schemaVersion: 1,
+    releaseId,
+    real: true,
+    productionComplete: true,
+    samples,
+  };
+  const reportHash = createHash("sha256").update(JSON.stringify(reportBody)).digest("hex");
+  const report = { ...reportBody, reportHash };
+  writeFileSync(reportPath, JSON.stringify(report, null, 2));
+  return reportPath;
+}
+
+function admissionArgs(root, releaseId) {
+  return ["--admission-replay", makeAdmissionReport(root, releaseId)];
+}
+
 function g5PipelineTrace(kind, releaseId, bundleId, approvalRef) {
   const releaseGovernance = releaseId && bundleId
     ? {
@@ -730,6 +764,7 @@ test("promote: candidate_prod → active_prod 强制 actor=user（默认）切�
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-001"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -769,6 +804,7 @@ test("promote: R2 缺少 completed canary 证据不得切 active_prod", () => {
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-001", "R2"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -803,6 +839,7 @@ test("promote: R2 canary_started 声明性 trace 不得切 active_prod", () => {
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
         ...writePassingEvalEvidence(root, "rel-001", "R2"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -832,6 +869,7 @@ test("promote: R2 completed 且绑定完整的 canary trace 才允许 active_pro
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
         ...writePassingEvalEvidence(root, "rel-001", "R2"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -867,6 +905,7 @@ test("promote: R2 canary 结果 artifact 被篡改时不得切 active_prod", () 
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
         ...writePassingEvalEvidence(root, "rel-001", "R2"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -900,6 +939,7 @@ test("promote: R2 canary 晋级事件写失败时不得改变 manifest 或 produ
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         "--workspace", workspacePath, "--canary-run", trace.runId,
         ...writePassingEvalEvidence(root, "rel-001", "R2"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -1177,6 +1217,7 @@ test("rollback: production 可执行指定 rollbackReleaseId（即使其因单�
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-001"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -1185,6 +1226,7 @@ test("rollback: production 可执行指定 rollbackReleaseId（即使其因单�
       [
         "promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-002"),
+        ...admissionArgs(root, "rel-002"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -1224,6 +1266,7 @@ test("rollback: revoke 后 from=null 仍可执行 rollbackReleaseId", () => {
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-001"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -1235,6 +1278,7 @@ test("rollback: revoke 后 from=null 仍可执行 rollbackReleaseId", () => {
       [
         "promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-002"),
+        ...admissionArgs(root, "rel-002"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -1267,6 +1311,7 @@ test("promote: 双 active_prod 晋级被单例约束阻断（真实 production p
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-001"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -1277,6 +1322,7 @@ test("promote: 双 active_prod 晋级被单例约束阻断（真实 production p
       [
         "promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-002"),
+        ...admissionArgs(root, "rel-002"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
@@ -1504,6 +1550,7 @@ test("P0-2: promote pointer 切换失败时 manifest 不被污染（原子性）
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
         ...writePassingEvalEvidence(root, "rel-001"),
+        ...admissionArgs(root, "rel-001"),
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );

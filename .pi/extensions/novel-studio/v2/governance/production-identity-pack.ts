@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { createEvolutionReleaseRegistry } from "./evolution-release-registry.js";
 import { createReleasePointerStore } from "./release-pointer-store.js";
@@ -25,6 +25,26 @@ export const DEFAULT_PRODUCTION_IDENTITY_PACK_REL = join(
   "production-identity",
   "active.pack.json",
 );
+// repo-layout 变体：clean-deploy 时 pack 可能落在扩展目录下而非仓库根（P0 路径缺口）。
+const REPO_LAYOUT_PRODUCTION_IDENTITY_PACK_REL = join(
+  ".pi",
+  "extensions",
+  "novel-studio",
+  "config",
+  "production-identity",
+  "active.pack.json",
+);
+const PRODUCTION_IDENTITY_PACK_REL_CANDIDATES = [
+  DEFAULT_PRODUCTION_IDENTITY_PACK_REL,
+  REPO_LAYOUT_PRODUCTION_IDENTITY_PACK_REL,
+] as const;
+
+export interface ProductionIdentityRollbackIdentity {
+  releaseId: string;
+  manifest: EvolutionReleaseManifest;
+  approvalArtifact: ReleaseProxyApprovalArtifact | null;
+  environmentFingerprint: Record<string, unknown> | null;
+}
 
 export interface ProductionIdentityPack {
   schemaId: typeof PRODUCTION_IDENTITY_PACK_SCHEMA_ID;
@@ -35,6 +55,7 @@ export interface ProductionIdentityPack {
   manifest: EvolutionReleaseManifest;
   approvalArtifact: ReleaseProxyApprovalArtifact | null;
   environmentFingerprint: Record<string, unknown> | null;
+  rollbackIdentity: ProductionIdentityRollbackIdentity | null;
   packHash: string;
 }
 
@@ -58,6 +79,7 @@ function canonicalPackPayload(pack: Omit<ProductionIdentityPack, "packHash">): s
     manifest: pack.manifest,
     approvalArtifact: pack.approvalArtifact,
     environmentFingerprint: pack.environmentFingerprint,
+    rollbackIdentity: pack.rollbackIdentity,
   });
 }
 
@@ -72,6 +94,7 @@ export function buildProductionIdentityPack(input: {
   manifest: EvolutionReleaseManifest;
   approvalArtifact?: ReleaseProxyApprovalArtifact | null;
   environmentFingerprint?: Record<string, unknown> | null;
+  rollbackIdentity?: ProductionIdentityRollbackIdentity | null;
   exportedAt?: string;
 }): ProductionIdentityPack {
   const draft: Omit<ProductionIdentityPack, "packHash"> = {
@@ -83,6 +106,7 @@ export function buildProductionIdentityPack(input: {
     manifest: input.manifest,
     approvalArtifact: input.approvalArtifact ?? null,
     environmentFingerprint: input.environmentFingerprint ?? null,
+    rollbackIdentity: input.rollbackIdentity ?? null,
   };
   return {
     ...draft,
@@ -112,6 +136,20 @@ export function parseProductionIdentityPack(raw: unknown): ProductionIdentityPac
   }
   if (typeof raw.packHash !== "string" || !/^[0-9a-f]{64}$/.test(raw.packHash)) {
     errors.push("packHash 必须为 64 位 SHA-256 hex");
+  }
+  if (raw.rollbackIdentity != null) {
+    if (
+      !isPlainObject(raw.rollbackIdentity) ||
+      typeof raw.rollbackIdentity.releaseId !== "string" ||
+      raw.rollbackIdentity.releaseId.trim().length === 0
+    ) {
+      errors.push("rollbackIdentity 缺失或非法");
+    } else if (
+      !isPlainObject(raw.rollbackIdentity.manifest) ||
+      raw.rollbackIdentity.manifest.releaseId !== raw.rollbackIdentity.releaseId
+    ) {
+      errors.push("rollbackIdentity.manifest 缺失或 releaseId 不一致");
+    }
   }
   if (errors.length > 0) {
     return { ok: false, pack: null, errors };
@@ -162,8 +200,23 @@ export function resolveProductionIdentityPackPath(
   if (env && env.trim().length > 0) {
     return env;
   }
-  const defaultPath = join(projectRoot, DEFAULT_PRODUCTION_IDENTITY_PACK_REL);
-  return existsSync(defaultPath) ? defaultPath : null;
+  // 同时探测 ext-layout 与 repo-layout 两种默认路径，并向上最多 6 级父目录查找
+  // （与 evolution root 解析的宽容度对齐），覆盖 clean-deploy 时 pack 落在扩展目录的情形。
+  let dir = resolve(projectRoot);
+  for (let level = 0; level < 6; level += 1) {
+    for (const rel of PRODUCTION_IDENTITY_PACK_REL_CANDIDATES) {
+      const candidate = join(dir, rel);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return null;
 }
 
 function atomicWrite(filePath: string, content: string): void {
@@ -197,11 +250,37 @@ export function exportProductionIdentityPack(evolutionRoot: string): ProductionI
   if (existsSync(fpPath)) {
     environmentFingerprint = JSON.parse(readFileSync(fpPath, "utf-8")) as Record<string, unknown>;
   }
+  // 组合 pack：内联携带回滚身份（rollbackReleaseId），clean-deploy 后可直接执行回滚。
+  let rollbackIdentity: ProductionIdentityRollbackIdentity | null = null;
+  const rollbackId = manifest.rollbackReleaseId;
+  if (rollbackId && rollbackId !== pointer.releaseId) {
+    const rollbackManifest = registry.loadManifest(rollbackId);
+    if (rollbackManifest) {
+      let rollbackApproval: ReleaseProxyApprovalArtifact | null = null;
+      if (rollbackManifest.approvalRef) {
+        rollbackApproval = createProxyApprovalRegistry({
+          approvalsDir: join(evolutionRoot, "releases", rollbackId, "approvals"),
+        }).loadArtifact(rollbackManifest.approvalRef);
+      }
+      let rollbackFingerprint: Record<string, unknown> | null = null;
+      const rbFpPath = join(evolutionRoot, "releases", rollbackId, "environment-fingerprint.json");
+      if (existsSync(rbFpPath)) {
+        rollbackFingerprint = JSON.parse(readFileSync(rbFpPath, "utf-8")) as Record<string, unknown>;
+      }
+      rollbackIdentity = {
+        releaseId: rollbackId,
+        manifest: rollbackManifest,
+        approvalArtifact: rollbackApproval,
+        environmentFingerprint: rollbackFingerprint,
+      };
+    }
+  }
   return buildProductionIdentityPack({
     pointer,
     manifest,
     approvalArtifact,
     environmentFingerprint,
+    rollbackIdentity,
   });
 }
 
@@ -233,6 +312,27 @@ export function injectProductionIdentityPack(
       join(evolutionRoot, "releases", sealed.releaseId, "environment-fingerprint.json"),
       `${JSON.stringify(sealed.environmentFingerprint, null, 2)}\n`,
     );
+  }
+  // 物化回滚身份（held release），使 clean-deploy 后 evolution:rollback 可直接执行。
+  if (sealed.rollbackIdentity) {
+    const rb = sealed.rollbackIdentity;
+    mkdirSync(join(evolutionRoot, "releases", rb.releaseId), { recursive: true });
+    registry.writeManifest(rb.manifest);
+    if (rb.approvalArtifact) {
+      const rollbackApprovals = createProxyApprovalRegistry({
+        approvalsDir: join(evolutionRoot, "releases", rb.releaseId, "approvals"),
+      });
+      const existing = rollbackApprovals.loadArtifact(rb.approvalArtifact.approvalId);
+      if (!existing) {
+        rollbackApprovals.writeArtifact(rb.approvalArtifact);
+      }
+    }
+    if (rb.environmentFingerprint) {
+      atomicWrite(
+        join(evolutionRoot, "releases", rb.releaseId, "environment-fingerprint.json"),
+        `${JSON.stringify(rb.environmentFingerprint, null, 2)}\n`,
+      );
+    }
   }
   atomicWrite(
     join(evolutionRoot, "active-production.json"),

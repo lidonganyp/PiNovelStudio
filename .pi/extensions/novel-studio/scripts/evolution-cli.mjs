@@ -27,6 +27,7 @@
  */
 import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -1075,6 +1076,101 @@ function validateApprovalArtifactForRelease({
  *
  * R2/R3 active_prod 晋级必须消费已完成且与 release 绑定的真实 canary 证据。
  */
+// 生产准入 recovery 四场景（production-admission-replay.mjs）——promote 必须逐个校验。
+const ADMISSION_REPLAY_REQUIRED_SAMPLES = [
+  "timeout",
+  "retry",
+  "factguard-block",
+  "atomic-rollback",
+  "state-commit-fail",
+];
+
+/**
+ * 只读校验 production-admission-replay 报告（不做任何真实模型调用）。
+ *
+ * 校验：报告存在/可解析、releaseId 绑定晋级 release、real=true、
+ * productionComplete=true、5 个必需场景全部 passed 且 devMode=false 且 releaseId 一致、
+ * reportHash 完整性。任一失败即 fail-closed（返回 ok=false）。
+ */
+function verifyProductionAdmissionReplayReport(reportPath, expectedReleaseId) {
+  const abs = resolve(reportPath);
+  if (!existsSync(abs)) {
+    return { ok: false, code: "ADMISSION_REPLAY_MISSING", reason: `admission replay 报告不存在：${abs}` };
+  }
+  let report;
+  try {
+    report = JSON.parse(readFileSync(abs, "utf-8"));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "ADMISSION_REPLAY_PARSE",
+      reason: `admission replay 报告解析失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    return { ok: false, code: "ADMISSION_REPLAY_INVALID", reason: "admission replay 报告必须是对象" };
+  }
+  if (report.releaseId !== expectedReleaseId) {
+    return {
+      ok: false,
+      code: "ADMISSION_REPLAY_RELEASE_MISMATCH",
+      reason: `admission replay 报告 releaseId=${report.releaseId} 与晋级 release ${expectedReleaseId} 不一致`,
+    };
+  }
+  if (report.real !== true) {
+    return { ok: false, code: "ADMISSION_REPLAY_NOT_REAL", reason: "admission replay 报告必须来自 --real 运行" };
+  }
+  if (report.productionComplete !== true) {
+    return { ok: false, code: "ADMISSION_REPLAY_INCOMPLETE", reason: "admission replay 报告 productionComplete 不为 true" };
+  }
+  if (!Array.isArray(report.samples)) {
+    return { ok: false, code: "ADMISSION_REPLAY_NO_SAMPLES", reason: "admission replay 报告缺少 samples 数组" };
+  }
+  const byId = new Map(report.samples.map((sample) => [sample?.id, sample]));
+  const missing = ADMISSION_REPLAY_REQUIRED_SAMPLES.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      code: "ADMISSION_REPLAY_MISSING_SCENARIO",
+      reason: `admission replay 报告缺少场景：${missing.join(", ")}`,
+    };
+  }
+  for (const id of ADMISSION_REPLAY_REQUIRED_SAMPLES) {
+    const sample = byId.get(id);
+    if (sample?.passed !== true) {
+      return {
+        ok: false,
+        code: "ADMISSION_REPLAY_SCENARIO_FAILED",
+        reason: `admission replay 场景 ${id} 未通过（passed=${String(sample?.passed)}）`,
+      };
+    }
+    if (sample?.releaseGovernance?.devMode !== false) {
+      return {
+        ok: false,
+        code: "ADMISSION_REPLAY_DEVMODE",
+        reason: `admission replay 场景 ${id} 未在非 dev 模式运行（devMode=${String(sample?.releaseGovernance?.devMode)}）`,
+      };
+    }
+    if (sample?.releaseGovernance?.releaseId !== expectedReleaseId) {
+      return {
+        ok: false,
+        code: "ADMISSION_REPLAY_RELEASE_MISMATCH",
+        reason: `admission replay 场景 ${id} releaseId=${String(sample?.releaseGovernance?.releaseId)} 与晋级 release 不一致`,
+      };
+    }
+  }
+  const { reportHash, ...reportBody } = report;
+  const recomputed = createHash("sha256").update(JSON.stringify(reportBody)).digest("hex");
+  if (typeof reportHash !== "string" || recomputed !== reportHash) {
+    return { ok: false, code: "ADMISSION_REPLAY_HASH", reason: "admission replay 报告 reportHash 不匹配" };
+  }
+  return {
+    ok: true,
+    code: "ADMISSION_REPLAY_VERIFIED",
+    reason: `admission replay 报告校验通过（releaseId=${expectedReleaseId}，5/5 场景通过）`,
+  };
+}
+
 function cmdPromote(args) {
   const releaseId = args["release-id"];
   if (!releaseId) {
@@ -1201,6 +1297,21 @@ function cmdPromote(args) {
       }
     }
 
+    const admissionReplayPath = args["admission-replay"] || null;
+    if (!admissionReplayPath) {
+      console.error(
+        `[evolution:promote] ADMISSION_REPLAY_REQUIRED: 晋级 active_prod 必须提供 --admission-replay <path>` +
+          `（五场景恢复准入证据：timeout / retry / factguard-block / atomic-rollback / state-commit-fail）`,
+      );
+      process.exit(5);
+    }
+    const admission = verifyProductionAdmissionReplayReport(admissionReplayPath, releaseId);
+    if (!admission.ok) {
+      console.error(`[evolution:promote] ${admission.code}: ${admission.reason}`);
+      process.exit(5);
+    }
+    console.log(`[evolution:promote] admission replay evidence: ${admission.reason}`);
+
     const workspacePath = args["workspace"] || process.env.PINOVEL_WORKSPACE_PATH || null;
     const canaryRunId = args["canary-run"] || null;
     let canaryTrace = null;
@@ -1278,8 +1389,11 @@ function cmdPromote(args) {
   };
   let promotionEventRecorded = false;
 
-  // 晋级事件不得早于 pointer。active_prod 在 pointer 之后、manifest 之前写事件：
-  // pointer 失败则无事件；事件失败则回滚 pointer，manifest 仍是 candidate_prod。
+  // 晋级事件不得早于 pointer；active_prod 在 pointer 之后、manifest 之前写事件
+  // （事件承载 canary/admission 证据，G6 门禁据此校验 R2/R3 晋级合法性，故事件写失败须 fail-closed）。
+  //   pointer 切换失败 → 无事件、无 manifest（可安全重试）；
+  //   事件写入失败 → 回滚 pointer，manifest 仍是 candidate_prod（fail-closed）；
+  //   manifest 转移失败 → 回滚 pointer + 移除刚写入的晋级事件（P1 补偿修复）。
   const store = createReleasePointerStore({
     configDir: configDir(),
     resolveManifestForValidation: (rid) => {
@@ -1360,11 +1474,25 @@ function cmdPromote(args) {
     } else if (pointerKindSwitched && !previousPointer) {
       console.error(`[evolution:promote] ⚠ manifest 失败且无前序 pointer 可回滚（需人工介入）`);
     }
+    // P1 补偿修复：manifest 转移失败时移除刚写入的晋级事件，避免「manifest 仍是 candidate_prod
+    // 但 state-events 末尾残留 active_prod」触发四方不一致阻断 re-promote。
+    if (promotionEventRecorded) {
+      try {
+        const removed = registry.removeStateEvent(releaseId, promotionEvent.eventId);
+        if (!removed) {
+          console.error(`[evolution:promote] ⚠ 晋级事件补偿未找到（eventId=${promotionEvent.eventId}，可能已被外部修改）`);
+        }
+      } catch (revertErr) {
+        console.error(`[evolution:promote] ⚠ 晋级事件补偿失败：${revertErr.message}（需人工介入）`);
+      }
+    }
     console.error(`[evolution:promote] 状态迁移失败：${e.message}`);
     process.exit(5);
   }
 
-  // 写状态事件（audit log，失败只 warning 不阻断 — pointer + manifest 已成功）
+  // 写状态事件（audit log，失败只 warning 不阻断 — pointer + manifest 已成功）。
+  // active_dev / candidate_prod 路径未在 pointer 切换阶段写事件，故在此补写；
+  // active_prod 路径已在 pointer 之后、manifest 之前写过（promotionEventRecorded=true），不再重复。
   if (!promotionEventRecorded) {
     try {
       registry.recordStateEvent(promotionEvent);
@@ -2666,6 +2794,7 @@ promote 生产选项:
   --workspace <path>           R2/R3 active_prod 的 canary workspace 路径
   --canary-run <id>            R2/R3 active_prod 的 completed canary trace ID
   --eval-evidence-root <path>  active_prod 的离线回放证据根（R3 强制；R0-R2 提供即 fail-closed）
+  --admission-replay <path>    active_prod 的 production-admission 报告（只读校验 releaseId/5 场景/hash，fail-closed）
 
 proxy-review 选项:
   --release-id <id>        必填，被审批的 release ID

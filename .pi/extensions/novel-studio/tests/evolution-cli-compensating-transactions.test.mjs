@@ -3,6 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   mkdtempSync,
   rmSync,
@@ -353,6 +354,44 @@ function readStateEvents(root, releaseId) {
   return readFileSync(path, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
+const ADMISSION_REPLAY_SAMPLE_IDS = [
+  "timeout",
+  "retry",
+  "factguard-block",
+  "atomic-rollback",
+  "state-commit-fail",
+];
+
+// 生成合法 production-admission-replay.json（reportHash 覆盖 reportBody，与脚本一致）。
+function makeAdmissionReport(root, releaseId) {
+  const reportBody = {
+    generatedAt: "2026-08-18T00:00:00.000Z",
+    real: true,
+    productionComplete: true,
+    releaseId,
+    sourceRoot: root,
+    harnessHash: "a".repeat(64),
+    samples: ADMISSION_REPLAY_SAMPLE_IDS.map((id) => ({
+      id,
+      scenario: `scenario ${id}`,
+      transport: "stub",
+      passed: true,
+      detail: "ok",
+      releaseGovernance: { devMode: false, releaseId },
+    })),
+    traceHashes: {},
+    traceRetention: 1,
+  };
+  const reportHash = createHash("sha256").update(JSON.stringify(reportBody)).digest("hex");
+  const path = join(root, "admission-replay.json");
+  writeFileSync(path, JSON.stringify({ ...reportBody, reportHash }, null, 2));
+  return path;
+}
+
+function admissionArgs(root, releaseId) {
+  return ["--admission-replay", makeAdmissionReport(root, releaseId)];
+}
+
 test("promote: pointer 切换失败不得留下 active_prod 晋级事件", () => {
   const root = makeTempRoot();
   try {
@@ -363,7 +402,7 @@ test("promote: pointer 切换失败不得留下 active_prod 晋级事件", () =>
     mkdirSync(join(root, "active-production.json.tmp"));
 
     const result = runCli(
-      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod", ...evalArgs],
+      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod", ...evalArgs, ...admissionArgs(root, "rel-001")],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
     assert.equal(result.code, 5, result.stderr);
@@ -374,6 +413,117 @@ test("promote: pointer 切换失败不得留下 active_prod 晋级事件", () =>
       `不应留下孤立晋级事件：${JSON.stringify(events)}`,
     );
     assert.equal(createReleasePointerStore({ configDir: root }).readActive("production"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("promote: manifest 转移失败（单例冲突）不得残留孤立 active_prod 晋级事件", () => {
+  const root = makeTempRoot();
+  try {
+    // rel-100 已是 active_prod 且 pointer 指向它；rel-001 晋级 active_prod 触发单例冲突
+    const m100 = makeManifest("rel-100", "active_prod", { approvalRef: "apr-100" });
+    const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
+    setupReleases(root, [m100, m1]);
+    writeStubApproval(root, "rel-100", "apr-100", m100);
+    writeStubApproval(root, "rel-001", "apr-001", m1);
+    const store = createReleasePointerStore({ configDir: root });
+    store.switchActive("production", "rel-100", { actor: "user", reason: "init" });
+    const evalArgs = writePassingEvalEvidence(root, "rel-001");
+
+    // pointer 切换成功 → transitionStatus 因 active_prod 单例约束失败 → 应回滚 pointer 且无事件
+    const result = runCli(
+      ["promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod", ...evalArgs, ...admissionArgs(root, "rel-001")],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    assert.equal(result.code, 5, result.stderr);
+    assert.equal(
+      createReleasePointerStore({ configDir: root }).readActive("production").releaseId,
+      "rel-100",
+      "manifest 转移失败后 pointer 必须回滚到原 release",
+    );
+    const events = readStateEvents(root, "rel-001");
+    assert.equal(
+      events.some((e) => e.toStatus === "active_prod" && String(e.eventId).includes("promote")),
+      false,
+      `manifest 转移失败不应残留孤立晋级事件：${JSON.stringify(events)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("promote: --admission-replay 报告 releaseId 不匹配必须 fail-closed 且不晋级", () => {
+  const root = makeTempRoot();
+  try {
+    const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
+    setupReleases(root, [m1]);
+    writeStubApproval(root, "rel-001", "apr-001", m1);
+    const evalArgs = writePassingEvalEvidence(root, "rel-001");
+    const admissionPath = makeAdmissionReport(root, "rel-wrong");
+
+    const result = runCli(
+      [
+        "promote",
+        "--release-id",
+        "rel-001",
+        "--target",
+        "active_prod",
+        "--confirm-prod",
+        ...evalArgs,
+        "--admission-replay",
+        admissionPath,
+      ],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    assert.equal(result.code, 5, result.stderr);
+    assert.match(result.stderr, /ADMISSION_REPLAY_RELEASE_MISMATCH/);
+    assert.equal(
+      createReleasePointerStore({ configDir: root }).readActive("production"),
+      null,
+      "admission 校验失败不得切换 pointer",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("promote: --admission-replay 报告校验通过后晋级成功并绑定 evidenceRef", () => {
+  const root = makeTempRoot();
+  try {
+    const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
+    setupReleases(root, [m1]);
+    writeStubApproval(root, "rel-001", "apr-001", m1);
+    const evalArgs = writePassingEvalEvidence(root, "rel-001");
+    const admissionPath = makeAdmissionReport(root, "rel-001");
+
+    const result = runCli(
+      [
+        "promote",
+        "--release-id",
+        "rel-001",
+        "--target",
+        "active_prod",
+        "--confirm-prod",
+        ...evalArgs,
+        "--admission-replay",
+        admissionPath,
+      ],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /admission replay evidence: admission replay 报告校验通过（releaseId=rel-001，5\/5 场景通过）/);
+    assert.equal(
+      createReleasePointerStore({ configDir: root }).readActive("production").releaseId,
+      "rel-001",
+    );
+    const events = readStateEvents(root, "rel-001");
+    const promoteEvent = events.find((e) => e.toStatus === "active_prod");
+    assert.ok(promoteEvent, "应有 active_prod 晋级事件");
+    assert.ok(
+      (promoteEvent.evidenceRefs ?? []).some((ref) => ref.startsWith("admission-replay:")),
+      `晋级事件应绑定 admission-replay evidenceRef：${JSON.stringify(promoteEvent.evidenceRefs)}`,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
