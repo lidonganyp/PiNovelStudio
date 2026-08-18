@@ -16,6 +16,18 @@ const routing = JSON.parse(
   readFileSync(resolve(process.cwd(), "../../../config/model-routing.json"), "utf8"),
 );
 
+const routingRaw = readFileSync(
+  resolve(process.cwd(), "../../../config/model-routing.json"),
+  "utf8",
+);
+
+test("routing config carries no stale Gemini 3.1 Pro writer identity", () => {
+  assert.ok(
+    !routingRaw.includes("gemini-3.1-pro"),
+    "config/model-routing.json must not reference gemini-3.1-pro after the 3.7 Flash switch",
+  );
+});
+
 test("production Gemini writer identity is Gemini 3.7 Flash across config and runtime lock", () => {
   const expectedModel = "gemini-3.7-flash";
   assert.equal(routing.model_strategy.narrator_primary, expectedModel);

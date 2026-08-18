@@ -1231,7 +1231,7 @@
         ]
       },
       "current_default_writer_evidence": {
-        "evidence_model": "gemini-3.1-pro",
+        "evidence_model": "gemini-3.7-flash",
         "applies_to_current_default_writer": true,
         "attempted_comparisons": 4,
         "controlled_comparisons": 2,
