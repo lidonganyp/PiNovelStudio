@@ -44,7 +44,7 @@ PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [
 ### 当前项目记忆（2026-07-20）
 
 - 跨会话快照见 [docs/project-memory.md](docs/project-memory.md)。它记录当前代码基线、已完成清理、脏工作树保护、模型路由状态与授权边界。
-- 当前路由基线为 `config/model-routing.json` v4.31.0：Gemini 3.1 Pro Preview 负责 NovelOS Agentic 生成与作者风格整章优化；普通 one-shot raw 仅保留为隔离评测资产。生产不调用 GPT 文学裁判，用户反馈是唯一文学评价来源。
+- 当前路由基线为 `config/model-routing.json` v4.32.0：Gemini 3.7 Flash 负责 NovelOS Agentic 生成与作者风格整章优化；生产主 API 为 Aimagichub，Solov 仅保留为显式对比端点。普通 one-shot raw 仅保留为隔离评测资产。生产不调用 GPT 文学裁判，用户反馈是唯一文学评价来源。
 - 7.75GB `corpus/` 已从仓库删除，生产路径对原始语料零依赖。离线数据重建必须显式使用外部语料，不得继续把“仓库内置 100+ 部全文”写成当前事实。
 - `cd15cd2` 删除 4 个 craft 文件后 `030420f`（P0 阻断项修复）已恢复并纳入版本控制，`npm run build` / `build:prod` 通过，clean checkout 完整。
 - 当前工作树包含用户正在进行的代理审批代码、staged 测试修改、未跟踪 RED 测试与模型验证输出；未经明确指示不得恢复、删除、暂存或覆盖。现有 stash 也不得擅自 `pop/drop`。
@@ -237,7 +237,7 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
 | 任务类型 | 推荐模型 | 原因 |
 |---------|---------|------|
 | 规划/分析 | PI 默认模型 | 结构化推理 |
-| Agentic 初稿 + 作者风格整章优化 | Gemini 3.1 Pro Preview | 未传 `writerModel` 时 NovelOS Agentic 使用 `v2_rawstage2_gemini31`，风格优化使用 `v2_amplified_gemini31`；`fallback=[]`，失败 hard block |
+| Agentic 初稿 + 作者风格整章优化 | Gemini 3.7 Flash | 未传 `writerModel` 时 NovelOS Agentic 使用 `v2_rawstage2_gemini31`，风格优化使用 `v2_amplified_gemini31`；`fallback=[]`，失败 hard block |
 | 显式备选正文模型 | Claude Opus 4.6 | `writerModel=claude` 时使用 `v2_rawstage2` / `v2_amplified` 与 `claude_writer_v1`；`fallback=[]`，不作为 Gemini 的自动备援 |
 | 中文校准候选(评测兼容) | Doubao Seed 2.1 Pro | `v2_chinese_calibration` 仅保留给隔离评测/历史局部校准，不进入正式生产主链路 |
 | 文学裁判(评测兼容) | gpt-5.6-sol | `v2_opportunity_judge` / `v2_literary_judge` 仅保留隔离评测和回放，不在 `novel_generate_chapter` 生产路径调用 |
@@ -297,8 +297,8 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
    - ❌ 禁止直接调用 `novel_critic` 替代质量审查
    - ❌ 禁止在未通过 `novel_generate_chapter` 的情况下输出"第X章"内容
 
-4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.31.0）：
-   - `v2_rawstage2_gemini31` / `v2_amplified_gemini31` → Gemini 3.1 Pro Preview；默认 `writerModel`，使用 `gemini_writer_v2`，失败 hard block，不静默切换 Claude 或其他正文模型
+4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.32.0）：
+   - `v2_rawstage2_gemini31` / `v2_amplified_gemini31` → Gemini 3.7 Flash；默认 `writerModel`，使用 `gemini_writer_v2`，失败 hard block，不静默切换 Claude 或其他正文模型
    - 默认 Gemini 生产路径 → NovelOS Agentic 检索/验证生成初稿，再由同一 writer family 消费作者风格档案做整章优化；初稿不得直接交付
    - `v2_rawstage2` / `v2_amplified` → Claude Opus 4.6；仅由显式 `writerModel=claude` 选择，使用 `claude_writer_v1`，route-level `fallback=[]`，不作为 Gemini 的自动备援
    - `boundedBestOf3` → 历史评测兼容字段；固定场景多候选已退出生产，旧证据不限制当前或未来模型能力

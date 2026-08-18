@@ -142,7 +142,7 @@ function pipelineTraceFor(kind, releaseId, bundleId) {
     ? {
         devMode: false,
         releaseId,
-        environmentFingerprint: "fp-p6",
+        environmentFingerprint: "fp-test-hash",
         approvalRef: "apr-p6",
         behaviorIdentity: { bundleId, modelVersion: "gemini31" },
       }
@@ -1380,7 +1380,7 @@ test("CLI eval-gate: 证据通过 → exit 0 + 待审批报告；缺失 → exit
   try {
     const releasesDir = join(root, "releases");
     const registry = createEvolutionReleaseRegistry({ releasesDir });
-    registry.writeManifest(makeManifest("rel-gate-001", "candidate_prod", { approvalRef: "apr-1" }));
+    registry.writeManifest(makeManifest("rel-gate-001", "candidate_prod", { approvalRef: "apr-p6" }));
     const { runRoot } = makeEvalRunRoot(root, "rel-gate-001", "bundle-test-001");
     writeGeneratedPassingMatrix(runRoot, "rel-gate-001", "bundle-test-001");
 

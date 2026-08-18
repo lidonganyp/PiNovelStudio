@@ -631,7 +631,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元�
     writeFileSync(join(configDir, "model-routing.json"), '{"_version":"test"}\n', "utf-8");
 
     const expectedFingerprint = collectDefaultEnvironmentFingerprint(projectRoot);
-    assert.equal(expectedFingerprint.generationModel, "gemini-3.1-pro");
+    assert.equal(expectedFingerprint.generationModel, "gemini-3.7-flash");
     assert.equal(DEFAULT_RELEASE_FINGERPRINT_SPEC.modelRoutingPath, "config/model-routing.json");
     assert.ok(
       DEFAULT_RELEASE_FINGERPRINT_SPEC.envSwitchNames.includes("PINOVEL_EVAL_REPLAY_TRANSPORT"),
@@ -640,7 +640,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元�
     assert.equal(
       captureDefaultEnvironmentFingerprint(projectRoot),
       computeFingerprintHash(expectedFingerprint),
-      "默认生产指纹必须绑定实际路由文件与 Gemini 3.1 Pro 主写元数据",
+      "默认生产指纹必须绑定实际路由文件与 Gemini 3.7 Flash 主写元数据",
     );
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -652,7 +652,7 @@ test("evolution CLI: capture 与生产门禁使用同一当前路由真相源", 
   const specSource = readFileSync(join(EXT_ROOT, "v2", "governance", "environment-fingerprint.ts"), "utf-8");
   assert.match(cliSource, /collectDefaultEnvironmentFingerprint/);
   assert.match(specSource, /modelRoutingPath:\s*["']config\/model-routing\.json["']/);
-  assert.match(specSource, /generationModel:\s*["']gemini-3\.1-pro["']/);
+  assert.match(specSource, /generationModel:\s*["']gemini-3\.7-flash["']/);
   assert.doesNotMatch(
     specSource,
     /modelRoutingPath:\s*["']\.pi\/extensions\/novel-studio\/config\/model-routing\.json["']/,

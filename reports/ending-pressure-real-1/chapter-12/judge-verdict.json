@@ -19,7 +19,7 @@
     },
     "mapping": {
       "leftCandidateId": "candidate:raw:chapter-12",
-      "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1786951331003",
+      "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1787056224757",
       "leftLabel": "A",
       "rightLabel": "B",
       "orderRandomized": false,
@@ -46,7 +46,7 @@
     },
     "mapping": {
       "leftCandidateId": "candidate:raw:chapter-12",
-      "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1786951331003",
+      "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1787056224757",
       "leftLabel": "B",
       "rightLabel": "A",
       "orderRandomized": true,
@@ -57,7 +57,7 @@
   "rounds": 2,
   "mapping": {
     "leftCandidateId": "candidate:raw:chapter-12",
-    "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1786951331003",
+    "rightCandidateId": "candidate:editorial:chapter_end_pressure_focus:1787056224757",
     "leftLabel": "A",
     "rightLabel": "B",
     "orderRandomized": false,

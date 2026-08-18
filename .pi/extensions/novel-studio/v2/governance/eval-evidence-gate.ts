@@ -96,6 +96,29 @@ export interface EvalEvidenceGateResult {
  * 生产验收闭环：R0-R3 发布关键路径一律要求四臂矩阵 + pass^3=1。
  * 不得按 changeClass 降级为 deterministic-only。
  */
+export function buildExpectedTraceIdentity(
+  manifest: {
+    releaseId: string;
+    bundleId?: string | null;
+    environmentFingerprint?: string | null;
+    approvalRef?: string | null;
+    createdAt?: string | null;
+  },
+  opts?: { gitHash?: string | null },
+): GraderExpectedReleaseIdentity {
+  return {
+    releaseId: manifest.releaseId,
+    bundleId: manifest.bundleId ?? "",
+    ...(manifest.environmentFingerprint
+      ? { environmentFingerprint: manifest.environmentFingerprint }
+      : {}),
+    ...(manifest.approvalRef ? { approvalRef: manifest.approvalRef } : {}),
+    ...(opts?.gitHash ? { gitHash: opts.gitHash } : {}),
+    ...(manifest.createdAt ? { createdAt: manifest.createdAt } : {}),
+    identityMode: "candidate",
+  };
+}
+
 export function matrixEvidenceRequired(changeClass: ChangeClass): boolean {
   return (
     changeClass === "R0" ||
@@ -173,10 +196,18 @@ export function gradeBoundMatrixArms(
       failures.push(`臂 ${armId} runRoot 不存在：${arm.runRoot}`);
       continue;
     }
-    const armGrade = gradeDeterministicFromRunRoot(
-      arm.runRoot,
-      armId === "candidate" ? expectedCandidateIdentity : undefined,
-    );
+    const expectedForArm = armId === "candidate"
+      ? expectedCandidateIdentity
+        ? { ...expectedCandidateIdentity, identityMode: "candidate" as const }
+        : undefined
+      : armId === "raw_direct"
+        ? {
+            releaseId: expectedCandidateIdentity?.releaseId ?? "",
+            bundleId: expectedCandidateIdentity?.bundleId ?? "",
+            identityMode: "independent_raw" as const,
+          }
+        : undefined;
+    const armGrade = gradeDeterministicFromRunRoot(arm.runRoot, expectedForArm);
     if (!armGrade.passed) {
       failures.push(
         `臂 ${armId} grader 失败：${armGrade.failedChecks.join(", ") || "unknown"}`,

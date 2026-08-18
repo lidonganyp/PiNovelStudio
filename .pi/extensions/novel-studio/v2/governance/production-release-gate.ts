@@ -58,6 +58,11 @@ import {
 } from "./behavior-bundle.js";
 import { captureDefaultBehaviorSnapshot } from "./behavior-snapshot.js";
 import type { EvolutionReleaseManifest } from "./evolution-release-types.js";
+import type { ReleaseProxyApprovalArtifact } from "./release-proxy-approval-types.js";
+import {
+  loadProductionIdentityPackFromFile,
+  resolveProductionIdentityPackPath,
+} from "./production-identity-pack.js";
 
 // ============================================================================
 // 类型
@@ -99,6 +104,12 @@ export interface ReleaseGateInput {
    * 默认 true。candidate_like 传 false；production_like 必须 true。
    */
   requireActiveApproval?: boolean;
+  /**
+   * 密封生产身份包路径。pointer 缺失时只读回退到 pack，不写治理目录。
+   * 未提供时读 PINOVEL_PRODUCTION_IDENTITY_PACK，再回退
+   * {projectRoot}/config/production-identity/active.pack.json（仅当文件存在）。
+   */
+  identityPackPath?: string;
 }
 
 export interface ReleaseGateOkResult {
@@ -367,7 +378,9 @@ export function evaluateProductionReleaseGate(
     : input.requireActiveApproval !== false;
 
   // 2-3. 候选验收加载指定 release；否则读 active production pointer。
+  // pointer 缺失时只读回退到密封 identity pack，不改治理目录。
   let manifest: EvolutionReleaseManifest;
+  let packApprovalArtifact: ReleaseProxyApprovalArtifact | null = null;
   if (candidateEval) {
     const loaded = registry.loadManifest(targetReleaseId);
     if (loaded === null) {
@@ -380,6 +393,22 @@ export function evaluateProductionReleaseGate(
   } else {
     const pointer = store.readActive("production");
     if (pointer === null) {
+      const packPath = resolveProductionIdentityPackPath(input.projectRoot, input.identityPackPath);
+      if (packPath) {
+        const parsed = loadProductionIdentityPackFromFile(packPath);
+        if (!parsed.ok || !parsed.pack) {
+          return releaseGateBlocked(
+            `identity pack 无法恢复生产身份：${parsed.errors.join("; ")}`,
+          );
+        }
+        if (parsed.pack.manifest.status !== "active_prod") {
+          return releaseGateBlocked(
+            `identity pack release "${parsed.pack.releaseId}" status="${parsed.pack.manifest.status}"，必须是 active_prod`,
+          );
+        }
+        manifest = parsed.pack.manifest;
+        packApprovalArtifact = parsed.pack.approvalArtifact;
+      } else {
       return {
         ok: false,
         devMode: false,
@@ -392,7 +421,8 @@ export function evaluateProductionReleaseGate(
           degradedTo: "hard_block",
         },
       };
-    }
+      }
+    } else {
     const loaded = registry.loadManifest(pointer.releaseId);
     if (loaded === null) {
       return {
@@ -410,6 +440,7 @@ export function evaluateProductionReleaseGate(
       };
     }
     manifest = loaded;
+    }
   }
 
   // 4. 真实生产必须是 active_prod。候选验收允许 draft/verified/…，证据先于指针切换。
@@ -456,7 +487,7 @@ export function evaluateProductionReleaseGate(
   const approvalRef = manifest.approvalRef ?? "";
   const approvalsDir = join(evolutionRoot, "releases", manifest.releaseId, "approvals");
   const approvalRegistry = createProxyApprovalRegistry({ approvalsDir });
-  const approvalArtifact = approvalRegistry.loadArtifact(approvalRef);
+  const approvalArtifact = packApprovalArtifact ?? approvalRegistry.loadArtifact(approvalRef);
   if (approvalArtifact === null) {
     return {
       ok: false,

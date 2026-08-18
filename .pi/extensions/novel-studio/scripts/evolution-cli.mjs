@@ -87,8 +87,14 @@ import {
   writeEvalPendingReviewReport,
   resolveEvalEvidenceEnforcement,
   matrixEvidenceRequired,
+  buildExpectedTraceIdentity,
 } from "../dist-test/v2/governance/eval-evidence-gate.js";
 import { captureEvalFixture } from "../dist-test/v2/core/eval-fixture-capture.js";
+import {
+  exportProductionIdentityPack,
+  injectProductionIdentityPack,
+  loadProductionIdentityPackFromFile,
+} from "../dist-test/v2/governance/production-identity-pack.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = resolve(__dirname, ".."); // .pi/extensions/novel-studio
@@ -1172,10 +1178,9 @@ function cmdPromote(args) {
           bundleId: manifest.bundleId ?? null,
           changeClass: manifest.changeClass,
           evalRunRoot,
-          expectedTraceIdentity: {
-            releaseId,
-            bundleId: manifest.bundleId ?? "",
-          },
+          expectedTraceIdentity: buildExpectedTraceIdentity(manifest, {
+            gitHash: loadPersistedEnvironmentFingerprint(join(releasesDir(), releaseId))?.codeCommit ?? null,
+          }),
         });
         if (evalGate.verdict !== "approved") {
           console.error(
@@ -1272,17 +1277,9 @@ function cmdPromote(args) {
     timestamp: new Date().toISOString(),
   };
   let promotionEventRecorded = false;
-  if (target === "active_prod") {
-    try {
-      registry.recordStateEvent(promotionEvent);
-      promotionEventRecorded = true;
-    } catch (e) {
-      console.error(`[evolution:promote] 状态事件写入失败，未切换 production pointer：${e.message}`);
-      process.exit(5);
-    }
-  }
 
-  // P0-2 修复：原子切换 — pointer 先切，失败则 manifest 未动，可安全重试
+  // 晋级事件不得早于 pointer。active_prod 在 pointer 之后、manifest 之前写事件：
+  // pointer 失败则无事件；事件失败则回滚 pointer，manifest 仍是 candidate_prod。
   const store = createReleasePointerStore({
     configDir: configDir(),
     resolveManifestForValidation: (rid) => {
@@ -1306,6 +1303,32 @@ function cmdPromote(args) {
       pointerKindSwitched = "production";
     } catch (e) {
       console.error(`[evolution:promote] 指针切换失败（prod）：${e.message}`);
+      process.exit(5);
+    }
+    try {
+      registry.recordStateEvent(promotionEvent);
+      promotionEventRecorded = true;
+    } catch (e) {
+      if (previousPointer) {
+        try {
+          store.switchActive("production", previousPointer.releaseId, {
+            actor: "user",
+            reason: `revert: promote event 失败 — ${e.message}`,
+          });
+        } catch (revertErr) {
+          console.error(`[evolution:promote] ⚠ 指针回滚也失败：${revertErr.message}（需人工介入）`);
+        }
+      } else {
+        try {
+          store.revokeActive("production", {
+            actor: "user",
+            reason: `revert: promote event 失败且无前序 pointer — ${e.message}`,
+          });
+        } catch (revertErr) {
+          console.error(`[evolution:promote] ⚠ 撤销 pointer 也失败：${revertErr.message}（需人工介入）`);
+        }
+      }
+      console.error(`[evolution:promote] 状态事件写入失败，已补偿 production pointer：${e.message}`);
       process.exit(5);
     }
   }
@@ -1606,11 +1629,11 @@ function cmdRollback(args) {
     process.exit(5);
   }
 
-  // 标记当前 release 为 held（不删除失败版本和负面证据，符合 §G5）
-  if (currentManifest) {
-    try {
+  let currentHeld = false;
+  try {
+    if (currentManifest && currentManifest.status !== "held") {
       registry.transitionStatus(currentPointer.releaseId, "held", { actor, reason });
-      // 状态事件（transitionStatus 不写事件，需单独记录）
+      currentHeld = true;
       registry.recordStateEvent({
         eventId: `evt-${currentPointer.releaseId}-rollback-${Date.now()}`,
         releaseId: currentPointer.releaseId,
@@ -1621,16 +1644,11 @@ function cmdRollback(args) {
         timestamp: new Date().toISOString(),
       });
       console.log(`[evolution:rollback] 当前 release ${currentPointer.releaseId} 已标记 held（不删除）`);
-    } catch (e) {
-      console.warn(
-        `[evolution:rollback] ⚠ 标记 ${currentPointer.releaseId} 为 held 失败（指针已回滚）：${e.message}`,
-      );
+    } else if (currentManifest?.status === "held") {
+      console.log(`[evolution:rollback] 当前 release ${currentPointer.releaseId} 已是 held，跳过重复 hold`);
     }
-  }
 
-  // 指定 rollback 目标若因单例被置 held，必须恢复为 active_prod，否则生产指针指向不可运行基线。
-  if (kind === "production" && targetManifest.status === "held") {
-    try {
+    if (kind === "production" && targetManifest.status === "held") {
       registry.transitionStatus(targetReleaseId, "active_prod", {
         actor,
         approvalRef: targetManifest.approvalRef,
@@ -1649,12 +1667,36 @@ function cmdRollback(args) {
         timestamp: new Date().toISOString(),
       });
       console.log(`[evolution:rollback] 指定回滚目标 ${targetReleaseId} 已从 held 恢复为 active_prod`);
-    } catch (e) {
+    }
+  } catch (e) {
+    if (currentHeld && currentManifest) {
+      try {
+        registry.transitionStatus(currentPointer.releaseId, currentManifest.status, {
+          actor,
+          approvalRef: currentManifest.approvalRef,
+          resolveAllManifests: () => registry.listManifests(),
+        });
+      } catch (revertStatusErr) {
+        console.error(
+          `[evolution:rollback] ⚠ 补偿：恢复 ${currentPointer.releaseId} 原状态失败：${revertStatusErr.message}`,
+        );
+      }
+    }
+    try {
+      store.switchActive(kind, currentPointer.releaseId, {
+        actor: kind === "production" ? "user" : actor,
+        reason: `compensate rollback failure — ${e.message}`,
+      });
+    } catch (revertPtrErr) {
       console.error(
-        `[evolution:rollback] 错误：指针已回滚到 ${targetReleaseId}，但无法将其从 held 恢复为 active_prod：${e.message}`,
+        `[evolution:rollback] 错误：manifest 失败后 pointer 补偿也失败：${revertPtrErr.message}`,
       );
       process.exit(5);
     }
+    console.error(
+      `[evolution:rollback] 错误：pointer 已补偿回 ${currentPointer.releaseId}：${e.message}`,
+    );
+    process.exit(5);
   }
 
   const rbHistory = store.loadRollbackHistory(kind);
@@ -2286,6 +2328,47 @@ function cmdCanaryAuthorize(releaseId, workspacePath, authFile, authJson) {
 }
 
 // ============================================================================
+// 子命令：export-identity / inject-identity
+// ============================================================================
+
+function cmdExportIdentity(args) {
+  const outPath = args.out || args.pack;
+  if (!outPath) {
+    console.error("[evolution:export-identity] 错误：必须提供 --out <path>");
+    process.exit(2);
+  }
+  try {
+    const pack = exportProductionIdentityPack(configDir());
+    writeFileSync(resolve(outPath), `${JSON.stringify(pack, null, 2)}\n`, "utf-8");
+    console.log(`[evolution:export-identity] ✓ ${pack.releaseId} → ${resolve(outPath)}`);
+    console.log(`  packHash : ${pack.packHash}`);
+  } catch (error) {
+    console.error(`[evolution:export-identity] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(5);
+  }
+}
+
+function cmdInjectIdentity(args) {
+  const packPath = args.pack || args.in;
+  if (!packPath) {
+    console.error("[evolution:inject-identity] 错误：必须提供 --pack <path>");
+    process.exit(2);
+  }
+  const parsed = loadProductionIdentityPackFromFile(resolve(packPath));
+  if (!parsed.ok || !parsed.pack) {
+    console.error(`[evolution:inject-identity] pack 非法：${parsed.errors.join("; ")}`);
+    process.exit(5);
+  }
+  try {
+    injectProductionIdentityPack(configDir(), parsed.pack);
+    console.log(`[evolution:inject-identity] ✓ ${parsed.pack.releaseId} → ${configDir()}`);
+  } catch (error) {
+    console.error(`[evolution:inject-identity] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(5);
+  }
+}
+
+// ============================================================================
 // 子命令：eval-gate / eval-capture（EVAL-REPLAY-ACCEPTANCE-LOOP P6）
 // ============================================================================
 
@@ -2325,10 +2408,9 @@ function cmdEvalGate(args) {
     bundleId: manifest.bundleId ?? null,
     changeClass: manifest.changeClass,
     evalRunRoot: resolve(evalRunRoot),
-    expectedTraceIdentity: {
-      releaseId,
-      bundleId: manifest.bundleId ?? "",
-    },
+    expectedTraceIdentity: buildExpectedTraceIdentity(manifest, {
+      gitHash: loadPersistedEnvironmentFingerprint(join(releasesDir(), releaseId))?.codeCommit ?? null,
+    }),
   });
 
   // 待审批报告落盘（不执行任何状态迁移）
@@ -2653,6 +2735,12 @@ async function main() {
       break;
     case "eval-capture":
       cmdEvalCapture(args);
+      break;
+    case "export-identity":
+      cmdExportIdentity(args);
+      break;
+    case "inject-identity":
+      cmdInjectIdentity(args);
       break;
     case undefined:
     case "--help":

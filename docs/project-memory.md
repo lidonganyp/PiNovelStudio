@@ -1,28 +1,28 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-18（rel-prod-135 P6 结论作废，生产切流仍阻断）
+**快照日期**：2026-08-18
 **代码基线**：工作树主链路仍是 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存；旧裁判链仅保留隔离评测。
-**用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写”当前唯一 active_prod”，一律以本节为准。
+**用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写“当前唯一 active_prod”，一律以本节为准。
 
 ## 现行发布状态（2026-08-18，唯一当前声明）
 
-**生产指针：`rel-prod-135`（指针在，P6 不可信）。建议状态：`Blocked`。不得再宣称 135 已完整、可信进入生产。**
+### Gemini 3.7 Flash 主线路由切换（2026-08-18）
+
+`config/model-routing.json` 已升级至 v4.32.0。正式 `novel_generate_chapter` 的 Gemini writer identity 已统一为 `gemini-3.7-flash`，生产主 API 为 Aimagichub（`https://aimagichub.xyz/v1`）；Solov 保留为显式对比端点，不作为静默 fallback。在 `PINOVEL_DEV_MODE=1` 的本地正式入口验证中，隔离 xinmo 第18章工作区、相同入口参数的测试结果为：Solov 2/2 次 HTTP 404；Aimagichub 4/4 次完成模型调用，其中 2 次 `status=ok/selectedSource=editorial`（约 34–52 秒），另 2 次在 StoryPreservation 门禁阻断（非网络失败）。因此主线路选择 Aimagichub；这不是关闭发布身份门禁后的生产验收，文学门禁波动仍需后续持续观察。
+
+**没有可在当前 HEAD 直接验证且可运行的生产身份。** 本地运行时指针仍可能写着 `rel-prod-134`，但那不是 clean checkout 可恢复、也不是 `3e4dcc0` 能过 G6 的基线。
 
 | 项 | 现行事实 |
 |---|---|
-| `active-production.json` | **`rel-prod-135`** |
-| 冻结提交 | `ed76161`（分支 `main`），`worktreeDirty=false` |
-| 最新 forward-fix | `rel-prod-135`，状态 **`active_prod`**，verify YES @ `ed76161` |
-| 前一个 active_prod | `rel-prod-134`（已 hold，因 135 激活时自动受单例约束退场） |
-| `rel-prod-135` rollbackReleaseId | `rel-prod-134`（修复：原 134 指向 held 的 131 不可执行） |
-| `rel-prod-135` changeClass | `R1`（forward-fix after 134: 回滚目标修复 + replay-provenance-guard 导入路径 dist/ → dist-eval/ + 文档更新） |
-| 运行时行为 hash | 与 `rel-prod-134` **完全一致**（modelRouting/toolSchema/contextCompiler/qualityPolicy/recoveryPolicy/capabilityPackageSet 全同） |
-| 真实审批 | gpt5.6-sol 网络 `APPROVE_DEV`，`approval-rel-prod-135-1787030718297-db0ede0d` |
-| development pointer | `rel-prod-135`（已对齐） |
-| promote | `draft → candidate → frozen → evaluated → approved_dev → active_dev → candidate_prod → active_prod` 已完成 |
-| P6 四臂矩阵 | **作废**：`pns-eval-archives-135/run-msy135` 是 134 归档改贴，底层 trace 身份仍是 `rel-prod-134` / `6d87…` / `d238c7c`。`candidatePassPow3=1` 不能作为 135 准入证据。 |
-| 真实 failure/recovery 回放 | 旧 4/4 过宽（retry 只证明重试后仍失败，缺成功恢复与 FactGuard）。须在新 forward-fix release 下重跑。 |
-| 文学结论 | 本包是 R1 治理封口，不声称文学收益 |
+| 当前 HEAD | `3e4dcc0`。主树 dirty 时 G6 必失败 |
+| 运行时 pointer（gitignore） | 本机可能仍是 `rel-prod-134`，clean checkout 没有这份文件 |
+| `rel-prod-134` 冻结提交 | `d238c7c`。旧 P6 的 raw_direct 无生产身份；不得把旧 P6 当当前准入证据 |
+| `rel-prod-135` | `held`。P6 是 134 归档改贴，结论作废。**不是** active_prod |
+| `rel-prod-136` | `quarantined` |
+| `rel-prod-137` | `held` |
+| 新身份 3x candidate / 5 场景 admission | **未跑**。`production_like` 需要 APPROVE_DEV |
+| 治理恢复 | `evolution:export-identity` / `inject-identity`；G6 可只读回退 `PINOVEL_PRODUCTION_IDENTITY_PACK` |
+| 文学结论 | 不声称文学收益 |
 
 ### rel-prod-134 生产审计结论 → rel-prod-135 修复状态（2026-08-18）
 

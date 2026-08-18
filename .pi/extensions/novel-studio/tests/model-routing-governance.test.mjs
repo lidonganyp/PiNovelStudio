@@ -41,7 +41,7 @@ describe("WP-01 路由契约与运行锁", () => {
     const mod = await importDist("v2/core/run-routing-context.js");
     const ctx = mod.resolveRunRouting({});
     assert.equal(ctx.provider, "gemini31");
-    assert.equal(ctx.model, "gemini-3.1-pro");
+    assert.equal(ctx.model, "gemini-3.7-flash");
     assert.equal(ctx.generationRoute, "v2_rawstage2_gemini31");
     assert.equal(ctx.editorialRoute, "v2_amplified_gemini31");
     assert.equal(ctx.routeClass, "production");

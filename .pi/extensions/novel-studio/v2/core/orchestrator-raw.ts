@@ -340,7 +340,7 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
     profile: input.rawPromptProfile ?? resolveWriterPromptProfile({
       route: "v2_rawstage2_gemini31",
       provider: "gemini31",
-      model: "gemini-3.1-pro",
+      model: "gemini-3.7-flash",
     }),
     chapterNumber: input.chapterNumber,
     contract: chapterContract,

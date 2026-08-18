@@ -1,5 +1,5 @@
 /**
- * GEMINI-DEFAULT-WRITER-1: Gemini 3.1 Pro is the production default writer.
+ * GEMINI37-FLASH-PRODUCTION-SWITCH-1: Gemini 3.7 Flash is the production default writer.
  *
  * All runtime checks use stubs. No network request is allowed from this file.
  */
@@ -23,7 +23,7 @@ const routing = JSON.parse(
 );
 
 test("routing keeps judge calibration evidence while production authority belongs to user feedback", () => {
-  assert.equal(routing._version, "4.31.0");
+  assert.equal(routing._version, "4.32.0");
   assert.deepEqual(routing.model_strategy.literary_judge_admission.evidence_paths, [
     "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
     "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority-gemini31-reader.json",
@@ -44,33 +44,33 @@ test("routing keeps judge calibration evidence while production authority belong
 
 test("Gemini is the production default writer while Claude remains an explicit option", () => {
   assert.equal(routing.model_strategy.writer_admission.default_writer, "gemini31");
-  assert.equal(routing.model_strategy.narrator_primary, "gemini-3.1-pro");
+  assert.equal(routing.model_strategy.narrator_primary, "gemini-3.7-flash");
   assert.equal(routing.stage_routing.stage2_narrator.provider, "gemini31");
-  assert.equal(routing.stage_routing.stage2_narrator.model, "gemini-3.1-pro");
+  assert.equal(routing.stage_routing.stage2_narrator.model, "gemini-3.7-flash");
   assert.equal(routing.agent_routing.narrator_primary.provider, "gemini31");
-  assert.equal(routing.agent_routing.narrator_primary.model, "gemini-3.1-pro");
+  assert.equal(routing.agent_routing.narrator_primary.model, "gemini-3.7-flash");
   assert.deepEqual(resolveWriterModelRouteLock(undefined), {
     rawRoute: "v2_rawstage2_gemini31",
     amplifiedRoute: "v2_amplified_gemini31",
     judgeRoute: "v2_opportunity_judge",
     provider: "gemini31",
-    model: "gemini-3.1-pro",
+    model: "gemini-3.7-flash",
     promptProfile: "gemini_writer_v2",
   });
 
   const handlers = new Proxy({}, { get: () => async () => ({}) });
   const chapterTool = registerTools(handlers).find((tool) => tool.name === "novel_generate_chapter");
-  assert.match(chapterTool.parameters.properties.writerModel.description, /Gemini 3\.1 Pro（默认）/);
+  assert.match(chapterTool.parameters.properties.writerModel.description, /Gemini 3\.7 Flash（默认）/);
 });
 
 test("routing declares Claude and Gemini as isolated explicit writer models", () => {
   assert.equal(routing.model_strategy.narrator_coprimary_models, undefined);
   assert.deepEqual(routing.model_strategy.explicit_writer_models, [
-    "gemini-3.1-pro",
+    "gemini-3.7-flash",
     "claude-opus-4-6",
   ]);
   assert.deepEqual(routing.best_of_n_config.models, [
-    "gemini-3.1-pro",
+    "gemini-3.7-flash",
     "claude-opus-4-6",
   ]);
   assert.deepEqual(routing.agent_routing.v2_rawstage2_gemini31.fallback, []);
@@ -117,7 +117,7 @@ test("Gemini production routes consume the configured GOOGLE_GEMINI/GEMINI env n
   const amplifiedRoute = routing.agent_routing.v2_amplified_gemini31;
   for (const route of [rawRoute, amplifiedRoute]) {
     assert.equal(route.provider, "gemini31");
-    assert.equal(route.model, "gemini-3.1-pro");
+    assert.equal(route.model, "gemini-3.7-flash");
     assert.equal(route.base_url_env, "GOOGLE_GEMINI_BASE_URL");
     assert.equal(route.api_key_env, "GEMINI_API_KEY");
     assert.equal(route.model_env, "GEMINI_MODEL");
@@ -128,7 +128,7 @@ test("Gemini production routes consume the configured GOOGLE_GEMINI/GEMINI env n
 test("Gemini reader-experience judge is isolated from prose routes and has no fallback", () => {
   assert.deepEqual(routing.agent_routing.v2_reader_experience_judge_gemini31, {
     provider: "gemini31",
-    model: "gemini-3.1-pro",
+    model: "gemini-3.7-flash",
     base_url_env: "GOOGLE_GEMINI_BASE_URL",
     api_key_env: "GEMINI_API_KEY",
     model_env: "GEMINI_MODEL",
@@ -148,7 +148,7 @@ test("Gemini provider defaults use the production environment names outside rout
       getBaseUrl("gemini31", "https://generativelanguage.googleapis.com/v1beta/openai/"),
       "https://gemini.example.test",
     );
-    assert.equal(getModelOverride("gemini31", "gemini-3.1-pro"), "gemini-test-model");
+    assert.equal(getModelOverride("gemini31", "gemini-3.7-flash"), "gemini-test-model");
   } finally {
     if (savedBaseUrl === undefined) delete process.env.GOOGLE_GEMINI_BASE_URL;
     else process.env.GOOGLE_GEMINI_BASE_URL = savedBaseUrl;
@@ -179,7 +179,7 @@ test("writerModel route lock keeps generation and heterogeneous GPT judge separa
     amplifiedRoute: "v2_amplified_gemini31",
     judgeRoute: "v2_opportunity_judge",
     provider: "gemini31",
-    model: "gemini-3.1-pro",
+    model: "gemini-3.7-flash",
     promptProfile: "gemini_writer_v2",
   });
   assert.deepEqual(resolveWriterModelRouteLock(undefined), resolveWriterModelRouteLock("gemini31"));
@@ -192,7 +192,7 @@ test("writer route wrapper preserves semantic candidate routes while selecting r
     return {
       text: "stub",
       route: input.route,
-      model: "gemini-3.1-pro",
+      model: "gemini-3.7-flash",
       provider: "gemini31",
       durationMs: 1,
     };
@@ -251,7 +251,7 @@ test("public chapter tool exposes writerModel without widening modelTestRoute", 
     undefined,
     "fullPipelinePreview 已从公开 schema 移除（只读预览为 eval/开发能力）",
   );
-  assert.match(writerSchema.description, /Gemini 3\.1 Pro/);
+  assert.match(writerSchema.description, /Gemini 3\.7 Flash/);
   assert.match(writerSchema.description, /仅当用户明确要求 Claude/);
   assert.match(writerSchema.description, /fallback=\[\]/);
   assert.equal(chapterTool.parameters.properties.candidateTimeoutMs.type, "number");

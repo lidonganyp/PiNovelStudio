@@ -60,27 +60,27 @@ describe("model routing runtime alignment", () => {
   test("chapter generation routes use the best-fit production model per stage", () => {
     const config = loadRoutingConfig();
 
-    // GEMINI-DEFAULT-WRITER-1: Gemini 负责默认正文，Claude 继续负责风格/角色并可显式主写。
+    // GEMINI37-FLASH-PRODUCTION-SWITCH-1: Gemini 负责默认正文，Claude 继续负责风格/角色并可显式主写。
     // best_of_n_config.models 是休眠候选目录，不代表自动双写。
-    assert.equal(config.model_strategy.narrator_primary, "gemini-3.1-pro");
+    assert.equal(config.model_strategy.narrator_primary, "gemini-3.7-flash");
     assert.equal(config.model_strategy.narrator_backup, null);
     assert.equal(config.model_strategy.narrator_candidate, null);
     assert.equal(config.model_strategy.narrator_testing, "doubao-seed-2-1-pro-260628");
     assert.equal(config.model_strategy.chinese_naturalizer, "doubao-seed-2-1-pro-260628");
     assert.equal(config.model_strategy.style_shaper, "claude-opus-4-6");
     assert.deepEqual(config.best_of_n_config.models, [
-      "gemini-3.1-pro",
+      "gemini-3.7-flash",
       "claude-opus-4-6",
     ]);
 
     assert.equal(config.stage_routing.stage2_narrator.provider, "gemini31");
-    assert.equal(config.stage_routing.stage2_narrator.model, "gemini-3.1-pro");
+    assert.equal(config.stage_routing.stage2_narrator.model, "gemini-3.7-flash");
     assert.equal(config.stage_routing.stage5_style_shaper.provider, "claude");
     assert.equal(config.stage_routing.stage5_style_shaper.model, "claude-opus-4-6");
     assert.equal(config.stage_routing.stage8_final_gate.provider, "claude");
     assert.equal(config.stage_routing.stage8_final_gate.model, "claude-opus-4-6");
     assert.equal(config.agent_routing.narrator_primary.provider, "gemini31");
-    assert.equal(config.agent_routing.narrator_primary.model, "gemini-3.1-pro");
+    assert.equal(config.agent_routing.narrator_primary.model, "gemini-3.7-flash");
     assert.deepEqual(config.agent_routing.narrator_primary.fallback, []);
     assert.equal(config.agent_routing.narrator_backup, undefined);
     assert.equal(config.agent_routing.narrator_testing_claude.provider, "claude");

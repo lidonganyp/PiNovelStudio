@@ -165,6 +165,7 @@ import "../v2/governance/proxy-approval-provider-runner.js";
 // agents / workflow / lab / novelbench，可安全纳入 dist-test。
 // 同时也由生产入口（v2/core/unified-entry.ts）import 进入 dist/，实现 G6 生产入口绑定。
 import "../v2/governance/production-release-gate.js";
+import "../v2/governance/production-identity-pack.js";
 
 // EVOLUTION-RELEASE-GOVERNANCE-G7：正式章节代理审批（ChapterProxyApproval）。
 // schema/registry 切片（3 个模块）+ runner 切片（4 个模块）闭包自包含（仅依赖 node 内建

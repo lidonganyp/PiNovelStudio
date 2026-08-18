@@ -195,7 +195,7 @@ export const DEFAULT_RELEASE_FINGERPRINT_SPEC = {
     "ARK_API_KEY",
     "ERNIE_API_KEY",
   ],
-  generationModel: "gemini-3.1-pro",
+  generationModel: "gemini-3.7-flash",
   judgeModel: "gpt5.6-sol",
   proxyApprovalModel: "gpt5.6-sol",
   seed: 0,

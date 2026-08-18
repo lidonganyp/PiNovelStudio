@@ -40,6 +40,8 @@
     "evolution:canary": "node scripts/evolution-cli.mjs canary",
     "evolution:eval-capture": "node scripts/evolution-cli.mjs eval-capture",
     "evolution:eval-gate": "node scripts/evolution-cli.mjs eval-gate",
+    "evolution:export-identity": "node scripts/evolution-cli.mjs export-identity",
+    "evolution:inject-identity": "node scripts/evolution-cli.mjs inject-identity",
     "test:eval": "node scripts/artifact-operation-lock.mjs --command \"node --import ./tests/setup-test-env.mjs --test --test-concurrency=1 tests-eval/*.test.mjs\"",
     "verify:real-quality": "node scripts/artifact-operation-lock.mjs --command \"node scripts/real-quality-acceptance.mjs\"",
     "verify:prompt-registry": "node scripts/artifact-operation-lock.mjs --command \"npm run build:eval && node scripts/prompt-registry-drift-check.mjs && node --import ./tests/setup-test-env.mjs --test --test-concurrency=1 tests/phase9-registry-governance.test.mjs && node --import ./tests/setup-test-env.mjs --test tests/phase5-unified-default-path.test.mjs\""

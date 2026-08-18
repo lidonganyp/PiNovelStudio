@@ -295,7 +295,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             type: "string",
             enum: ["gemini31", "claude"],
             default: "gemini31",
-            description: "正文主写模型：Gemini 3.1 Pro（默认）。通常省略本字段或传 gemini31；仅当用户明确要求 Claude 时才允许传 claude。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。",
+            description: "正文主写模型：Gemini 3.7 Flash（默认）。通常省略本字段或传 gemini31；仅当用户明确要求 Claude 时才允许传 claude。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。",
           },
           // PRODUCTION-ROLLOUT-AUDIT-1 P0-1b/P0-10：modelTestRoute 已从公开 schema 移除
           // （eval-only 模型对比路由）。生产路径不接受显式模型对比路由；内部 handler 仍

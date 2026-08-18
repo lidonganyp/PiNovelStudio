@@ -1,9 +1,10 @@
 {
   "_comment": "PiNovelStudio AI Model Routing",
-  "_version": "4.31.0",
-  "_updated": "2026-07-21",
+  "_version": "4.32.0",
+  "_updated": "2026-08-18",
   "disabled_providers": ["qwen", "ernie"],
   "_migration_notes": [
+    "v4.32.0 (GEMINI37-FLASH-PRODUCTION-SWITCH-1): 正式 novel_generate_chapter 主线路由从 Gemini 3.1 Pro 切换为 Gemini 3.7 Flash。保留 gemini31 provider/route 标识以兼容 trace 与既有协议；两个 Gemini-compatible endpoint 均通过 GEMINI_MODEL/GEMINI_AIMAGICHUB_MODEL 使用同一模型 ID，API 只按真实入口测速与稳定性结果选择主线路。",
     "v4.31.0 (AGENTIC-AUTHOR-STYLE-PRODUCTION-1): 正式 novel_generate_chapter 改为 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 状态提交/原子保存。生产不调用 opportunity judge、pairwise judge、reverse review 或 SelectionPolicy，不把 one-shot raw 作为交付稿；GPT judge 与旧 raw/editorial 选择链仅保留在隔离评测/回放。最终文学评价权归用户，用户修改稿与反馈作为后续学习信号。",
     "v4.29.0 (AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1): Retires the global GEMINI-SCENE-PRIMARY-1 extrapolation. The chapter writer receives author-owned plot direction, chapter function, prior state, character motivations, foreshadowing/promises, causality, inviolable facts, and ending target; sensory choices, diction, syntax, rhetoric, dialogue, paragraph rhythm, and concrete scene expression remain model-owned. Fixed scene-solution search and boundedBestOf3 are removed from production. A chapter candidate may replace raw only after chapter-specific comparison and a human-aligned selection authority; current machine literary judges remain advisory, so production preserves raw when no human-authoritative choice is available.",
     "v4.28.0 (GEMINI-SCENE-PRIMARY-1): The natural-human blind review of the continuous chapter 18-20 sequences clearly selected sequence B, privately mapped to shared ChapterSeed + pre-writing scene-solution search + Gemini raw. The default single-candidate Gemini production path now treats the first scene-search draft as the human-admitted primary after FactGuard, story-preservation, completeness, and final fact recheck. Ordinary Gemini raw remains the untouched baseline and fallback. GPT-5.6-sol literary output remains advisory and cannot decide the winner. Explicit Claude, modelTestRoute, qualityExperiment, and boundedBestOf3 paths are excluded from this admission.",
@@ -55,7 +56,7 @@
       ]
     },
     "gemini31": {
-      "model": "gemini-3.1-pro",
+      "model": "gemini-3.7-flash",
       "strengths": [
         "long-context synthesis",
         "scene continuity",
@@ -178,9 +179,9 @@
     }
   },
   "model_strategy": {
-    "narrator_primary": "gemini-3.1-pro",
+    "narrator_primary": "gemini-3.7-flash",
     "explicit_writer_models": [
-      "gemini-3.1-pro",
+      "gemini-3.7-flash",
       "claude-opus-4-6"
     ],
     "writer_admission": {
@@ -252,9 +253,9 @@
         ]
       }
     },
-    "narrator_reason": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: 用户要求正式章节必须走全流程。Gemini 3.1 Pro Preview 通过 v2_rawstage2_gemini31 服务 NovelOS Agentic，通过 v2_amplified_gemini31 执行作者风格整章优化；fallback=[]，任一阶段失败 hard block，不静默交付 one-shot raw。Claude Opus 4.6 仅为显式 writerModel=claude 备选。",
+    "narrator_reason": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1 + GEMINI37-FLASH-PRODUCTION-SWITCH-1: 正式章节必须走全流程。Gemini 3.7 Flash 通过 v2_rawstage2_gemini31 服务 NovelOS Agentic，通过 v2_amplified_gemini31 执行作者风格整章优化；fallback=[]，任一阶段失败 hard block，不静默交付 one-shot raw。Claude Opus 4.6 仅为显式 writerModel=claude 备选。",
     "narrator_backup": null,
-    "narrator_backup_reason": "Gemini 3.1 Pro 是默认正文主写，但没有自动备援；raw 失败由 v2_rawstage2_gemini31.fallback=[] hard block。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
+    "narrator_backup_reason": "Gemini 3.7 Flash 是默认正文主写，但没有自动备援；raw 失败由 v2_rawstage2_gemini31.fallback=[] hard block。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
     "narrator_candidate": null,
     "narrator_testing": "doubao-seed-2-1-pro-260628",
     "chinese_naturalizer": "doubao-seed-2-1-pro-260628",
@@ -432,10 +433,10 @@
       }
     },
     "gemini31": {
-      "name": "Gemini 3.1 Pro writer",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "name": "Gemini 3.7 Flash writer",
+      "base_url": "https://aimagichub.xyz/v1",
       "api_key_env": "GEMINI_API_KEY",
-      "model": "gemini-3.1-pro",
+      "model": "gemini-3.7-flash",
       "protocol": "openai",
       "temperature": {
         "nb4_generate_gemini31": 0.72,
@@ -679,8 +680,8 @@
     },
     "stage2_narrator": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro",
-      "note": "GEMINI-DEFAULT-WRITER-1: Stage 2 production default is Gemini 3.1 Pro Preview via the isolated Gemini raw/editorial routes and gemini_writer_v1. fallback=[] hard blocks failures; Claude remains explicit-only and is never a silent prose fallback."
+      "model": "gemini-3.7-flash",
+      "note": "GEMINI37-FLASH-PRODUCTION-SWITCH-1: Stage 2 production default is Gemini 3.7 Flash via the isolated Gemini raw/editorial routes and gemini_writer_v2. fallback=[] hard blocks failures; Claude remains explicit-only and is never a silent prose fallback."
     },
     "stage3_skeleton": {
       "provider": "gpt",
@@ -766,7 +767,7 @@
     },
     "narrator_primary": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro",
+      "model": "gemini-3.7-flash",
       "fallback": [],
       "note": "GEMINI-DEFAULT-WRITER-1: Production prose default selected by explicit human comparison. Uses Gemini-specific routes and prompt profile; fallback=[] prevents silent replacement by Claude, GPT, Doubao, or GLM."
     },
@@ -1000,7 +1001,7 @@
     },
     "v2_rawstage2_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro",
+      "model": "gemini-3.7-flash",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
@@ -1009,7 +1010,7 @@
     },
     "v2_amplified_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro",
+      "model": "gemini-3.7-flash",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
@@ -1018,7 +1019,7 @@
     },
     "v2_reader_experience_judge_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro",
+      "model": "gemini-3.7-flash",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
@@ -1152,13 +1153,13 @@
     },
     "nb4_generate_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.1-pro",
+      "model": "gemini-3.7-flash",
       "base_url_env": "GEMINI31_BASE_URL",
       "api_key_env": "GEMINI31_API_KEY",
       "model_env": "GEMINI31_MODEL",
       "fallback": [],
       "lab_testing": true,
-      "note": "Isolated chapter comparison route for Gemini 3.1 Pro."
+      "note": "Isolated chapter comparison route for Gemini 3.7 Flash."
     },
     "nb4_judge_doubao": {
       "provider": "doubao",
@@ -1193,7 +1194,7 @@
       "runtime_status": "retired_from_production",
       "public_flag": "boundedBestOf3",
       "enabled_by_default": false,
-      "writer_model": "gemini-3.1-pro",
+      "writer_model": "gemini-3.7-flash",
       "candidate_layout": {
         "baseline": "raw",
         "max_scene_candidates": 2,
@@ -1255,7 +1256,7 @@
       }
     },
     "models": [
-      "gemini-3.1-pro",
+      "gemini-3.7-flash",
       "claude-opus-4-6"
     ],
     "n_candidates": {

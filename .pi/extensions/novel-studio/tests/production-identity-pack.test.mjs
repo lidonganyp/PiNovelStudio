@@ -1,0 +1,232 @@
+/**
+ * 生产身份包：clean checkout 可通过 export/inject 或只读 pack 恢复治理状态。
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+import { createEvolutionReleaseRegistry } from "../dist-test/v2/governance/evolution-release-registry.js";
+import { createReleasePointerStore } from "../dist-test/v2/governance/release-pointer-store.js";
+import { createProxyApprovalRegistry } from "../dist-test/v2/governance/release-proxy-approval-registry.js";
+import {
+  EVOLUTION_RELEASE_SCHEMA_ID,
+  EVOLUTION_RELEASE_SCHEMA_VERSION,
+  EVOLUTION_POINTER_SCHEMA_ID,
+  EVOLUTION_POINTER_SCHEMA_VERSION,
+} from "../dist-test/v2/governance/evolution-release-types.js";
+import { computeReleasePayloadHash } from "../dist-test/v2/governance/evolution-release-schema.js";
+import { evaluateProductionReleaseGate } from "../dist-test/v2/governance/production-release-gate.js";
+import {
+  buildProductionIdentityPack,
+  parseProductionIdentityPack,
+  injectProductionIdentityPack,
+  exportProductionIdentityPack,
+} from "../dist-test/v2/governance/production-identity-pack.js";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const CLI_PATH = join(__dirname, "..", "scripts", "evolution-cli.mjs");
+const EXT_ROOT = join(__dirname, "..");
+
+function makeTempRoot() {
+  return mkdtempSync(join(tmpdir(), "prod-identity-"));
+}
+
+function runCli(args, env = {}) {
+  try {
+    const output = execFileSync("node", [CLI_PATH, ...args], {
+      cwd: EXT_ROOT,
+      env: { ...process.env, ...env },
+      encoding: "utf-8",
+      timeout: 30000,
+    });
+    return { code: 0, stdout: output, stderr: "" };
+  } catch (e) {
+    return {
+      code: e.status ?? 1,
+      stdout: e.stdout?.toString() ?? "",
+      stderr: e.stderr?.toString() ?? "",
+    };
+  }
+}
+
+function makeManifest(releaseId) {
+  return {
+    schemaId: EVOLUTION_RELEASE_SCHEMA_ID,
+    schemaVersion: EVOLUTION_RELEASE_SCHEMA_VERSION,
+    releaseId,
+    status: "active_prod",
+    parentReleaseId: "rel-000",
+    rollbackReleaseId: "rel-000",
+    supersedesRef: null,
+    changeClass: "R1",
+    claims: ["identity-pack"],
+    environmentFingerprint: "fp-pack-hash",
+    artifactRefs: [],
+    approvalRef: "apr-pack",
+    createdAt: "2026-08-18T00:00:00.000Z",
+    activatedAt: "2026-08-18T00:01:00.000Z",
+    bundleId: "bundle-pack",
+    modelVersion: "gemini31",
+    promptBundleHash: "1".repeat(64),
+    modelRoutingHash: "2".repeat(64),
+    toolSchemaHash: "3".repeat(64),
+    contextCompilerHash: "4".repeat(64),
+    qualityPolicyHash: "5".repeat(64),
+    recoveryPolicyHash: "6".repeat(64),
+    knowledgeSnapshotHash: "7".repeat(64),
+    runtimeFingerprint: "8".repeat(64),
+    evalProtocolVersion: "pinovel.eval-protocol/1",
+  };
+}
+
+function makeApproval(manifest) {
+  return {
+    schemaId: "pinovel.release-proxy-approval",
+    schemaVersion: 1,
+    approvalId: "apr-pack",
+    releaseId: manifest.releaseId,
+    releaseManifestHash: computeReleasePayloadHash(manifest),
+    reviewerType: "validated_human_proxy",
+    reviewerModel: "gpt5.6-sol",
+    reviewerModelVersion: "gpt5.6-sol-2026-07",
+    reviewTransport: "network",
+    promptHash: "stub-prompt-hash",
+    inputArtifactHash: "stub-input-hash",
+    forwardVerdict: "APPROVE_DEV",
+    reverseVerdict: "APPROVE_DEV",
+    finalVerdict: "APPROVE_DEV",
+    winningSpans: [],
+    losingSpans: [],
+    risks: [],
+    rationale: "identity pack test",
+    decidedAt: "2026-08-18T00:00:00.000Z",
+    budgetUsed: { calls: 2, timeoutMs: 300000 },
+    changeClass: "R1",
+    r3SelfApproval: false,
+  };
+}
+
+function makePointer(releaseId) {
+  return {
+    schemaId: EVOLUTION_POINTER_SCHEMA_ID,
+    schemaVersion: EVOLUTION_POINTER_SCHEMA_VERSION,
+    kind: "production",
+    releaseId,
+    reason: "identity-pack",
+    actor: "user",
+    switchedAt: "2026-08-18T00:01:00.000Z",
+  };
+}
+
+test("identity pack：hash 篡改 fail-closed；inject 后 G6 不再报 pointer 缺失", () => {
+  const root = makeTempRoot();
+  try {
+    const manifest = makeManifest("rel-pack-001");
+    const pack = buildProductionIdentityPack({
+      pointer: makePointer("rel-pack-001"),
+      manifest,
+      approvalArtifact: makeApproval(manifest),
+      environmentFingerprint: { codeCommit: "abc", fingerprintHash: "fp-pack-hash" },
+    });
+    const parsed = parseProductionIdentityPack(pack);
+    assert.equal(parsed.ok, true, parsed.errors?.join("; "));
+
+    const tampered = { ...pack, packHash: "a".repeat(64) };
+    const bad = parseProductionIdentityPack(tampered);
+    assert.equal(bad.ok, false);
+    assert.match(bad.errors.join("; "), /packHash|hash/i);
+
+    const dest = join(root, "empty-evo");
+    mkdirSync(dest, { recursive: true });
+    const prevDev = process.env.PINOVEL_DEV_MODE;
+    delete process.env.PINOVEL_DEV_MODE;
+    try {
+    const missing = evaluateProductionReleaseGate({
+      projectRoot: root,
+      evolutionRoot: dest,
+      currentFingerprintHash: "fp-pack-hash",
+    });
+    assert.equal(missing.ok, false);
+    assert.match(missing.failureEnvelope.reason, /no active production release set/);
+
+    injectProductionIdentityPack(dest, pack);
+    assert.equal(createReleasePointerStore({ configDir: dest }).readActive("production").releaseId, "rel-pack-001");
+    assert.equal(
+      createEvolutionReleaseRegistry({ releasesDir: join(dest, "releases") }).loadManifest("rel-pack-001").status,
+      "active_prod",
+    );
+
+    const afterInject = evaluateProductionReleaseGate({
+      projectRoot: root,
+      evolutionRoot: dest,
+      currentFingerprintHash: "fp-pack-hash",
+    });
+    assert.equal(afterInject.ok, false);
+    assert.doesNotMatch(afterInject.failureEnvelope.reason, /no active production release set/);
+
+    writeFileSync(join(root, "pack.json"), JSON.stringify(pack, null, 2));
+    const fromPack = evaluateProductionReleaseGate({
+      projectRoot: root,
+      evolutionRoot: join(root, "still-empty"),
+      identityPackPath: join(root, "pack.json"),
+      currentFingerprintHash: "fp-pack-hash",
+    });
+    assert.equal(fromPack.ok, false);
+    assert.doesNotMatch(fromPack.failureEnvelope.reason, /no active production release set/);
+    } finally {
+      if (prevDev === undefined) delete process.env.PINOVEL_DEV_MODE;
+      else process.env.PINOVEL_DEV_MODE = prevDev;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI export-identity / inject-identity 可在空治理根恢复 pointer", () => {
+  const root = makeTempRoot();
+  try {
+    const source = join(root, "source");
+    const dest = join(root, "dest");
+    mkdirSync(source, { recursive: true });
+    mkdirSync(dest, { recursive: true });
+    const manifest = makeManifest("rel-pack-002");
+    const registry = createEvolutionReleaseRegistry({ releasesDir: join(source, "releases") });
+    registry.writeManifest(manifest);
+    createProxyApprovalRegistry({
+      approvalsDir: join(source, "releases", "rel-pack-002", "approvals"),
+    }).writeArtifact(makeApproval(manifest));
+    createReleasePointerStore({ configDir: source }).switchActive("production", "rel-pack-002", {
+      actor: "user",
+      reason: "export-source",
+    });
+
+    const packPath = join(root, "exported.pack.json");
+    const exported = exportProductionIdentityPack(source);
+    writeFileSync(packPath, JSON.stringify(exported, null, 2));
+    assert.equal(exported.releaseId, "rel-pack-002");
+
+    const cli = runCli(
+      ["inject-identity", "--pack", packPath],
+      { PINOVEL_EVOLUTION_ROOT: dest },
+    );
+    assert.equal(cli.code, 0, cli.stderr);
+    assert.equal(
+      createReleasePointerStore({ configDir: dest }).readActive("production").releaseId,
+      "rel-pack-002",
+    );
+    assert.ok(existsSync(join(dest, "releases", "rel-pack-002", "manifest.json")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -54,6 +54,8 @@ export interface GraderCheck {
   violations: Array<{ fixtureId?: string; detail: string }>;
 }
 
+export type GraderIdentityMode = "candidate" | "independent_raw";
+
 export interface GraderExpectedReleaseIdentity {
   releaseId: string;
   bundleId: string;
@@ -61,6 +63,11 @@ export interface GraderExpectedReleaseIdentity {
   approvalRef?: string;
   gitHash?: string;
   createdAt?: string;
+  /**
+   * independent_raw：裸写对照臂，不要求 candidate 生产身份。
+   * 未声明时按 fixture.matrixArm === "raw_direct" 推断。
+   */
+  identityMode?: GraderIdentityMode;
 }
 
 export interface DeterministicGradeReport {
@@ -233,6 +240,65 @@ function computeTraceFileHash(path: string): string | null {
   }
 }
 
+function isIndependentRawSample(
+  archive: SampleArchive,
+  expected?: GraderExpectedReleaseIdentity,
+): boolean {
+  if (expected?.identityMode === "independent_raw") {
+    return true;
+  }
+  if (expected?.identityMode === "candidate") {
+    return false;
+  }
+  return archive.fixture?.matrixArm === "raw_direct";
+}
+
+function resolveArchivedTracePath(
+  entry: ReplayRunSampleEntry,
+  archive: SampleArchive,
+): string | null {
+  if (entry.traceArchivePath && existsSync(entry.traceArchivePath) && entry.traceArchivePath.endsWith(".json")) {
+    return entry.traceArchivePath;
+  }
+  const tracesDir = archive.tracesDir
+    ?? (entry.traceArchivePath && existsSync(entry.traceArchivePath) ? entry.traceArchivePath : null);
+  if (!tracesDir) {
+    return null;
+  }
+  const names = listJsonFiles(tracesDir);
+  const preferred = names.find((name) => name.endsWith("-quality-trace.json")) ?? names[0];
+  return preferred ? join(tracesDir, preferred) : null;
+}
+
+function checkDeclaredTraceHash(
+  entry: ReplayRunSampleEntry,
+  archive: SampleArchive,
+  fixtureId: string,
+  traceLabel: string,
+  violations: Array<{ fixtureId?: string; detail: string }>,
+): void {
+  const archivedTracePath = resolveArchivedTracePath(entry, archive);
+  if (!archivedTracePath || !existsSync(archivedTracePath)) {
+    return;
+  }
+  const hash = computeTraceFileHash(archivedTracePath);
+  if (!hash) {
+    violations.push({
+      fixtureId,
+      detail: `${traceLabel} 无法重算 trace hash：${archivedTracePath}`,
+    });
+    return;
+  }
+  const declared = archive.fixture?.referenceTraceHash;
+  if (typeof declared === "string" && declared.length > 0 && declared !== hash) {
+    violations.push({
+      fixtureId,
+      detail:
+        `${traceLabel} referenceTraceHash 与归档不一致：declared=${declared} computed=${hash}`,
+    });
+  }
+}
+
 function checkTraceIdentityBinding(
   manifest: ReplayRunManifestV1,
   root: string,
@@ -249,11 +315,14 @@ function checkTraceIdentityBinding(
       continue;
     }
     const archive = loadSampleArchive(root, entry.fixtureId);
+    const independentRaw = isIndependentRawSample(archive, expected);
     const qualityTraces = collectQualityTraces(archive.traces);
     if (qualityTraces.length === 0) {
       violations.push({
         fixtureId: entry.fixtureId,
-        detail: `${entry.replayMode} 缺少可复算身份的底层 quality-trace（不得只信顶层 manifest/releaseIdentity）`,
+        detail: independentRaw
+          ? `${entry.replayMode} raw_direct 缺少可复算的底层 quality-trace`
+          : `${entry.replayMode} 缺少可复算身份的底层 quality-trace（不得只信顶层 manifest/releaseIdentity）`,
       });
       continue;
     }
@@ -262,6 +331,12 @@ function checkTraceIdentityBinding(
     for (const [index, trace] of qualityTraces.entries()) {
       const extracted = extractReplayReleaseIdentity(trace);
       const traceLabel = `trace[${index}]`;
+      checkDeclaredTraceHash(entry, archive, entry.fixtureId, traceLabel, violations);
+
+      if (independentRaw) {
+        continue;
+      }
+
       if (!extracted || !extracted.releaseId || !extracted.bundleId) {
         violations.push({
           fixtureId: entry.fixtureId,
@@ -324,22 +399,6 @@ function checkTraceIdentityBinding(
             fixtureId: entry.fixtureId,
             detail:
               `${traceLabel} 时间线非法：trace.generatedAt=${extracted.generatedAt} 早于 release.createdAt=${expected?.createdAt}（旧 archive 不得 rebind）`,
-          });
-        }
-      }
-
-      const archivedTracePath = entry.traceArchivePath && existsSync(entry.traceArchivePath)
-        && entry.traceArchivePath.endsWith(".json")
-        ? entry.traceArchivePath
-        : archive.tracesDir
-          ? join(archive.tracesDir, "chapter-002-quality-trace.json")
-          : null;
-      if (archivedTracePath && existsSync(archivedTracePath)) {
-        const hash = computeTraceFileHash(archivedTracePath);
-        if (!hash) {
-          violations.push({
-            fixtureId: entry.fixtureId,
-            detail: `${traceLabel} 无法重算 trace hash：${archivedTracePath}`,
           });
         }
       }

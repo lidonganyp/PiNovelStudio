@@ -56,12 +56,12 @@ test("grok45 comparison locks generation to Grok 4.5", () => {
   });
 });
 
-test("gemini31 comparison locks generation to Gemini 3.1 Pro", () => {
+test("gemini31 comparison locks generation to Gemini 3.7 Flash", () => {
   assert.deepEqual(resolveModelTestRouteLock("gemini31"), {
     generateRoute: "nb4_generate_gemini31",
     judgeRoute: "v2_opportunity_judge",
     provider: "gemini31",
-    model: "gemini-3.1-pro",
+    model: "gemini-3.7-flash",
   });
 });
 
@@ -124,13 +124,13 @@ test("new comparison routes use isolated model env overrides", () => {
   });
   assert.deepEqual(routing.agent_routing.nb4_generate_gemini31, {
     provider: "gemini31",
-    model: "gemini-3.1-pro",
+    model: "gemini-3.7-flash",
     base_url_env: "GEMINI31_BASE_URL",
     api_key_env: "GEMINI31_API_KEY",
     model_env: "GEMINI31_MODEL",
     fallback: [],
     lab_testing: true,
-    note: "Isolated chapter comparison route for Gemini 3.1 Pro.",
+    note: "Isolated chapter comparison route for Gemini 3.7 Flash.",
   });
 });
 
