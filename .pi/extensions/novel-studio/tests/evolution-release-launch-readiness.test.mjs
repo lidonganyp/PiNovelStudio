@@ -23,6 +23,7 @@ import {
 import { createProxyApprovalRegistry } from "../dist-test/v2/governance/release-proxy-approval-registry.js";
 import { createEvolutionReleaseRegistry } from "../dist-test/v2/governance/evolution-release-registry.js";
 import { evaluateCanaryPromotionGate } from "../dist-test/v2/governance/canary-promotion-gate.js";
+import { localizeLlmText } from "../dist-test/utils/llm-language-guard.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const CLI_PATH = join(__dirname, "..", "scripts", "evolution-cli.mjs");
@@ -487,8 +488,8 @@ test("runRealProxyReview consumes a real card and performs bounded forward/rever
         choices: [{ message: { content: JSON.stringify({
           verdict: "APPROVE_DEV",
           rationale: "candidate evidence is clearly stronger",
-          winningSpans: ["candidate-green"],
-          losingSpans: ["baseline"],
+          winningSpans: [localizeLlmText("candidate-green")],
+          losingSpans: [localizeLlmText("baseline")],
           risks: [],
         }) } }],
       }), { status: 200, headers: { "content-type": "application/json" } });

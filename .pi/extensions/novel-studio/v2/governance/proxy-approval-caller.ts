@@ -158,20 +158,32 @@ function validateRealProxyEvidence(
   comparison: AnonymousApprovalPacket["forward"],
   candidateLabel: "A" | "B",
 ): RealProxyVerdictOutput {
-  const spanSides = new Map(comparison.spans.map((span) => [span.id, span.side]));
+  const spanReferences = new Map<string, { id: string; side: "A" | "B" }>();
+  for (const span of comparison.spans) {
+    const reference = { id: span.id, side: span.side };
+    spanReferences.set(span.id, reference);
+    const localizedId = localizeLlmText(span.id);
+    if (localizedId !== span.id && !spanReferences.has(localizedId)) {
+      spanReferences.set(localizedId, reference);
+    }
+  }
   const losingLabel = candidateLabel === "A" ? "B" : "A";
-  const validWinningSpans = output.winningSpans.filter(
-    (id) => spanSides.get(id) === candidateLabel,
-  );
-  const validLosingSpans = output.losingSpans.filter(
-    (id) => spanSides.get(id) === losingLabel,
-  );
-  const invalidWinningSpans = output.winningSpans.filter(
-    (id) => spanSides.get(id) !== candidateLabel,
-  );
-  const invalidLosingSpans = output.losingSpans.filter(
-    (id) => spanSides.get(id) !== losingLabel,
-  );
+  const resolveReferences = (ids: string[], expectedSide: "A" | "B") => {
+    const valid: string[] = [];
+    const invalid: string[] = [];
+    for (const id of ids) {
+      const reference = spanReferences.get(id);
+      if (reference?.side === expectedSide) valid.push(reference.id);
+      else invalid.push(id);
+    }
+    return { valid, invalid };
+  };
+  const winning = resolveReferences(output.winningSpans, candidateLabel);
+  const losing = resolveReferences(output.losingSpans, losingLabel);
+  const validWinningSpans = winning.valid;
+  const validLosingSpans = losing.valid;
+  const invalidWinningSpans = winning.invalid;
+  const invalidLosingSpans = losing.invalid;
   const missingApprovalEvidence =
     output.verdict === "APPROVE_DEV" &&
     (validWinningSpans.length === 0 || validLosingSpans.length === 0);
