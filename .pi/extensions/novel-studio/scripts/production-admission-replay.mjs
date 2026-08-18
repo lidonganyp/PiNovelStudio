@@ -169,9 +169,14 @@ function collectModelCalls(ws, chapterId) {
 function releaseGovernance(ws, chapterId) {
   const tracePath = findTrace(ws, chapterId);
   const doc = tracePath ? readJson(tracePath) : null;
-  return doc?.gates?.[0]?.evidence?.releaseGovernance
-    ?? doc?.releaseGovernance
-    ?? null;
+  if (doc?.releaseGovernance) return doc.releaseGovernance;
+  const gates = Array.isArray(doc?.gates) ? doc.gates : [];
+  for (const gate of [...gates].reverse()) {
+    const governance = gate?.evidence?.releaseGovernance
+      ?? gate?.evidence?.strategyContext?.releaseGovernance;
+    if (governance) return governance;
+  }
+  return null;
 }
 
 function firstGate(ws, chapterId) {
