@@ -1209,6 +1209,50 @@ test("rollback: production 可执行指定 rollbackReleaseId（即使其因单�
   }
 });
 
+test("rollback: revoke 后 from=null 仍可执行 rollbackReleaseId", () => {
+  const root = makeTempRoot();
+  try {
+    const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
+    const m2 = makeManifest("rel-002", "candidate_prod", {
+      approvalRef: "apr-002",
+      rollbackReleaseId: "rel-001",
+    });
+    setupReleases(root, [m1, m2]);
+    writeStubApproval(root, "rel-001", "apr-001", m1);
+    writeStubApproval(root, "rel-002", "apr-002", m2);
+    runCli(
+      [
+        "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-001"),
+      ],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    runCli(
+      ["hold", "--release-id", "rel-001", "--actor", "user"],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    runCli(
+      [
+        "promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod",
+        ...writePassingEvalEvidence(root, "rel-002"),
+      ],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+
+    const result = runCli(
+      ["rollback", "--kind", "production"],
+      { PINOVEL_EVOLUTION_ROOT: root },
+    );
+    assert.equal(result.code, 0, `期望指定 rollbackReleaseId 可执行，实际 ${result.code}：${result.stderr}`);
+    assert.equal(makeStore(root).readActive("production")?.releaseId, "rel-001");
+    const registry = makeRegistry(root);
+    assert.equal(registry.loadManifest("rel-001").status, "active_prod");
+    assert.equal(registry.loadManifest("rel-002").status, "held");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("promote: 双 active_prod 晋级被单例约束阻断（真实 production promote 路径）", () => {
   const root = makeTempRoot();
   try {

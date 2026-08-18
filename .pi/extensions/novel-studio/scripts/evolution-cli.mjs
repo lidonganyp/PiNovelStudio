@@ -1520,8 +1520,16 @@ function cmdRollback(args) {
     process.exit(5);
   }
   if (targetReleaseId === null) {
-    console.error(`[evolution:rollback] 错误：已到初始状态，无前序可回滚`);
-    process.exit(5);
+    const designated = currentManifest?.rollbackReleaseId;
+    if (kind === "production" && designated && designated !== "rel-000") {
+      targetReleaseId = designated;
+      console.log(
+        `[evolution:rollback] history 无前序（revoke 后 from=null），改用 rollbackReleaseId=${designated}`,
+      );
+    } else {
+      console.error(`[evolution:rollback] 错误：已到初始状态，无前序可回滚`);
+      process.exit(5);
+    }
   }
 
   // P1-3 修复：校验 manifest.rollbackReleaseId（跳过 rel-000 占位）
@@ -1588,7 +1596,11 @@ function cmdRollback(args) {
   // 执行 rollback
   let newPointer;
   try {
-    newPointer = store.rollback(kind, { reason, actor });
+    newPointer = store.rollback(kind, {
+      reason,
+      actor,
+      designatedTargetReleaseId: targetReleaseId,
+    });
   } catch (e) {
     console.error(`[evolution:rollback] 指针回滚失败：${e.message}`);
     process.exit(5);

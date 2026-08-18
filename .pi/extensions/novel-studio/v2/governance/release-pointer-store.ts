@@ -63,6 +63,11 @@ export interface SwitchActiveOptions {
 export interface RollbackOptions {
   reason: string;
   actor: PointerActor;
+  /**
+   * 当 history 因 revoke 后再 switch(from=null) 丢失前序时，
+   * 使用当前 release 的 rollbackReleaseId 作为可执行回滚目标。
+   */
+  designatedTargetReleaseId?: string;
 }
 
 /**
@@ -494,7 +499,10 @@ export function createReleasePointerStore(
     }
 
     // P1-1 修复：用括号匹配 consume 跟踪找目标
-    const { target: targetFromId } = computeRollbackTarget(kind, history, current);
+    let { target: targetFromId } = computeRollbackTarget(kind, history, current);
+    if (targetFromId === null && opts.designatedTargetReleaseId) {
+      targetFromId = opts.designatedTargetReleaseId;
+    }
     if (targetFromId === null) {
       throw new Error(
         `rollback 失败：${kind} pointer 已到初始状态，无前序可回滚` +
