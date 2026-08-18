@@ -70,6 +70,11 @@ export interface EvolutionReleaseRegistry {
   /** 读取状态事件；不存在返回空数组；损坏 jsonl 抛错 */
   loadStateEvents(releaseId: string): ReleaseStateEvent[];
   /**
+   * Remove the last event written by a failed promotion transaction.
+   * The removed event is copied to a compensation log for auditability.
+   */
+  removeStateEvent(releaseId: string, eventId: string): boolean;
+  /**
    * 状态机迁移：加载既有 manifest → 校验 isStatusTransitionValid → 审批绑定 / 角色守护 →
    * 更新 status（+ approvalRef）。绕过 frozen immutability 检查（因为状态迁移本身已由
    * isStatusTransitionValid + 审批/角色守护）。
@@ -298,6 +303,50 @@ export function createEvolutionReleaseRegistry(
     return events;
   }
 
+  function removeStateEvent(releaseId: string, eventId: string): boolean {
+    assertSafeReleaseId(releaseId);
+    if (typeof eventId !== "string" || eventId.length === 0) {
+      throw new Error("removeStateEvent failed: eventId must be a non-empty string");
+    }
+
+    const filePath = stateEventsPath(releasesDir, releaseId);
+    if (!existsSync(filePath)) return false;
+    const existing = loadStateEvents(releaseId);
+    const index = existing.findIndex((event) => event.eventId === eventId);
+    if (index < 0) return false;
+    if (index !== existing.length - 1) {
+      throw new Error(
+        `removeStateEvent failed: only the last state event may be compensated (eventId=${eventId})`,
+      );
+    }
+
+    const removed = existing[index];
+    const remaining = existing.slice(0, index);
+    const content = remaining.length > 0
+      ? `${remaining.map((event) => JSON.stringify(event)).join("\n")}\n`
+      : "";
+    atomicWrite(filePath, content);
+
+    // Keep the authoritative state chain consistent while retaining an audit trail.
+    const compensationPath = join(
+      releaseDir(releasesDir, releaseId),
+      "state-events-compensated.jsonl",
+    );
+    const previous = existsSync(compensationPath)
+      ? readFileSync(compensationPath, "utf-8").trimEnd()
+      : "";
+    const compensation = JSON.stringify({
+      compensationType: "state_event_removed",
+      compensatedAt: new Date().toISOString(),
+      event: removed,
+    });
+    atomicWrite(
+      compensationPath,
+      previous.length > 0 ? `${previous}\n${compensation}\n` : `${compensation}\n`,
+    );
+    return true;
+  }
+
   function recordStateEvent(event: ReleaseStateEvent): void {
     // P1-2 路径穿越守护
     assertSafeReleaseId(event.releaseId);
@@ -495,6 +544,7 @@ export function createEvolutionReleaseRegistry(
     listManifests,
     recordStateEvent,
     loadStateEvents,
+    removeStateEvent,
     transitionStatus,
   };
 }

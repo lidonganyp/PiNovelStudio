@@ -95,6 +95,7 @@ import {
   exportProductionIdentityPack,
   injectProductionIdentityPack,
   loadProductionIdentityPackFromFile,
+  resolveProductionIdentityPackPath,
 } from "../dist-test/v2/governance/production-identity-pack.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1012,17 +1013,18 @@ function validateApprovalArtifactForRelease({
   manifest,
   label,
   requireNetwork = false,
+  artifactOverride = null,
 }) {
   if (manifest.approvalRef == null || manifest.approvalRef === "") {
     console.error(`[evolution:${label}] 错误：release ${releaseId} approvalRef 为空`);
     process.exit(5);
   }
   const approvalsDir = join(releasesDir, releaseId, "approvals");
-  const proxyRegistry = createProxyApprovalRegistry({ approvalsDir });
+  const proxyRegistry = artifactOverride ? null : createProxyApprovalRegistry({ approvalsDir });
   const finalApprovalRef = manifest.approvalRef;
   let artifact;
   try {
-    artifact = proxyRegistry.loadArtifact(finalApprovalRef);
+    artifact = artifactOverride ?? proxyRegistry.loadArtifact(finalApprovalRef);
   } catch (e) {
     console.error(`[evolution:${label}] 错误：approval artifact 解析失败：${finalApprovalRef} — ${e.message}`);
     process.exit(5);
@@ -1696,10 +1698,25 @@ function cmdRollback(args) {
     process.exit(5);
   }
 
-  // P1-3 修复：校验目标 manifest 存在 + 状态可接受
-  const targetManifest = registry.loadManifest(targetReleaseId);
+  // A clean deployment may contain only the active release. In that case use
+  // the sealed rollback identity embedded in the active production pack.
+  let targetManifest = registry.loadManifest(targetReleaseId);
+  let sealedRollbackIdentity = null;
+  if (!targetManifest && kind === "production") {
+    const packPath = resolveProductionIdentityPackPath(REPO_ROOT);
+    if (packPath) {
+      const parsedPack = loadProductionIdentityPackFromFile(packPath);
+      if (parsedPack.ok && parsedPack.pack?.rollbackIdentity?.releaseId === targetReleaseId) {
+        sealedRollbackIdentity = parsedPack.pack.rollbackIdentity;
+        targetManifest = sealedRollbackIdentity.manifest;
+        console.log(
+          `[evolution:rollback] 使用 sealed rollback identity=${targetReleaseId}（来源 ${packPath}）`,
+        );
+      }
+    }
+  }
   if (!targetManifest) {
-    console.error(`[evolution:rollback] 错误：目标 release ${targetReleaseId} 不存在`);
+    console.error(`[evolution:rollback] 错误：目标 release ${targetReleaseId} 不存在，且 sealed rollback identity 不可用`);
     process.exit(5);
   }
   const ACCEPTABLE_TARGET_STATUS = new Set([
@@ -1741,6 +1758,7 @@ function cmdRollback(args) {
       manifest: targetManifest,
       label: "rollback",
       requireNetwork: true,
+      artifactOverride: sealedRollbackIdentity?.approvalArtifact ?? null,
     });
   }
 
@@ -1777,6 +1795,11 @@ function cmdRollback(args) {
     }
 
     if (kind === "production" && targetManifest.status === "held") {
+      if (sealedRollbackIdentity) {
+        // Materialize the sealed predecessor only at rollback time; normal
+        // deployments still keep a single active production baseline.
+        registry.writeManifest(targetManifest);
+      }
       registry.transitionStatus(targetReleaseId, "active_prod", {
         actor,
         approvalRef: targetManifest.approvalRef,
