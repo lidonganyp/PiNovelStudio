@@ -97,10 +97,10 @@ test("正式回归：fingerprint mismatch 必须带字段级差异", () => {
   assert.match(reason, /gemini-3.1-pro/);
 });
 
-test("正式回归：held 不得迁回 evaluated / approved_dev / active_prod", () => {
+test("正式回归：held 不得迁回 evaluated / approved_dev；指定 rollback 可恢复 active_prod", () => {
   assert.equal(isStatusTransitionValid("held", "evaluated"), false);
   assert.equal(isStatusTransitionValid("held", "approved_dev"), false);
-  assert.equal(isStatusTransitionValid("held", "active_prod"), false);
+  assert.equal(isStatusTransitionValid("held", "active_prod"), true);
 });
 
 test("正式回归：完整 held manifest 的 proxy-review 以 exit 4 结构化阻断", () => {

@@ -169,3 +169,20 @@ test("production-admission harness must not bypass G6 or hardcode productionComp
   assert.doesNotMatch(harness, /V2_FORCE_STUB:\s*["']1["']/);
   assert.match(harness, /durationMs|bounded/);
 });
+
+test("production-admission retry must certify successful recovery, not retry-then-fail", () => {
+  const harness = readSrc("scripts/production-admission-replay.mjs");
+  assert.match(harness, /PINOVEL_ADMISSION_FAIL_ONCE/);
+  assert.match(harness, /id = "retry"/);
+  assert.match(harness, /result\.status === 0/);
+  assert.match(harness, /hasChapterFile\(ws, "1"\)/);
+  assert.doesNotMatch(
+    harness,
+    /id = "retry"[\s\S]*result\.status !== 0[\s\S]*retried/,
+    "retry scenario must not pass merely because the process failed after retrying",
+  );
+  assert.match(harness, /id = "factguard-block"/);
+  assert.match(harness, /PINOVEL_ADMISSION_STUB_INJECT|法宝|禁制/);
+  assert.match(harness, /requiredIds = \[[^\]]*factguard-block/);
+  assert.match(harness, /traceRelativePath|relativeTracePath/);
+});

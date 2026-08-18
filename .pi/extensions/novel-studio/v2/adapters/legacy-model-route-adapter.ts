@@ -178,7 +178,10 @@ export function createStubModelGenerateFn(): ModelGenerateFn {
     // 只有 raw_chapter / opportunity_judge / editorial_amplified / literary_judge
     // 四类 v2 主链路 kind 走结构化分支；其他 kind（direct_baseline/scene_contract 等
     // legacy CandidateGenerator 测试用例）保持 buildStubText 占位行为，向后兼容。
-    const text = buildStubTextByKind(input.kind, input.route, input.userPrompt);
+    const text = injectAdmissionStubText(
+      buildStubTextByKind(input.kind, input.route, input.userPrompt),
+      input.kind,
+    );
     return {
       text,
       model,
@@ -603,6 +606,22 @@ function lookupV2RouteProvider(route: string): string | null {
  * 保持原 buildStubText 占位行为，向后兼容（candidate-generator.test.mjs 依赖
  * 不同 kind 返回可区分正文）。
  */
+function injectAdmissionStubText(text: string, kind: string): string {
+  const injected = process.env.PINOVEL_ADMISSION_STUB_INJECT?.trim();
+  if (!injected) {
+    return text;
+  }
+  if (
+    kind === "raw_chapter"
+    || kind === "agentic_raw"
+    || kind === "editorial_amplified"
+    || kind === "author_style_optimization"
+  ) {
+    return `${text}\n${injected}`;
+  }
+  return text;
+}
+
 function buildStubTextByKind(kind: string, route: string, userPrompt: string): string {
   switch (kind) {
     case "raw_chapter":

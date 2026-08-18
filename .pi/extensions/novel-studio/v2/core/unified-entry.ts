@@ -2362,6 +2362,48 @@ export async function runUnifiedPipeline(
     : undefined;
   // 推送 pipeline_start：前端尽早感知工具已启动，进入编排器后 timeAsync/timeSync 接管阶段进度
   emitTopProgress("pipeline", "start", "统一主链路编排开始（Preflight → Agentic → 风格优化 → 复检 → 保存）");
+  if (
+    process.env.PINOVEL_ADMISSION_FAIL_ONCE === "timeout"
+    && !(typeof input._modelTimeoutRetryAttempt === "number" && input._modelTimeoutRetryAttempt > 0)
+  ) {
+    const failOnceEnvelope = {
+      stage: "novelos_agentic_generation",
+      gate: "model_timeout",
+      severity: "recoverable" as const,
+      reason: "PINOVEL_ADMISSION_FAIL_ONCE=timeout（首次章节尝试强制超时，供成功恢复验收）",
+      evidence: { admissionFailOnce: "timeout" },
+      recoverable: true,
+      retryPlan: { strategy: "chapter_level_retry" as const, maxAttempts: 1 },
+      userActionRequired: [],
+    };
+    persistEarlyBlockedTrace(
+      projectRoot,
+      workspaceId,
+      chapterId,
+      failOnceEnvelope,
+      releaseGovernanceTrace,
+      effectiveFullPipelinePreview,
+      auditSession,
+    );
+    return seal({
+      status: "blocked",
+      workspaceId,
+      chapterId,
+      chapterNumber,
+      text: "",
+      candidates: [],
+      diagnostics: [],
+      failureEnvelope: failOnceEnvelope,
+      stageResults: {
+        unifiedPipeline: true,
+        releaseGovernance: releaseGovernanceTrace,
+      },
+      isPreviewRun: effectiveFullPipelinePreview,
+      selectedSource: null,
+      selectedCandidateId: "",
+      isUnderSpecified: false,
+    });
+  }
   const orchestrator = new UnifiedOrchestrator();
   const orchResult = await orchestrator.orchestrate({
     workspaceId,

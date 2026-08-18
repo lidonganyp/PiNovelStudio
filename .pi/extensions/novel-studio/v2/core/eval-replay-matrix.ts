@@ -794,6 +794,7 @@ export interface GenerateMatrixReportFromReplayRunsOptions {
   codeCommit?: string | null;
   zeroTolerance?: ZeroToleranceCounts;
   humanBlindPreference?: HumanBlindPreference;
+  expectedCandidateIdentity?: import("./eval-deterministic-grader.js").GraderExpectedReleaseIdentity;
 }
 
 function canonicalMatrixHashPayload(report: {
@@ -883,7 +884,10 @@ export function generateMatrixReportFromReplayRuns(
       }
     }
     const arm = deriveArmMetricsFromReplayManifest(manifest, armId, { runRoot });
-    const grade = gradeDeterministicFromRunRoot(runRoot);
+    const grade = gradeDeterministicFromRunRoot(
+      runRoot,
+      armId === "candidate" ? options.expectedCandidateIdentity : undefined,
+    );
     if (!grade.passed) {
       bindingReasons.push(
         `臂 ${armId} 确定性 Grader 未通过：${grade.failedChecks.join(", ") || "unknown"}（runRoot=${runRoot}）`,

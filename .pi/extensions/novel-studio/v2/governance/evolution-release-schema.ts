@@ -81,9 +81,9 @@ const VALID_CHANGE_CLASSES: ReadonlySet<ChangeClass> = new Set<ChangeClass>([
  *   active_dev -> candidate_prod | held | revoked | retired
  *   candidate_prod -> active_prod | held | rejected
  *   active_prod -> held | revoked | retired
- *   held -> active_dev | rejected | retired（旧 release 仅审计读取：不可重新激活为
- *     active_prod；active_dev 仅限 auto-hold 原子性回滚的事务撤销，恢复生产必须
- *     新建 releaseId 重新走完整审批链）
+ *   held -> active_dev | active_prod | rejected | retired
+ *     active_prod 仅供当前 active_prod.rollbackReleaseId 的 production rollback 恢复；
+ *     promote CLI 仍禁止从 held 晋级。active_dev 仅限 auto-hold 原子性回滚。
  */
 const TRANSITIONS: Record<ReleaseStatus, ReleaseStatus[]> = {
   draft: ["candidate"],
@@ -94,10 +94,9 @@ const TRANSITIONS: Record<ReleaseStatus, ReleaseStatus[]> = {
   active_dev: ["candidate_prod", "held", "revoked", "retired"],
   candidate_prod: ["active_prod", "held", "rejected"],
   active_prod: ["held", "revoked", "retired"],
-  // 终态：不可直接迁回 active；需新 releaseId 重新审批
-  // held 为软终态：不可重新激活为 active_prod（旧生产基线仅审计读取，版本收敛原则）；
-  // active_dev 仅用于 executeAutoHold 状态事件写入失败时的事务回滚（原子性）
-  held: ["active_dev", "rejected", "retired"],
+  // held 可经 production rollback 恢复为指定 rollbackReleaseId 的 active_prod。
+  // promote 仍只允许 candidate_prod → active_prod，不能把任意 held 重新晋级。
+  held: ["active_dev", "active_prod", "rejected", "retired"],
   rejected: [],
   quarantined: [],
   revoked: [],

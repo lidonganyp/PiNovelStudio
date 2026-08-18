@@ -40,6 +40,8 @@ export interface ReplayReleaseIdentity {
   approvalRef: string | null;
   bundleId: string | null;
   modelVersion: string | null;
+  gitHash: string | null;
+  generatedAt: string | null;
 }
 
 export interface ProductionLikeRouteExpectation {
@@ -261,23 +263,54 @@ function readReleaseGovernance(trace: Record<string, unknown>): Record<string, u
   return null;
 }
 
+function readTraceGitHash(trace: Record<string, unknown>): string | null {
+  if (isPlainObject(trace.buildInfo) && typeof trace.buildInfo.gitHash === "string") {
+    return trace.buildInfo.gitHash;
+  }
+  if (typeof trace.gitHash === "string") {
+    return trace.gitHash;
+  }
+  return null;
+}
+
+function readTraceGeneratedAt(trace: Record<string, unknown>): string | null {
+  if (typeof trace.createdAt === "string" && trace.createdAt.trim().length > 0) {
+    return trace.createdAt;
+  }
+  if (typeof trace.timestamp === "string" && trace.timestamp.trim().length > 0) {
+    return trace.timestamp;
+  }
+  if (isPlainObject(trace.v2Summary) && Array.isArray(trace.v2Summary.stages)) {
+    for (const stage of trace.v2Summary.stages) {
+      if (isPlainObject(stage) && typeof stage.timestamp === "string") {
+        return stage.timestamp;
+      }
+    }
+  }
+  return null;
+}
+
 export function extractReplayReleaseIdentity(trace: unknown): ReplayReleaseIdentity | null {
   if (!isPlainObject(trace)) {
     return null;
   }
   const gov = readReleaseGovernance(trace);
-  if (!gov) {
+  const gitHash = readTraceGitHash(trace);
+  const generatedAt = readTraceGeneratedAt(trace);
+  if (!gov && !gitHash && !generatedAt) {
     return null;
   }
-  const identity = isPlainObject(gov.behaviorIdentity) ? gov.behaviorIdentity : {};
+  const identity = gov && isPlainObject(gov.behaviorIdentity) ? gov.behaviorIdentity : {};
   return {
-    devMode: gov.devMode === true,
-    releaseId: typeof gov.releaseId === "string" ? gov.releaseId : null,
+    devMode: gov?.devMode === true,
+    releaseId: typeof gov?.releaseId === "string" ? gov.releaseId : null,
     environmentFingerprint:
-      typeof gov.environmentFingerprint === "string" ? gov.environmentFingerprint : null,
-    approvalRef: typeof gov.approvalRef === "string" ? gov.approvalRef : null,
+      typeof gov?.environmentFingerprint === "string" ? gov.environmentFingerprint : null,
+    approvalRef: typeof gov?.approvalRef === "string" ? gov.approvalRef : null,
     bundleId: typeof identity.bundleId === "string" ? identity.bundleId : null,
     modelVersion: typeof identity.modelVersion === "string" ? identity.modelVersion : null,
+    gitHash,
+    generatedAt,
   };
 }
 

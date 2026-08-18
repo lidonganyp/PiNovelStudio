@@ -121,7 +121,7 @@ test("evaluateProductionReleaseGate / explainFingerprintMismatch 必须带字段
 test("held 不得迁回 evaluated；同一基线不得换号重复评审", () => {
   assert.equal(isStatusTransitionValid("held", "evaluated"), false);
   assert.equal(isStatusTransitionValid("held", "approved_dev"), false);
-  assert.equal(isStatusTransitionValid("held", "active_prod"), false);
+  assert.equal(isStatusTransitionValid("held", "active_prod"), true);
 });
 
 function makeCompleteManifest(releaseId, status = "held") {

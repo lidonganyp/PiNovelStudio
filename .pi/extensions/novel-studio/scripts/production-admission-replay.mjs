@@ -127,11 +127,21 @@ function findTrace(ws, chapterId) {
   return hit ? join(tracesDir, hit) : null;
 }
 
+function toRepoRelative(absPath) {
+  const root = DEFAULT_PROJECT_ROOT.replace(/\\/g, "/");
+  const normalized = absPath.replace(/\\/g, "/");
+  if (normalized.toLowerCase().startsWith(root.toLowerCase() + "/")) {
+    return normalized.slice(root.length + 1);
+  }
+  return absPath;
+}
+
 function copyTrace(ws, chapterId, outName) {
   const src = findTrace(ws, chapterId);
   if (!src) return null;
   const dest = join(OUT_DIR, "traces", `${outName}-quality-trace.json`);
   copyIfExists(src, dest);
+  if (!existsSync(dest)) return null;
   return dest;
 }
 
@@ -262,8 +272,27 @@ materializeScratch(scratch);
 const samples = [];
 
 function record(sample) {
-  samples.push(sample);
+  const absTrace = sample.traceAbsolutePath ?? null;
+  const relative = absTrace ? toRepoRelative(absTrace) : (sample.tracePath ?? null);
+  samples.push({
+    ...sample,
+    tracePath: relative,
+    traceRelativePath: relative,
+    traceAbsolutePath: absTrace,
+  });
   console.log(`[${sample.passed ? "PASS" : "FAIL"}] ${sample.id}: ${sample.detail}`);
+}
+
+function factGuardBlocked(ws, chapterId, result) {
+  const tracePath = findTrace(ws, chapterId);
+  const doc = tracePath ? readJson(tracePath) : null;
+  const blob = JSON.stringify({
+    gates: doc?.gates ?? [],
+    envelopes: doc?.failureEnvelopes ?? [],
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+  return /fact_guard|factguard|禁制|法宝/i.test(blob);
 }
 
 {
@@ -290,7 +319,7 @@ function record(sample) {
       && gov?.devMode === false
       && gov?.releaseId === RELEASE_ID,
     detail: `exit=${result.status} maxDurationMs=${maxDuration} timedOut=${timedOut} saved=${hasChapterFile(ws, "1")} releaseId=${gov?.releaseId ?? "none"}`,
-    tracePath: copyTrace(ws, "1", id),
+    traceAbsolutePath: copyTrace(ws, "1", id),
     gate: firstGate(ws, "1"),
     maxDurationMs: maxDuration,
     releaseGovernance: gov,
@@ -301,26 +330,54 @@ function record(sample) {
   const id = "retry";
   const ws = scaffoldWorkspace(scratch, id);
   const result = invokeChapter(scratch, id, "1", 1, {
-    PINOVEL_FORCE_REQUEST_TIMEOUT_MS: "1",
-    PINOVEL_MODEL_MAX_RETRIES: "0",
+    PINOVEL_ADMISSION_FAIL_ONCE: "timeout",
+    PINOVEL_ADMISSION_STUB: "1",
   });
   const calls = collectModelCalls(ws, "1");
   const retryIndexes = calls.map((c) => Number(c.retryIndex) || 0);
   const retried = retryIndexes.some((idx) => idx > 0);
+  const saved = hasChapterFile(ws, "1");
   const gov = releaseGovernance(ws, "1");
   record({
     id,
-    scenario: "automatic chapter retry",
-    transport: "network",
-    passed: result.status !== 0
+    scenario: "successful automatic chapter recovery",
+    transport: "fail_once_then_stub",
+    passed: result.status === 0
       && retried
-      && !hasChapterFile(ws, "1")
+      && saved
       && gov?.devMode === false
       && gov?.releaseId === RELEASE_ID,
-    detail: `exit=${result.status} retryIndexes=${JSON.stringify(retryIndexes)} saved=${hasChapterFile(ws, "1")}`,
-    tracePath: copyTrace(ws, "1", id),
+    detail: `exit=${result.status} retryIndexes=${JSON.stringify(retryIndexes)} saved=${saved}`,
+    traceAbsolutePath: copyTrace(ws, "1", id),
     gate: firstGate(ws, "1"),
     retryIndexes,
+    releaseGovernance: gov,
+  });
+}
+
+{
+  const id = "factguard-block";
+  const ws = scaffoldWorkspace(scratch, id);
+  const result = invokeChapter(scratch, id, "1", 1, {
+    PINOVEL_ADMISSION_STUB: "1",
+    PINOVEL_ADMISSION_STUB_INJECT: "叶尘取出一枚从未登记的法宝，当场解开禁制。",
+  });
+  const gov = releaseGovernance(ws, "1");
+  const gate = firstGate(ws, "1");
+  const blockedByFact = factGuardBlocked(ws, "1", result);
+  record({
+    id,
+    scenario: "FactGuard hard block",
+    transport: "stub_fact_inject",
+    passed: result.status !== 0
+      && !hasChapterFile(ws, "1")
+      && !stateAdvanced(ws)
+      && blockedByFact
+      && gov?.devMode === false
+      && gov?.releaseId === RELEASE_ID,
+    detail: `exit=${result.status} saved=${hasChapterFile(ws, "1")} gate=${gate ?? "none"} factBlock=${blockedByFact}`,
+    traceAbsolutePath: copyTrace(ws, "1", id),
+    gate,
     releaseGovernance: gov,
   });
 }
@@ -345,7 +402,7 @@ function record(sample) {
       && gov?.devMode === false
       && gov?.releaseId === RELEASE_ID,
     detail: `exit=${result.status} saved=${hasChapterFile(ws, "1")} rolledBack=${save?.rolledBack ?? false}`,
-    tracePath: copyTrace(ws, "1", id),
+    traceAbsolutePath: copyTrace(ws, "1", id),
     gate: firstGate(ws, "1"),
     atomicSave: save,
     releaseGovernance: gov,
@@ -372,14 +429,14 @@ function record(sample) {
       && gov?.devMode === false
       && gov?.releaseId === RELEASE_ID,
     detail: `exit=${result.status} saved=${hasChapterFile(ws, "1")} rolledBack=${save?.rolledBack ?? false}`,
-    tracePath: copyTrace(ws, "1", id),
+    traceAbsolutePath: copyTrace(ws, "1", id),
     gate: firstGate(ws, "1"),
     atomicSave: save,
     releaseGovernance: gov,
   });
 }
 
-const requiredIds = ["timeout", "retry", "atomic-rollback", "state-commit-fail"];
+const requiredIds = ["timeout", "retry", "atomic-rollback", "state-commit-fail", "factguard-block"];
 const requiredPassed = requiredIds.every((id) => samples.find((s) => s.id === id)?.passed);
 const productionLike = samples
   .filter((s) => requiredIds.includes(s.id))
@@ -389,8 +446,11 @@ const productionComplete = requiredPassed && productionLike;
 const harnessHash = sha256File(join(EXT_ROOT, "scripts", "production-admission-replay.mjs"));
 const traceHashes = {};
 for (const sample of samples) {
-  if (sample.tracePath && existsSync(sample.tracePath)) {
-    traceHashes[sample.id] = sha256File(sample.tracePath);
+  const hashSrc = sample.traceAbsolutePath && existsSync(sample.traceAbsolutePath)
+    ? sample.traceAbsolutePath
+    : (sample.tracePath && existsSync(sample.tracePath) ? sample.tracePath : null);
+  if (hashSrc) {
+    traceHashes[sample.id] = sha256File(hashSrc);
   }
 }
 const reportBody = {

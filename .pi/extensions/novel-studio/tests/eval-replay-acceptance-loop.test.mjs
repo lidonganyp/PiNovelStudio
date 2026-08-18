@@ -1509,7 +1509,8 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
       ),
     );
     assert.equal(report.failedChecks.length, 0);
-    assert.equal(report.checks.length, 12);
+    assert.equal(report.checks.length, 13);
+    assert.ok(report.checks.some((c) => c.name === "trace_identity_binding"));
   });
 
   it("trace 归档缺失 → trace_retention 违规；failed 无 envelope → silent_degrade 违规", () => {
@@ -1723,6 +1724,111 @@ describe("P5 eval-deterministic-grader：合成 runRoot 评分", () => {
     assert.ok(report.failedChecks.includes("real_model_binding"), report.failedChecks.join(","));
     const check = report.checks.find((c) => c.name === "real_model_binding");
     assert.ok(check.violations.some((v) => v.detail.includes("mock") || v.detail.includes("token")));
+  });
+
+  it("production_like 顶层 manifest 改贴身份但底层 trace 仍是旧 release → trace_identity_binding 失败", () => {
+    const fixture = buildValidFixture({
+      fixtureId: "fixture.closure-production-like-134-01",
+      replayMode: "production_like",
+    });
+    const sampleDir = join(tmpRun, "samples", fixture.fixtureId);
+    const tracesDir = join(sampleDir, "traces");
+    mkdirSync(tracesDir, { recursive: true });
+    writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
+    writeFileSync(
+      join(sampleDir, "state-projection.json"),
+      JSON.stringify({ narrativeStateHash: HEX64("state-rebind") }),
+    );
+    const traceFile = join(tracesDir, "chapter-002-quality-trace.json");
+    writeFileSync(
+      traceFile,
+      JSON.stringify({
+        createdAt: "2026-08-18T02:55:01.936Z",
+        buildInfo: { gitHash: "d238c7cd82475ef5b6775f778f7de97adde938d4" },
+        gates: [
+          {
+            stage: "v2_final_selected",
+            evidence: {
+              modelCalls: [
+                {
+                  requestedRoute: "v2_rawstage2_gemini31",
+                  actualProvider: "gemini31",
+                  actualModel: "gemini-3.1-pro",
+                  tokenUsage: { in: 10, out: 20 },
+                },
+              ],
+              releaseGovernance: {
+                devMode: false,
+                releaseId: "rel-prod-134",
+                environmentFingerprint: "eb8a410183971a25b017f85ff730e2ce96a5f94636d785dbc84e35ddac3a4a05",
+                approvalRef: "approval-rel-prod-134-1787020172038-55d60317",
+                behaviorIdentity: {
+                  bundleId: "6d87b4262248a9522669a34750506ebf168410406e1fc857d43f7a35397f2d0b",
+                  modelVersion: "gemini31",
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const reboundRelease = "rel-prod-135";
+    const reboundBundle = "c103bb7662bb3eecc0906e4a78f6ca456750a2ef9ff962ea0a84b368979396b7";
+    const manifest = {
+      schemaId: "pinovel.eval-replay-run-manifest",
+      schemaVersion: 1,
+      runId: "run-msy135-rebind",
+      evalProtocolVersion: "pinovel.eval-protocol/1",
+      replayMode: "production_like",
+      releaseId: reboundRelease,
+      bundleId: reboundBundle,
+      runRoot: tmpRun,
+      startedAt: "2026-08-18T02:53:01.163Z",
+      finishedAt: "2026-08-18T02:57:28.478Z",
+      samples: [
+        buildManifestEntry(fixture, tracesDir, {
+          replayMode: "production_like",
+          modelCalls: 1,
+          releaseIdentity: {
+            devMode: false,
+            releaseId: reboundRelease,
+            environmentFingerprint: "541a0b23b94ccc4747e56604a7295ba0ac0b241b1527c95591aea2b61be5543f",
+            approvalRef: "approval-rel-prod-135-1787030718297-db0ede0d",
+            bundleId: reboundBundle,
+            modelVersion: "gemini31",
+          },
+        }),
+      ],
+      summary: {
+        totalSamples: 1,
+        countedSamples: 1,
+        completed: 1,
+        failed: 0,
+        skipped: 0,
+        traceRetentionRate: 1,
+        isolationViolationCount: 0,
+      },
+    };
+
+    const report = grader.gradeDeterministic(manifest, tmpRun, {
+      releaseId: reboundRelease,
+      bundleId: reboundBundle,
+      environmentFingerprint: "541a0b23b94ccc4747e56604a7295ba0ac0b241b1527c95591aea2b61be5543f",
+      approvalRef: "approval-rel-prod-135-1787030718297-db0ede0d",
+      gitHash: "ed7616196864739c5b57b163bdf274b09593f429",
+      createdAt: "2026-08-18T05:20:00.000Z",
+    });
+    assert.equal(report.passed, false);
+    assert.ok(
+      report.failedChecks.includes("trace_identity_binding"),
+      report.failedChecks.join(", "),
+    );
+    const identity = report.checks.find((c) => c.name === "trace_identity_binding");
+    const details = identity.violations.map((v) => v.detail).join("\n");
+    assert.match(details, /rel-prod-134/);
+    assert.match(details, /rel-prod-135/);
+    assert.match(details, /d238c7cd|ed761619|createdAt|时间线|fingerprint|approval/i);
   });
 
   it("gradeDeterministicFromRunRoot：manifest 缺失 → fail-closed", () => {
@@ -2253,11 +2359,19 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
   });
 
   const pipelineTraceForArm = (armId) => {
+    const releaseGovernance = {
+      devMode: false,
+      releaseId: "rel-prod-110",
+      environmentFingerprint: "fp-110",
+      approvalRef: "apr-110",
+      behaviorIdentity: { bundleId: "bundle-20260815", modelVersion: "gemini31" },
+    };
     if (armId.startsWith("raw") || armId.includes("raw-")) {
       return {
         schemaId: "pinovel.independent-raw-quality-trace",
         matrixArm: "raw_direct",
         evalMode: "B0",
+        createdAt: "2026-08-15T00:00:30.000Z",
         gates: [
           {
             stage: "v2_final_selected",
@@ -2271,6 +2385,7 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
                   tokenUsage: { in: 1600, out: 2600 },
                 },
               ],
+              releaseGovernance,
             },
           },
         ],
@@ -2281,6 +2396,7 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
       return { stageResults: [], recoveryAttempts: [] };
     }
     return {
+      createdAt: "2026-08-15T00:00:30.000Z",
       gates: [
         {
           stage: "v2_final_selected",
@@ -2301,6 +2417,7 @@ describe("矩阵报告必须由回放 run 生成，不得手写两字段过门",
                 tokenUsage: { in: 1700, out: 4700 },
               },
             ],
+            releaseGovernance,
           },
         },
       ],

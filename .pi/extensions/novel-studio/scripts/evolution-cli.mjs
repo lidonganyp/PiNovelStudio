@@ -1172,6 +1172,10 @@ function cmdPromote(args) {
           bundleId: manifest.bundleId ?? null,
           changeClass: manifest.changeClass,
           evalRunRoot,
+          expectedTraceIdentity: {
+            releaseId,
+            bundleId: manifest.bundleId ?? "",
+          },
         });
         if (evalGate.verdict !== "approved") {
           console.error(
@@ -1250,6 +1254,13 @@ function cmdPromote(args) {
     }
   }
 
+  const cliEvidenceRefs = collectRepeatableArg(process.argv, "evidence-ref");
+  const evidenceRefs = [
+    ...cliEvidenceRefs,
+    ...(canaryEvidenceRef ? [canaryEvidenceRef] : []),
+    ...(args["eval-evidence-root"] ? [`eval-run:${resolve(args["eval-evidence-root"])}`] : []),
+    ...(args["admission-replay"] ? [`admission-replay:${resolve(args["admission-replay"])}`] : []),
+  ];
   const promotionEvent = {
     eventId: `evt-${releaseId}-promote-${Date.now()}`,
     releaseId,
@@ -1257,11 +1268,11 @@ function cmdPromote(args) {
     toStatus: target,
     reason,
     actor,
-    ...(canaryEvidenceRef ? { evidenceRefs: [canaryEvidenceRef] } : {}),
+    ...(evidenceRefs.length > 0 ? { evidenceRefs } : {}),
     timestamp: new Date().toISOString(),
   };
   let promotionEventRecorded = false;
-  if (target === "active_prod" && canaryEvidenceRef) {
+  if (target === "active_prod") {
     try {
       registry.recordStateEvent(promotionEvent);
       promotionEventRecorded = true;
@@ -1535,11 +1546,25 @@ function cmdRollback(args) {
   const ACCEPTABLE_TARGET_STATUS = new Set([
     "active_dev", "candidate_prod", "active_prod", "approved_dev", "frozen", "evaluated",
   ]);
-  // 旧 release 仅审计读取：held 不可作为任何 rollback 目标（版本收敛原则）。
-  // 恢复生产必须新建 releaseId 重新走完整审批链（forward-fix），不得重新激活旧基线。
-  if (!ACCEPTABLE_TARGET_STATUS.has(targetManifest.status)) {
+  // 指定 rollbackReleaseId 即使已 held 也可执行（promote 单例会把前序 active_prod 置 held）。
+  // development 回滚与非指定 held 目标仍 fail-closed。
+  const designatedRollback =
+    currentManifest?.rollbackReleaseId
+    && currentManifest.rollbackReleaseId !== "rel-000"
+    && currentManifest.rollbackReleaseId === targetReleaseId;
+  if (targetManifest.status === "held") {
+    if (kind !== "production" || !designatedRollback) {
+      console.error(
+        `[evolution:rollback] 错误：目标 ${targetReleaseId} 状态 held 不可作为回滚目标` +
+          (kind === "production"
+            ? `（不是当前 ${currentPointer.releaseId} 的 rollbackReleaseId）`
+            : "（development 不得回滚到 held）"),
+      );
+      process.exit(5);
+    }
+  } else if (!ACCEPTABLE_TARGET_STATUS.has(targetManifest.status)) {
     const notRollbackable =
-      "draft/held/rejected/quarantined 不可回滚到（旧 release 仅审计读取；恢复需新建 releaseId 重新审批）";
+      "draft/rejected/quarantined/revoked/retired 不可回滚到（恢复需指定 rollbackReleaseId 或新建 release）";
     console.error(
       `[evolution:rollback] 错误：目标 ${targetReleaseId} 状态 ${targetManifest.status} 不可作为回滚目标` +
         `（${notRollbackable}）`,
@@ -1591,8 +1616,34 @@ function cmdRollback(args) {
     }
   }
 
-  // 旧 release 仅审计读取（版本收敛原则）：rollback 不再把 held 目标重新晋级
-  // active_prod；恢复生产必须新建 releaseId 重新走完整审批链（forward-fix）。
+  // 指定 rollback 目标若因单例被置 held，必须恢复为 active_prod，否则生产指针指向不可运行基线。
+  if (kind === "production" && targetManifest.status === "held") {
+    try {
+      registry.transitionStatus(targetReleaseId, "active_prod", {
+        actor,
+        approvalRef: targetManifest.approvalRef,
+        resolveAllManifests: () => registry.listManifests(),
+      });
+      registry.recordStateEvent({
+        eventId: `evt-${targetReleaseId}-rollback-restore-${Date.now()}`,
+        releaseId: targetReleaseId,
+        fromStatus: "held",
+        toStatus: "active_prod",
+        reason: `designated rollback restore from ${currentPointer.releaseId}: ${reason}`,
+        actor,
+        evidenceRefs: [
+          `rollback:${currentPointer.releaseId}->${targetReleaseId}`,
+        ],
+        timestamp: new Date().toISOString(),
+      });
+      console.log(`[evolution:rollback] 指定回滚目标 ${targetReleaseId} 已从 held 恢复为 active_prod`);
+    } catch (e) {
+      console.error(
+        `[evolution:rollback] 错误：指针已回滚到 ${targetReleaseId}，但无法将其从 held 恢复为 active_prod：${e.message}`,
+      );
+      process.exit(5);
+    }
+  }
 
   const rbHistory = store.loadRollbackHistory(kind);
 
@@ -2262,6 +2313,10 @@ function cmdEvalGate(args) {
     bundleId: manifest.bundleId ?? null,
     changeClass: manifest.changeClass,
     evalRunRoot: resolve(evalRunRoot),
+    expectedTraceIdentity: {
+      releaseId,
+      bundleId: manifest.bundleId ?? "",
+    },
   });
 
   // 待审批报告落盘（不执行任何状态迁移）
@@ -2417,6 +2472,21 @@ function parseArgs(argv) {
     }
   }
   return args;
+}
+
+function collectRepeatableArg(argv, name) {
+  const values = [];
+  const prefix = `--${name}=`;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === `--${name}` && argv[i + 1] && !argv[i + 1].startsWith("--")) {
+      values.push(argv[i + 1]);
+      i += 1;
+    } else if (a.startsWith(prefix)) {
+      values.push(a.slice(prefix.length));
+    }
+  }
+  return values;
 }
 
 function printHelp() {

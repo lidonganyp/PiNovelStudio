@@ -134,12 +134,23 @@ function makeRegistry(root) {
   return createEvolutionReleaseRegistry({ releasesDir: join(root, "releases") });
 }
 
-function g5PipelineTrace(kind) {
+function g5PipelineTrace(kind, releaseId, bundleId, approvalRef) {
+  const releaseGovernance = releaseId && bundleId
+    ? {
+        devMode: false,
+        releaseId,
+        environmentFingerprint: "fp-test-hash",
+        approvalRef: approvalRef ?? `apr-${String(releaseId).replace(/^rel-/, "")}`,
+        behaviorIdentity: { bundleId, modelVersion: "gemini31" },
+      }
+    : undefined;
   if (kind === "independent_raw") {
     return {
       schemaId: "pinovel.independent-raw-quality-trace",
       matrixArm: "raw_direct",
       evalMode: "B0",
+      createdAt: "2026-08-16T00:00:30.000Z",
+      buildInfo: { gitHash: "deadbeefcafebabe0123456789abcdef01234567" },
       gates: [{
         stage: "v2_final_selected",
         evidence: {
@@ -152,6 +163,7 @@ function g5PipelineTrace(kind) {
               tokenUsage: { in: 1600, out: 2600 },
             },
           ],
+          ...(releaseGovernance ? { releaseGovernance } : {}),
         },
       }],
       recoveryAttempts: [],
@@ -159,6 +171,8 @@ function g5PipelineTrace(kind) {
   }
   if (kind === "unified_full") {
     return {
+      createdAt: "2026-08-16T00:00:30.000Z",
+      buildInfo: { gitHash: "deadbeefcafebabe0123456789abcdef01234567" },
       gates: [{
         stage: "v2_final_selected",
         evidence: {
@@ -178,6 +192,7 @@ function g5PipelineTrace(kind) {
               tokenUsage: { in: 1700, out: 4700 },
             },
           ],
+          ...(releaseGovernance ? { releaseGovernance } : {}),
         },
       }],
       recoveryAttempts: [],
@@ -253,7 +268,12 @@ function makeEvalRunRoot(runRoot, releaseId, bundleId, opts = {}) {
     writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
     writeFileSync(
       join(tracesDir, "chapter-001-quality-trace.json"),
-      JSON.stringify(g5PipelineTrace(pipelineKind)),
+      JSON.stringify(g5PipelineTrace(
+        pipelineKind,
+        releaseId,
+        bundleId,
+        opts.approvalRef ?? `apr-${String(releaseId).replace(/^rel-/, "")}`,
+      )),
     );
     writeFileSync(
       join(sampleDir, "state-projection.json"),
@@ -1142,15 +1162,17 @@ test("rollback: 当前无 active pointer 退出码 4", () => {
   }
 });
 
-test("rollback: production 回滚到 held 旧基线被阻断（旧 release 仅审计读取）", () => {
+test("rollback: production 可执行指定 rollbackReleaseId（即使其因单例已被 held）", () => {
   const root = makeTempRoot();
   try {
     const m1 = makeManifest("rel-001", "candidate_prod", { approvalRef: "apr-001" });
-    const m2 = makeManifest("rel-002", "candidate_prod", { approvalRef: "apr-002" });
+    const m2 = makeManifest("rel-002", "candidate_prod", {
+      approvalRef: "apr-002",
+      rollbackReleaseId: "rel-001",
+    });
     setupReleases(root, [m1, m2]);
     writeStubApproval(root, "rel-001", "apr-001", m1);
     writeStubApproval(root, "rel-002", "apr-002", m2);
-    // promote rel-001 → active_prod（首次 prod switch，建立唯一生产基线）
     runCli(
       [
         "promote", "--release-id", "rel-001", "--target", "active_prod", "--confirm-prod",
@@ -1158,10 +1180,7 @@ test("rollback: production 回滚到 held 旧基线被阻断（旧 release 仅�
       ],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
-    // DG-6 单一生产基线：晋级 rel-002 前必须先降级旧基线 rel-001（active_prod → held），
-    // 否则 active_prod 单例约束会阻断第二次晋级。
     runCli(["hold", "--release-id", "rel-001"], { PINOVEL_EVOLUTION_ROOT: root });
-    // promote rel-002 → active_prod（第二次 prod switch，fromReleaseId=rel-001）
     runCli(
       [
         "promote", "--release-id", "rel-002", "--target", "active_prod", "--confirm-prod",
@@ -1170,24 +1189,21 @@ test("rollback: production 回滚到 held 旧基线被阻断（旧 release 仅�
       { PINOVEL_EVOLUTION_ROOT: root },
     );
 
-    // 旧 release 仅审计读取：rollback 到 held 旧基线必须被阻断（exit 5，fail-closed）
     const result = runCli(
       ["rollback", "--kind", "production"],
       { PINOVEL_EVOLUTION_ROOT: root },
     );
-    assert.equal(result.code, 5, `期望阻断 exit 5，实际 ${result.code}：${result.stderr}`);
-    assert.match(result.stderr, /held/);
+    assert.equal(result.code, 0, `期望可执行回滚，实际 ${result.code}：${result.stderr}`);
 
-    // fail-closed：pointer 未变，rel-002 仍是唯一 active_prod，rel-001 保持 held（仅审计读取）
     const store = makeStore(root);
     const prodPointer = store.readActive("production");
-    assert.equal(prodPointer?.releaseId, "rel-002");
+    assert.equal(prodPointer?.releaseId, "rel-001");
 
     const registry = makeRegistry(root);
-    assert.equal(registry.loadManifest("rel-002").status, "active_prod");
-    assert.equal(registry.loadManifest("rel-001").status, "held");
+    assert.equal(registry.loadManifest("rel-001").status, "active_prod");
+    assert.equal(registry.loadManifest("rel-002").status, "held");
     const active = registry.listManifests().filter((x) => x.status === "active_prod");
-    assert.deepEqual(active.map((x) => x.releaseId), ["rel-002"]);
+    assert.deepEqual(active.map((x) => x.releaseId), ["rel-001"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

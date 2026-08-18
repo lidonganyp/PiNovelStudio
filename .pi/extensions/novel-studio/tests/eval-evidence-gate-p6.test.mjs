@@ -137,12 +137,22 @@ function makeWorkspace(projectRoot, workspaceId, opts = {}) {
   return ws;
 }
 
-function pipelineTraceFor(kind) {
+function pipelineTraceFor(kind, releaseId, bundleId) {
+  const releaseGovernance = releaseId && bundleId
+    ? {
+        devMode: false,
+        releaseId,
+        environmentFingerprint: "fp-p6",
+        approvalRef: "apr-p6",
+        behaviorIdentity: { bundleId, modelVersion: "gemini31" },
+      }
+    : undefined;
   if (kind === "independent_raw") {
     return {
       schemaId: "pinovel.independent-raw-quality-trace",
       matrixArm: "raw_direct",
       evalMode: "B0",
+      createdAt: "2026-08-15T00:00:30.000Z",
       gates: [
         {
           stage: "v2_final_selected",
@@ -158,6 +168,7 @@ function pipelineTraceFor(kind) {
                 tokenUsage: { in: 1600, out: 2600 },
               },
             ],
+            ...(releaseGovernance ? { releaseGovernance } : {}),
           },
         },
       ],
@@ -166,6 +177,7 @@ function pipelineTraceFor(kind) {
   }
   if (kind === "unified_full") {
     return {
+      createdAt: "2026-08-15T00:00:30.000Z",
       gates: [
         {
           stage: "v2_final_selected",
@@ -190,6 +202,7 @@ function pipelineTraceFor(kind) {
                 tokenUsage: { in: 1700, out: 4700 },
               },
             ],
+            ...(releaseGovernance ? { releaseGovernance } : {}),
           },
         },
       ],
@@ -277,7 +290,7 @@ function makeEvalRunRoot(root, releaseId, bundleId, opts = {}) {
     writeFileSync(join(sampleDir, "fixture.json"), JSON.stringify(fixture, null, 2));
     writeFileSync(
       join(tracesDir, "chapter-001-quality-trace.json"),
-      JSON.stringify(pipelineTraceFor(pipelineKind)),
+      JSON.stringify(pipelineTraceFor(pipelineKind, releaseId, bundleId)),
     );
     if (replayMode === "production_like" || replayMode === "dev_real_model" || replayMode === "candidate_like") {
       writeFileSync(

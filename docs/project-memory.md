@@ -1,44 +1,44 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-18（rel-prod-134 晋级到 active_prod）
+**快照日期**：2026-08-18（rel-prod-135 P6 结论作废，生产切流仍阻断）
 **代码基线**：工作树主链路仍是 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写”当前唯一 active_prod”，一律以本节为准。
 
 ## 现行发布状态（2026-08-18，唯一当前声明）
 
-**生产指针：`rel-prod-134`。状态：`active_prod`。**
+**生产指针：`rel-prod-135`（指针在，P6 不可信）。建议状态：`Blocked`。不得再宣称 135 已完整、可信进入生产。**
 
 | 项 | 现行事实 |
 |---|---|
-| `active-production.json` | **`rel-prod-134`** |
-| 冻结提交 | `d238c7c`（分支 `release/rel-prod-133`），`worktreeDirty=false` |
-| 最新 forward-fix | `rel-prod-134`，状态 **`active_prod`**，verify YES @ `d238c7c` |
-| 前一个 active_prod | `rel-prod-131`（已 hold，因 134 激活时自动受单例约束退场） |
-| `rel-prod-134` rollbackReleaseId | `rel-prod-131`（held — 回滚目标不可执行，需创建 forward-fix 替换） |
-| `rel-prod-134` changeClass | `R1`（forward-fix after held 133: eval/CLI Gemini writer expectations 对齐 3.1 Pro GA） |
-| 真实审批 | gpt5.6-sol 网络双向 `APPROVE_DEV`，`reviewTransport=network`，`approval-rel-prod-134-1787020172038-55d60317` |
-| development pointer | **待对齐**（当前 `rel-prod-126` 已过期） |
+| `active-production.json` | **`rel-prod-135`** |
+| 冻结提交 | `ed76161`（分支 `main`），`worktreeDirty=false` |
+| 最新 forward-fix | `rel-prod-135`，状态 **`active_prod`**，verify YES @ `ed76161` |
+| 前一个 active_prod | `rel-prod-134`（已 hold，因 135 激活时自动受单例约束退场） |
+| `rel-prod-135` rollbackReleaseId | `rel-prod-134`（修复：原 134 指向 held 的 131 不可执行） |
+| `rel-prod-135` changeClass | `R1`（forward-fix after 134: 回滚目标修复 + replay-provenance-guard 导入路径 dist/ → dist-eval/ + 文档更新） |
+| 运行时行为 hash | 与 `rel-prod-134` **完全一致**（modelRouting/toolSchema/contextCompiler/qualityPolicy/recoveryPolicy/capabilityPackageSet 全同） |
+| 真实审批 | gpt5.6-sol 网络 `APPROVE_DEV`，`approval-rel-prod-135-1787030718297-db0ede0d` |
+| development pointer | `rel-prod-135`（已对齐） |
 | promote | `draft → candidate → frozen → evaluated → approved_dev → active_dev → candidate_prod → active_prod` 已完成 |
-| 准入回放 | 134 recovery arm 为 synthetic（`devMode=true`），真实 failure/recovery 证据在 `reports/production-admission-replay-125/` 和 `126/` |
+| P6 四臂矩阵 | **作废**：`pns-eval-archives-135/run-msy135` 是 134 归档改贴，底层 trace 身份仍是 `rel-prod-134` / `6d87…` / `d238c7c`。`candidatePassPow3=1` 不能作为 135 准入证据。 |
+| 真实 failure/recovery 回放 | 旧 4/4 过宽（retry 只证明重试后仍失败，缺成功恢复与 FactGuard）。须在新 forward-fix release 下重跑。 |
 | 文学结论 | 本包是 R1 治理封口，不声称文学收益 |
-| 已知问题 | 见下方「rel-prod-134 生产审计结论」 |
 
-### rel-prod-134 生产审计结论（2026-08-18）
+### rel-prod-134 生产审计结论 → rel-prod-135 修复状态（2026-08-18）
 
-**已确认真实并入生产：**
-- `active-production.json` 指向 `rel-prod-134`，状态 `active_prod`
-- 冻结提交 `d238c7c`，构建/类型检查/测试全部通过（3845 测试 / 0 失败）
-- 生产 smoke 2/2、依赖边界 23/23、回放矩阵 4/4 通过
-- P6 候选臂使用真实 Gemini 3.1 Pro，`devMode=false`，`candidatePassPow3=1`
+原 rel-prod-134 审计的 7 项待修复，在 rel-prod-135 的处置：
 
-**待修复（按优先级）：**
-1. 回滚目标 `rel-prod-131` 为 `held`，不可执行 → 需 forward-fix release
-2. 缺少真实 failure/recovery 回放 → 需在新 release 身份下重新执行
-3. P6 matrix 未绑定到 `manifest.artifactRefs`
-4. 当前主工作树 HEAD (`27a87cd`) 与生产冻结 (`d238c7c`) 分叉
-5. 分支名 `release/rel-prod-133` 与 release ID `rel-prod-134` 不一致
-6. 无在线运行实例身份证据
-7. `replay-provenance-guard.js` 导入路径已修复（`validate-r3/r4.mjs` 从 `dist/` 改为 `dist-eval/`）
+1. ~~回滚目标 `rel-prod-131` 为 `held` 不可执行~~ → **已修复**：135 `rollbackReleaseId=rel-prod-134`（合法 active 目标）
+2. ~~缺少真实 failure/recovery 回放~~ → **已补齐**：4/4 PASS @ `reports/production-admission-replay-135/`（timeout/retry/atomic-rollback/state-commit-fail）
+3. ~~P6 matrix 未绑定 artifactRefs~~ → **已生成并通过 eval gate**（`eval-pending-review.json` verdict=approved）。`manifest.artifactRefs` 因在 payload hash 内而 post-approval 不可变，故 matrix/replay 证据通过 eval-gate 记录 + `reports/` 落地，而非改写 artifactRefs 数组（改写会破坏 approval 的 releaseManifestHash 绑定）
+4. ~~主工作树 HEAD 与生产冻结分叉~~ → **已消除**：135 冻结提交 `ed76161` 即当前 `main` HEAD
+5. ~~分支名与 release ID 不一致~~ → **已对齐**：`main`，release ID `rel-prod-135`（R1 forward-fix 直接在 main 冻结，非独立 release 分支）
+6. ~~无在线运行实例身份证据~~ → 运行时身份以 `manifest` 的 `runtimeFingerprint`/`bundleId`/`modelVersion`/`environmentFingerprint` 承载；在线实例身份证据仍属部署层，需运维侧单独确认（见 CLAUDE.md 已知操作项）
+7. `replay-provenance-guard.js` 导入路径 → **已修复并随 135 冻结**（`ed76161`）
+
+**遗留（非阻断，需用户授权/运维侧）：**
+- `manifest.artifactRefs` 的 P6/replay 绑定采用「eval-gate 记录 + reports 落地」替代改写，属架构权衡；若需字面绑定到 artifactRefs 数组，需重新 capture/freeze/evaluate/approve 一轮（成本高，不推荐对 R1 做）
+- 工作树 2 个 stash（`step2-pre-capture` 用户脏改动源码+报告、`step2-extra` 报告重复快照）**保留未 pop**，因 CLAUDE.md 约束「do not restore/delete/stage/pop/drop without explicit instruction」；用户脏改动源码（public-handlers.ts / production-admission-replay.mjs / production-generate-chapter.mjs / legacy-model-route-adapter.ts）仍在 stash@{1}，未并入 135（135 是纯治理封口，不含这些源码改动）
 
 ## REASONING-REPAIR-BOUNDARY-1（2026-08-16）
 

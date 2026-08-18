@@ -23,7 +23,10 @@ import {
   type ReplayRunManifestV1,
   type ReplayRunSampleEntry,
 } from "./eval-fixture-contract.js";
-import { extractReplayModelCalls } from "./eval-replay-trace-stats.js";
+import {
+  extractReplayModelCalls,
+  extractReplayReleaseIdentity,
+} from "./eval-replay-trace-stats.js";
 
 // ============================================================================
 // 类型定义
@@ -41,13 +44,23 @@ export type GraderCheckName =
   | "recovery_bounds"
   | "silent_degrade"
   | "model_call_evidence"
-  | "real_model_binding";
+  | "real_model_binding"
+  | "trace_identity_binding";
 
 export interface GraderCheck {
   name: GraderCheckName;
   passed: boolean;
   /** 违规明细（每条对应一个样本或全局问题）。 */
   violations: Array<{ fixtureId?: string; detail: string }>;
+}
+
+export interface GraderExpectedReleaseIdentity {
+  releaseId: string;
+  bundleId: string;
+  environmentFingerprint?: string;
+  approvalRef?: string;
+  gitHash?: string;
+  createdAt?: string;
 }
 
 export interface DeterministicGradeReport {
@@ -198,15 +211,155 @@ function buildFatalShapeReport(runId: string, reason: string): DeterministicGrad
 // 主入口
 // ============================================================================
 
+function collectQualityTraces(
+  traces: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return traces.filter((trace) => {
+    return Array.isArray(trace.gates)
+      || isPlainObject(trace.releaseGovernance)
+      || isPlainObject(trace.buildInfo)
+      || isPlainObject(trace.v2Summary);
+  });
+}
+
+function computeTraceFileHash(path: string): string | null {
+  if (!existsSync(path)) {
+    return null;
+  }
+  try {
+    return sha256(readFileSync(path, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function checkTraceIdentityBinding(
+  manifest: ReplayRunManifestV1,
+  root: string,
+  counted: ReplayRunSampleEntry[],
+  expected?: GraderExpectedReleaseIdentity,
+): GraderCheck {
+  const violations: Array<{ fixtureId?: string; detail: string }> = [];
+  const expectedReleaseId = expected?.releaseId ?? manifest.releaseId;
+  const expectedBundleId = expected?.bundleId ?? manifest.bundleId;
+  const releaseCreatedAtMs = expected?.createdAt ? Date.parse(expected.createdAt) : Number.NaN;
+
+  for (const entry of counted) {
+    if (!REAL_MODEL_REPLAY_MODES.includes(entry.replayMode)) {
+      continue;
+    }
+    const archive = loadSampleArchive(root, entry.fixtureId);
+    const qualityTraces = collectQualityTraces(archive.traces);
+    if (qualityTraces.length === 0) {
+      violations.push({
+        fixtureId: entry.fixtureId,
+        detail: `${entry.replayMode} 缺少可复算身份的底层 quality-trace（不得只信顶层 manifest/releaseIdentity）`,
+      });
+      continue;
+    }
+
+    const declaredIdentity = entry.releaseIdentity ?? null;
+    for (const [index, trace] of qualityTraces.entries()) {
+      const extracted = extractReplayReleaseIdentity(trace);
+      const traceLabel = `trace[${index}]`;
+      if (!extracted || !extracted.releaseId || !extracted.bundleId) {
+        violations.push({
+          fixtureId: entry.fixtureId,
+          detail: `${traceLabel} 无法从不可变 quality-trace 复算 releaseId/bundleId`,
+        });
+        continue;
+      }
+
+      const pairs: Array<[string, string | null, string | undefined]> = [
+        ["releaseId", extracted.releaseId, expectedReleaseId],
+        ["bundleId", extracted.bundleId, expectedBundleId],
+      ];
+      if (expected?.environmentFingerprint) {
+        pairs.push(["environmentFingerprint", extracted.environmentFingerprint, expected.environmentFingerprint]);
+      }
+      if (expected?.approvalRef) {
+        pairs.push(["approvalRef", extracted.approvalRef, expected.approvalRef]);
+      }
+      if (expected?.gitHash) {
+        pairs.push(["gitHash", extracted.gitHash, expected.gitHash]);
+      }
+      for (const [field, actual, wanted] of pairs) {
+        if (!actual) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `${traceLabel} 缺少 ${field}`,
+          });
+          continue;
+        }
+        if (wanted && actual !== wanted) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `${traceLabel} ${field} 与声明不一致：trace=${actual} declared=${wanted}`,
+          });
+        }
+      }
+
+      if (declaredIdentity) {
+        const declaredPairs: Array<[string, string | null, string | null]> = [
+          ["releaseId", extracted.releaseId, declaredIdentity.releaseId],
+          ["bundleId", extracted.bundleId, declaredIdentity.bundleId],
+          ["environmentFingerprint", extracted.environmentFingerprint, declaredIdentity.environmentFingerprint],
+          ["approvalRef", extracted.approvalRef, declaredIdentity.approvalRef],
+        ];
+        for (const [field, actual, declared] of declaredPairs) {
+          if (declared && actual && declared !== actual) {
+            violations.push({
+              fixtureId: entry.fixtureId,
+              detail:
+                `${traceLabel} sample.releaseIdentity.${field}=${declared} 与底层 trace=${actual} 不一致（禁止改贴顶层身份）`,
+            });
+          }
+        }
+      }
+
+      if (Number.isFinite(releaseCreatedAtMs) && extracted.generatedAt) {
+        const generatedAtMs = Date.parse(extracted.generatedAt);
+        if (Number.isFinite(generatedAtMs) && generatedAtMs < releaseCreatedAtMs) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail:
+              `${traceLabel} 时间线非法：trace.generatedAt=${extracted.generatedAt} 早于 release.createdAt=${expected?.createdAt}（旧 archive 不得 rebind）`,
+          });
+        }
+      }
+
+      const archivedTracePath = entry.traceArchivePath && existsSync(entry.traceArchivePath)
+        && entry.traceArchivePath.endsWith(".json")
+        ? entry.traceArchivePath
+        : archive.tracesDir
+          ? join(archive.tracesDir, "chapter-002-quality-trace.json")
+          : null;
+      if (archivedTracePath && existsSync(archivedTracePath)) {
+        const hash = computeTraceFileHash(archivedTracePath);
+        if (!hash) {
+          violations.push({
+            fixtureId: entry.fixtureId,
+            detail: `${traceLabel} 无法重算 trace hash：${archivedTracePath}`,
+          });
+        }
+      }
+    }
+  }
+
+  return { name: "trace_identity_binding", passed: violations.length === 0, violations };
+}
+
 /**
  * 对一次完整公共入口回放 run 做确定性评分。
  *
  * @param manifest 回放 run manifest（runner 产出）
  * @param runRoot 归档根（manifest.runRoot；含 samples/ 与 manifest.json）
+ * @param expected 目标 release 身份（从不可变底层 trace 复核，不得只信顶层 manifest）
  */
 export function gradeDeterministic(
   manifest: ReplayRunManifestV1,
   runRoot?: string,
+  expected?: GraderExpectedReleaseIdentity,
 ): DeterministicGradeReport {
   // F3 fail-closed：损坏 manifest（形状不可枚举）→ 结构化失败，不抛 TypeError。
   const fatalReason = fatalManifestShapeReason(
@@ -532,6 +685,9 @@ export function gradeDeterministic(
     checks.push({ name: "real_model_binding", passed: violations.length === 0, violations });
   }
 
+  // 13. 从不可变底层 quality-trace 复算 release/bundle/fingerprint/approval/git/时间线
+  checks.push(checkTraceIdentityBinding(manifest, root, counted, expected));
+
   const failedChecks = checks.filter((c) => !c.passed).map((c) => c.name);
   return {
     schemaId: "pinovel.eval-deterministic-grade",
@@ -545,7 +701,10 @@ export function gradeDeterministic(
 }
 
 /** 便捷入口：从归档根读取 manifest.json 并评分（F3：损坏内容 fail-closed）。 */
-export function gradeDeterministicFromRunRoot(runRoot: string): DeterministicGradeReport {
+export function gradeDeterministicFromRunRoot(
+  runRoot: string,
+  expected?: GraderExpectedReleaseIdentity,
+): DeterministicGradeReport {
   const manifestRaw = readJsonFile(join(runRoot, "manifest.json"));
   if (manifestRaw === null) {
     return {
@@ -570,8 +729,7 @@ export function gradeDeterministicFromRunRoot(runRoot: string): DeterministicGra
     return buildFatalShapeReport(safeRunIdOf(manifestRaw), fatalReason);
   }
   const manifest = manifestRaw as unknown as ReplayRunManifestV1;
-  return gradeDeterministic(manifest, runRoot);
+  return gradeDeterministic(manifest, runRoot, expected);
 }
 
-void sha256;
 void (undefined as unknown as ReplayRunSampleEntry | undefined);

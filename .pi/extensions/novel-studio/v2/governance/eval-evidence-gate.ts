@@ -32,6 +32,7 @@ import {
 import {
   gradeDeterministicFromRunRoot,
   type DeterministicGradeReport,
+  type GraderExpectedReleaseIdentity,
 } from "../core/eval-deterministic-grader.js";
 import {
   parseBoundMatrixReport,
@@ -63,6 +64,8 @@ export interface EvalEvidenceGateInput {
    * null/不存在 → insufficient（按 policy 阻断或警告）。
    */
   evalRunRoot: string | null;
+  /** 目标 release 的不可变身份；传入后 grader 从底层 trace 复核，禁止改贴顶层 manifest。 */
+  expectedTraceIdentity?: GraderExpectedReleaseIdentity;
 }
 
 export interface EvalEvidenceGateResult {
@@ -147,7 +150,10 @@ function readMatrixReportRaw(evalRunRoot: string): unknown | null {
  * 对矩阵四臂归档重跑确定性 grader。
  * 缺 runRoot / 路径不存在 / grader 失败一律记入 failures（fail-closed）。
  */
-export function gradeBoundMatrixArms(report: BoundMatrixReport): {
+export function gradeBoundMatrixArms(
+  report: BoundMatrixReport,
+  expectedCandidateIdentity?: GraderExpectedReleaseIdentity,
+): {
   ok: boolean;
   failures: string[];
 } {
@@ -167,7 +173,10 @@ export function gradeBoundMatrixArms(report: BoundMatrixReport): {
       failures.push(`臂 ${armId} runRoot 不存在：${arm.runRoot}`);
       continue;
     }
-    const armGrade = gradeDeterministicFromRunRoot(arm.runRoot);
+    const armGrade = gradeDeterministicFromRunRoot(
+      arm.runRoot,
+      armId === "candidate" ? expectedCandidateIdentity : undefined,
+    );
     if (!armGrade.passed) {
       failures.push(
         `臂 ${armId} grader 失败：${armGrade.failedChecks.join(", ") || "unknown"}`,
@@ -295,7 +304,7 @@ export function evaluateEvalEvidenceGate(
   }
 
   // -- 4. 确定性 Grader（P5 全量检查） ---------------------------------------
-  const grade = gradeDeterministicFromRunRoot(input.evalRunRoot);
+  const grade = gradeDeterministicFromRunRoot(input.evalRunRoot, input.expectedTraceIdentity);
   evidence.deterministicGradePassed = grade.passed;
   evidence.failedChecks = grade.failedChecks;
   if (!grade.passed) {
@@ -376,7 +385,7 @@ export function evaluateEvalEvidenceGate(
       };
     }
 
-    const armGrades = gradeBoundMatrixArms(parsed.report);
+    const armGrades = gradeBoundMatrixArms(parsed.report, input.expectedTraceIdentity);
     evidence.armGraderFailures = armGrades.failures;
     if (!armGrades.ok) {
       return {

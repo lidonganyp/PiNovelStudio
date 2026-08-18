@@ -48,7 +48,8 @@ export const EVOLUTION_POINTER_SCHEMA_VERSION = 1 as const;
  *     -> held | revoked | retired
  *     -> rollbackReleaseId
  *
- * 终态：rejected / quarantined / revoked / retired（不可直接迁回 active，需新 releaseId 重新审批）
+ * 终态：rejected / quarantined / revoked / retired（不可直接迁回 active）
+ * held → active_prod 仅允许 production rollback 恢复当前 rollbackReleaseId；promote 仍禁止。
  */
 export type ReleaseStatus =
   | "draft"
