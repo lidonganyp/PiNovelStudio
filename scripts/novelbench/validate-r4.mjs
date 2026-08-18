@@ -26,7 +26,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { validateB4ArtifactsProvenance } from "../../.pi/extensions/novel-studio/dist/v2/core/replay-provenance-guard.js";
+import { validateB4ArtifactsProvenance } from "../../.pi/extensions/novel-studio/dist-eval/v2/core/replay-provenance-guard.js";
 import { checkEditorialStoryPreservation } from "../../.pi/extensions/novel-studio/dist/v2/core/editorial-story-preservation-gate.js";
 import { collectRuntimeProvenance, verifyRuntimeProvenance } from "../../.pi/extensions/novel-studio/dist-eval/novelbench/runtime-provenance-collector.js";
 

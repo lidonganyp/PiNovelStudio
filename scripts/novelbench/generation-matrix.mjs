@@ -212,9 +212,8 @@ const RUNTIME_FILE_PATHS = [
   ".pi/extensions/novel-studio/dist-eval/v2/core/unified-entry.js",
   ".pi/extensions/novel-studio/dist-eval/v2/core/unified-orchestrator.js",
   ".pi/extensions/novel-studio/dist-eval/v2/core/editorial-story-preservation-gate.js",
-  // replay-provenance-guard 只被 tsconfig.prod.json 编译到 dist/（validate-r4.mjs 从 dist/ import），
-  // 不在 tsconfig.eval.json 编译范围，因此路径指向 dist/ 而非 dist-eval/。
-  ".pi/extensions/novel-studio/dist/v2/core/replay-provenance-guard.js",
+  // replay-provenance-guard 被 tsconfig.eval.json 编译到 dist-eval/（validate-r3/r4.mjs 从 dist-eval/ import）。
+  ".pi/extensions/novel-studio/dist-eval/v2/core/replay-provenance-guard.js",
   ".pi/extensions/novel-studio/dist-eval/v2/adapters/legacy-model-route-adapter.js",
 ];
 

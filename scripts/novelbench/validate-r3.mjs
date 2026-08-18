@@ -26,7 +26,7 @@ import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
-import { validateB4ArtifactsProvenance } from "../../.pi/extensions/novel-studio/dist/v2/core/replay-provenance-guard.js";
+import { validateB4ArtifactsProvenance } from "../../.pi/extensions/novel-studio/dist-eval/v2/core/replay-provenance-guard.js";
 import { checkEditorialStoryPreservation } from "../../.pi/extensions/novel-studio/dist/v2/core/editorial-story-preservation-gate.js";
 
 // ── 路径 ────────────────────────────────────────────────────────────────────

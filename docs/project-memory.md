@@ -1,28 +1,44 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-17（rel-prod-122 晋级到 candidate_prod）
+**快照日期**：2026-08-18（rel-prod-134 晋级到 active_prod）
 **代码基线**：工作树主链路仍是 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存；旧裁判链仅保留隔离评测。
-**用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写“当前唯一 active_prod”，一律以本节为准。
+**用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写”当前唯一 active_prod”，一律以本节为准。
 
-## 现行发布状态（2026-08-17，唯一当前声明）
+## 现行发布状态（2026-08-18，唯一当前声明）
 
-**生产指针：无。`rel-prod-122` 已到 `candidate_prod`，不得自动切 `active_prod`。**
+**生产指针：`rel-prod-134`。状态：`active_prod`。**
 
 | 项 | 现行事实 |
 |---|---|
-| `active-production.json` | 无 pointer |
-| 最新 release | `rel-prod-122`，状态 **`candidate_prod`** |
-| 干净冻结树 | `D:\CODE\pns-eval-122` @ `2c868e6`，`worktreeDirty=false` |
-| verify | **YES**（fpHash `e3a18115…`，bundleId `15ca74b4…`，modelVersion `gemini31`，prompt hash `2909e82c…`） |
-| 真实审批 | gpt5.6-sol 网络双向 `APPROVE_DEV`，`reviewTransport=network`，`approval-rel-prod-122-1786954695948-a93adc2e` |
-| development pointer | **`rel-prod-122`**（已从 held 的 `rel-prod-120` 切走） |
-| promote | `approved_dev → active_dev → candidate_prod` 已完成 |
-| `active_prod` | **未切**。必须用户再次明确批准 |
+| `active-production.json` | **`rel-prod-134`** |
+| 冻结提交 | `d238c7c`（分支 `release/rel-prod-133`），`worktreeDirty=false` |
+| 最新 forward-fix | `rel-prod-134`，状态 **`active_prod`**，verify YES @ `d238c7c` |
+| 前一个 active_prod | `rel-prod-131`（已 hold，因 134 激活时自动受单例约束退场） |
+| `rel-prod-134` rollbackReleaseId | `rel-prod-131`（held — 回滚目标不可执行，需创建 forward-fix 替换） |
+| `rel-prod-134` changeClass | `R1`（forward-fix after held 133: eval/CLI Gemini writer expectations 对齐 3.1 Pro GA） |
+| 真实审批 | gpt5.6-sol 网络双向 `APPROVE_DEV`，`reviewTransport=network`，`approval-rel-prod-134-1787020172038-55d60317` |
+| development pointer | **待对齐**（当前 `rel-prod-126` 已过期） |
+| promote | `draft → candidate → frozen → evaluated → approved_dev → active_dev → candidate_prod → active_prod` 已完成 |
+| 准入回放 | 134 recovery arm 为 synthetic（`devMode=true`），真实 failure/recovery 证据在 `reports/production-admission-replay-125/` 和 `126/` |
 | 文学结论 | 本包是 R1 治理封口，不声称文学收益 |
+| 已知问题 | 见下方「rel-prod-134 生产审计结论」 |
 
-证据：`.pi/extensions/novel-studio/eval/fixtures/closure-20260817-121/`（verification-report、human-verdict-summary、binding）。
+### rel-prod-134 生产审计结论（2026-08-18）
 
-`rel-prod-110`～`120` 的 capture / 回放 / HOLD 记录仍是历史过程，不是现行生产证书。恢复生产必须新建或继续审批链，且需要用户明确授权切 pointer；1-1-1 盲评本身不构成该授权。
+**已确认真实并入生产：**
+- `active-production.json` 指向 `rel-prod-134`，状态 `active_prod`
+- 冻结提交 `d238c7c`，构建/类型检查/测试全部通过（3845 测试 / 0 失败）
+- 生产 smoke 2/2、依赖边界 23/23、回放矩阵 4/4 通过
+- P6 候选臂使用真实 Gemini 3.1 Pro，`devMode=false`，`candidatePassPow3=1`
+
+**待修复（按优先级）：**
+1. 回滚目标 `rel-prod-131` 为 `held`，不可执行 → 需 forward-fix release
+2. 缺少真实 failure/recovery 回放 → 需在新 release 身份下重新执行
+3. P6 matrix 未绑定到 `manifest.artifactRefs`
+4. 当前主工作树 HEAD (`27a87cd`) 与生产冻结 (`d238c7c`) 分叉
+5. 分支名 `release/rel-prod-133` 与 release ID `rel-prod-134` 不一致
+6. 无在线运行实例身份证据
+7. `replay-provenance-guard.js` 导入路径已修复（`validate-r3/r4.mjs` 从 `dist/` 改为 `dist-eval/`）
 
 ## REASONING-REPAIR-BOUNDARY-1（2026-08-16）
 
