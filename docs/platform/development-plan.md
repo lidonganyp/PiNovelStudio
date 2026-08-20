@@ -657,7 +657,7 @@ services:
 >
 > **执行偏差**：
 > - **开发默认 `PAYMENT_MODE=stub`**：商户号未就绪时仅开发/测试环境可用 stub 渠道（`stub://pay/{orderNo}` + `x-payment-stub-secret` 验签）。生产必须为 `PAYMENT_MODE=live`，并禁止模拟充值接口；live 模式走 `alipay-sdk` 当面付预下单 / `wechatpay-node-v3` Native，缺凭证则 503。
-> - **P6-6 阻塞**：真实/沙箱小额需用户提供支付宝/微信商户配置；当前验收以 stub 通知幂等 + 查单补偿为准。
+> - **P6-6 支付宝商户已配置（2026-08-20）**：本地 `.env`（不入库）写入 AppID 与密钥；回调对齐 sub2api `POST /api/v1/payment/webhook/alipay`。当前商户只开通电脑网站支付，生产下单固定 `alipay.trade.page.pay`（`FAST_INSTANT_TRADE_PAY`），不调用当面付。密钥 `keyType=PKCS8`。测试进程强制 `PAYMENT_MODE=stub`。真实小额须在 `ainovel.cloud` 打开收银台验收；微信仍未配置。
 > - **`audit_logs` 提前落地**：支付成功写入 `audit_logs`（actor_type=channel），供 Phase 7 审计页复用。
 > - **stub 模拟支付**：`POST /api/payment/orders/:orderNo/simulate`（JWT，仅 stub）供充值页「模拟支付成功」；生产 live 模式拒绝该接口。
 > - **查单补偿**：进程内每小时 `reconcilePendingOrders`（`NODE_ENV=test` 不启动定时器）；渠道已支付则补入账，超时未支付则 `expired`。

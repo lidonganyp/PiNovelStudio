@@ -26,16 +26,38 @@ import { PaymentService } from './payment.service';
 export class PaymentController {
   constructor(private readonly payment: PaymentService) {}
 
+  @Get('config')
+  config(): { mode: string; simulate: boolean; channels: string[] } {
+    const channels: string[] = [];
+    if (env.PAYMENT_MODE === 'stub') {
+      channels.push('alipay', 'wechat');
+    } else {
+      if (env.ALIPAY_APP_ID && env.ALIPAY_PRIVATE_KEY && env.ALIPAY_PUBLIC_KEY) {
+        channels.push('alipay');
+      }
+      if (env.WECHAT_APP_ID && env.WECHAT_MCH_ID) {
+        channels.push('wechat');
+      }
+    }
+    return {
+      mode: env.PAYMENT_MODE,
+      simulate: env.PAYMENT_MODE === 'stub',
+      channels,
+    };
+  }
+
   @Post('orders')
   @UseGuards(JwtAuthGuard)
   async create(
     @CurrentUser() user: AuthUserPayload,
     @Body() dto: CreatePaymentOrderDto,
+    @Req() request: FastifyRequest,
   ): Promise<Record<string, unknown>> {
     const order = await this.payment.createOrder({
       userId: user.sub,
       channel: dto.channel,
       amountFen: BigInt(dto.amount),
+      userAgent: String(request.headers['user-agent'] ?? ''),
     });
     return this.payment.serialize(order);
   }

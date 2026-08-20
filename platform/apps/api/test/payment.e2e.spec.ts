@@ -120,6 +120,19 @@ describe('支付充值 e2e', () => {
     });
     expect(me.json().balance).toBe('1200');
 
+    const webhook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/payment/webhook/alipay',
+      headers: { 'x-payment-stub-secret': env.PAYMENT_STUB_SECRET },
+      payload: {
+        orderNo,
+        amount: 1200,
+        tradeNo: `E2E-${runId}`,
+      },
+    });
+    expect(webhook.statusCode).toBe(200);
+    expect(webhook.body).toContain('success');
+
     const second = await notify();
     expect(second.statusCode).toBe(200);
     expect(second.json().alreadyPaid).toBe(true);

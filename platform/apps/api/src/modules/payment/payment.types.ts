@@ -29,6 +29,7 @@ export interface PaymentChannelAdapter {
     orderNo: string;
     amountFen: bigint;
     subject: string;
+    userAgent?: string;
   }): Promise<CreatePaymentResult>;
   verifyNotify(input: {
     body: unknown;
@@ -54,4 +55,5 @@ export interface CreateOrderInput {
   userId: number;
   channel: PaymentChannel;
   amountFen: bigint;
+  userAgent?: string;
 }

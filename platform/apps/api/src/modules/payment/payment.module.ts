@@ -12,6 +12,7 @@ import { env } from '../../config/env';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AlipayPaymentAdapter } from './alipay.adapter';
 import { PAYMENT_ADAPTERS } from './payment.constants';
+import { AlipayWebhookController } from './alipay-webhook.controller';
 import { PaymentAdminController } from './payment-admin.controller';
 import { PaymentController } from './payment.controller';
 import { PaymentService } from './payment.service';
@@ -71,7 +72,7 @@ export class PaymentReconcileHost implements OnModuleInit, OnModuleDestroy {
 }
 
 @Module({
-  controllers: [PaymentController, PaymentAdminController],
+  controllers: [PaymentController, PaymentAdminController, AlipayWebhookController],
   providers: [
     {
       provide: PAYMENT_ADAPTERS,

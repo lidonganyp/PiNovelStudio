@@ -1,5 +1,6 @@
 /**
- * 支付宝当面付（预下单）适配器。PAYMENT_MODE=live 且配置齐全时启用。
+ * 支付宝直连：当前商户只开通了电脑网站支付（alipay.trade.page.pay）。
+ * 桌面与移动都走 page.pay 收银台，不调用当面付 precreate。
  */
 import {
   Injectable,
@@ -9,12 +10,20 @@ import {
 } from '@nestjs/common';
 import { env } from '../../config/env';
 import { fenToYuan, yuanToFen } from './amount';
+import {
+  defaultAlipayNotifyUrl,
+  defaultPaymentReturnUrl,
+  parseAlipayNotifyParams,
+  wrapAlipayPem,
+} from './alipay-notify';
 import type {
   ChannelQueryResult,
   CreatePaymentResult,
   PaymentChannelAdapter,
   VerifiedNotify,
 } from './payment.types';
+
+const PRODUCT_PAGE_PAY = 'FAST_INSTANT_TRADE_PAY';
 
 /** Alipay may report a completed payment as either success or finished. */
 export function isAlipayPaidTradeStatus(status: string | undefined): boolean {
@@ -49,27 +58,23 @@ export class AlipayPaymentAdapter implements PaymentChannelAdapter {
     orderNo: string;
     amountFen: bigint;
     subject: string;
+    userAgent?: string;
   }): Promise<CreatePaymentResult> {
     const sdk = await this.loadSdk();
-    const result = (await sdk.exec('alipay.trade.precreate', {
-      notifyUrl: `${env.PAYMENT_NOTIFY_BASE_URL.replace(/\/$/, '')}/api/payment/notify/alipay`,
-      bizContent: {
-        outTradeNo: order.orderNo,
-        totalAmount: fenToYuan(order.amountFen),
-        subject: order.subject,
-      },
-    })) as { qrCode?: string };
-    if (!result.qrCode) {
-      throw new ServiceUnavailableException('支付宝未返回收款码');
-    }
-    return { qrContent: result.qrCode };
+    const notifyUrl =
+      env.ALIPAY_NOTIFY_URL.trim() || defaultAlipayNotifyUrl(env.PAYMENT_NOTIFY_BASE_URL);
+    const returnUrl =
+      env.PAYMENT_RETURN_URL.trim() || defaultPaymentReturnUrl(env.PAYMENT_NOTIFY_BASE_URL);
+    const subject = order.subject.trim() || env.PAYMENT_SUBJECT;
+    return this.createPagePay(sdk, order, subject, notifyUrl, returnUrl);
   }
 
   async verifyNotify(input: {
     body: unknown;
+    rawBody?: string;
   }): Promise<VerifiedNotify> {
     const sdk = await this.loadSdk();
-    const params = asStringRecord(input.body);
+    const params = parseAlipayNotifyParams(input.body, input.rawBody);
     const ok = sdk.checkNotifySign(params) as boolean;
     if (!ok) {
       throw new UnauthorizedException('支付宝通知验签失败');
@@ -103,48 +108,58 @@ export class AlipayPaymentAdapter implements PaymentChannelAdapter {
     }
   }
 
-  private async loadSdk(): Promise<{
-    exec: (method: string, params: Record<string, unknown>) => Promise<unknown>;
-    checkNotifySign: (params: Record<string, string>) => boolean;
-  }> {
+  private createPagePay(
+    sdk: AlipaySdkLike,
+    order: { orderNo: string; amountFen: bigint },
+    subject: string,
+    notifyUrl: string,
+    returnUrl: string,
+  ): CreatePaymentResult {
+    const payUrl = sdk.pageExecute('alipay.trade.page.pay', 'GET', {
+      notifyUrl,
+      returnUrl,
+      bizContent: {
+        outTradeNo: order.orderNo,
+        productCode: PRODUCT_PAGE_PAY,
+        subject,
+        totalAmount: fenToYuan(order.amountFen),
+      },
+    });
+    if (!payUrl) {
+      throw new ServiceUnavailableException('支付宝电脑网站支付未返回收银台');
+    }
+    return { qrContent: '', payUrl };
+  }
+
+  private async loadSdk(): Promise<AlipaySdkLike> {
     if (!env.ALIPAY_APP_ID || !env.ALIPAY_PRIVATE_KEY || !env.ALIPAY_PUBLIC_KEY) {
       throw new ServiceUnavailableException('支付宝商户未配置');
     }
     const mod = (await import('alipay-sdk')) as unknown as {
-      default?: new (opts: Record<string, unknown>) => {
-        exec: (
-          method: string,
-          params: Record<string, unknown>,
-        ) => Promise<unknown>;
-        checkNotifySign: (params: Record<string, string>) => boolean;
-      };
-      AlipaySdk?: new (opts: Record<string, unknown>) => {
-        exec: (
-          method: string,
-          params: Record<string, unknown>,
-        ) => Promise<unknown>;
-        checkNotifySign: (params: Record<string, string>) => boolean;
-      };
+      default?: new (opts: Record<string, unknown>) => AlipaySdkLike;
+      AlipaySdk?: new (opts: Record<string, unknown>) => AlipaySdkLike;
     };
-    const Sdk = mod.default ?? mod.AlipaySdk;
+    const Sdk = mod.AlipaySdk ?? mod.default;
     if (!Sdk) {
       throw new ServiceUnavailableException('支付宝 SDK 不可用');
     }
     return new Sdk({
       appId: env.ALIPAY_APP_ID,
-      privateKey: env.ALIPAY_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      alipayPublicKey: env.ALIPAY_PUBLIC_KEY.replace(/\\n/g, '\n'),
+      privateKey: wrapAlipayPem(env.ALIPAY_PRIVATE_KEY, 'PRIVATE KEY'),
+      alipayPublicKey: wrapAlipayPem(env.ALIPAY_PUBLIC_KEY, 'PUBLIC KEY'),
       gateway: env.ALIPAY_GATEWAY,
+      keyType: 'PKCS8',
+      signType: 'RSA2',
     });
   }
 }
 
-function asStringRecord(body: unknown): Record<string, string> {
-  if (!body || typeof body !== 'object') return {};
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
-    if (value === undefined || value === null) continue;
-    result[key] = String(value);
-  }
-  return result;
+interface AlipaySdkLike {
+  exec: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+  checkNotifySign: (params: Record<string, string>) => boolean;
+  pageExecute: (
+    method: string,
+    httpMethod: string,
+    params: Record<string, unknown>,
+  ) => string;
 }

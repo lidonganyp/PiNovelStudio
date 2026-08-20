@@ -61,6 +61,11 @@ const router = createRouter({
           component: () => import('../views/portal/RechargeView.vue'),
         },
         { path: 'recharge', redirect: '/billing/topup' },
+        {
+          path: 'payment/result',
+          name: 'payment-result',
+          component: () => import('../views/portal/PaymentResultView.vue'),
+        },
       ],
     },
     {

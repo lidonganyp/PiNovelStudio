@@ -49,3 +49,13 @@ export function listAdminPaymentOrders(params: {
 }): Promise<PaymentOrderList> {
   return http.get('/admin/payment/orders', { params }).then((r) => r.data);
 }
+
+export interface PaymentConfig {
+  mode: 'stub' | 'live';
+  simulate: boolean;
+  channels: PaymentChannel[];
+}
+
+export function getPaymentConfig(): Promise<PaymentConfig> {
+  return http.get('/payment/config').then((r) => r.data);
+}

@@ -9,6 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { env } from '../../config/env';
 import { PrismaService } from '../../prisma/prisma.service';
 import { fenToString } from '../billing/money';
 import { MAX_SAFE_PAYMENT_AMOUNT_FEN } from './amount';
@@ -56,7 +57,8 @@ export class PaymentService {
     const pay: CreatePaymentResult = await adapter.createPayment({
         orderNo,
         amountFen: input.amountFen,
-        subject: '账户充值',
+        subject: env.PAYMENT_SUBJECT,
+        userAgent: input.userAgent,
     });
 
     const updated = await this.prisma.paymentOrder.update({

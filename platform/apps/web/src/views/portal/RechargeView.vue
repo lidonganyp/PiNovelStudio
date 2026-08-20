@@ -9,10 +9,11 @@ import { getBillingSummary, fenToYuan } from '../../api/billing';
 import type { BillingSummary } from '../../api/billing';
 import {
   createPaymentOrder,
+  getPaymentConfig,
   getPaymentOrder,
   simulatePayment,
 } from '../../api/payment';
-import type { PaymentChannel, PaymentOrder } from '../../api/payment';
+import type { PaymentChannel, PaymentConfig, PaymentOrder } from '../../api/payment';
 import { useAuthStore } from '../../stores/auth';
 
 const AMOUNTS = [10, 30, 50, 100, 300];
@@ -25,6 +26,7 @@ const order = ref<PaymentOrder | null>(null);
 const submitting = ref(false);
 const simulating = ref(false);
 const qrImage = ref('');
+const config = ref<PaymentConfig | null>(null);
 let timer: ReturnType<typeof setInterval> | null = null;
 
 watch(
@@ -39,7 +41,15 @@ watch(
 );
 
 async function loadSummary(): Promise<void> {
-  summary.value = await getBillingSummary();
+  const [nextSummary, nextConfig] = await Promise.all([
+    getBillingSummary(),
+    getPaymentConfig(),
+  ]);
+  summary.value = nextSummary;
+  config.value = nextConfig;
+  if (nextConfig.channels.length && !nextConfig.channels.includes(channel.value)) {
+    channel.value = nextConfig.channels[0];
+  }
   await auth.fetchMe();
 }
 
@@ -79,6 +89,11 @@ async function startOrder(): Promise<void> {
   }
 }
 
+function openPayUrl(): void {
+  const url = order.value?.payUrl;
+  if (url) window.open(url, '_blank', 'noopener');
+}
+
 async function onSimulate(): Promise<void> {
   if (!order.value) return;
   simulating.value = true;
@@ -103,8 +118,18 @@ void loadSummary();
         <span class="available">（可用 ¥{{ fenToYuan(summary.available) }}）</span>
       </p>
       <el-radio-group v-model="channel" class="channel">
-        <el-radio-button value="alipay">支付宝</el-radio-button>
-        <el-radio-button value="wechat">微信支付</el-radio-button>
+        <el-radio-button
+          v-if="!config || config.channels.includes('alipay')"
+          value="alipay"
+        >
+          支付宝
+        </el-radio-button>
+        <el-radio-button
+          v-if="!config || config.channels.includes('wechat')"
+          value="wechat"
+        >
+          微信支付
+        </el-radio-button>
       </el-radio-group>
       <div class="amounts">
         <div
@@ -132,7 +157,14 @@ void loadSummary();
       <p class="order-amount">金额 ¥{{ fenToYuan(order.amount) }}</p>
       <div class="qr-box">
         <img v-if="qrImage" :src="qrImage" alt="支付二维码" width="220" height="220" />
-        <p class="qr-text">{{ order.qrContent }}</p>
+        <p v-if="order.qrContent" class="qr-text">请使用支付宝扫码</p>
+        <el-button
+          v-if="order.payUrl"
+          type="primary"
+          @click="openPayUrl"
+        >
+          打开支付宝收银台
+        </el-button>
       </div>
       <p class="order-status">
         状态：
@@ -141,7 +173,7 @@ void loadSummary();
         <el-tag v-else type="warning">待支付 · 轮询中</el-tag>
       </p>
       <el-button
-        v-if="order.status === 'created'"
+        v-if="order.status === 'created' && config?.simulate"
         type="success"
         :loading="simulating"
         @click="onSimulate"

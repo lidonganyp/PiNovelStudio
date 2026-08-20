@@ -11,6 +11,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [swc.vite()],
   test: {
+    env: {
+      PAYMENT_MODE: 'stub',
+    },
     include: ['test/**/*.spec.ts', 'src/**/*.spec.ts'],
     environment: 'node',
     // Several production-configuration tests intentionally exercise process.env
