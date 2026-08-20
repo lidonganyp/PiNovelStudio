@@ -1,0 +1,165 @@
+# 生产组网（P3-3）：postgres + api（含一次性迁移） + novel-runtime
+# 变量来源：同目录 .env（cp .env.example .env）；compose 自动加载。
+#
+# 构建（在仓库根执行，两个上下文不同）：
+#   docker compose build api        # 上下文 = platform/
+#   docker compose build runtime    # 上下文 = 仓库根（见 services/novel-runtime/Dockerfile 头注释）
+# 启动：
+#   docker compose up -d
+#
+# 网络拓扑：runtime 不映射宿主端口，仅 compose 内网可达；
+# 对外仅 api:3000（如需公网，前置反向代理并终结 TLS）。
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: platform-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-platform}
+    volumes:
+      - platform_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-platform} -d ${POSTGRES_DB:-platform}']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # 一次性迁移（成功后退出；api 依赖其完成）
+  api-migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: platform-api-migrate
+    command: ['npx', '--no-install', 'prisma', 'migrate', 'deploy', '--schema', 'prisma/schema.prisma']
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  # First-deploy control-plane bootstrap. It is idempotent and must complete
+  # before API startup so rate admission cannot deadlock a pristine database.
+  api-bootstrap:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: platform-api-bootstrap
+    command: ['node', 'dist/bootstrap.js']
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform}?schema=public
+      AES_MASTER_KEY: ${AES_MASTER_KEY:?AES_MASTER_KEY is required}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
+      BOOTSTRAP_GEMINI_API_KEY: ${BOOTSTRAP_GEMINI_API_KEY:?BOOTSTRAP_GEMINI_API_KEY is required}
+      BOOTSTRAP_GEMINI_API_BASE_URL: ${BOOTSTRAP_GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com}
+      BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN: ${BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN:?BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN is required}
+      BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN: ${BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN:?BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN is required}
+    depends_on:
+      api-migrate:
+        condition: service_completed_successfully
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: platform-api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required in production}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+      AES_MASTER_KEY: ${AES_MASTER_KEY:?AES_MASTER_KEY is required}
+      # jobs 模块（P3-4）签发任务令牌，与 runtime 共享密钥
+      NOVEL_TASK_TOKEN_HMAC_KEY: ${NOVEL_TASK_TOKEN_HMAC_KEY:?NOVEL_TASK_TOKEN_HMAC_KEY is required}
+      # runtime 内网地址（服务发现，供 P3-4 jobs 模块回调 invoke）
+      NOVEL_RUNTIME_BASE_URL: http://runtime:3100
+      # 生产只能调用受计量与门禁保护的 runtime，禁止内联 stub 正文。
+      NOVEL_RUNTIME_MODE: http
+      NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
+      # Must exactly match runtime modelCalls.requestedRoute values, and each
+      # key must have a current enabled model_rates row before API starts.
+      NOVEL_BILLING_REQUIRED_MODELS: v2_rawstage2_gemini31,v2_amplified_gemini31
+      # 默认关闭占位助手；配置 PLANNER_API_* 后可切 http 直连规划模型。
+      PLANNER_MODE: ${PLANNER_MODE:-disabled}
+      PLANNER_API_BASE_URL: ${PLANNER_API_BASE_URL:-}
+      PLANNER_API_KEY: ${PLANNER_API_KEY:-}
+      PLANNER_MODEL: ${PLANNER_MODEL:-gpt-5.6}
+      WEB_DIST_DIR: /app/web
+      # 支付只允许显式启用的 live 模式；未配置时拒绝启动，绝不回退为 stub。
+      PAYMENT_MODE: ${PAYMENT_MODE:?PAYMENT_MODE=live is required in production}
+      PAYMENT_ORDER_EXPIRE_MINUTES: ${PAYMENT_ORDER_EXPIRE_MINUTES:-30}
+      PAYMENT_NOTIFY_BASE_URL: ${PAYMENT_NOTIFY_BASE_URL:?PAYMENT_NOTIFY_BASE_URL is required in production}
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-}
+      ALIPAY_PRIVATE_KEY: ${ALIPAY_PRIVATE_KEY:-}
+      ALIPAY_PUBLIC_KEY: ${ALIPAY_PUBLIC_KEY:-}
+      ALIPAY_GATEWAY: ${ALIPAY_GATEWAY:-https://openapi.alipay.com/gateway.do}
+      WECHAT_APP_ID: ${WECHAT_APP_ID:-}
+      WECHAT_MCH_ID: ${WECHAT_MCH_ID:-}
+      WECHAT_SERIAL_NO: ${WECHAT_SERIAL_NO:-}
+      WECHAT_PRIVATE_KEY: ${WECHAT_PRIVATE_KEY:-}
+      WECHAT_API_V3_KEY: ${WECHAT_API_V3_KEY:-}
+      WECHAT_PLATFORM_CERT: ${WECHAT_PLATFORM_CERT:-}
+    ports:
+      - '${API_PORT:-3000}:3000'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-migrate:
+        condition: service_completed_successfully
+      api-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  runtime:
+    build:
+      context: ..
+      dockerfile: platform/services/novel-runtime/Dockerfile
+    container_name: platform-novel-runtime
+    environment:
+      NODE_ENV: production
+      # 回调 platform-api internal API（HMAC 签名，走 compose 内网）
+      PLATFORM_API_BASE_URL: http://api:3000
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+      NOVEL_TASK_TOKEN_HMAC_KEY: ${NOVEL_TASK_TOKEN_HMAC_KEY:?NOVEL_TASK_TOKEN_HMAC_KEY is required}
+      # The bootstrap job encrypts the credential in the control plane; runtime
+      # fetches it over the HMAC-protected internal API after API readiness.
+      NOVEL_PROVIDER_CREDENTIALS_SOURCE: platform
+      NOVEL_REQUIRED_PROVIDER_KEYS: GEMINI_API_KEY
+      # Never allow the extension's local development bypass in the production image.
+      PINOVEL_DEV_MODE: '0'
+      # The runtime image intentionally has no .git directory. Bind its G6
+      # behavior fingerprint to the immutable commit frozen in the active
+      # release manifest; a missing value must prevent deployment rather than
+      # silently producing an anonymous production identity.
+      PINOVEL_RELEASE_COMMIT: ${PINOVEL_RELEASE_COMMIT:?PINOVEL_RELEASE_COMMIT is required and must match the active release manifest}
+      PINOVEL_MODEL_REQUEST_TIMEOUT_MS: ${PINOVEL_MODEL_REQUEST_TIMEOUT_MS:-300000}
+      NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
+    volumes:
+      - novel_workspaces:/var/lib/novel-runtime/workspaces
+      # The sealed production identity is deployment state, not source code.
+      # Mount it read-only so G6 can verify the release on a clean checkout.
+      - ../config/production-identity:/app/pnovel/config/production-identity:ro
+    # 不映射宿主端口：仅 compose 内网（api）可达
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  platform_pgdata:
+  novel_workspaces:

@@ -1,0 +1,46 @@
+# 仅用于以仓库根为上下文的构建（platform/services/novel-runtime/Dockerfile）。
+# 策略：默认忽略重目录，再按镜像 COPY 清单精确放行。
+
+# ---- 版本与工具目录 ----
+.git
+.gitignore
+.trae
+.vscode
+.idea
+
+# ---- 依赖（镜像内重新安装） ----
+**/node_modules
+
+# ---- 构建与测试产物 ----
+**/dist-eval
+**/dist-test
+**/coverage
+*.log
+*.tmp
+
+# ---- PiNovelStudio 扩展：源码在镜像内编译；忽略本地依赖和构建产物 ----
+.pi/extensions/novel-studio/node_modules
+.pi/extensions/novel-studio/dist
+.pi/extensions/novel-studio/dist-eval
+.pi/extensions/novel-studio/dist-test
+
+# ---- platform：runtime 源码在镜像内编译；忽略依赖和构建产物 ----
+platform/apps
+platform/services/novel-runtime/node_modules
+platform/services/novel-runtime/dist
+
+# ---- 仓库根其他目录 ----
+scripts
+reports
+workspaces
+corpus
+docs/*
+!docs/top-tier-chinese-novel-system-development-plan.md
+
+# ---- 本地环境 ----
+.env
+*.local
+
+# ---- 部署态身份包 ----
+# 生产身份包只允许由 compose 以只读卷挂载，不能随源码构建进 runtime 镜像。
+config/production-identity/active.pack.json

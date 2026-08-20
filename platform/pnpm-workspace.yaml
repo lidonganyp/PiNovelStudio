@@ -1,0 +1,12 @@
+packages:
+  - 'apps/*'
+  - 'services/*'
+
+# pnpm 10 默认阻止依赖的 postinstall 构建脚本，以下为白名单
+onlyBuiltDependencies:
+  - argon2
+  - prisma
+  - '@prisma/client'
+  - '@prisma/engines'
+  - esbuild
+  - tsx

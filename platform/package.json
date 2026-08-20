@@ -1,0 +1,33 @@
+{
+  "name": "platform",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "PiNovelStudio 商用平台（PINOVEL-PLATFORM-BUILD-1）：用户门户 + 计费引擎 + novel-runtime 编排",
+  "packageManager": "pnpm@10.26.2",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev:db": "docker compose -f docker-compose.dev.yml up -d",
+    "dev:db:down": "docker compose -f docker-compose.dev.yml down",
+    "dev:api": "pnpm --filter @platform/api start:dev",
+    "dev:web": "pnpm --filter @platform/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "eslint .",
+    "format": "prettier --write \"apps/**/src/**/*.{ts,vue}\"",
+    "db:generate": "pnpm --filter @platform/api db:generate",
+    "db:migrate": "pnpm --filter @platform/api db:migrate",
+    "db:seed": "pnpm --filter @platform/api db:seed",
+    "ledger:reconcile": "pnpm --filter @platform/api ledger:reconcile"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "eslint": "^9.39.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "typescript-eslint": "^8.46.0"
+  }
+}

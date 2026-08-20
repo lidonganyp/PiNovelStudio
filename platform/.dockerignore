@@ -1,0 +1,11 @@
+# 仅用于以 platform/ 为上下文的构建（apps/api/Dockerfile）。
+node_modules
+**/node_modules
+.pnpm-store
+.npm-store
+dist
+**/dist
+coverage
+.env
+*.log
+services

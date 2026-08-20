@@ -1,0 +1,22 @@
+# 开发环境数据库（生产环境见 docker-compose.yml，Phase 8 提供）
+# 用法：pnpm dev:db
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: platform-postgres-dev
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform_dev
+      POSTGRES_DB: platform
+    ports:
+      - '15432:5432'
+    volumes:
+      - platform_pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U platform -d platform']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  platform_pgdata_dev:

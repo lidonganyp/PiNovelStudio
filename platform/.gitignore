@@ -1,0 +1,20 @@
+# platform 工作区本地产物（根 .gitignore 已覆盖大部分，此处为双保险）
+
+node_modules/
+dist/
+*.tsbuildinfo/
+.pnpm-store/
+.pnpm-cache/
+.pnpm-state/
+
+# 环境变量（绝不提交）
+.env
+.env.local
+.env.*.local
+
+# 测试与覆盖率
+coverage/
+
+# 本地数据
+*.sqlite
+*.db

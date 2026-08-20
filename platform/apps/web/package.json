@@ -1,0 +1,31 @@
+{
+  "name": "@platform/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "axios": "^1.12.2",
+    "echarts": "^6.0.0",
+    "element-plus": "^2.11.4",
+    "pinia": "^3.0.4",
+    "qrcode": "^1.5.4",
+    "vue": "^3.5.24",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/qrcode": "^1.5.5",
+    "@vitejs/plugin-vue": "^6.0.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.7",
+    "vue-tsc": "^3.1.8"
+  }
+}

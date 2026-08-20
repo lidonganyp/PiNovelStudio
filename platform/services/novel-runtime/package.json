@@ -1,0 +1,31 @@
+{
+  "name": "novel-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Novel generation runtime for the platform. Loads PiNovelStudio 6 public tools, enforces task-token capabilities, materializes per-job temp workspaces, and settles per-model-call billing against platform-api internal API (HMAC signed).",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --enable-source-maps dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:fresh": "npm run build && npm test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "jose": "^5.9.6",
+    "zod": "^3.24.1",
+    "pino": "^9.5.0",
+    "undici": "^6.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

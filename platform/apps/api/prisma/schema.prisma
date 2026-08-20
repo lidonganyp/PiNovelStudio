@@ -1,0 +1,449 @@
+// Prisma schema：platform-api 数据模型（PINOVEL-PLATFORM-BUILD-1）
+// Phase 1：users / settings
+// Phase 2：model_providers / model_rates / novel_balance_hold /
+//          novel_generation_call / novel_billing_adjustment
+// Phase 4：novel 项目域表 + novel_generation_job
+// Phase 6：payment_orders / audit_logs
+// 约定：余额与费率一律用分（BigInt），全程整数运算，防浮点误差。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  nickname     String
+  role         String   @default("user") // user | admin
+  status       String   @default("active") // active | banned
+  balance      BigInt   @default(0) // 余额，单位：分
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  holds            NovelBalanceHold[]
+  adjustments      NovelBillingAdjustment[] @relation("AdjustmentUser")
+  adminAdjustments NovelBillingAdjustment[] @relation("AdjustmentAdmin")
+  projects         NovelProject[]
+  chapters         NovelChapter[]
+  chapterSeeds     NovelChapterSeed[]
+  chapterVersions  NovelChapterVersion[]    @relation("ChapterVersionUser")
+  chapterVersionsCreated NovelChapterVersion[] @relation("ChapterVersionCreator")
+  characters       NovelCharacter[]
+  outlineNodes     NovelOutlineNode[]
+  documents        NovelDocument[]
+  documentVersions NovelDocumentVersion[]
+  assistantMessages NovelAssistantMessage[]
+  feedback         NovelFeedback[]          @relation("FeedbackUser")
+  adminFeedback    NovelFeedback[]          @relation("FeedbackAdmin")
+  generationJobs   NovelGenerationJob[]
+  paymentOrders    PaymentOrder[]
+
+  @@map("users")
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+model ModelProvider {
+  id              Int      @id @default(autoincrement())
+  providerKey     String   @unique @map("provider_key")
+  name            String
+  apiBaseUrl      String   @map("api_base_url")
+  apiKeyEncrypted String   @map("api_key_encrypted")
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  rates ModelRate[]
+
+  @@map("model_providers")
+}
+
+model ModelRate {
+  id                    Int           @id @default(autoincrement())
+  modelKey              String        @map("model_key")
+  displayName           String        @map("display_name")
+  providerId            Int           @map("provider_id")
+  provider              ModelProvider @relation(fields: [providerId], references: [id])
+  inputPricePerMillion  BigInt        @map("input_price_per_million")
+  outputPricePerMillion BigInt        @map("output_price_per_million")
+  effectiveFrom         DateTime      @map("effective_from")
+  enabled               Boolean       @default(true)
+  createdAt             DateTime      @default(now()) @map("created_at")
+
+  @@index([modelKey, effectiveFrom])
+  @@map("model_rates")
+}
+
+model NovelBalanceHold {
+  id             Int       @id @default(autoincrement())
+  jobId          String    @unique @map("job_id")
+  userId         Int       @map("user_id")
+  user           User      @relation(fields: [userId], references: [id])
+  amount         BigInt
+  settledAmount  BigInt    @default(0) @map("settled_amount")
+  status         String    @default("active") // active | released | settled
+  progressStage  String?   @map("progress_stage")
+  progressDetail Json?     @map("progress_detail")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  finalizedAt    DateTime? @map("finalized_at")
+
+  calls NovelGenerationCall[]
+
+  @@index([userId, status])
+  @@map("novel_balance_hold")
+}
+
+model NovelGenerationCall {
+  id            Int              @id @default(autoincrement())
+  jobId         String           @map("job_id")
+  callId        String           @map("call_id")
+  holdId        Int              @map("hold_id")
+  hold          NovelBalanceHold @relation(fields: [holdId], references: [id])
+  userId        Int              @map("user_id")
+  internalStage String           @map("internal_stage")
+  model         String
+  tokensIn      Int              @map("tokens_in")
+  tokensOut     Int              @map("tokens_out")
+  rateSnapshot  Json             @map("rate_snapshot")
+  actualCharge  BigInt           @map("actual_charge")
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  @@unique([jobId, callId])
+  @@index([userId, createdAt])
+  @@map("novel_generation_call")
+}
+
+model NovelBillingAdjustment {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  user        User     @relation("AdjustmentUser", fields: [userId], references: [id])
+  amount      BigInt
+  reason      String
+  adminUserId Int      @map("admin_user_id")
+  adminUser   User     @relation("AdjustmentAdmin", fields: [adminUserId], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("novel_billing_adjustment")
+}
+
+model NovelProject {
+  id            Int       @id @default(autoincrement())
+  userId        Int       @map("user_id")
+  user          User      @relation(fields: [userId], references: [id])
+  title         String
+  description   String    @default("")
+  genre         String    @default("")
+  subGenres     Json      @default("[]") @map("sub_genres")
+  worldKeyTerms Json      @default("[]") @map("world_key_terms")
+  status        String    @default("active") // active | archived
+  workflowState String    @default("project_created") @map("workflow_state")
+  version       Int       @default(1)
+  lastActiveAt  DateTime? @map("last_active_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  chapters          NovelChapter[]
+  chapterSeeds      NovelChapterSeed[]
+  chapterVersions   NovelChapterVersion[]
+  characters        NovelCharacter[]
+  outlineNodes      NovelOutlineNode[]
+  documents         NovelDocument[]
+  assistantMessages NovelAssistantMessage[]
+  feedback          NovelFeedback[]
+  generationJobs    NovelGenerationJob[]
+
+  @@index([userId, status])
+  @@map("novel_projects")
+}
+
+model NovelChapter {
+  id              Int       @id @default(autoincrement())
+  projectId       Int       @map("project_id")
+  project         NovelProject @relation(fields: [projectId], references: [id])
+  userId          Int       @map("user_id")
+  user            User      @relation(fields: [userId], references: [id])
+  chapterNumber   Int       @map("chapter_number")
+  title           String    @default("")
+  content         String    @default("")
+  wordCount       Int       @default(0) @map("word_count")
+  status          String    @default("draft") // draft | generated | final
+  version         Int       @default(1)
+  generationJobId String?   @map("generation_job_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  seed     NovelChapterSeed?
+  versions NovelChapterVersion[]
+  feedback NovelFeedback[]
+  jobs     NovelGenerationJob[]
+
+  @@index([projectId, chapterNumber])
+  @@index([userId])
+  @@map("novel_chapters")
+}
+
+model NovelChapterSeed {
+  id               Int      @id @default(autoincrement())
+  chapterId        Int      @unique @map("chapter_id")
+  chapter          NovelChapter @relation(fields: [chapterId], references: [id])
+  projectId        Int      @map("project_id")
+  project          NovelProject @relation(fields: [projectId], references: [id])
+  userId           Int      @map("user_id")
+  user             User     @relation(fields: [userId], references: [id])
+  intent           String   @default("")
+  mustInclude      String   @default("") @map("must_include")
+  forbiddenFacts   String   @default("") @map("forbidden_facts")
+  characterMotives String   @default("") @map("character_motives")
+  promises         String   @default("")
+  endingGoal       String   @default("") @map("ending_goal")
+  status           String   @default("draft") // draft | ready | consumed
+  version          Int      @default(1)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@map("novel_chapter_seeds")
+}
+
+model NovelChapterVersion {
+  id              Int      @id @default(autoincrement())
+  chapterId       Int      @map("chapter_id")
+  chapter         NovelChapter @relation(fields: [chapterId], references: [id])
+  projectId       Int      @map("project_id")
+  project         NovelProject @relation(fields: [projectId], references: [id])
+  userId          Int      @map("user_id")
+  user            User     @relation("ChapterVersionUser", fields: [userId], references: [id])
+  versionNumber   Int      @map("version_number")
+  title           String   @default("")
+  content         String   @default("")
+  wordCount       Int      @default(0) @map("word_count")
+  source          String   // manual_save | ai_generated | restore
+  generationJobId String?  @map("generation_job_id")
+  createdBy       Int      @map("created_by")
+  creator         User     @relation("ChapterVersionCreator", fields: [createdBy], references: [id])
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([chapterId, versionNumber])
+  @@index([projectId])
+  @@map("novel_chapter_versions")
+}
+
+model NovelCharacter {
+  id            Int       @id @default(autoincrement())
+  projectId     Int       @map("project_id")
+  project       NovelProject @relation(fields: [projectId], references: [id])
+  userId        Int       @map("user_id")
+  user          User      @relation(fields: [userId], references: [id])
+  name          String
+  aliases       Json      @default("[]")
+  roleType      String    @default("other") @map("role_type")
+  identity      String    @default("")
+  goals         String    @default("")
+  motivation    String    @default("")
+  personality   String    @default("")
+  abilities     String    @default("")
+  relationships String    @default("")
+  secrets       String    @default("")
+  characterArc  String    @default("") @map("character_arc")
+  currentState  String    @default("") @map("current_state")
+  notes         String    @default("")
+  sortOrder     Int       @default(0) @map("sort_order")
+  version       Int       @default(1)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  povNodes NovelOutlineNode[]
+
+  @@index([projectId])
+  @@map("novel_characters")
+}
+
+model NovelOutlineNode {
+  id                   Int       @id @default(autoincrement())
+  projectId            Int       @map("project_id")
+  project              NovelProject @relation(fields: [projectId], references: [id])
+  userId               Int       @map("user_id")
+  user                 User      @relation(fields: [userId], references: [id])
+  parentId             Int?      @map("parent_id")
+  parent               NovelOutlineNode?  @relation("OutlineTree", fields: [parentId], references: [id])
+  children             NovelOutlineNode[] @relation("OutlineTree")
+  nodeType             String    @default("chapter") @map("node_type")
+  title                String    @default("")
+  summary              String    @default("")
+  narrativeGoal        String    @default("") @map("narrative_goal")
+  conflict             String    @default("")
+  turningPoint         String    @default("") @map("turning_point")
+  endingHook           String    @default("") @map("ending_hook")
+  povCharacterId       Int?      @map("pov_character_id")
+  povCharacter         NovelCharacter? @relation(fields: [povCharacterId], references: [id])
+  involvedCharacterIds Json      @default("[]") @map("involved_character_ids")
+  sortOrder            Int       @default(0) @map("sort_order")
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+  deletedAt            DateTime? @map("deleted_at")
+
+  @@index([projectId])
+  @@index([parentId])
+  @@map("novel_outline_nodes")
+}
+
+model NovelDocument {
+  id              Int       @id @default(autoincrement())
+  projectId       Int       @map("project_id")
+  project         NovelProject @relation(fields: [projectId], references: [id])
+  userId          Int       @map("user_id")
+  user            User      @relation(fields: [userId], references: [id])
+  documentType    String    @map("document_type")
+  title           String
+  content         String    @default("")
+  currentVersion  Int       @default(1) @map("current_version")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  versions NovelDocumentVersion[]
+
+  @@index([projectId, documentType])
+  @@map("novel_documents")
+}
+
+model NovelDocumentVersion {
+  id            Int      @id @default(autoincrement())
+  documentId    Int      @map("document_id")
+  document      NovelDocument @relation(fields: [documentId], references: [id])
+  createdBy     Int      @map("created_by")
+  creator       User     @relation(fields: [createdBy], references: [id])
+  versionNumber Int      @map("version_number")
+  content       String   @default("")
+  changeSummary String   @default("") @map("change_summary")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([documentId, versionNumber])
+  @@map("novel_document_versions")
+}
+
+model NovelAssistantMessage {
+  id               Int       @id @default(autoincrement())
+  projectId        Int       @map("project_id")
+  project          NovelProject @relation(fields: [projectId], references: [id])
+  userId           Int       @map("user_id")
+  user             User      @relation(fields: [userId], references: [id])
+  jobId            String    @default("") @map("job_id")
+  role             String
+  content          String    @default("")
+  contentMetadata  Json?     @map("content_metadata")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  deletedAt        DateTime? @map("deleted_at")
+
+  @@index([projectId, createdAt])
+  @@map("novel_assistant_messages")
+}
+
+model NovelFeedback {
+  id              Int       @id @default(autoincrement())
+  projectId       Int       @map("project_id")
+  project         NovelProject @relation(fields: [projectId], references: [id])
+  userId          Int       @map("user_id")
+  user            User      @relation("FeedbackUser", fields: [userId], references: [id])
+  chapterId       Int?      @map("chapter_id")
+  chapter         NovelChapter? @relation(fields: [chapterId], references: [id])
+  jobId           String?   @map("job_id")
+  type            String
+  content         String    @default("")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  adminUserId     Int?      @map("admin_user_id")
+  adminUser       User?     @relation("FeedbackAdmin", fields: [adminUserId], references: [id])
+
+  @@index([projectId])
+  @@index([userId])
+  @@map("novel_feedback")
+}
+
+model NovelGenerationJob {
+  id              Int       @id @default(autoincrement())
+  jobId           String    @unique @map("job_id")
+  userId          Int       @map("user_id")
+  user            User      @relation(fields: [userId], references: [id])
+  projectId       Int       @map("project_id")
+  project         NovelProject @relation(fields: [projectId], references: [id])
+  chapterId       Int?      @map("chapter_id")
+  chapter         NovelChapter? @relation(fields: [chapterId], references: [id])
+  jobType         String    @default("chapter_generation") @map("job_type")
+  status          String    @default("pending")
+  maxCharge       BigInt    @map("max_charge")
+  settledAmount   BigInt    @default(0) @map("settled_amount")
+  progressStage   String    @default("checking_materials") @map("progress_stage")
+  failureMessage  String?   @map("failure_message")
+  startedAt       DateTime  @default(now()) @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+
+  @@index([userId, status])
+  @@index([projectId, chapterId])
+  @@map("novel_generation_jobs")
+}
+
+/// One-time receipt for an authenticated internal request.  The runtime uses a
+/// fresh nonce for every transport attempt, while this durable record rejects
+/// a captured HMAC request across API instances and restarts.
+model InternalRequestNonce {
+  id        Int      @id @default(autoincrement())
+  nonce     String   @unique
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("internal_request_nonces")
+}
+
+model PaymentOrder {
+  id               Int       @id @default(autoincrement())
+  orderNo          String    @unique @map("order_no")
+  userId           Int       @map("user_id")
+  user             User      @relation(fields: [userId], references: [id])
+  channel          String
+  amount           BigInt
+  status           String    @default("created") // created | paid | failed | expired
+  externalTradeNo  String?   @unique @map("external_trade_no")
+  qrContent        String    @default("") @map("qr_content")
+  payUrl           String?   @map("pay_url")
+  paidAt           DateTime? @map("paid_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("payment_orders")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  actorId    Int?     @map("actor_id")
+  actorType  String   @map("actor_type")
+  action     String
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  detail     Json?
+  ip         String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
