@@ -5,7 +5,7 @@ import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class LoginDto {
   /** 登录邮箱。 */
-  @IsEmail({}, { message: '邮箱格式不正确' })
+  @IsEmail({ require_tld: false }, { message: '邮箱格式不正确' })
   email!: string;
 
   /** 明文密码。 */
