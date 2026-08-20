@@ -11,7 +11,7 @@
   - **真实模型运行 + 证据防伪 + 文学净正收益**：`REQUIRES_AUTH / Partial` — 仓库中无符合 schema 的五章真实 Claude Opus 4.6 + gpt-5.6-sol evidence 输入文件；provenance 校验只检查字符串/哈希格式，未核验 `tracePath` 存在、request ID 与 trace 对应、响应 hash 与落盘原始响应一致，因此目前仍可伪造。
 - `--auth` 状态：未启用，退出码 2，fail-closed，不调用真实模型
 - Git HEAD 证据边界：仅记录基准提交，不代表当前脏工作树的完整代码快照
-- 冻结 raw manifest hash：`bb216d960809635f31c5aca846068d0e8eb95ee4e59a3cb2e7b5ce80e54645d7`
+- 冻结 raw manifest hash：`4acaf7e53362647046d6e42c968d37c97e1d8a43ceb5f0463ef4a4010a7b020a`
 - 冻结 raw manifest：`D:\CODE\PiNovelStudio\.pi\extensions\novel-studio\scripts\ending-pressure-real-1\raw-manifest.json`
 
 > ⚠️ **REQUIRES_AUTH 边界**：本切片为 offline stub 模式 + 真实 raw 文本 fixture。
@@ -419,7 +419,7 @@
 
 ---
 
-**生成时间**: 2026-08-18T12:30:24.771Z
+**生成时间**: 2026-08-20T05:06:52.051Z
 **脚本**: `scripts/ending-pressure-real-1/run-verification.mjs`
 **模式**: stub
-**Git HEAD（仅基准提交，不代表脏工作树快照）**: 3e4dcc0328196a89170124f6dcd610fa362f1e84
+**Git HEAD（仅基准提交，不代表脏工作树快照）**: ac0b55d9dec9f2827cc41d35937cc93c51b8eb71

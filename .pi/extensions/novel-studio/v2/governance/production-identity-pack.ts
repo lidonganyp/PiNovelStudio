@@ -15,6 +15,10 @@ import { dirname, join, resolve } from "node:path";
 import { createEvolutionReleaseRegistry } from "./evolution-release-registry.js";
 import { createReleasePointerStore } from "./release-pointer-store.js";
 import { createProxyApprovalRegistry } from "./release-proxy-approval-registry.js";
+import {
+  EVOLUTION_POINTER_SCHEMA_ID,
+  EVOLUTION_POINTER_SCHEMA_VERSION,
+} from "./evolution-release-types.js";
 import type { EvolutionReleaseManifest, ReleasePointer } from "./evolution-release-types.js";
 import type { ReleaseProxyApprovalArtifact } from "./release-proxy-approval-types.js";
 
@@ -38,6 +42,11 @@ const PRODUCTION_IDENTITY_PACK_REL_CANDIDATES = [
   DEFAULT_PRODUCTION_IDENTITY_PACK_REL,
   REPO_LAYOUT_PRODUCTION_IDENTITY_PACK_REL,
 ] as const;
+
+// Identity packs are consumed before the normal registry can validate the
+// pointer. Keep their release ids safe here as well: later G6 checks use the
+// id to locate evidence beneath the evolution root.
+const SAFE_RELEASE_ID = /^[A-Za-z0-9_-]+$/;
 
 export interface ProductionIdentityRollbackIdentity {
   releaseId: string;
@@ -127,9 +136,24 @@ export function parseProductionIdentityPack(raw: unknown): ProductionIdentityPac
   }
   if (typeof raw.releaseId !== "string" || raw.releaseId.trim().length === 0) {
     errors.push("releaseId 缺失");
+  } else if (!SAFE_RELEASE_ID.test(raw.releaseId)) {
+    errors.push("releaseId 包含不允许的字符");
   }
   if (!isPlainObject(raw.pointer) || typeof raw.pointer.releaseId !== "string") {
     errors.push("pointer 缺失或非法");
+  } else {
+    if (raw.pointer.schemaId !== EVOLUTION_POINTER_SCHEMA_ID) {
+      errors.push("pointer schemaId 非法");
+    }
+    if (raw.pointer.schemaVersion !== EVOLUTION_POINTER_SCHEMA_VERSION) {
+      errors.push("pointer schemaVersion 非法");
+    }
+    if (raw.pointer.kind !== "production") {
+      errors.push("identity pack pointer 必须是 production");
+    }
+    if (!SAFE_RELEASE_ID.test(raw.pointer.releaseId)) {
+      errors.push("pointer.releaseId 包含不允许的字符");
+    }
   }
   if (!isPlainObject(raw.manifest) || typeof raw.manifest.releaseId !== "string") {
     errors.push("manifest 缺失或非法");
@@ -149,6 +173,8 @@ export function parseProductionIdentityPack(raw: unknown): ProductionIdentityPac
       raw.rollbackIdentity.manifest.releaseId !== raw.rollbackIdentity.releaseId
     ) {
       errors.push("rollbackIdentity.manifest 缺失或 releaseId 不一致");
+    } else if (!SAFE_RELEASE_ID.test(raw.rollbackIdentity.releaseId)) {
+      errors.push("rollbackIdentity.releaseId 包含不允许的字符");
     }
   }
   if (errors.length > 0) {

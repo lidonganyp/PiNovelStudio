@@ -8,4 +8,4 @@ clean checkout 恢复生产身份的方式：
 2. 部署时设置 `PINOVEL_PRODUCTION_IDENTITY_PACK` 指向该 pack，或执行 `inject-identity --pack <path>`
 3. G6 在 pointer 缺失时只读回退 pack，不改治理目录
 
-当前 HEAD `3e4dcc0` 与 `rel-prod-134` 冻结提交 `d238c7c` 指纹不一致。注入 134 pack 只能恢复 pointer，不能让本提交通过 G6。新的可运行生产身份需要新的 capture / 审批 / 四臂 P6。
+身份包必须与目标 release manifest 的冻结提交、构建产物、路由指纹和工作树状态完全一致。把旧 release 的 pack 注入当前 checkout 只能恢复对应 pointer，不能让当前提交通过 G6；任何代码、路由或构建变更都必须重新 capture / 审批 / 四臂 P6。

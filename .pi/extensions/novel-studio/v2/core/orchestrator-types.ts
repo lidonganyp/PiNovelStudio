@@ -183,6 +183,8 @@ export interface UnifiedOrchestratorInput {
   /** Optional wall-clock budget for all model calls in one read-only preview. */
   previewTotalTimeoutMs?: number;
   projectRoot: string;
+  /** G6-bound release identity; separate from the active pointer concurrency baseline. */
+  executionReleaseId?: string | null;
   /** 章节意图（ChapterIntentBuilder 输出） */
   intent: ChapterIntent;
   /** SCENE-SOLUTION-SEARCH-1：显式选择的写前方案卡；未提供时保持普通 raw。 */

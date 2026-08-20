@@ -10,14 +10,15 @@
  *
  * 与 environment-fingerprint.ts 的分工：
  * - environment-fingerprint 提供"完整环境指纹"（Git/dirty、模型、策略、seed、
- *   budget、env 开关、secret 安全指纹），用于 G6 门禁的 fingerprint 对比；
+ *   budget、env 开关与 secret 审计状态）；secret 状态保留供审计，但不参与 G6 行为身份 hash；
  * - 本模块提供"行为身份快照"（8 个组件 hash + bundleId），用于 manifest 的
  *   bundleId / 组件 hash 字段填充与独立 verify（DG-2 交付物）。
  *
  * 设计原则：
  * - 任一行为资产变化 → 对应组件 hash 变化 → bundleId 变化
  * - 同输入重复 capture → 完全一致（capturedAt 不计入任何 hash）
- * - 秘密 redaction：只记录文件名 / 是否存在 / 安全 hash，绝不记录文件内容或秘密值
+ * - 秘密 redaction：只记录文件名 / 是否存在 / 安全 hash，绝不记录文件内容或秘密值；
+ *   secret 注入与轮换不改变行为身份，必需凭证由生产启动门禁单独校验
  *
  * 边界（READY_LOCAL）：
  * - 仅 node 内建（crypto/fs/path/child_process）+ sibling behavior-bundle

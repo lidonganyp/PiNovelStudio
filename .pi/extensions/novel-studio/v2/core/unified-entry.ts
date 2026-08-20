@@ -178,6 +178,7 @@ import {
   type JudgeRoundTrace,
 } from "../adapters/legacy-trace-adapter.js";
 import { atomicSave } from "./orchestrator-commit-save.js";
+import { captureGenerationBaseline } from "./commit-stale-guard.js";
 import { computeProductionBundleHash } from "./production-bundle-hash.js";
 import type { FailureEnvelope } from "../../craft/failure-envelope.js";
 import {
@@ -970,6 +971,9 @@ function buildTraceRecordsFromOrchResult(
   const rawCandidateId = rawCandidate?.id ?? `candidate:raw:${orchResult.chapterId}`;
 
   const productionFlow = orchResult.stageResults.productionFlow as { mode?: string } | undefined;
+  const generationBaseline = orchResult.stageResults.generationBaseline as
+    | V2TraceRecord["generationBaseline"]
+    | undefined;
   // 1. rawstage2_generated — 仅旧评测/兼容路径记录 one-shot raw
   if (rawCandidate && productionFlow?.mode !== "agentic_style_full_pipeline") {
     records.push({
@@ -1144,6 +1148,7 @@ function buildTraceRecordsFromOrchResult(
           }
         : {}),
       // Phase 4 C9：release governance 绑定，供 canary 证据跨 release 校验
+      generationBaseline,
       releaseGovernance,
     });
   }
@@ -1220,6 +1225,7 @@ function buildTraceRecordsFromOrchResult(
       qualityCostAnalysis: orchResult.stageResults.qualityCostAnalysis,
       failureStrategyDecision: orchResult.stageResults.failureStrategyDecision,
       failureStrategyTrace: orchResult.stageResults.failureStrategyTrace,
+      generationBaseline,
       releaseGovernance,
     });
   }
@@ -1375,6 +1381,23 @@ function persistEarlyBlockedTrace(
       auditSink,
     });
     const now = new Date().toISOString();
+    // 早期阻断没有进入 UnifiedOrchestrator，不能依赖其 stageResults
+    // 写入 generationBaseline。这里仍捕获 active pointer 与本次 G6 实际
+    // 绑定的 execution release，避免 preflight/control-plane 阻断在审计中
+    // 退化为只有一个模糊的 releaseGovernance.releaseId。
+    //
+    // 若 pointer 本身已经损坏，不能因为补充审计字段而丢弃原有阻断 trace；
+    // G6 的 FailureEnvelope 仍然是该失败的权威证据。
+    let generationBaseline: V2TraceRecord["generationBaseline"];
+    try {
+      generationBaseline = captureGenerationBaseline(
+        projectRoot,
+        workspaceId,
+        releaseGovernance?.releaseId ?? null,
+      );
+    } catch {
+      generationBaseline = undefined;
+    }
     // P1 修复（第三轮）：使用 failureEnvelope.stage（如 "story_preservation"）作为 trace record 的 stage，
     // 并透传完整 failureEnvelope（含 gate/severity/retryPlan/userActionRequired），
     // 避免 legacy-trace-adapter 把所有早期阻断路径改写为 stage/gate=v2_error。
@@ -1404,6 +1427,7 @@ function persistEarlyBlockedTrace(
       failureEnvelope: fullEnvelope,
       contextHash: "early-blocked",
       releaseGovernance,
+      ...(generationBaseline ? { generationBaseline } : {}),
     });
     return traceAdapter.flush() ?? null;
   } catch (traceErr) {
@@ -2410,6 +2434,7 @@ export async function runUnifiedPipeline(
     chapterId,
     chapterNumber,
     projectRoot,
+    executionReleaseId: releaseGateResult.releaseId,
     productionFlow,
     toolMode,
     // AUDIT-1 Phase 3 续：模型回合 + 工具细事件写入同一 AuditEventStore

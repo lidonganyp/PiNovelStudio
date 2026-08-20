@@ -9,7 +9,7 @@
 - 真实模型与正收益状态：`REQUIRES_AUTH`
 - `--auth` 状态：未启用，退出码 2，fail-closed，不调用真实模型
 - Git HEAD 证据边界：仅记录基准提交，不代表当前脏工作树的完整代码快照
-- 冻结 raw manifest hash：`8fca55d50b5b7c465bf553380eca7ded0fb91124f6807c08597cf82c91e2b266`
+- 冻结 raw manifest hash：`902a480df8ec02ae6cafddb425d972b2e52aec70dcb54b328dc0de3d27e3c91e`
 - 冻结 raw manifest：`D:\CODE\PiNovelStudio\.pi\extensions\novel-studio\scripts\language-calibration-real-1\raw-manifest.json`
 
 > ⚠️ **REQUIRES_AUTH 边界**：本切片为 offline stub 模式 + 真实 raw 文本 fixture。
@@ -342,7 +342,7 @@
 
 ---
 
-**生成时间**: 2026-08-18T12:31:59.115Z
+**生成时间**: 2026-08-20T05:08:20.757Z
 **脚本**: `scripts/language-calibration-real-1/run-verification.mjs`
 **模式**: stub
-**Git HEAD（仅基准提交，不代表脏工作树快照）**: 3e4dcc0328196a89170124f6dcd610fa362f1e84
+**Git HEAD（仅基准提交，不代表脏工作树快照）**: ac0b55d9dec9f2827cc41d35937cc93c51b8eb71

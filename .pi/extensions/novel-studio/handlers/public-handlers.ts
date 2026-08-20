@@ -13,6 +13,8 @@
 
 import { join } from "node:path";
 import { getProjectRoot } from "../utils/config.js";
+import { validateWorkspaceId } from "../utils/fs.js";
+import { validateChapterId } from "../utils/chapter-path.js";
 import { loadStrategyTraceContext } from "./strategy-feedback-trace-context.js";
 import {
   appendPublicFeedbackLedgerObservation,
@@ -113,6 +115,11 @@ export async function handleGenerateChapter(input: {
     modelTestRoute,
     seed,
   } = input;
+
+  // 公开生产入口必须在任何文件读取、trace 写入或模型调用前校验路径组成部分。
+  // 下游存在局部校验，但统一入口是唯一应当 fail-closed 的安全边界。
+  validateWorkspaceId(workspaceId);
+  validateChapterId(chapterId);
 
   // ============================================================================
   // EXPERIMENTAL-FIELDS-REJECT-1：拒绝实验字段与旧 raw/judge 分支
@@ -305,6 +312,8 @@ export async function handlePreflightWorkspace(input: {
   message: string;
 }> {
   const { workspaceId, chapterId, chapterNumber, skipSeedReadiness } = input;
+  validateWorkspaceId(workspaceId);
+  validateChapterId(chapterId);
   const projectRoot = getProjectRoot();
   const workspacePath = join(projectRoot, "workspaces", workspaceId);
 
@@ -363,6 +372,7 @@ export async function handlePreflightWorkspace(input: {
 // ============================================================================
 
 export async function handlePlanStoryOutline(input: StoryOutlinePlannerInput): Promise<StoryOutlinePlannerResult> {
+  validateWorkspaceId(input.workspaceId);
   const projectRoot = (input as StoryOutlinePlannerInput & { _projectRoot?: string })._projectRoot || getProjectRoot();
   const planner = createStoryOutlinePlanner({ projectRoot });
   return planner.plan(input);
@@ -379,6 +389,7 @@ export async function handleStrategyPolicyView(input: {
   modelVersion?: string;
   strategyId?: string;
 }): Promise<any> {
+  validateWorkspaceId(input.workspaceId);
   const projectRoot = (input as any)._projectRoot || getProjectRoot();
   const { loadStrategyPolicyStore } = await import(
     "../v2/learning/strategy-policy-store.js"
@@ -465,6 +476,8 @@ export async function handleStrategyFeedback(input: {
   exposureId?: string;
   promptBundleId?: string;
 }): Promise<any> {
+  validateWorkspaceId(input.workspaceId);
+  if (input.chapterId !== undefined) validateChapterId(input.chapterId);
   const projectRoot = (input as any)._projectRoot || getProjectRoot();
   const traceContext = input.chapterId
     ? loadStrategyTraceContext(projectRoot, input.workspaceId, input.chapterId)

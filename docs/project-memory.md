@@ -10,11 +10,11 @@
 
 `config/model-routing.json` 已升级至 v4.32.0。正式 `novel_generate_chapter` 的 Gemini writer identity 已统一为 `gemini-3.7-flash`，生产主 API 为 Aimagichub（`https://aimagichub.xyz/v1`）；Solov 保留为显式对比端点，不作为静默 fallback。在 `PINOVEL_DEV_MODE=1` 的本地正式入口验证中，隔离 xinmo 第18章工作区、相同入口参数的测试结果为：Solov 2/2 次 HTTP 404；Aimagichub 4/4 次完成模型调用，其中 2 次 `status=ok/selectedSource=editorial`（约 34–52 秒），另 2 次在 StoryPreservation 门禁阻断（非网络失败）。因此主线路选择 Aimagichub；这不是关闭发布身份门禁后的生产验收，文学门禁波动仍需后续持续观察。
 
-**没有可在当前 HEAD 直接验证且可运行的生产身份。** 本地运行时指针仍可能写着 `rel-prod-134`，但那不是 clean checkout 可恢复、也不是 `3e4dcc0` 能过 G6 的基线。
+**没有可在当前 HEAD 直接验证且可运行的生产身份。** 本地运行时指针当前为 `rel-prod-134`，但那不是 clean checkout 可恢复、也不是 `778b9f3` 能过 G6 的基线；`rel-prod-145` 对应当前提交但仍为 `approved_dev`，且当前工作树不可复现。
 
 | 项 | 现行事实 |
 |---|---|
-| 当前 HEAD | `3e4dcc0`。主树 dirty 时 G6 必失败 |
+| 当前 HEAD | `778b9f3`。主树 dirty 时 G6 必失败 |
 | 运行时 pointer（gitignore） | 本机可能仍是 `rel-prod-134`，clean checkout 没有这份文件 |
 | `rel-prod-134` 冻结提交 | `d238c7c`。旧 P6 的 raw_direct 无生产身份；不得把旧 P6 当当前准入证据 |
 | `rel-prod-135` | `held`。P6 是 134 归档改贴，结论作废。**不是** active_prod |

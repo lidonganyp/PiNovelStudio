@@ -112,8 +112,8 @@ function projectRoot() {
 }
 
 // PI 不会自动加载 .env，手动解析注入 process.env。
-// 环境指纹的 secretEnvStates 依赖密钥变量是否已设置，CLI 必须与生产运行时（index.ts）一致，
-// 否则 capture/verify 算出的指纹与 release gate 不一致。
+// CLI 仍加载 .env 以便生产启动门禁和审计输出保持一致；secretEnvStates 仅是审计元数据，
+// 不参与行为身份 hash，因此密钥注入/轮换不会造成 release fingerprint 漂移。
 const envPath = join(REPO_ROOT, ".env");
 if (existsSync(envPath)) {
   for (const line of readFileSync(envPath, "utf-8").split("\n")) {

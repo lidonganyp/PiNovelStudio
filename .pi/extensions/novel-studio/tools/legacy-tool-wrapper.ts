@@ -64,6 +64,13 @@ export function wrapLegacyTool(raw: any): any {
     parameters,
     async execute(toolCallId: string, params: any, _signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
       try {
+        const callerProvidedRoot = typeof params?._projectRoot === "string";
+        const trustedRootContext = ctx?.__novelRuntimeTrustedRoot === true;
+        if (callerProvidedRoot && !trustedRootContext && process.env.NOVEL_TEST_TOOLS !== "1") {
+          throw new Error(
+            "生产工具不得由调用方注入 _projectRoot；工作根目录必须由受信运行时或测试夹具提供。",
+          );
+        }
         // Respect _projectRoot passed by the caller (e.g., novel-runtime's invoke.js sets it
         // to a per-job temp workspace root like /app/.tmp/workspaces/{jobId}). Without this,
         // resolveProjectRoot walks UP the tree looking for PiNovelStudio marker files

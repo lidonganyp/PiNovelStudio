@@ -35,8 +35,17 @@ function loadRoutingConfig() {
   return JSON.parse(readRepoFile("config/model-routing.json"));
 }
 
-function loadRecommendation() {
-  return JSON.parse(readRepoFile("config/model-routing.recommendation.json"));
+/**
+ * The recommendation report was an experiment-only artifact and was removed
+ * when the repository converged on a single production routing baseline.
+ * Read the live routing source instead of requiring a second, stale file.
+ */
+function loadProductionCurrent() {
+  const config = loadRoutingConfig();
+  return {
+    narrator_primary: config.model_strategy?.narrator_primary,
+    style_shaper: config.model_strategy?.style_shaper,
+  };
 }
 
 const EXPECTED_CLAUDE_MODEL = "claude-opus-4-6";
@@ -164,15 +173,15 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
     });
   });
 
-  describe("model-routing.recommendation.json 当前态不声明 claude-opus-4-8 / Doubao 主写", () => {
+  describe("生产路由当前态不声明 claude-opus-4-8 / Doubao 主写", () => {
     test("productionCurrent.narrator_primary 为 Gemini 3.7 Flash", () => {
-      const rec = loadRecommendation();
-      assert.equal(rec.productionCurrent?.narrator_primary, "gemini-3.7-flash");
+      const current = loadProductionCurrent();
+      assert.equal(current.narrator_primary, "gemini-3.7-flash");
     });
 
     test("productionCurrent.style_shaper 不为 claude-opus-4-8", () => {
-      const rec = loadRecommendation();
-      assert.notEqual(rec.productionCurrent?.style_shaper, LEGACY_CLAUDE_MODEL);
+      const current = loadProductionCurrent();
+      assert.notEqual(current.style_shaper, LEGACY_CLAUDE_MODEL);
     });
   });
 

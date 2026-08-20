@@ -7,7 +7,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { handleGenerateChapter } from "../dist/handlers/public-handlers.js";
+import {
+  handleGenerateChapter,
+  handlePreflightWorkspace,
+  handlePlanStoryOutline,
+  handleStrategyPolicyView,
+  handleStrategyFeedback,
+} from "../dist/handlers/public-handlers.js";
 import {
   evaluateEvidenceAuthorityBinding,
   evaluateEvidenceEligibility,
@@ -28,6 +34,120 @@ test("生产入口拒绝 modelTestRoute / fullPipelinePreview / mock", async () 
       /实验字段在生产入口被拒绝/,
       field,
     );
+  }
+});
+
+test("PI wrapper rejects caller-supplied project roots outside the trusted runtime hand-off", async () => {
+  const original = process.env.NOVEL_TEST_TOOLS;
+  delete process.env.NOVEL_TEST_TOOLS;
+  try {
+    const { wrapLegacyTool } = await import("../dist/tools/legacy-tool-wrapper.js");
+    let invoked = false;
+    const tool = wrapLegacyTool({
+      name: "novel_test_boundary",
+      description: "boundary fixture",
+      inputSchema: { type: "object", properties: {} },
+      invoke: async () => {
+        invoked = true;
+        return { status: "ok" };
+      },
+    });
+    const result = await tool.execute(
+      "boundary-root",
+      { _projectRoot: "C:/attacker/root" },
+      undefined,
+      undefined,
+      { cwd: process.cwd() },
+    );
+    assert.equal(result.isError, true);
+    assert.match(result.content?.[0]?.text ?? "", /不得由调用方注入 _projectRoot/);
+    assert.equal(invoked, false);
+  } finally {
+    if (original === undefined) delete process.env.NOVEL_TEST_TOOLS;
+    else process.env.NOVEL_TEST_TOOLS = original;
+  }
+});
+
+test("PI wrapper accepts the runtime-marked isolated project root", async () => {
+  const original = process.env.NOVEL_TEST_TOOLS;
+  delete process.env.NOVEL_TEST_TOOLS;
+  try {
+    const { wrapLegacyTool } = await import("../dist/tools/legacy-tool-wrapper.js");
+    let capturedRoot;
+    const tool = wrapLegacyTool({
+      name: "novel_test_trusted_root",
+      description: "boundary fixture",
+      inputSchema: { type: "object", properties: {} },
+      invoke: async (input) => {
+        capturedRoot = input._projectRoot;
+        return { status: "ok" };
+      },
+    });
+    const result = await tool.execute(
+      "trusted-root",
+      { _projectRoot: "C:/runtime/isolation" },
+      undefined,
+      undefined,
+      { __novelRuntimeTrustedRoot: true },
+    );
+    assert.equal(result.isError, undefined);
+    assert.equal(capturedRoot, "C:/runtime/isolation");
+  } finally {
+    if (original === undefined) delete process.env.NOVEL_TEST_TOOLS;
+    else process.env.NOVEL_TEST_TOOLS = original;
+  }
+});
+
+test("production tool wrapper rejects proxy callerOverride even when schema omits it", async () => {
+  const original = process.env.NOVEL_TEST_TOOLS;
+  delete process.env.NOVEL_TEST_TOOLS;
+  try {
+    const { registerTools } = await import("../dist/tools/register-tools.js");
+    let invoked = false;
+    const tool = registerTools(new Proxy({}, {
+      get: (_target, key) => key === "handleWorkspaceManager"
+        ? async () => { invoked = true; return { status: "ok" }; }
+        : async () => ({}),
+    })).find((candidate) => candidate.name === "novel_workspace_manager");
+    assert.ok(tool);
+    const result = await tool.execute(
+      "boundary-caller",
+      { action: "proxy_review", workspaceId: "safe", callerOverride: { apiKey: "secret" } },
+      undefined,
+      undefined,
+      { cwd: process.cwd() },
+    );
+    assert.equal(result.isError, true);
+    assert.match(result.content?.[0]?.text ?? "", /内部字段不得通过生产工具入口传入/);
+    assert.equal(invoked, false);
+  } finally {
+    if (original === undefined) delete process.env.NOVEL_TEST_TOOLS;
+    else process.env.NOVEL_TEST_TOOLS = original;
+  }
+});
+
+test("生成入口拒绝 workspaceId/chapterId 路径穿越", async () => {
+  for (const input of [
+    { workspaceId: "..", chapterId: "1" },
+    { workspaceId: "safe", chapterId: "../escape" },
+  ]) {
+    await assert.rejects(
+      () => handleGenerateChapter({ ...input, chapterNumber: 1 }),
+      /Invalid (workspaceId|chapterId)/,
+      JSON.stringify(input),
+    );
+  }
+});
+
+test("其余公开 workspace 入口同样拒绝路径穿越", async () => {
+  const cases = [
+    () => handlePreflightWorkspace({ workspaceId: "..", chapterId: "1", chapterNumber: 1 }),
+    () => handlePlanStoryOutline({ workspaceId: "../escape", idea: "test" }),
+    () => handleStrategyPolicyView({ workspaceId: ".." }),
+    () => handleStrategyFeedback({ workspaceId: "safe", chapterId: "../escape", modelVersion: "gemini31" }),
+  ];
+  for (const [index, invoke] of cases.entries()) {
+    await assert.rejects(invoke, /Invalid (workspaceId|chapterId)/, `case ${index}`);
   }
 });
 

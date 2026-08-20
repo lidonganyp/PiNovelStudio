@@ -230,7 +230,6 @@ export interface BehavioralFingerprintFields {
   timeoutMs: number;
   fallbackPolicy: string;
   envSwitches: Array<{ name: string; set: boolean }>;
-  secretEnvStates: Array<{ name: string; set: boolean }>;
 }
 
 export interface FingerprintFieldDiff {
@@ -309,6 +308,13 @@ export function isGitBinaryAvailable(): boolean {
 }
 
 function getGitHead(projectRoot: string): string {
+  // Containerized production images intentionally omit .git. The deployer
+  // must inject the commit that was frozen into the release manifest; this
+  // preserves identity without making the image depend on a mutable checkout.
+  const deployedCommit = process.env.PINOVEL_RELEASE_COMMIT?.trim();
+  if (deployedCommit && /^[0-9a-f]{7,64}$/i.test(deployedCommit)) {
+    return deployedCommit;
+  }
   try {
     return execSync("git rev-parse HEAD", {
       cwd: projectRoot,
@@ -497,7 +503,7 @@ export function collectEnvironmentFingerprint(
  * 排除字段（非行为或会自然变化）：
  * - collectedAt（采集时间）
  * - fingerprintHash（自身）
- * - secretEnvStates[].fingerprint（秘密值指纹；秘密轮换不改变行为）
+ * - secretEnvStates（secret 名称、存在状态和值指纹均只保留为审计元数据，不参与行为身份）
  *
  * 包含字段（行为）：
  * - codeCommit / worktreeDirty
@@ -507,7 +513,8 @@ export function collectEnvironmentFingerprint(
  * - constitutionHash / datasetHash / evalProtocolHash
  * - seed / budgetMaxCalls / timeoutMs / fallbackPolicy
  * - envSwitches（name + set）
- * - secretEnvStates（name + set，不含 fingerprint）
+ *
+ * secretEnvStates 不参与行为 hash；必需 provider 凭证由生产运行时启动门禁校验。
  *
  * 注意：runtimeFileList 不直接计入 hash（其聚合 runtimeFilesHash 已计入），
  * 避免清单顺序影响 hash。
@@ -534,7 +541,6 @@ export function extractBehavioralFingerprintFields(
     | "timeoutMs"
     | "fallbackPolicy"
     | "envSwitches"
-    | "secretEnvStates"
   >,
 ): BehavioralFingerprintFields {
   return {
@@ -559,13 +565,13 @@ export function extractBehavioralFingerprintFields(
     envSwitches: [...fp.envSwitches]
       .map((item) => ({ name: item.name, set: item.set }))
       .sort((a, b) => a.name.localeCompare(b.name)),
-    secretEnvStates: [...fp.secretEnvStates]
-      .map((item) => ({ name: item.name, set: item.set }))
-      .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
 
 export function computeFingerprintHash(fp: EnvironmentFingerprint): string {
+  // Secret presence/value fingerprints are audit evidence only. Required provider
+  // credentials are validated by the production runtime startup gate, while the
+  // release behavior identity must remain stable across injection and rotation.
   return sha256(canonicalize(extractBehavioralFingerprintFields(fp)));
 }
 
@@ -653,7 +659,6 @@ export function diffBehavioralFingerprintFields(
     diffs.push({ field: "activeStrategyIds", recorded: recordedIds, actual: actualIds });
   }
   diffs.push(...diffNamedFlags("envSwitches", left.envSwitches ?? [], right.envSwitches ?? []));
-  diffs.push(...diffNamedFlags("secretEnvStates", left.secretEnvStates ?? [], right.secretEnvStates ?? []));
   return diffs;
 }
 
@@ -722,6 +727,10 @@ export function persistEnvironmentFingerprint(
     fingerprintHash: fp.fingerprintHash,
     collectedAt: fp.collectedAt,
     ...extractBehavioralFingerprintFields(fp),
+    // Secret state is retained for operational audit only; it is not behavior identity.
+    secretEnvStates: [...fp.secretEnvStates]
+      .map((item) => ({ name: item.name, set: item.set, fingerprint: item.fingerprint }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
   };
   const target = join(releaseDir, "environment-fingerprint.json");
   writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
@@ -730,7 +739,10 @@ export function persistEnvironmentFingerprint(
 
 export function loadPersistedEnvironmentFingerprint(
   releaseDir: string,
-): (BehavioralFingerprintFields & { fingerprintHash?: string }) | null {
+): (BehavioralFingerprintFields & {
+  fingerprintHash?: string;
+  secretEnvStates?: SecretEnvState[];
+}) | null {
   const target = join(releaseDir, "environment-fingerprint.json");
   if (!existsSync(target)) return null;
   try {
@@ -749,7 +761,6 @@ function normalizeComparableFields(
   return {
     ...fp,
     envSwitches: (fp.envSwitches ?? []).map((item) => ({ name: item.name, set: item.set })),
-    secretEnvStates: (fp.secretEnvStates ?? []).map((item) => ({ name: item.name, set: item.set })),
     activeStrategyIds: [...(fp.activeStrategyIds ?? [])].sort(),
   };
 }

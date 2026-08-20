@@ -640,6 +640,7 @@ const CACHED_BUILD_INFO: QualityTraceBuildInfo = loadBuildInfo();
  * 从 gate evidence 中策展读侧证据子集（P7 Stage B-Read）。
  *
  * 只提取 R1-R4 读侧消费的 strategyContext / modelCalls / releaseGovernance 三个
+ * 字段，以及不含正文的 generationBaseline 身份投影。
  * 字段，不携带完整候选正文（candidates / finalSelection / judgeEvidence /
  * comparison 等留在旧文件，不进审计流）。缺失字段不写入，确保 payload 不含
  * 大对象/完整正文。evidence 非对象（null/数组/原始值）时返回空对象。
@@ -658,6 +659,11 @@ function curateGateEvidence(evidence: unknown): Record<string, unknown> {
   }
   if (record.releaseGovernance !== undefined) {
     curated.releaseGovernance = record.releaseGovernance;
+  }
+  // 身份审计字段不含正文，必须保留在早期阻断与成功 trace 中，才能
+  // 区分 active pointer 与 G6 实际绑定的 execution release。
+  if (record.generationBaseline !== undefined) {
+    curated.generationBaseline = record.generationBaseline;
   }
   return curated;
 }

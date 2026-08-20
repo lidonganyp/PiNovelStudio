@@ -360,6 +360,14 @@ describe("CONCURRENCY-WAVE4：computeNarrativeStateRevision 单元", () => {
     const withoutWs = captureGenerationBaseline(TMP_ROOT);
     assert.equal(withoutWs.narrativeStateRevision, null);
   });
+
+  it("candidate execution release 与 active pointer 分离记录，且不改变并发基线", () => {
+    writePointer("rel-active");
+    const baseline = captureGenerationBaseline(TMP_ROOT, undefined, "rel-candidate");
+    assert.equal(baseline.activeReleaseId, "rel-active");
+    assert.equal(baseline.executionReleaseId, "rel-candidate");
+    assert.equal(checkCommitStale(baseline, TMP_ROOT).ok, true);
+  });
 });
 
 describe("CONCURRENCY-WAVE4：checkCommitStale stale_state_revision", () => {

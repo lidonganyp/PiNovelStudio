@@ -285,6 +285,62 @@ test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: 秘密环境变量只记录�
   }
 });
 
+test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: secret 注入/轮换不改变行为 hash", () => {
+  const dir = makeTempDir();
+  const secretName = "PINOVEL_TEST_ROTATING_SECRET";
+  try {
+    mkdirSync(join(dir, "config"), { recursive: true });
+    writeFileSync(join(dir, "config", "model-routing.json"), "{}", "utf-8");
+
+    delete process.env[secretName];
+    const withoutSecret = collectEnvironmentFingerprint(
+      makeFingerprintInput(dir, { secretEnvNames: [secretName] }),
+    );
+
+    process.env[secretName] = "injected-after-capture";
+    try {
+      const withSecret = collectEnvironmentFingerprint(
+        makeFingerprintInput(dir, { secretEnvNames: [secretName] }),
+      );
+
+      assert.equal(withSecret.secretEnvStates[0]?.set, true);
+      assert.equal(withoutSecret.secretEnvStates[0]?.set, false);
+      assert.equal(
+        withSecret.fingerprintHash,
+        withoutSecret.fingerprintHash,
+        "运行时注入或轮换 secret 不应使同一发布身份的行为 hash 漂移",
+      );
+    } finally {
+      delete process.env[secretName];
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: 无 .git 的运行时使用部署 commit 身份", () => {
+  const dir = makeTempDir();
+  const previousCommit = process.env.PINOVEL_RELEASE_COMMIT;
+  try {
+    mkdirSync(join(dir, "config"), { recursive: true });
+    writeFileSync(join(dir, "config", "model-routing.json"), "{}", "utf-8");
+    process.env.PINOVEL_RELEASE_COMMIT = "a".repeat(40);
+    const fingerprint = collectEnvironmentFingerprint(
+      makeFingerprintInput(dir, { mockGit: undefined }),
+    );
+    assert.equal(
+      fingerprint.codeCommit,
+      "a".repeat(40),
+      "无 .git 的容器运行时必须使用部署注入的不可变 commit 身份",
+    );
+    assert.equal(fingerprint.worktreeDirty, false);
+  } finally {
+    if (previousCommit === undefined) delete process.env.PINOVEL_RELEASE_COMMIT;
+    else process.env.PINOVEL_RELEASE_COMMIT = previousCommit;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("EVOLUTION-RELEASE-GOVERNANCE-1A fingerprint: envSwitches 只记录是否存在，不记录值", () => {
   const dir = makeTempDir();
   try {

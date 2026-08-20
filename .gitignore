@@ -238,6 +238,13 @@ Desktop.ini
 # =============================================================================
 .pi/extensions/novel-studio/config/evolution-release/
 
+# Runtime execution traces are generated evidence, not production source.
+traces/
+
+# 密封生产身份包由受控发布流程导出并由部署层只读挂载；它不是源码。
+# 未忽略会让 export-identity 污染冻结工作树，进而使生产指纹不可复现。
+config/production-identity/active.pack.json
+
 # =============================================================================
 # 评测回放归档 (eval replay archives，运行时生成，不纳入版本控制)
 # =============================================================================

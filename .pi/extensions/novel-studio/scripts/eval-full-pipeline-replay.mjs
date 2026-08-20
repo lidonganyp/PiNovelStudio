@@ -60,7 +60,7 @@ const PROJECT_ROOT = process.env.PINOVEL_PROJECT_ROOT
   : REPO_ROOT;
 
 // 与 evolution-cli 对齐：从仓库根或 PINOVEL_DOTENV_PATH 注入密钥/开关，
-// 避免 capture 与 production_like 因 secretEnvStates 集合不同而指纹漂移。
+// 让运行时凭证校验与审计输出可复现；secretEnvStates 不参与行为身份 hash。
 const dotenvPath = process.env.PINOVEL_DOTENV_PATH || join(REPO_ROOT, ".env");
 if (existsSync(dotenvPath)) {
   for (const line of readFileSync(dotenvPath, "utf-8").split("\n")) {

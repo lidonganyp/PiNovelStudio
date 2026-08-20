@@ -255,6 +255,14 @@ export interface V2TraceRecord {
     devMode: boolean;
     canaryEvidenceRunId?: string | null;
   };
+  /** Captured active pointer and the G6-bound release used by this execution. */
+  generationBaseline?: {
+    activeReleaseId: string | null;
+    executionReleaseId: string | null;
+    constitutionHash: string;
+    narrativeStateRevision: string | null;
+    capturedAt: string;
+  };
 }
 
 // ============================================================================

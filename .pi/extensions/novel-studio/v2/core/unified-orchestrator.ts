@@ -405,7 +405,11 @@ export class UnifiedOrchestrator {
     // 捕获失败（pointer 损坏）→ 记录结构化错误并保留 null 基线：提交边界检测时
     // readActiveProductionReleaseId 会再次抛错并 fail-closed，不会静默跳过。
     try {
-      stageResults.generationBaseline = captureGenerationBaseline(projectRoot, workspaceId);
+      stageResults.generationBaseline = captureGenerationBaseline(
+        projectRoot,
+        workspaceId,
+        input.executionReleaseId,
+      );
     } catch (e) {
       stageResults.generationBaselineCaptureError = {
         reason: (e as Error).message,

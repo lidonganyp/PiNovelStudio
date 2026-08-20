@@ -29,6 +29,7 @@ import { computeReleasePayloadHash } from "../dist-test/v2/governance/evolution-
 import { evaluateProductionReleaseGate } from "../dist-test/v2/governance/production-release-gate.js";
 import {
   buildProductionIdentityPack,
+  computeIdentityPackHash,
   parseProductionIdentityPack,
   injectProductionIdentityPack,
   exportProductionIdentityPack,
@@ -192,6 +193,41 @@ test("identity pack：hash 篡改 fail-closed；inject 后 G6 不再报 pointer 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("identity pack rejects non-production and unsafe pointers even with a recomputed hash", () => {
+  const manifest = makeManifest("rel-pack-safe");
+  const pack = buildProductionIdentityPack({
+    pointer: makePointer(manifest.releaseId),
+    manifest,
+    approvalArtifact: makeApproval(manifest),
+  });
+
+  const nonProductionPointerPayload = {
+    ...pack,
+    pointer: { ...pack.pointer, kind: "development" },
+  };
+  const nonProductionPointer = {
+    ...nonProductionPointerPayload,
+    packHash: computeIdentityPackHash(nonProductionPointerPayload),
+  };
+  const nonProductionResult = parseProductionIdentityPack(nonProductionPointer);
+  assert.equal(nonProductionResult.ok, false);
+  assert.match(nonProductionResult.errors.join("; "), /production/i);
+
+  const unsafeReleasePayload = {
+    ...pack,
+    releaseId: "../outside",
+    pointer: { ...pack.pointer, releaseId: "../outside" },
+    manifest: { ...pack.manifest, releaseId: "../outside" },
+  };
+  const unsafeRelease = {
+    ...unsafeReleasePayload,
+    packHash: computeIdentityPackHash(unsafeReleasePayload),
+  };
+  const unsafeReleaseResult = parseProductionIdentityPack(unsafeRelease);
+  assert.equal(unsafeReleaseResult.ok, false);
+  assert.match(unsafeReleaseResult.errors.join("; "), /releaseId/i);
 });
 
 test("CLI export-identity / inject-identity 可在空治理根恢复 pointer", () => {

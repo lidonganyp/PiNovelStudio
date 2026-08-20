@@ -26,6 +26,33 @@ interface ChapterFileSnapshot {
   text: string | null;
 }
 
+/**
+ * Public MCP/tool calls must not be able to inject handler-only test seams
+ * through undeclared JSON properties. Filesystem-root authority
+ * is checked earlier by legacy-tool-wrapper, which can distinguish the trusted
+ * novel-runtime hand-off from an ordinary tool call. The handlers still accept
+ * these fields for in-process tests and for the batch orchestrator; this
+ * boundary is where remaining untrusted tool input is rejected.
+ */
+const INTERNAL_ONLY_PUBLIC_FIELDS = new Set([
+  "_mockGenerateChapter",
+  "_commitAndSaveFn",
+  "_registryOverride",
+  "callerOverride",
+]);
+
+function rejectInternalPublicFields(input: unknown): void {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return;
+  const forbidden = Object.keys(input as Record<string, unknown>).filter((key) =>
+    INTERNAL_ONLY_PUBLIC_FIELDS.has(key),
+  );
+  if (forbidden.length === 0 || process.env.NOVEL_TEST_TOOLS === "1") return;
+  throw new Error(
+    `内部字段不得通过生产工具入口传入：${forbidden.join(", ")}。` +
+    "请使用已声明的生产参数；测试注入只能在隔离测试环境中使用。",
+  );
+}
+
 function captureChapterFileSnapshot(input: Record<string, unknown>): ChapterFileSnapshot | null {
   const projectRoot = typeof input._projectRoot === "string" ? input._projectRoot : null;
   const workspaceId = typeof input.workspaceId === "string" ? input.workspaceId : null;
@@ -259,6 +286,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         styleProfile?: string;
         targetWordCount?: { perChapter: { min: number; max: number }; total: number };
       }) {
+        rejectInternalPublicFields(input);
         return handlers.handleWorkspaceManager(input);
       },
     },
@@ -384,6 +412,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         commandId?: string;
         _projectRoot?: string;
       }) {
+        rejectInternalPublicFields(input);
         const _forbiddenProduction = [
           "modelTestRoute",
           "fullPipelinePreview",
@@ -522,6 +551,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         chapterNumber: number;
         skipSeedReadiness?: boolean;
       }) {
+        rejectInternalPublicFields(input);
         return handlers.handlePreflightWorkspace(input);
       },
     },
@@ -548,6 +578,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         required: ["workspaceId"],
       },
       async invoke(input: Record<string, unknown>) {
+        rejectInternalPublicFields(input);
         return handlers.handlePlanStoryOutline(input);
       },
     },
@@ -572,6 +603,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         modelVersion?: string;
         strategyId?: string;
       }) {
+        rejectInternalPublicFields(input);
         return handlers.handleStrategyPolicyView(input);
       },
     },
@@ -646,6 +678,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         reason?: string;
         note?: string;
       }) {
+        rejectInternalPublicFields(input);
         return handlers.handleStrategyFeedback(input);
       },
     },

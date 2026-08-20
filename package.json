@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspace novel-studio",
+    "build:prod": "npm run build:prod --workspace novel-studio",
     "test": "npm test --workspace novel-studio",
     "smoke": "npm run smoke --workspace novel-studio",
     "replay:multi-agent-boundary": "npm run replay:multi-agent-boundary --workspace novel-studio",

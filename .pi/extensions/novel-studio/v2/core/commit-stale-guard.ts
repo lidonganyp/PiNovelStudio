@@ -51,6 +51,8 @@ const POINTER_FILE_NAME = "active-production.json";
 export interface GenerationBaseline {
   /** 当时 active production releaseId；未接入 release 治理为 null */
   activeReleaseId: string | null;
+  /** Release selected by the successful G6 gate for this execution. */
+  executionReleaseId: string | null;
   /** 当时 CreativeConstitution hash（无 constitution 文件为 ""） */
   constitutionHash: string;
   /**
@@ -141,9 +143,11 @@ export function readActiveProductionReleaseId(projectRoot: string): string | nul
 export function captureGenerationBaseline(
   projectRoot: string,
   workspaceId?: string,
+  executionReleaseId?: string | null,
 ): GenerationBaseline {
   return {
     activeReleaseId: readActiveProductionReleaseId(projectRoot),
+    executionReleaseId: executionReleaseId ?? null,
     constitutionHash: computeConstitutionHash(projectRoot),
     narrativeStateRevision: workspaceId
       ? computeNarrativeStateRevision(workspaceId, projectRoot)

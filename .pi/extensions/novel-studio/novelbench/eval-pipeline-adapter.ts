@@ -25,6 +25,8 @@
  * 本模块为 eval-only，由 tsconfig.eval.json 编译到 dist-eval/，不进 dist/。
  */
 
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { GeneratorCase } from "./types.js";
 import type {
   ModelGenerateFn,
@@ -39,6 +41,7 @@ import type {
 } from "../v2/core/types.js";
 import { resolveWriterPromptProfile } from "../v2/core/model-prompt-adapter.js";
 import type { WriterPromptProfile } from "../v2/core/model-prompt-adapter.js";
+import { withExclusiveGuard } from "../v2/core/fs-atomic.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 类型定义
@@ -176,6 +179,27 @@ function buildFullContext(genCase: GeneratorCase): CompiledContext {
   };
 }
 
+/**
+ * 每个 NovelBench layer 都是独立的评测运行，不得继承同一 eval workspace
+ * 上一次运行的持久化预算账本。只清理明确以 `eval-` 开头的 workspace，
+ * 并在各自 guard 内完成删除，避免与仍在进行的账本更新并发。
+ */
+function resetEvalBudgetArtifacts(workspaceId: string, projectRoot: string): void {
+  if (!workspaceId.startsWith("eval-")) return;
+
+  const workspaceRoot = join(projectRoot, "workspaces", workspaceId);
+  for (const fileName of [
+    "budget-ledger.json",
+    "provider-budget-ledger.json",
+  ]) {
+    const filePath = join(workspaceRoot, fileName);
+    const guardPath = `${filePath}.guard`;
+    withExclusiveGuard(guardPath, () => {
+      if (existsSync(filePath)) rmSync(filePath, { force: true });
+    });
+  }
+}
+
 /** 从 V2Output.stageResults.modelCalls 提取主模型名（第一个非 failed 调用） */
 function extractModelName(result: V2Output): string {
   const modelCalls = (result.stageResults?.modelCalls as Array<{ model: string; failed?: boolean }>) ?? [];
@@ -262,6 +286,10 @@ export async function runEvalLayer(
   const start = Date.now();
   const workspaceId = `eval-${genCase.caseId}`;
   const chapterId = `${genCase.caseId}-${layer}`;
+
+  // Eval layer 之间共享逻辑 workspaceId 以保持结果身份稳定，但预算必须
+  // 按 layer/run 隔离；否则历史 eval 或前一次 layer 的账本会造成假性耗尽。
+  resetEvalBudgetArtifacts(workspaceId, process.cwd());
 
   // 构造 intent/context（按 layer 层级填字段）
   let intent: ChapterIntent;

@@ -23,6 +23,7 @@ import { resolveRunRouting } from "../dist/v2/core/run-routing-context.js";
 import { buildTrustedControlPlane } from "../dist/v2/core/control-plane.js";
 import { createLegacyTraceAdapter } from "../dist/v2/adapters/legacy-trace-adapter.js";
 import { buildTraceRecordsFromOrchResultForTest } from "../dist/v2/core/unified-entry.js";
+import { runUnifiedPipeline } from "../dist/v2/core/unified-entry.js";
 // buildTraceRecordsFromOrchResultForTest 与生产 buildTraceRecordsFromOrchResult 同逻辑
 
 function makeIntent() {
@@ -289,6 +290,80 @@ test("success B0：quality-trace final_selected evidence 含 modelCallObservabil
       );
     }
   } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("release identity：quality-trace 同时保留 active pointer 与 execution release", () => {
+  const orchResult = {
+    status: "ok",
+    chapterId: "identity-trace",
+    candidates: [{ id: "c1", kind: "agentic_raw", text: "正文" }],
+    selectedSource: "editorial",
+    selectedCandidateId: "c1",
+    stageResults: {
+      productionFlow: { mode: "agentic_style_full_pipeline" },
+      generationBaseline: {
+        activeReleaseId: "rel-active",
+        executionReleaseId: "rel-candidate",
+        constitutionHash: "constitution-hash",
+        narrativeStateRevision: "state-revision",
+        capturedAt: "2026-08-19T00:00:00.000Z",
+      },
+    },
+  };
+  const records = buildTraceRecordsFromOrchResultForTest(
+    orchResult,
+    "ctx:identity",
+    {
+      devMode: false,
+      releaseId: "rel-candidate",
+      environmentFingerprint: "fp-candidate",
+      approvalRef: "approval-candidate",
+    },
+  );
+  const finalRecord = records.find((record) => record.stage === "final_selected");
+  assert.ok(finalRecord, "应生成 final_selected trace record");
+  assert.deepEqual(finalRecord.generationBaseline, orchResult.stageResults.generationBaseline);
+  assert.equal(finalRecord.releaseGovernance.releaseId, "rel-candidate");
+});
+
+test("early blocked trace：G6 之后的阻断仍保留 generationBaseline 身份投影", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "gov-trace-early-"));
+  const workspaceId = "ws-early-block";
+  mkdirSync(join(projectRoot, "workspaces", workspaceId), { recursive: true });
+  const previousDevMode = process.env.PINOVEL_DEV_MODE;
+  delete process.env.PINOVEL_DEV_MODE;
+  try {
+    const result = await runUnifiedPipeline({
+      workspaceId,
+      chapterId: "early-blocked",
+      chapterNumber: 1,
+      projectRoot,
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(result.failureEnvelope?.stage, "g6_release_gate");
+
+    const tracePath = join(
+      projectRoot,
+      "workspaces",
+      workspaceId,
+      "traces",
+      "early-blocked-quality-trace.json",
+    );
+    assert.ok(existsSync(tracePath), "G6 阻断必须落盘 quality-trace");
+    const trace = JSON.parse(readFileSync(tracePath, "utf8"));
+    const gate = trace.gates?.find((entry) => entry.stage === "v2_g6_release_gate");
+    assert.ok(gate, "G6 阻断 trace 应有对应 gate");
+    assert.ok(
+      gate.evidence?.generationBaseline,
+      `早期阻断必须携带 generationBaseline；evidence=${JSON.stringify(gate.evidence)}`,
+    );
+    assert.equal(gate.evidence.generationBaseline.executionReleaseId, null);
+    assert.equal(gate.evidence.generationBaseline.activeReleaseId, null);
+  } finally {
+    if (previousDevMode === undefined) delete process.env.PINOVEL_DEV_MODE;
+    else process.env.PINOVEL_DEV_MODE = previousDevMode;
     rmSync(projectRoot, { recursive: true, force: true });
   }
 });
