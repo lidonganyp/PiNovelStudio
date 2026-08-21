@@ -36,7 +36,7 @@ function renderChart(): void {
     series: [
       {
         type: 'bar',
-        data: days.map((row) => Number(row.charge) / 100),
+        data: days.map((row) => Number(fenToYuan(row.charge))),
       },
     ],
   });
@@ -91,8 +91,11 @@ onBeforeUnmount(() => {
     <el-row v-if="summary" :gutter="16" class="cards">
       <el-col :span="6">
         <el-card shadow="never">
-          <p class="label">余额</p>
-          <p class="value">¥{{ fenToYuan(summary.balance) }}</p>
+          <p class="label">总余额</p>
+          <p class="value">¥{{ fenToYuan(summary.totalBalance) }}</p>
+          <p class="sub">
+            充值 ¥{{ fenToYuan(summary.balance) }} · 赠送 ¥{{ fenToYuan(summary.bonusBalance) }}
+          </p>
         </el-card>
       </el-col>
       <el-col :span="6">
@@ -193,6 +196,11 @@ onBeforeUnmount(() => {
 }
 .value.warn {
   color: var(--el-color-warning);
+}
+.sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .records-head {
   display: flex;

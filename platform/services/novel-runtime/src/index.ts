@@ -19,12 +19,15 @@
 
 import express from "express";
 import pino from "pino";
-import { assertRequiredProviderCredentials, loadConfig, ConfigError } from "./config.js";
+import { applyRuntimeGovernanceEnv, assertRequiredProviderCredentials, loadConfig, ConfigError } from "./config.js";
 import { loadNovelStudioExtension, ExtensionLoadError } from "./extension-loader.js";
 import {
   createProviderCredentialsClient,
   ProviderCredentialsError,
+  type ProviderCredential,
+  type ProviderCredentialsClient,
 } from "./provider-credentials.js";
+import type { Logger } from "pino";
 import { createBillingClient } from "./billing-client.js";
 import { loadPricingTable, PricingTableError } from "./pricing-table.js";
 import { createMeteringBinder } from "./metering-binder.js";
@@ -48,7 +51,17 @@ async function main(): Promise<void> {
     }
     throw err;
   }
-  logger.info({ host: config.host, port: config.port, nodeEnv: config.nodeEnv }, "config loaded");
+  applyRuntimeGovernanceEnv(config);
+  logger.info(
+    {
+      host: config.host,
+      port: config.port,
+      nodeEnv: config.nodeEnv,
+      pinovelDevMode: process.env.PINOVEL_DEV_MODE ?? "0",
+      fingerprintRoot: process.env.PINOVEL_FINGERPRINT_ROOT,
+    },
+    "config loaded",
+  );
 
   // ── 2. 加载 PiNovelStudio 扩展（fail closed） ───────────────────
   let loadedTools: LoadedTools;
@@ -77,7 +90,7 @@ async function main(): Promise<void> {
   if (config.providerCredentialsSource === "platform") {
     const credentialsClient = createProviderCredentialsClient(config);
     try {
-      const credentials = await credentialsClient.fetchCredentials();
+      const credentials = await fetchCredentialsWithRetry(credentialsClient, logger);
       const { injected, skipped } = credentialsClient.injectIntoEnv(credentials);
       logger.info(
         { injected, skipped, providerCount: credentials.length },
@@ -195,6 +208,35 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+}
+
+const CREDENTIAL_RETRY_ATTEMPTS = 8;
+const CREDENTIAL_RETRY_DELAY_MS = 1500;
+
+async function fetchCredentialsWithRetry(
+  client: ProviderCredentialsClient,
+  logger: Logger,
+): Promise<ProviderCredential[]> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CREDENTIAL_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await client.fetchCredentials();
+    } catch (error) {
+      lastError = error;
+      logger.warn(
+        {
+          attempt,
+          maxAttempts: CREDENTIAL_RETRY_ATTEMPTS,
+          err: error instanceof Error ? error.message : String(error),
+        },
+        "provider credentials fetch failed; retrying",
+      );
+      if (attempt < CREDENTIAL_RETRY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, CREDENTIAL_RETRY_DELAY_MS));
+      }
+    }
+  }
+  throw lastError;
 }
 
 /** 脱敏 URL：保留 host，掩盖 path */

@@ -1,9 +1,10 @@
 /**
- * 助手对话 API：历史 + 发消息（JSON 或 SSE）。
+ * 助手对话 API：历史 + 发消息（JSON 或真流式 SSE）。
  */
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -30,8 +31,26 @@ export class AssistantController {
   list(
     @CurrentUser() user: AuthUserPayload,
     @Param('id', ParseIntPipe) projectId: number,
-  ): Promise<unknown> {
+  ): Promise<unknown[]> {
     return this.assistant.list(user.sub, projectId);
+  }
+
+  /** 新建对话：软删除当前项目全部消息，上下文从零开始。 */
+  @Delete()
+  clear(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id', ParseIntPipe) projectId: number,
+  ): Promise<{ cleared: number }> {
+    return this.assistant.clear(user.sub, projectId);
+  }
+
+  @Delete(':messageId')
+  remove(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id', ParseIntPipe) projectId: number,
+    @Param('messageId', ParseIntPipe) messageId: number,
+  ): Promise<{ ok: true }> {
+    return this.assistant.remove(user.sub, projectId, messageId);
   }
 
   @Post()
@@ -42,23 +61,51 @@ export class AssistantController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<unknown> {
-    const result = await this.assistant.post(user.sub, projectId, dto.content);
-    const accept = request.headers.accept ?? '';
-    if (accept.includes('text/event-stream')) {
+    const wantsSse = (request.headers.accept ?? '').includes('text/event-stream');
+    if (!wantsSse) {
+      return this.assistant.post(user.sub, projectId, dto.content);
+    }
+
+    let started = false;
+    const startSse = (): void => {
+      if (started) return;
+      started = true;
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
       });
-      for (const chunk of result.chunks) {
-        reply.raw.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`);
-      }
-      reply.raw.write(
-        `data: ${JSON.stringify({ done: true, message: result.assistantMessage })}\n\n`,
+    };
+    const writeEvent = (payload: Record<string, unknown>): void => {
+      startSse();
+      reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    try {
+      const result = await this.assistant.post(
+        user.sub,
+        projectId,
+        dto.content,
+        (delta) => writeEvent({ delta }),
       );
+      writeEvent({
+        done: true,
+        message: result.assistantMessage,
+        generationJobId: result.generationJobId,
+        artifacts: result.artifacts,
+      });
       reply.raw.end();
       return reply;
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : '规划模型调用失败，请稍后重试';
+      if (started) {
+        writeEvent({ error: message });
+        reply.raw.end();
+        return reply;
+      }
+      throw error;
     }
-    return result;
   }
 }

@@ -181,6 +181,20 @@ export function loadConfig(): NovelRuntimeConfig {
   };
 }
 
+/**
+ * Bind G6 governance to the real novel-studio tree, not the per-job temp
+ * workspace. Local development also opts into PINOVEL_DEV_MODE so a missing
+ * production pointer cannot hard-block chat chapter generation.
+ */
+export function applyRuntimeGovernanceEnv(config: NovelRuntimeConfig): void {
+  if (!process.env.PINOVEL_FINGERPRINT_ROOT || process.env.PINOVEL_FINGERPRINT_ROOT.trim() === "") {
+    process.env.PINOVEL_FINGERPRINT_ROOT = config.novelStudioProjectRoot;
+  }
+  if (config.nodeEnv === "development" && process.env.PINOVEL_DEV_MODE !== "0") {
+    process.env.PINOVEL_DEV_MODE = "1";
+  }
+}
+
 /** Validate credentials after env/platform injection, before opening HTTP. */
 export function assertRequiredProviderCredentials(config: NovelRuntimeConfig): void {
   if (config.nodeEnv !== "production") return;

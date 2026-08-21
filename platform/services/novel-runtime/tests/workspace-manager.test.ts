@@ -321,6 +321,27 @@ describe("P0-4 workspace-manager.materializeWorkspace", () => {
     assert.equal(cfg.chapterBudget, 5000);
     wm.cleanupWorkspace("job-extra-1");
   });
+
+  test("缺风格档案时写入默认 fingerprint JSON，空题材回填都市", () => {
+    const wm = makeManager();
+    const result = wm.materializeWorkspace({
+      jobId: "job-defaults-1",
+      workspaceId: "u1_p1",
+      projectConfig: { genre: "  " },
+      documents: [],
+    });
+
+    const cfg = readJson<{ genre: string }>(join(result.workspacePath, "config.json"));
+    assert.equal(cfg.genre, "都市");
+    const profile = readJson<{ id: string; editorialGuidance: string[] }>(
+      join(result.workspacePath, "styles", "profile.json"),
+    );
+    assert.equal(profile.id, "platform-default");
+    assert.ok(profile.editorialGuidance.length > 0);
+    assert.ok(existsSync(join(result.workspacePath, "CORE-WRITING-PRINCIPLES.md")));
+    assert.ok(existsSync(join(result.workspacePath, "WORLDBUILDING-CANON.md")));
+    wm.cleanupWorkspace("job-defaults-1");
+  });
 });
 
 describe("P0-4 workspace-manager.cleanupWorkspace", () => {

@@ -4,6 +4,7 @@
  */
 import { onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { fenToYuan } from '../api/billing';
 import { useAuthStore } from '../stores/auth';
 
 const auth = useAuthStore();
@@ -15,11 +16,6 @@ const navItems: Array<{ name: string; label: string }> = [
   { name: 'billing', label: '计费明细' },
   { name: 'recharge', label: '充值' },
 ];
-
-/** 分（字符串）转元展示。 */
-function formatBalance(cents: string): string {
-  return (Number(cents) / 100).toFixed(2);
-}
 
 function onLogout(): void {
   auth.logout();
@@ -47,7 +43,7 @@ onMounted(() => {
       </nav>
       <span class="spacer" />
       <span v-if="auth.user" class="balance">
-        {{ auth.user.nickname }} · 余额 ¥{{ formatBalance(auth.user.balance) }}
+        {{ auth.user.nickname }} · 余额 ¥{{ fenToYuan(auth.user.totalBalance) }}
       </span>
       <el-button
         v-if="auth.role === 'admin'"

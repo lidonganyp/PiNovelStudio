@@ -3,14 +3,19 @@
  */
 import { http } from './http';
 
-/** 对外用户视图（余额单位：分，字符串）。 */
+/** 对外用户视图（余额接口为分字符串，页面按元展示）。 */
 export interface PublicUser {
   id: number;
   email: string;
   nickname: string;
   role: string;
   status: string;
+  /** 充值余额（真实）。 */
   balance: string;
+  /** 赠送余额（虚拟）。 */
+  bonusBalance: string;
+  /** 总余额 = 充值 + 赠送。 */
+  totalBalance: string;
   createdAt: string;
 }
 

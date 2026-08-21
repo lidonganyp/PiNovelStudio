@@ -1,6 +1,8 @@
 /**
  * 计费引擎：预占（行锁 + 可用余额）、幂等结算（jobId+callId 唯一约束兜底）、
  * 收尾（settled/released，未扣部分回到可用余额）、调账（只追加）。
+ * 双余额账户：balance=充值余额（真实收入），bonusBalance=赠送余额（虚拟）。
+ * 结算先扣充值余额、再扣赠送余额，逐调用记录 chargeFromReal/chargeFromBonus。
  */
 import {
   BadRequestException,
@@ -39,7 +41,7 @@ export class BillingService {
     private readonly rates: RatesService,
   ) {}
 
-  /** 查询余额与可用余额（可用 = balance − Σ(active holds 未结算部分)）。 */
+  /** 查询余额与可用余额（可用 = 充值 + 赠送 − Σ(active holds 未结算部分)）。 */
   async getAvailableBalance(userId: number): Promise<AvailableBalance> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
@@ -48,8 +50,9 @@ export class BillingService {
     const reserved = await this.sumActiveReserved(this.prisma, userId);
     return {
       balance: user.balance,
+      bonusBalance: user.bonusBalance,
       reserved,
-      available: user.balance - reserved,
+      available: user.balance + user.bonusBalance - reserved,
     };
   }
 
@@ -84,7 +87,7 @@ export class BillingService {
       }
 
       const reserved = await this.sumActiveReserved(tx, input.userId);
-      const available = user.balance - reserved;
+      const available = user.balance + user.bonusBalance - reserved;
       if (available < input.amount) {
         throw new InsufficientBalanceException();
       }
@@ -125,6 +128,7 @@ export class BillingService {
       tokensOut: input.tokensOut,
       inputPricePerMillion: BigInt(snapshot.inputPricePerMillion),
       outputPricePerMillion: BigInt(snapshot.outputPricePerMillion),
+      multiplierPercent: snapshot.multiplierPercent ?? 100,
     });
 
     try {
@@ -157,10 +161,22 @@ export class BillingService {
         }
 
         await tx.$executeRaw`SELECT id FROM users WHERE id = ${hold.userId} FOR UPDATE`;
+        // 双余额扣款：先扣充值余额（真实），不足部分扣赠送余额（虚拟）。
+        // hold 预占校验保证 充值+赠送-在途 >= charge，两账户均不会扣成负数。
+        let chargeFromReal = 0n;
+        let chargeFromBonus = 0n;
         if (charge > 0n) {
+          const user = await tx.user.findUniqueOrThrow({
+            where: { id: hold.userId },
+          });
+          chargeFromReal = user.balance >= charge ? charge : user.balance;
+          chargeFromBonus = charge - chargeFromReal;
           await tx.user.update({
             where: { id: hold.userId },
-            data: { balance: { decrement: charge } },
+            data: {
+              balance: { decrement: chargeFromReal },
+              bonusBalance: { decrement: chargeFromBonus },
+            },
           });
         }
 
@@ -180,6 +196,8 @@ export class BillingService {
             tokensOut: input.tokensOut,
             rateSnapshot: snapshot as unknown as Prisma.InputJsonValue,
             actualCharge: charge,
+            chargeFromReal,
+            chargeFromBonus,
           },
         });
         return this.toSettleResult(created, updatedHold, false);
@@ -287,7 +305,7 @@ export class BillingService {
     return this.toHoldView(updated, { alreadyFinalized: false });
   }
 
-  /** 管理员调账：只追加流水，负数不得使 balance < 0。 */
+  /** 管理员调账：作用于赠送余额（虚拟收入），只追加流水，负数不得使赠送余额 < 0。 */
   async adjustBalance(input: AdjustBalanceInput): Promise<AdjustmentView> {
     const reason = input.reason.trim();
     if (!reason) {
@@ -303,9 +321,9 @@ export class BillingService {
       if (!user) {
         throw new NotFoundException('用户不存在');
       }
-      const nextBalance = user.balance + input.amount;
-      if (nextBalance < 0n) {
-        throw new BadRequestException('调账后余额不能为负');
+      const nextBonus = user.bonusBalance + input.amount;
+      if (nextBonus < 0n) {
+        throw new BadRequestException('调账后赠送余额不能为负');
       }
       const admin = await tx.user.findUnique({
         where: { id: input.adminUserId },
@@ -315,7 +333,7 @@ export class BillingService {
       }
       await tx.user.update({
         where: { id: input.userId },
-        data: { balance: nextBalance },
+        data: { bonusBalance: nextBonus },
       });
       const created = await tx.novelBillingAdjustment.create({
         data: {
@@ -408,7 +426,13 @@ export class BillingService {
   }
 
   private toSettleResult(
-    call: { jobId: string; callId: string; actualCharge: bigint },
+    call: {
+      jobId: string;
+      callId: string;
+      actualCharge: bigint;
+      chargeFromReal: bigint;
+      chargeFromBonus: bigint;
+    },
     hold: { amount: bigint; settledAmount: bigint },
     alreadySettled: boolean,
   ): SettleCallResult {
@@ -417,6 +441,8 @@ export class BillingService {
       callId: call.callId,
       alreadySettled,
       actualCharge: call.actualCharge,
+      chargeFromReal: call.chargeFromReal,
+      chargeFromBonus: call.chargeFromBonus,
       settledAmount: hold.settledAmount,
       remainingBudget: hold.amount - hold.settledAmount,
     };

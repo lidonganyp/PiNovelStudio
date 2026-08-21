@@ -5,7 +5,7 @@
 import { onBeforeUnmount, ref, watch } from 'vue';
 import QRCode from 'qrcode';
 import { ElMessage } from 'element-plus';
-import { getBillingSummary, fenToYuan } from '../../api/billing';
+import { getBillingSummary, fenToYuan, yuanToFen } from '../../api/billing';
 import type { BillingSummary } from '../../api/billing';
 import {
   createPaymentOrder,
@@ -79,7 +79,7 @@ async function startOrder(): Promise<void> {
   try {
     order.value = await createPaymentOrder({
       channel: channel.value,
-      amount: selectedAmount.value * 100,
+      amount: yuanToFen(selectedAmount.value),
     });
     timer = setInterval(() => {
       void poll();
@@ -114,7 +114,7 @@ void loadSummary();
     <el-card shadow="never" class="main-card">
       <template #header>账户充值</template>
       <p v-if="summary" class="current">
-        当前余额：<strong>¥{{ fenToYuan(summary.balance) }}</strong>
+        当前余额：<strong>¥{{ fenToYuan(summary.totalBalance) }}</strong>
         <span class="available">（可用 ¥{{ fenToYuan(summary.available) }}）</span>
       </p>
       <el-radio-group v-model="channel" class="channel">

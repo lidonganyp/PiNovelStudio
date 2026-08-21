@@ -1,5 +1,5 @@
 /**
- * 生成任务：预检 + 预占 + 令牌签发 + stub/http 调度 + 轮询。
+ * 生成任务：预检 + 预占 + 令牌签发 + http 调度（本地开发可 stub）+ 轮询。
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -32,9 +32,37 @@ import {
   SETTING_SAFETY_FACTOR,
   SETTING_WORD_COUNT_BUDGET,
 } from '../admin/runtime-settings';
+import {
+  buildExplicitOutlineMarkdown,
+  DEFAULT_CREATIVE_CONSTITUTION,
+  DEFAULT_STYLE_PROFILE,
+  DEFAULT_WORLDBUILDING,
+  describeGenerationFailure,
+  resolveProjectGenre,
+} from './runtime-workspace-defaults';
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function describeRuntimeChapterFailure(result: unknown, modelCallCount: number | undefined): string {
+  if (result && typeof result === 'object') {
+    const value = result as {
+      failureEnvelope?: { reason?: unknown };
+      reason?: unknown;
+    };
+    const envelope = value.failureEnvelope?.reason;
+    if (typeof envelope === 'string' && envelope.trim()) {
+      return envelope.trim().slice(0, 1000);
+    }
+    if (typeof value.reason === 'string' && value.reason.trim()) {
+      return value.reason.trim().slice(0, 1000);
+    }
+  }
+  if (modelCallCount === 0) {
+    return '章节生成未调用模型，未产出可交付正文';
+  }
+  return 'runtime returned a non-deliverable chapter result';
 }
 
 /** Prisma's unique-constraint code is deliberately checked structurally here so
@@ -402,11 +430,20 @@ export class JobsService implements OnModuleInit {
       },
       0n,
     );
+    // 预占需覆盖「原价 × 倍率」后的最高可能结算额。
+    const multiplierPercent = snapshots.reduce(
+      (highest, snapshot) => {
+        const value = snapshot.multiplierPercent ?? 100;
+        return value > highest ? value : highest;
+      },
+      100,
+    );
     const base = computeChargeFen({
       tokensIn: tokens.tokensIn,
       tokensOut: tokens.tokensOut,
       inputPricePerMillion,
       outputPricePerMillion,
+      multiplierPercent,
     });
     return applySafetyFactor(base, factor);
   }
@@ -458,7 +495,10 @@ export class JobsService implements OnModuleInit {
       this.logger.error(
         `stub generate failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      await this.closeFailedGenerationIfHoldReleased(input.jobId);
+      await this.closeFailedGenerationIfHoldReleased(
+        input.jobId,
+        describeGenerationFailure(error),
+      );
       throw error;
     }
   }
@@ -500,7 +540,7 @@ export class JobsService implements OnModuleInit {
         typeof (result as { text?: unknown }).text !== 'string' ||
         (result as { text: string }).text.trim().length === 0
       ) {
-        throw new Error('runtime returned a non-deliverable chapter result');
+        throw new Error(describeRuntimeChapterFailure(invoked.result, modelCallCount));
       }
       const text = (result as { text: string }).text;
       await this.persistGeneratedChapter(
@@ -520,7 +560,10 @@ export class JobsService implements OnModuleInit {
       this.logger.error(
         `http generate failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      await this.closeFailedGenerationIfHoldReleased(input.jobId);
+      await this.closeFailedGenerationIfHoldReleased(
+        input.jobId,
+        describeGenerationFailure(error),
+      );
       return;
     }
   }
@@ -535,7 +578,10 @@ export class JobsService implements OnModuleInit {
    * confirms the matching reservation is released. Otherwise a retryable
    * billing outage would turn into a hidden, permanently reserved balance.
    */
-  private async closeFailedGenerationIfHoldReleased(jobId: string): Promise<void> {
+  private async closeFailedGenerationIfHoldReleased(
+    jobId: string,
+    failureMessage: string,
+  ): Promise<void> {
     let settledAmount = 0n;
     try {
       const finalized = await this.billing.finalizeHold({ jobId, outcome: 'failure' });
@@ -564,7 +610,7 @@ export class JobsService implements OnModuleInit {
         where: { jobId },
         data: {
           status: 'failed',
-          failureMessage: 'generation failed',
+          failureMessage,
           settledAmount,
           completedAt: new Date(),
         },
@@ -671,17 +717,15 @@ export class JobsService implements OnModuleInit {
     });
     if (!seed) throw new Error('runtime workspace chapter seed is missing');
 
-    const explicitOutline = [
-      `# 本章功能\n推进`,
-      `## 事件 1：${seed.intent.trim()}`,
-      `- 参与角色：${characters.map((character) => character.name).join('、')}`,
-      `- 内容摘要：${seed.intent.trim()}`,
-      seed.mustInclude.trim() ? `- 必须包含：${seed.mustInclude.trim()}` : '',
-      seed.characterMotives.trim() ? `- 人物动机：${seed.characterMotives.trim()}` : '',
-      seed.forbiddenFacts.trim() ? `- 禁止包含：${seed.forbiddenFacts.trim()}` : '',
-      seed.promises.trim() ? `- 伏笔埋设：${seed.promises.trim()}` : '',
-      `- 章末目标：${seed.endingGoal.trim()}`,
-    ].filter(Boolean).join('\n');
+    const explicitOutline = buildExplicitOutlineMarkdown({
+      intent: seed.intent,
+      mustInclude: seed.mustInclude,
+      forbiddenFacts: seed.forbiddenFacts,
+      characterMotives: seed.characterMotives,
+      promises: seed.promises,
+      endingGoal: seed.endingGoal,
+      characterNames: characters.map((character) => character.name),
+    });
 
     const workspaceDocuments: Array<{ type: string; content: string }> = [
       { type: 'character_profile', content: characterContent },
@@ -690,14 +734,26 @@ export class JobsService implements OnModuleInit {
     for (const [type, values] of grouped) {
       workspaceDocuments.push({ type, content: values.join('\n\n') });
     }
+    if (!grouped.has('creative_constitution')) {
+      workspaceDocuments.push({ type: 'creative_constitution', content: DEFAULT_CREATIVE_CONSTITUTION });
+    }
+    if (!grouped.has('worldbuilding')) {
+      workspaceDocuments.push({ type: 'worldbuilding', content: DEFAULT_WORLDBUILDING });
+    }
     for (const type of ['style_profile', 'narrative_state']) {
       const content = rawDocuments.get(type);
       if (content !== undefined) workspaceDocuments.push({ type, content });
     }
+    if (!rawDocuments.has('style_profile')) {
+      workspaceDocuments.push({
+        type: 'style_profile',
+        content: JSON.stringify(DEFAULT_STYLE_PROFILE),
+      });
+    }
 
     return {
       projectConfig: {
-        genre: project.genre,
+        genre: resolveProjectGenre(project.genre),
         subGenres: readStringArray(project.subGenres),
         worldKeyTerms: readStringArray(project.worldKeyTerms),
         characters: characters.map((character) => ({

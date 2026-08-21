@@ -1,12 +1,17 @@
 /**
  * 计费查询 API：总览 + 消费明细分页。
- * 金额均为「分」字符串，展示层统一转元。
+ * 接口仍用分（整数）传输；页面一律按元展示和录入。
  */
 import { http } from './http';
 
 /** 计费总览视图。 */
 export interface BillingSummary {
+  /** 充值余额（真实）。 */
   balance: string;
+  /** 赠送余额（虚拟）。 */
+  bonusBalance: string;
+  /** 总余额 = 充值 + 赠送。 */
+  totalBalance: string;
   reserved: string;
   available: string;
   spentLast30Days: string;
@@ -49,4 +54,9 @@ export function listBillingRecords(params: {
 /** 分字符串 → 元展示（两位小数）。 */
 export function fenToYuan(fen: string | number): string {
   return (Number(fen) / 100).toFixed(2);
+}
+
+/** 元 → 分（四舍五入到整数分，可负）。 */
+export function yuanToFen(yuan: number): number {
+  return Math.round(yuan * 100);
 }

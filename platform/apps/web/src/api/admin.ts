@@ -8,6 +8,86 @@ export interface AdminOverview {
   activeUsers: number;
   rechargeToday: string;
   consumeToday: string;
+  remainingQuota?: string;
+  trend7d?: Array<{
+    day: string;
+    realRecharge: string;
+    virtualRecharge: string;
+    realConsume: string;
+    virtualConsume: string;
+    recharge: string;
+    consume: string;
+  }>;
+  topUsers?: Array<{
+    userId: number;
+    email: string;
+    nickname: string;
+    consume: string;
+    calls: number;
+  }>;
+  topModels?: Array<{ model: string; consume: string; calls: number }>;
+}
+
+export interface ModelPriceLookup {
+  found: boolean;
+  query: string;
+  matchedId?: string;
+  displayName?: string;
+  source?: 'siliconflow' | 'openrouter';
+  nativeCurrency?: 'CNY' | 'USD';
+  usdCnyRate?: number;
+  inputYuanPerMillion?: number;
+  outputYuanPerMillion?: number;
+  inputPricePerMillionFen?: string;
+  outputPricePerMillionFen?: string;
+  message?: string;
+  candidates?: Array<{
+    id: string;
+    source: string;
+    inputYuanPerMillion: number;
+    outputYuanPerMillion: number;
+  }>;
+}
+
+export interface UsageDashboard {
+  from: string | null;
+  to: string | null;
+  cards: {
+    requests: number;
+    tokensIn: number;
+    tokensOut: number;
+    charge: string;
+    users: number;
+  };
+  previous: {
+    requests: number;
+    tokensIn: number;
+    tokensOut: number;
+    charge: string;
+  } | null;
+  trend: Array<{
+    day: string;
+    calls: number;
+    tokensIn: number;
+    tokensOut: number;
+    charge: string;
+  }>;
+  byModel: Array<{
+    model: string;
+    calls: number;
+    tokensIn: number;
+    tokensOut: number;
+    charge: string;
+  }>;
+  byUser: Array<{
+    userId: number;
+    email: string;
+    nickname: string;
+    calls: number;
+    tokensIn: number;
+    tokensOut: number;
+    charge: string;
+  }>;
 }
 
 export interface AdminUserRow {
@@ -16,7 +96,12 @@ export interface AdminUserRow {
   nickname: string;
   role: string;
   status: string;
+  /** 充值余额（真实）。 */
   balance: string;
+  /** 赠送余额（虚拟）。 */
+  bonusBalance: string;
+  /** 总余额 = 充值 + 赠送。 */
+  totalBalance: string;
   spent: string;
   createdAt: string;
 }
@@ -29,6 +114,10 @@ export interface AdminUserList {
 }
 
 export interface AdminUserDetail extends AdminUserRow {
+  /** 真实消耗（从充值余额扣减）。 */
+  spentFromReal: string;
+  /** 虚拟消耗（从赠送余额扣减）。 */
+  spentFromBonus: string;
   holds: Array<{
     jobId: string;
     amount: string;
@@ -67,6 +156,7 @@ export interface ModelRateRow {
   providerKey: string;
   inputPricePerMillion: string;
   outputPricePerMillion: string;
+  multiplierPercent?: number;
   effectiveFrom: string;
   enabled: boolean;
 }
@@ -98,9 +188,25 @@ export interface UsageRecordList {
 }
 
 export interface RevenueSummary {
+  realRecharge: string;
+  virtualRecharge: string;
+  realConsume: string;
+  virtualConsume: string;
   rechargeTotal: string;
   consumeTotal: string;
-  byDay: Array<{ day: string; recharge: string; consume: string }>;
+  periodRemaining: string;
+  remainingQuota: string;
+  remainingReal: string;
+  remainingVirtual: string;
+  byDay: Array<{
+    day: string;
+    realRecharge: string;
+    virtualRecharge: string;
+    realConsume: string;
+    virtualConsume: string;
+    recharge: string;
+    consume: string;
+  }>;
 }
 
 export interface AuditLogList {
@@ -181,12 +287,17 @@ export function listModelRates(): Promise<ModelRateRow[]> {
   return http.get('/admin/model-rates').then((r) => r.data);
 }
 
+export function lookupModelRate(q: string): Promise<ModelPriceLookup> {
+  return http.get('/admin/model-rates/lookup', { params: { q } }).then((r) => r.data);
+}
+
 export function createModelRate(payload: {
   modelKey: string;
   displayName: string;
   providerId: number;
   inputPricePerMillion: number;
   outputPricePerMillion: number;
+  multiplierPercent?: number;
   effectiveFrom?: string;
   enabled?: boolean;
 }): Promise<ModelRateRow> {
@@ -195,15 +306,38 @@ export function createModelRate(payload: {
 
 export function patchModelRate(
   id: number,
-  payload: { enabled?: boolean; displayName?: string },
+  payload: {
+    enabled?: boolean;
+    displayName?: string;
+    multiplierPercent?: number;
+  },
 ): Promise<ModelRateRow> {
   return http.patch(`/admin/model-rates/${id}`, payload).then((r) => r.data);
 }
 
+export function deleteModelRate(id: number): Promise<{ id: number }> {
+  return http.delete(`/admin/model-rates/${id}`).then((r) => r.data);
+}
+
+export function deleteModelProvider(id: number): Promise<{ id: number }> {
+  return http.delete(`/admin/model-providers/${id}`).then((r) => r.data);
+}
+
 export function getUsageSummary(
   groupBy: 'model' | 'user' | 'day',
+  params: { from?: string; to?: string; userId?: number; model?: string } = {},
 ): Promise<UsageSummaryRow[]> {
-  return http.get('/admin/usage/summary', { params: { groupBy } }).then((r) => r.data);
+  return http
+    .get('/admin/usage/summary', { params: { groupBy, ...params } })
+    .then((r) => r.data);
+}
+
+export function getUsageDashboard(params: {
+  from?: string;
+  to?: string;
+  userId?: number;
+}): Promise<UsageDashboard> {
+  return http.get('/admin/usage/dashboard', { params }).then((r) => r.data);
 }
 
 export function listUsageRecords(params: {
@@ -211,12 +345,18 @@ export function listUsageRecords(params: {
   pageSize?: number;
   userId?: number;
   model?: string;
+  from?: string;
+  to?: string;
 }): Promise<UsageRecordList> {
   return http.get('/admin/usage/records', { params }).then((r) => r.data);
 }
 
-export function getRevenueSummary(): Promise<RevenueSummary> {
-  return http.get('/admin/revenue/summary').then((r) => r.data);
+export function getRevenueSummary(params: {
+  from?: string;
+  to?: string;
+  userId?: number;
+} = {}): Promise<RevenueSummary> {
+  return http.get('/admin/revenue/summary', { params }).then((r) => r.data);
 }
 
 export function listAuditLogs(params: {

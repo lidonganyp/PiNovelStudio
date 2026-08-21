@@ -1,6 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyRuntimeGovernanceEnv,
   assertRequiredProviderCredentials,
   ConfigError,
   loadConfig,
@@ -14,11 +15,12 @@ const RUNTIME_ENV_KEYS = [
   "INTERNAL_API_SECRET",
   "PINOVEL_MODEL_REQUEST_TIMEOUT_MS",
   "PINOVEL_DEV_MODE",
+  "PINOVEL_FINGERPRINT_ROOT",
   "NOVEL_REQUIRED_PROVIDER_KEYS",
 ] as const;
 
 function withRuntimeEnv(
-  overrides: Partial<Record<(typeof RUNTIME_ENV_KEYS)[number], string>>,
+  overrides: Partial<Record<(typeof RUNTIME_ENV_KEYS)[number], string | undefined>>,
   action: () => void,
 ): void {
   const previous = new Map(
@@ -106,6 +108,28 @@ describe("runtime startup configuration", () => {
         () => loadConfig(),
         (err: unknown) => err instanceof ConfigError && err.code === "INVALID_ENV",
       );
+    });
+  });
+
+  it("enables the local G6 bypass in development unless it is explicitly disabled", () => {
+    withRuntimeEnv({ PINOVEL_DEV_MODE: undefined, PINOVEL_FINGERPRINT_ROOT: undefined }, () => {
+      applyRuntimeGovernanceEnv(makeConfigForTest({
+        nodeEnv: "development",
+        novelStudioProjectRoot: "D:/novel-studio",
+      }));
+      assert.equal(process.env.PINOVEL_DEV_MODE, "1");
+      assert.equal(process.env.PINOVEL_FINGERPRINT_ROOT, "D:/novel-studio");
+    });
+  });
+
+  it("does not enable the development G6 bypass in production", () => {
+    withRuntimeEnv({ PINOVEL_DEV_MODE: "0", PINOVEL_FINGERPRINT_ROOT: undefined }, () => {
+      applyRuntimeGovernanceEnv(makeConfigForTest({
+        nodeEnv: "production",
+        novelStudioProjectRoot: "D:/novel-studio",
+      }));
+      assert.equal(process.env.PINOVEL_DEV_MODE, "0");
+      assert.equal(process.env.PINOVEL_FINGERPRINT_ROOT, "D:/novel-studio");
     });
   });
 });

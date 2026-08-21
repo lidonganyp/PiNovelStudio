@@ -3,7 +3,7 @@
  * P5-2 文档面板：五类项目文档（创作宪法/世界观/大纲/风格档案/叙事状态）的
  * 列表 + 新建/编辑。style_profile 与 narrative_state 以原文保存（JSON/MD 均可）。
  */
-import { onMounted, reactive, ref } from 'vue';
+import { inject, onMounted, reactive, ref, watch, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   DOCUMENT_TYPES,
@@ -101,7 +101,12 @@ function typeLabel(value: string): string {
   return DOCUMENT_TYPES.find((t) => t.value === value)?.label ?? value;
 }
 
+const epoch = inject<Ref<number>>('materialEpoch');
+
 onMounted(() => {
+  void load();
+});
+watch(() => epoch?.value, () => {
   void load();
 });
 </script>

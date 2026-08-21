@@ -34,10 +34,13 @@ export class BillingQueryService {
       WHERE user_id = ${userId} AND created_at >= ${since}
       GROUP BY 1
       ORDER BY 1 ASC`;
+    const total = user.balance + user.bonusBalance;
     return {
       balance: fenToString(user.balance),
+      bonusBalance: fenToString(user.bonusBalance),
+      totalBalance: fenToString(total),
       reserved: fenToString(reserved),
-      available: fenToString(user.balance - reserved),
+      available: fenToString(total - reserved),
       spentLast30Days: fenToString(grouped._sum.actualCharge ?? 0n),
       spentByDay: byDay.map((row) => ({
         day: row.day.toISOString().slice(0, 10),

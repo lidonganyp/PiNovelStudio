@@ -368,7 +368,7 @@ describe('BillingService', () => {
     expect(after.available).toBe(480n);
   });
 
-  it('调账只追加：正负金额入账，禁止 update/delete', async () => {
+  it('调账只追加：作用于赠送余额，正负金额入账，禁止 update/delete', async () => {
     const isolated = await prisma.user.create({
       data: {
         email: `billing-adjust-${runId}@test.local`,
@@ -394,7 +394,8 @@ describe('BillingService', () => {
     const user = await prisma.user.findUniqueOrThrow({
       where: { id: isolated.id },
     });
-    expect(user.balance).toBe(130n);
+    expect(user.balance).toBe(100n);
+    expect(user.bonusBalance).toBe(30n);
     const rows = await prisma.novelBillingAdjustment.findMany({
       where: { userId: isolated.id },
       orderBy: { id: 'asc' },
@@ -426,12 +427,62 @@ describe('BillingService', () => {
     const still = await prisma.user.findUniqueOrThrow({
       where: { id: isolated.id },
     });
-    expect(still.balance).toBe(130n);
+    expect(still.balance).toBe(100n);
+    expect(still.bonusBalance).toBe(30n);
     expect(
       await prisma.novelBillingAdjustment.count({
         where: { userId: isolated.id },
       }),
     ).toBe(2);
+  });
+
+  it('结算先扣充值余额、再扣赠送余额，并逐调用记录归因', async () => {
+    const isolated = await prisma.user.create({
+      data: {
+        email: `billing-dual-${runId}@test.local`,
+        passwordHash: 'x',
+        nickname: '双余额用户',
+        balance: 10n,
+        bonusBalance: 1000n,
+      },
+    });
+    const jobId = `dual-${runId}`;
+    // 费率 100/200 分每百万 token：100k in + 50k out = 20 分
+    await billing.createHold({ userId: isolated.id, jobId, amount: 100n });
+    const settled = await billing.settleCall({
+      jobId,
+      callId: `dual-call-${runId}`,
+      internalStage: 'agentic_raw',
+      model: MODEL_KEY,
+      tokensIn: 100_000,
+      tokensOut: 50_000,
+    });
+    expect(settled.actualCharge).toBe(20n);
+    expect(settled.chargeFromReal).toBe(10n);
+    expect(settled.chargeFromBonus).toBe(10n);
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: isolated.id },
+    });
+    expect(user.balance).toBe(0n);
+    expect(user.bonusBalance).toBe(990n);
+    const call = await prisma.novelGenerationCall.findUniqueOrThrow({
+      where: { jobId_callId: { jobId, callId: `dual-call-${runId}` } },
+    });
+    expect(call.chargeFromReal).toBe(10n);
+    expect(call.chargeFromBonus).toBe(10n);
+    // 幂等重放必须带回原归因，不重复扣款
+    const replay = await billing.settleCall({
+      jobId,
+      callId: `dual-call-${runId}`,
+      internalStage: 'agentic_raw',
+      model: MODEL_KEY,
+      tokensIn: 100_000,
+      tokensOut: 50_000,
+    });
+    expect(replay.alreadySettled).toBe(true);
+    expect(replay.chargeFromReal).toBe(10n);
+    expect(replay.chargeFromBonus).toBe(10n);
+    await billing.finalizeHold({ jobId, outcome: 'success' });
   });
 
   it('费率取调用时刻生效值并写入快照，历史费率不影响新结算', async () => {

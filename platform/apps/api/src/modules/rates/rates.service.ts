@@ -9,6 +9,12 @@ import { env } from '../../config/env';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { ProviderCredential, RateSnapshot } from './rates.types';
 
+/** 后台常填展示名时，仍用于 Gemini 写作链路计费。 */
+const MODEL_RATE_ALIASES: Record<string, string[]> = {
+  v2_rawstage2_gemini31: ['gemini-3.7-flash', 'gemini'],
+  v2_amplified_gemini31: ['gemini-3.7-flash', 'gemini'],
+};
+
 @Injectable()
 export class RatesService {
   private readonly logger = new Logger(RatesService.name);
@@ -20,20 +26,26 @@ export class RatesService {
     modelKey: string,
     at: Date = new Date(),
   ): Promise<Prisma.ModelRateGetPayload<{ include: { provider: true } }>> {
-    const rate = await this.prisma.modelRate.findFirst({
-      where: {
-        modelKey,
-        enabled: true,
-        effectiveFrom: { lte: at },
-        provider: { is: { enabled: true } },
-      },
-      orderBy: { effectiveFrom: 'desc' },
-      include: { provider: true },
-    });
-    if (!rate) {
-      throw new NotFoundException(`未找到模型 ${modelKey} 的生效费率`);
+    const keys = [modelKey, ...(MODEL_RATE_ALIASES[modelKey] ?? [])];
+    for (const key of keys) {
+      const rate = await this.prisma.modelRate.findFirst({
+        where: {
+          modelKey: key,
+          enabled: true,
+          effectiveFrom: { lte: at },
+          provider: { is: { enabled: true } },
+        },
+        orderBy: { effectiveFrom: 'desc' },
+        include: { provider: true },
+      });
+      if (rate) {
+        if (key !== modelKey) {
+          this.logger.log(`using rate alias ${key} for ${modelKey}`);
+        }
+        return rate;
+      }
     }
-    return rate;
+    throw new NotFoundException(`未找到模型 ${modelKey} 的生效费率`);
   }
 
   /** 构造结算用费率快照（单价以分的字符串落库）。 */
@@ -48,6 +60,7 @@ export class RatesService {
       providerKey: rate.provider.providerKey,
       inputPricePerMillion: rate.inputPricePerMillion.toString(),
       outputPricePerMillion: rate.outputPricePerMillion.toString(),
+      multiplierPercent: rate.multiplierPercent,
       effectiveFrom: rate.effectiveFrom.toISOString(),
     };
   }

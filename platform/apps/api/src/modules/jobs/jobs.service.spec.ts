@@ -45,6 +45,8 @@ function makeService(runtimeResult: unknown) {
   };
   const billing = {
     createHold: vi.fn().mockResolvedValue({}),
+    settleCall: vi.fn().mockResolvedValue({}),
+    updateJobProgress: vi.fn().mockResolvedValue({}),
     finalizeHold: vi.fn().mockResolvedValue({ status: 'released', settledAmount: 12n }),
     finalizeHoldInTransaction: vi.fn().mockResolvedValue({ status: 'settled', settledAmount: 12n }),
   };
@@ -489,7 +491,11 @@ describe('JobsService HTTP generation delivery contract', () => {
 
     expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
     expect(prisma.novelGenerationJob.update).toHaveBeenLastCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: 'failed', settledAmount: 12n }),
+      data: expect.objectContaining({
+        status: 'failed',
+        settledAmount: 12n,
+        failureMessage: 'fact guard blocked',
+      }),
     }));
     expect(runtime.invoke).toHaveBeenCalledWith(
       expect.any(String),
@@ -506,6 +512,36 @@ describe('JobsService HTTP generation delivery contract', () => {
       .toBe('{"voice":"冷峻"}');
     expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'narrative_state')?.content)
       .toBe('{"chapters":[]}');
+  });
+
+  it('injects a default style fingerprint and constitution when the project omitted them', async () => {
+    const { service, prisma, runtime } = makeService({
+      status: 'ok',
+      result: { status: 'blocked', reason: 'preflight' },
+    });
+    prisma.novelDocument.findMany = vi.fn().mockResolvedValue([]);
+    prisma.novelProject.findFirst = vi.fn().mockResolvedValue({
+      genre: '',
+      subGenres: [],
+      worldKeyTerms: [],
+    });
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration(input);
+
+    const runtimeInput = runtime.invoke.mock.calls[0][2] as {
+      projectConfig: { genre: string };
+      workspaceDocuments: Array<{ type: string; content: string }>;
+    };
+    expect(runtimeInput.projectConfig.genre).toBe('都市');
+    const style = runtimeInput.workspaceDocuments.find((doc) => doc.type === 'style_profile')?.content ?? '';
+    expect(style).toContain('editorialGuidance');
+    expect(style).toContain('platform-default');
+    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'creative_constitution')?.content)
+      .toContain('创作宪法');
+    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'worldbuilding')?.content)
+      .toContain('世界观');
+    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'explicit_outline')?.content)
+      .toContain('内容摘要：推进本章冲突');
   });
 
   it('marks a non-empty ok chapter as succeeded only after its hold is finalized', async () => {
@@ -559,7 +595,24 @@ describe('JobsService HTTP generation delivery contract', () => {
 
     expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
     expect(prisma.novelGenerationJob.update).toHaveBeenLastCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: 'failed' }),
+      data: expect.objectContaining({
+        status: 'failed',
+        failureMessage: '章节生成未调用模型，未产出可交付正文',
+      }),
+    }));
+  });
+
+  it('persists the runtime invoke error instead of a generic generation failed label', async () => {
+    const { service, prisma, runtime } = makeService({ status: 'ok', result: {} });
+    runtime.invoke = vi.fn().mockRejectedValue(new Error('no active production release set'));
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration(input);
+
+    expect(prisma.novelGenerationJob.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        failureMessage: 'no active production release set',
+      }),
     }));
   });
 

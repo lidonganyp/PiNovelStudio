@@ -192,7 +192,7 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
         atomicWriteJson(
           join(workspacePath, "config.json"),
           {
-            genre: input.projectConfig.genre,
+            genre: (input.projectConfig.genre ?? "").trim() || "都市",
             subGenres: input.projectConfig.subGenres ?? [],
             worldKeyTerms: input.projectConfig.worldKeyTerms ?? [],
             characters: input.projectConfig.characters ?? [],
@@ -214,6 +214,7 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
         for (const doc of input.documents) {
           writeDocumentByType(workspacePath, doc, input.chapterNumber);
         }
+        ensureRequiredWorkspaceMaterials(workspacePath);
 
         logger?.info(
           {
@@ -359,6 +360,53 @@ function writeDocumentByType(workspacePath: string, doc: WorkspaceDocument, chap
         );
       }
       break;
+  }
+}
+
+const DEFAULT_STYLE_PROFILE = {
+  name: "platform-default",
+  id: "platform-default",
+  version: "1.0",
+  profileRole: "workspace_author_style",
+  usagePolicy: {
+    rawPrompt: "not_applicable",
+    editorialCandidate: "full_chapter_required",
+    fullChapterOptimization: "required",
+    selectionAuthority: "user_feedback",
+    statisticsRole: "diagnostic_only",
+  },
+  editorialGuidance: [
+    "叙述保持第三人称有限，锚定主角当下可感知的范围。",
+    "情绪优先通过身体反应、静默或动作呈现，不直接替人物命名。",
+    "汉语表达自然直接，少用翻译腔、外貌清单和解释性独白。",
+    "章末优先停在仍有叙事压力的动作、状态或静物细节上。",
+  ],
+  characterVoiceGuidance: {},
+};
+
+const DEFAULT_CREATIVE_CONSTITUTION = [
+  "# 创作宪法",
+  "",
+  "- 不违背已确立的人物身份、能力与关系。",
+  "- 不引入未声明的世界观规则。",
+  "- 本章必须推进既定冲突，并在章末留下可续写的压力。",
+].join("\n");
+
+const DEFAULT_WORLDBUILDING = [
+  "# 世界观",
+  "",
+  "以项目题材为准，保持内部自洽；未声明的规则不得突然生效。",
+].join("\n");
+
+function ensureRequiredWorkspaceMaterials(workspacePath: string): void {
+  if (!existsSync(join(workspacePath, "styles", "profile.json"))) {
+    atomicWriteJson(join(workspacePath, "styles", "profile.json"), DEFAULT_STYLE_PROFILE);
+  }
+  if (!existsSync(join(workspacePath, "CORE-WRITING-PRINCIPLES.md"))) {
+    atomicWriteText(join(workspacePath, "CORE-WRITING-PRINCIPLES.md"), DEFAULT_CREATIVE_CONSTITUTION);
+  }
+  if (!existsSync(join(workspacePath, "WORLDBUILDING-CANON.md"))) {
+    atomicWriteText(join(workspacePath, "WORLDBUILDING-CANON.md"), DEFAULT_WORLDBUILDING);
   }
 }
 

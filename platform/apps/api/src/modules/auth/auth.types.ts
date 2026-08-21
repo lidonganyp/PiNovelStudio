@@ -20,8 +20,12 @@ export interface PublicUser {
   nickname: string;
   role: string;
   status: string;
-  /** 余额，单位：分（字符串形式）。 */
+  /** 充值余额（真实收入），单位：分（字符串形式）。 */
   balance: string;
+  /** 赠送余额（虚拟），单位：分（字符串形式）。 */
+  bonusBalance: string;
+  /** 总余额 = 充值 + 赠送，门户展示用。 */
+  totalBalance: string;
   createdAt: string;
 }
 
@@ -40,6 +44,7 @@ export interface UserRow {
   role: string;
   status: string;
   balance: bigint;
+  bonusBalance: bigint;
   createdAt: Date;
   updatedAt: Date;
 }

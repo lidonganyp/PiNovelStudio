@@ -45,16 +45,49 @@ export class RuntimeClient {
       if (controller.signal.aborted) {
         throw new Error(`runtime invoke timed out after ${this.requestTimeoutMs}ms`);
       }
-      throw error;
+      throw new Error(describeRuntimeFetchFailure(env.NOVEL_RUNTIME_BASE_URL, error));
     } finally {
       clearTimeout(timeout);
     }
     const body = (await response.json()) as RuntimeInvokeResult;
     if (!response.ok) {
-      throw new Error(
-        `runtime invoke ${response.status}: ${JSON.stringify(body).slice(0, 300)}`,
-      );
+      throw new Error(describeRuntimeInvokeError(response.status, body));
     }
     return body;
   }
+}
+
+export function describeRuntimeFetchFailure(baseUrl: string, error: unknown): string {
+  const cause =
+    error instanceof Error && 'cause' in error
+      ? (error as { cause?: unknown }).cause
+      : undefined;
+  const details = [error instanceof Error ? error.message : String(error)];
+  if (cause instanceof Error && cause.message) details.push(cause.message);
+  const joined = details.join(' ');
+  if (/ECONNREFUSED|fetch failed|ENOTFOUND|ECONNRESET/i.test(joined)) {
+    return `无法连接章节生成运行时（${baseUrl}）。请确认 novel-runtime 已启动。`;
+  }
+  return `runtime invoke failed: ${joined}`.slice(0, 1000);
+}
+
+export function describeRuntimeInvokeError(status: number, body: unknown): string {
+  if (body && typeof body === 'object') {
+    const value = body as {
+      message?: unknown;
+      code?: unknown;
+      failureEnvelope?: { reason?: unknown };
+    };
+    const envelope = value.failureEnvelope?.reason;
+    if (typeof envelope === 'string' && envelope.trim()) {
+      return envelope.trim().slice(0, 1000);
+    }
+    if (typeof value.message === 'string' && value.message.trim()) {
+      return value.message.trim().slice(0, 1000);
+    }
+    if (typeof value.code === 'string' && value.code.trim()) {
+      return `runtime invoke ${status}: ${value.code}`;
+    }
+  }
+  return `runtime invoke ${status}`;
 }

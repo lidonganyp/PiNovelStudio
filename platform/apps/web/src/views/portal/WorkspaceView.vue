@@ -7,6 +7,8 @@
 import { computed, onMounted, provide, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import { fenToYuan } from '../../api/billing';
+import { useAuthStore } from '../../stores/auth';
 import {
   getProject,
   type Project,
@@ -20,6 +22,7 @@ import ChapterTree from '../../components/workspace/ChapterTree.vue';
 import ChapterEditor from '../../components/workspace/ChapterEditor.vue';
 import SeedEditor from '../../components/workspace/SeedEditor.vue';
 import CharacterPanel from '../../components/workspace/CharacterPanel.vue';
+import OutlinePanel from '../../components/workspace/OutlinePanel.vue';
 import DocumentPanel from '../../components/workspace/DocumentPanel.vue';
 import VersionPanel from '../../components/workspace/VersionPanel.vue';
 import AssistantPanel from '../../components/workspace/AssistantPanel.vue';
@@ -27,6 +30,7 @@ import GenerationPanel from '../../components/workspace/GenerationPanel.vue';
 import FeedbackPanel from '../../components/workspace/FeedbackPanel.vue';
 
 const route = useRoute();
+const auth = useAuthStore();
 const projectId = computed(() => Number(route.params.id));
 
 const project = ref<Project | null>(null);
@@ -37,7 +41,26 @@ const activeTab = ref('chapter');
 
 /** GenerationPanel 通过 provide/inject 拿到 track 入口。 */
 const trackJob = ref<((jobId: string) => void) | null>(null);
+const materialEpoch = ref(0);
 provide('trackJob', (jobId: string) => trackJob.value?.(jobId));
+provide('materialEpoch', materialEpoch);
+provide(
+  'reloadMaterials',
+  async (opts?: { tab?: string; chapterNumber?: number }): Promise<void> => {
+    materialEpoch.value += 1;
+    await loadChapters();
+    try {
+      project.value = await getProject(projectId.value);
+    } catch {
+      /* 项目刷新失败不阻断板块刷新 */
+    }
+    if (opts?.chapterNumber != null) {
+      const found = chapters.value.find((item) => item.chapterNumber === opts.chapterNumber);
+      if (found) activeChapterId.value = found.id;
+    }
+    if (opts?.tab) activeTab.value = opts.tab;
+  },
+);
 
 const activeChapter = computed(
   () => chapters.value.find((c) => c.id === activeChapterId.value) ?? null,
@@ -86,6 +109,7 @@ async function startGeneration(): Promise<void> {
 }
 
 onMounted(async () => {
+  void auth.fetchMe();
   project.value = await getProject(projectId.value);
   await loadChapters();
 });
@@ -99,6 +123,7 @@ defineExpose({ loadChapters, patchChapter });
       <span class="project-title" :title="project.title">{{ project.title }}</span>
       <el-tag v-if="project.genre" size="small">{{ project.genre }}</el-tag>
       <span v-for="sub in project.subGenres" :key="sub" class="sub-genre">{{ sub }}</span>
+      <span class="balance">余额 ¥{{ auth.user ? fenToYuan(auth.user.totalBalance) : '-' }}</span>
       <span class="workflow">流程：{{ project.workflowState }}</span>
     </div>
 
@@ -125,9 +150,15 @@ defineExpose({ loadChapters, patchChapter });
             />
             <el-empty v-else description="左侧新建或选择一个章节" />
           </el-tab-pane>
-          <el-tab-pane label="种子" name="seed">
+          <!-- 项目级：全书大纲，不随章节切换 -->
+          <el-tab-pane label="大纲（全书）" name="outline">
+            <OutlinePanel :project-id="projectId" />
+          </el-tab-pane>
+          <!-- 章节级：当前选中章节的种子 -->
+          <el-tab-pane label="种子（本章）" name="seed">
             <SeedEditor
               v-if="activeChapter"
+              :key="'seed-' + activeChapter.id + '-' + (activeChapter.seed?.version ?? 0)"
               :project-id="projectId"
               :chapter="activeChapter"
               @updated="patchChapter"
@@ -135,10 +166,12 @@ defineExpose({ loadChapters, patchChapter });
             />
             <el-empty v-else description="先选择一个章节" />
           </el-tab-pane>
-          <el-tab-pane label="角色" name="characters" lazy>
+          <!-- 项目级：全书角色档案，不随章节切换 -->
+          <el-tab-pane label="角色（全书）" name="characters" lazy>
             <CharacterPanel :project-id="projectId" />
           </el-tab-pane>
-          <el-tab-pane label="文档" name="documents" lazy>
+          <!-- 项目级：全书设定文档 -->
+          <el-tab-pane label="文档（全书）" name="documents" lazy>
             <DocumentPanel :project-id="projectId" />
           </el-tab-pane>
           <el-tab-pane label="版本" name="versions" lazy>
@@ -198,8 +231,12 @@ defineExpose({ loadChapters, patchChapter });
   border-radius: 4px;
   padding: 0 6px;
 }
-.workflow {
+.balance {
   margin-left: auto;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.workflow {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }

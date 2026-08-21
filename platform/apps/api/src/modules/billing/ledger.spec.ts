@@ -40,7 +40,7 @@ describe('computeLedgerIdentity', () => {
     }
   });
 
-  it('counts adjustments toward users.balance', async () => {
+  it('counts adjustments toward users.bonusBalance', async () => {
     await billing.adjustBalance({
       userId,
       adminUserId: userId,
@@ -49,8 +49,10 @@ describe('computeLedgerIdentity', () => {
     });
     const row = await computeLedgerIdentity(prisma, userId);
     expect(row.balanceMatches).toBe(true);
+    expect(row.bonusBalanceMatches).toBe(true);
     expect(row.availableMatches).toBe(true);
-    expect(row.balanceFen).toBe(2500n);
+    expect(row.balanceFen).toBe(0n);
+    expect(row.bonusBalanceFen).toBe(2500n);
     expect(row.adjustmentFen).toBe(2500n);
   });
 });

@@ -11,6 +11,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -22,6 +23,12 @@ export class AdminUserQueryDto extends PaginationDto {
   @IsOptional()
   @IsIn(['active', 'banned'])
   status?: string;
+}
+
+export class AuditLogQueryDto extends PaginationDto {
+  @IsOptional()
+  @IsString()
+  action?: string;
 }
 
 export class AdjustBalanceDto {
@@ -118,6 +125,13 @@ export class CreateRateDto {
   outputPricePerMillion!: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  multiplierPercent?: number;
+
+  @IsOptional()
   @IsString()
   effectiveFrom?: string;
 
@@ -134,6 +148,13 @@ export class PatchRateDto {
   @IsOptional()
   @IsString()
   displayName?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  multiplierPercent?: number;
 }
 
 export class UsageQueryDto extends PaginationDto {
@@ -149,6 +170,37 @@ export class UsageQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   model?: string;
+
+  @IsOptional()
+  @IsString()
+  from?: string;
+
+  @IsOptional()
+  @IsString()
+  to?: string;
+}
+
+export class RevenueQueryDto {
+  @IsOptional()
+  @IsString()
+  from?: string;
+
+  @IsOptional()
+  @IsString()
+  to?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  userId?: number;
+}
+
+export class LookupRateQueryDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  q!: string;
 }
 
 export class SettingItemDto {

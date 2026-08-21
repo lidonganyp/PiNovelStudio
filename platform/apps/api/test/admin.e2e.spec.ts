@@ -152,7 +152,8 @@ describe('管理后台 e2e', () => {
       url: '/api/auth/me',
       headers: { authorization: `Bearer ${userToken}` },
     });
-    expect(me.json().balance).toBe('5000');
+    expect(me.json().bonusBalance).toBe('5000');
+    expect(me.json().totalBalance).toBe('5000');
     const audit = await app.inject({
       method: 'GET',
       url: '/api/admin/audit-logs?action=user.adjust',
@@ -160,6 +161,14 @@ describe('管理后台 e2e', () => {
     });
     expect(audit.statusCode).toBe(200);
     expect(audit.json().total).toBeGreaterThanOrEqual(1);
+
+    const paged = await app.inject({
+      method: 'GET',
+      url: '/api/admin/audit-logs?page=1&pageSize=20',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(paged.statusCode).toBe(200);
+    expect(Array.isArray(paged.json().items)).toBe(true);
   });
 
   it('新费率不影响历史结算快照', async () => {
@@ -298,6 +307,50 @@ describe('管理后台 e2e', () => {
     const list = put.json() as Array<{ key: string; value: unknown }>;
     const saved = list.find((item) => item.key === `p7-flag-${runId}`);
     expect(saved?.value).toEqual({ enabled: false });
+  });
+
+  it('用量看板与收入拆分按真实/虚拟记账', async () => {
+    const dashboard = await app.inject({
+      method: 'GET',
+      url: '/api/admin/usage/dashboard',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(dashboard.statusCode).toBe(200);
+    expect(dashboard.json().cards).toMatchObject({
+      requests: expect.any(Number),
+      charge: expect.any(String),
+    });
+
+    const revenue = await app.inject({
+      method: 'GET',
+      url: `/api/admin/revenue/summary?userId=${userId}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(revenue.statusCode).toBe(200);
+    const body = revenue.json() as {
+      virtualRecharge: string;
+      virtualConsume: string;
+      remainingQuota: string;
+    };
+    expect(Number(body.virtualRecharge)).toBeGreaterThanOrEqual(5000);
+    expect(Number(body.virtualConsume)).toBeGreaterThanOrEqual(220);
+    expect(body.remainingQuota).toBeDefined();
+  });
+
+  it('查价缺少模型名返回 400；空结果提示手动填写', async () => {
+    const missing = await app.inject({
+      method: 'GET',
+      url: '/api/admin/model-rates/lookup',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(missing.statusCode).toBe(400);
+
+    const forbidden = await app.inject({
+      method: 'GET',
+      url: '/api/admin/model-rates/lookup?q=gemini-3.7-flash',
+      headers: { authorization: `Bearer ${userToken}` },
+    });
+    expect([401, 403]).toContain(forbidden.statusCode);
   });
 
   it('Provider 列表不返回明文密钥', async () => {

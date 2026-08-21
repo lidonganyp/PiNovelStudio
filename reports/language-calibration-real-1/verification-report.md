@@ -342,7 +342,7 @@
 
 ---
 
-**生成时间**: 2026-08-20T05:08:20.757Z
+**生成时间**: 2026-08-20T05:19:28.451Z
 **脚本**: `scripts/language-calibration-real-1/run-verification.mjs`
 **模式**: stub
-**Git HEAD（仅基准提交，不代表脏工作树快照）**: ac0b55d9dec9f2827cc41d35937cc93c51b8eb71
+**Git HEAD（仅基准提交，不代表脏工作树快照）**: 7e5aaf59f3046ea1e307cc2e5f32664e58c42412

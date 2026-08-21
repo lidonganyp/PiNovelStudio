@@ -22,7 +22,8 @@ model User {
   nickname     String
   role         String   @default("user") // user | admin
   status       String   @default("active") // active | banned
-  balance      BigInt   @default(0) // 余额，单位：分
+  balance      BigInt   @default(0) // 充值余额（真实收入），单位：分
+  bonusBalance BigInt   @default(0) @map("bonus_balance") // 赠送余额（虚拟），单位：分
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -78,6 +79,8 @@ model ModelRate {
   provider              ModelProvider @relation(fields: [providerId], references: [id])
   inputPricePerMillion  BigInt        @map("input_price_per_million")
   outputPricePerMillion BigInt        @map("output_price_per_million")
+  // 结算倍率（百分比整数）：100=1.0 倍，150=1.5 倍；最终价 = 公开原价 × 倍率。
+  multiplierPercent     Int           @default(100) @map("multiplier_percent")
   effectiveFrom         DateTime      @map("effective_from")
   enabled               Boolean       @default(true)
   createdAt             DateTime      @default(now()) @map("created_at")
@@ -118,6 +121,9 @@ model NovelGenerationCall {
   tokensOut     Int              @map("tokens_out")
   rateSnapshot  Json             @map("rate_snapshot")
   actualCharge  BigInt           @map("actual_charge")
+  // 双余额扣款归因：actualCharge = chargeFromReal + chargeFromBonus
+  chargeFromReal  BigInt         @default(0) @map("charge_from_real") // 从充值余额扣减部分
+  chargeFromBonus BigInt         @default(0) @map("charge_from_bonus") // 从赠送余额扣减部分
   createdAt     DateTime         @default(now()) @map("created_at")
 
   @@unique([jobId, callId])

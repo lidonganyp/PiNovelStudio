@@ -4,6 +4,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -21,10 +22,13 @@ import { FeedbackService } from '../feedback/feedback.service';
 import {
   AdjustBalanceDto,
   AdminUserQueryDto,
+  AuditLogQueryDto,
   CreateProviderDto,
   CreateRateDto,
+  LookupRateQueryDto,
   PatchRateDto,
   PutSettingsBodyDto,
+  RevenueQueryDto,
   UpsertProviderDto,
   UpdateUserStatusDto,
   UsageQueryDto,
@@ -104,6 +108,11 @@ export class AdminController {
     return this.admin.patchProvider(actor.sub, id, dto);
   }
 
+  @Get('model-rates/lookup')
+  lookupRate(@Query() query: LookupRateQueryDto): Promise<unknown> {
+    return this.admin.lookupRate(query.q);
+  }
+
   @Get('model-rates')
   listRates(): Promise<unknown> {
     return this.admin.listRates();
@@ -120,6 +129,7 @@ export class AdminController {
       providerId: dto.providerId,
       inputPricePerMillion: BigInt(dto.inputPricePerMillion),
       outputPricePerMillion: BigInt(dto.outputPricePerMillion),
+      multiplierPercent: dto.multiplierPercent,
       effectiveFrom: dto.effectiveFrom ? new Date(dto.effectiveFrom) : undefined,
       enabled: dto.enabled,
     });
@@ -134,9 +144,39 @@ export class AdminController {
     return this.admin.patchRate(actor.sub, id, dto);
   }
 
+  @Delete('model-rates/:id')
+  deleteRate(
+    @CurrentUser() actor: AuthUserPayload,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<unknown> {
+    return this.admin.deleteRate(actor.sub, id);
+  }
+
+  @Delete('model-providers/:id')
+  deleteProvider(
+    @CurrentUser() actor: AuthUserPayload,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<unknown> {
+    return this.admin.deleteProvider(actor.sub, id);
+  }
+
   @Get('usage/summary')
   usageSummary(@Query() query: UsageQueryDto): Promise<unknown> {
-    return this.admin.usageSummary(query.groupBy ?? 'model');
+    return this.admin.usageSummary(query.groupBy ?? 'model', {
+      userId: query.userId,
+      model: query.model,
+      from: query.from,
+      to: query.to,
+    });
+  }
+
+  @Get('usage/dashboard')
+  usageDashboard(@Query() query: UsageQueryDto): Promise<unknown> {
+    return this.admin.usageDashboard({
+      from: query.from,
+      to: query.to,
+      userId: query.userId,
+    });
   }
 
   @Get('usage/records')
@@ -144,16 +184,22 @@ export class AdminController {
     return this.admin.usageRecords(query.page ?? 1, query.pageSize ?? 20, {
       userId: query.userId,
       model: query.model,
+      from: query.from,
+      to: query.to,
     });
   }
 
   @Get('revenue/summary')
-  revenue(): Promise<unknown> {
-    return this.admin.revenueSummary();
+  revenue(@Query() query: RevenueQueryDto): Promise<unknown> {
+    return this.admin.revenueSummary({
+      from: query.from,
+      to: query.to,
+      userId: query.userId,
+    });
   }
 
   @Get('audit-logs')
-  auditLogs(@Query() query: PaginationDto & { action?: string }): Promise<unknown> {
+  auditLogs(@Query() query: AuditLogQueryDto): Promise<unknown> {
     return this.admin.listAuditLogs(
       query.page ?? 1,
       query.pageSize ?? 20,

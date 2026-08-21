@@ -13,13 +13,45 @@ export interface AssistantMessage {
 }
 
 /** SSE 事件：增量文本或完成信号。 */
+export interface AssistantArtifacts {
+  outlineSaved?: boolean;
+  charactersSaved?: number;
+  chaptersTouched?: number[];
+  generationJobId?: string;
+  focusTab?: 'outline' | 'characters' | 'chapter' | 'seed';
+}
+
 export type AssistantStreamEvent =
   | { delta: string }
-  | { done: true; message: AssistantMessage };
+  | { error: string }
+  | {
+      done: true;
+      message: AssistantMessage;
+      generationJobId?: string;
+      artifacts?: AssistantArtifacts;
+    };
 
 export function listMessages(projectId: number): Promise<AssistantMessage[]> {
   return http
     .get(`/projects/${projectId}/assistant/messages`)
+    .then((r) => r.data);
+}
+
+/** 新建对话：软删除当前项目全部消息（规划上下文从零开始）。 */
+export function clearMessages(
+  projectId: number,
+): Promise<{ cleared: number }> {
+  return http
+    .delete(`/projects/${projectId}/assistant/messages`)
+    .then((r) => r.data);
+}
+
+export function deleteMessage(
+  projectId: number,
+  messageId: number,
+): Promise<{ ok: true }> {
+  return http
+    .delete(`/projects/${projectId}/assistant/messages/${messageId}`)
     .then((r) => r.data);
 }
 
@@ -59,11 +91,12 @@ export async function sendMessageStream(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let completed = false;
+  let streamError: string | null = null;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    // SSE 事件以空行分隔；逐块解析已完整的事件
     let separator = buffer.indexOf('\n\n');
     while (separator >= 0) {
       const raw = buffer.slice(0, separator);
@@ -72,11 +105,16 @@ export async function sendMessageStream(
       for (const line of raw.split('\n')) {
         if (!line.startsWith('data: ')) continue;
         try {
-          onEvent(JSON.parse(line.slice(6)) as AssistantStreamEvent);
+          const event = JSON.parse(line.slice(6)) as AssistantStreamEvent;
+          if ('error' in event) streamError = event.error;
+          if ('done' in event) completed = true;
+          onEvent(event);
         } catch {
           /* 跳过无法解析的行 */
         }
       }
     }
   }
+  if (streamError) throw new Error(streamError);
+  if (!completed) throw new Error('规划模型连接中断，请重试');
 }

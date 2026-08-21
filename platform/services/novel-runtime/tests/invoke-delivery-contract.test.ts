@@ -167,9 +167,18 @@ describe("invoke delivery contract", () => {
     const { response, finalizedOutcomes } = await invokeChapter({
       status: "blocked",
       reason: "fact guard blocked",
+      failureEnvelope: { stage: "preflight", reason: "风格指纹文件不存在" },
     });
 
     assert.equal(response.status, 422);
+    const body = await response.json() as {
+      code?: unknown;
+      message?: unknown;
+      failureEnvelope?: { reason?: unknown };
+    };
+    assert.equal(body.code, "CHAPTER_NOT_DELIVERABLE");
+    assert.equal(body.message, "风格指纹文件不存在");
+    assert.equal(body.failureEnvelope?.reason, "风格指纹文件不存在");
     assert.deepEqual(finalizedOutcomes, ["failure"]);
   });
 

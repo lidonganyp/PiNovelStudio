@@ -8,6 +8,8 @@ export interface RateSnapshot {
   providerKey: string;
   inputPricePerMillion: string;
   outputPricePerMillion: string;
+  /** 结算倍率（百分比整数，100=1.0 倍）；旧快照缺省按 100。 */
+  multiplierPercent?: number;
   effectiveFrom: string;
 }
 

@@ -378,4 +378,67 @@ describe('小说业务 API e2e', () => {
     });
     expect(gone.statusCode).toBe(404);
   });
+
+  it('回收站可恢复，导出全书 TXT，助手可删单条', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { title: `回收导出-${runId}`, description: '简介' },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id as number;
+    await app.inject({
+      method: 'POST',
+      url: `/api/projects/${id}/chapters`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { chapterNumber: 1, title: '开端' },
+    });
+
+    const exported = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${id}/export`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(exported.statusCode).toBe(200);
+    expect(exported.json().filename).toMatch(/\.txt$/);
+    expect(exported.json().content).toContain('第1章 开端');
+
+    const archived = await app.inject({
+      method: 'DELETE',
+      url: `/api/projects/${id}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(archived.statusCode).toBe(200);
+    const trash = await app.inject({
+      method: 'GET',
+      url: '/api/projects/trash',
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(trash.statusCode).toBe(200);
+    expect(
+      (trash.json().items as Array<{ id: number }>).some((item) => item.id === id),
+    ).toBe(true);
+
+    const restored = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${id}/restore`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(restored.statusCode).toBe(201);
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${id}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().chapterCount).toBeGreaterThanOrEqual(1);
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${id}/assistant/messages`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(listed.statusCode).toBe(200);
+  });
 });

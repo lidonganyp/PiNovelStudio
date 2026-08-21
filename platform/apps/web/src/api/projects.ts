@@ -16,8 +16,12 @@ export interface Project {
   status: string;
   workflowState: string;
   version: number;
+  chapterCount?: number;
+  wordCount?: number;
+  lastActiveAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string | null;
 }
 
 export interface ProjectListResult {
@@ -60,4 +64,21 @@ export function updateProject(
 
 export function removeProject(id: number): Promise<{ ok: true }> {
   return http.delete(`/projects/${id}`).then((r) => r.data);
+}
+
+export function listTrashedProjects(params: {
+  page?: number;
+  pageSize?: number;
+}): Promise<ProjectListResult> {
+  return http.get('/projects/trash', { params }).then((r) => r.data);
+}
+
+export function restoreProject(id: number): Promise<Project> {
+  return http.post(`/projects/${id}/restore`).then((r) => r.data);
+}
+
+export function exportProjectBook(
+  id: number,
+): Promise<{ filename: string; content: string }> {
+  return http.get(`/projects/${id}/export`).then((r) => r.data);
 }

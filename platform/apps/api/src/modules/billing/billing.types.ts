@@ -36,6 +36,8 @@ export interface SettleCallResult {
   callId: string;
   alreadySettled: boolean;
   actualCharge: bigint;
+  chargeFromReal: bigint;
+  chargeFromBonus: bigint;
   settledAmount: bigint;
   remainingBudget: bigint;
 }
@@ -62,8 +64,12 @@ export interface AdjustmentView {
 }
 
 export interface AvailableBalance {
+  /** 充值余额（真实收入） */
   balance: bigint;
+  /** 赠送余额（虚拟） */
+  bonusBalance: bigint;
   reserved: bigint;
+  /** 可用 = balance + bonusBalance − reserved */
   available: bigint;
 }
 

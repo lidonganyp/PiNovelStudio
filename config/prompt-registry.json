@@ -69,7 +69,7 @@
       "label": "通用作者风格优化系统 Prompt（生产基线）",
       "modelRoute": "narrator_primary",
       "hashes": {
-        "promptHash": "83c11299b5554407",
+        "promptHash": "ada2d64326623dca",
         "toolSchemaHash": "1a6dddf02234e8bd",
         "contextHash": "231f6970cf8d110e",
         "budgetHash": "5e66798af7a5163a"

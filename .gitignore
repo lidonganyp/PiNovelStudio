@@ -47,6 +47,8 @@ build/
 .pi/.tmp-*
 *.tmp
 *.log
+# Playwright 本地运行产物
+platform/apps/web/test-results/
 # 管线运行 marker（如 extract-done.marker，由 wait-and-report.mjs 仅写不读，运行时自动重建）
 *.marker
 

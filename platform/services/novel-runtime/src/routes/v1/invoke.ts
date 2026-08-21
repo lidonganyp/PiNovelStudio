@@ -63,6 +63,33 @@ export function isDeliverableChapterResult(result: unknown): result is {
   return value.status === "ok" && typeof value.text === "string" && value.text.trim().length > 0;
 }
 
+export function describeUndeliverableChapter(result: unknown, modelCallCount: number): string {
+  if (result && typeof result === "object") {
+    const value = result as {
+      failureEnvelope?: { reason?: unknown };
+      reason?: unknown;
+    };
+    const envelope = value.failureEnvelope?.reason;
+    if (typeof envelope === "string" && envelope.trim()) {
+      return envelope.trim().slice(0, 1000);
+    }
+    if (typeof value.reason === "string" && value.reason.trim()) {
+      return value.reason.trim().slice(0, 1000);
+    }
+  }
+  if (modelCallCount <= 0) {
+    return "章节生成未调用模型，未产出可交付正文";
+  }
+  return "章节生成未产出可交付正文";
+}
+
+function extractFailureEnvelope(result: unknown): unknown {
+  if (result && typeof result === "object" && "failureEnvelope" in result) {
+    return (result as { failureEnvelope?: unknown }).failureEnvelope;
+  }
+  return undefined;
+}
+
 /** A disconnected caller must never reach the durable success path. */
 export function assertInvokeNotAborted(signal: AbortSignal): void {
   if (signal.aborted) {
@@ -319,8 +346,9 @@ export function createInvokeRouter(
             : "error";
         res.status(422).json({
           code: "CHAPTER_NOT_DELIVERABLE",
-          message: "章节生成未产出可交付正文",
+          message: describeUndeliverableChapter(resultForCaller, metering.modelCallCount),
           status: resultStatus === "blocked" ? "blocked" : "error",
+          failureEnvelope: extractFailureEnvelope(resultForCaller),
           jobId: jobCtx.jobId,
           requestId: res.locals.requestId,
         });

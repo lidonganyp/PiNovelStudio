@@ -30,7 +30,10 @@ function applyEnvFile(envPath: string): void {
     if (eqIndex <= 0) continue;
     const key = line.slice(0, eqIndex).trim();
     const value = line.slice(eqIndex + 1).trim();
-    if (process.env.VITEST && key === 'PAYMENT_MODE') {
+    if (
+      process.env.VITEST &&
+      (key === 'PAYMENT_MODE' || key === 'PLANNER_MODE' || key === 'NOVEL_RUNTIME_MODE')
+    ) {
       continue;
     }
     if (process.env[key] === undefined) {

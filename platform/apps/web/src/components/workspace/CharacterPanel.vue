@@ -3,7 +3,7 @@
  * P5-2 角色面板：列表 + 新建/编辑抽屉（name/roleType/aliases/identity/goals）。
  * 生成前 Preflight 要求至少一个角色，此处给出就绪提示。
  */
-import { onMounted, reactive, ref } from 'vue';
+import { inject, onMounted, reactive, ref, watch, type Ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ROLE_TYPES,
@@ -110,7 +110,12 @@ function roleLabel(value: string): string {
   return ROLE_TYPES.find((r) => r.value === value)?.label ?? value;
 }
 
+const epoch = inject<Ref<number>>('materialEpoch');
+
 onMounted(() => {
+  void load();
+});
+watch(() => epoch?.value, () => {
   void load();
 });
 </script>

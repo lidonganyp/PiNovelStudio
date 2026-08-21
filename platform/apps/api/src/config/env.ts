@@ -98,6 +98,7 @@ const envSchema = z
   PLANNER_API_BASE_URL: z.string().default(''),
   PLANNER_API_KEY: z.string().default(''),
   PLANNER_MODEL: z.string().default('gpt-5.6'),
+  PLANNER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
   WEB_DIST_DIR: z.string().default(''),
   STUB_WRITER_MODEL: z.string().default('stub-writer'),
   PAYMENT_MODE: z.enum(['stub', 'live']).default('stub'),

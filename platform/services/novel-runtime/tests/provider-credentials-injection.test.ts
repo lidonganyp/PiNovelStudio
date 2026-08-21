@@ -34,4 +34,38 @@ describe("platform provider credential injection", () => {
       "https://gemini-gateway.example/v1",
     );
   });
+
+  it("maps admin provider keys like gemini-3.7-flash onto GEMINI_API_KEY", () => {
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GOOGLE_GEMINI_BASE_URL;
+    const client = createProviderCredentialsClient(makeConfigForTest());
+
+    const result = client.injectIntoEnv([
+      {
+        providerKey: "gemini-3.7-flash",
+        apiKey: "sk-admin-gemini",
+        apiBaseUrl: "https://aimagichub.xyz/v1",
+      },
+    ]);
+
+    assert.deepEqual(result.injected, ["GEMINI_API_KEY"]);
+    assert.equal(process.env.GEMINI_API_KEY, "sk-admin-gemini");
+    assert.equal(process.env.GOOGLE_GEMINI_BASE_URL, "https://aimagichub.xyz/v1");
+  });
+
+  it("lets platform-admin credentials replace a leftover shell GEMINI_API_KEY", () => {
+    process.env.GEMINI_API_KEY = "stale-shell-key";
+    const client = createProviderCredentialsClient(
+      makeConfigForTest({ providerCredentialsSource: "platform" }),
+    );
+    const result = client.injectIntoEnv([
+      {
+        providerKey: "gemini-3.7-flash",
+        apiKey: "admin-gemini-key",
+        apiBaseUrl: "https://aimagichub.xyz/v1",
+      },
+    ]);
+    assert.deepEqual(result.injected, ["GEMINI_API_KEY"]);
+    assert.equal(process.env.GEMINI_API_KEY, "admin-gemini-key");
+  });
 });

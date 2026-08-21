@@ -13,6 +13,8 @@ export default defineConfig({
   test: {
     env: {
       PAYMENT_MODE: 'stub',
+      PLANNER_MODE: 'stub',
+      NOVEL_RUNTIME_MODE: 'stub',
     },
     include: ['test/**/*.spec.ts', 'src/**/*.spec.ts'],
     environment: 'node',

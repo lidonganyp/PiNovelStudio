@@ -1,8 +1,10 @@
 /**
  * P8-2 对账脚本：按用户打印账本恒等式，零差额退出 0，否则退出 1。
+ * 双余额账户口径：
  *
- *   users.balance == Σ充值 + Σ调账 − Σ已结算调用
- *   available     == users.balance − Σ在途预占
+ *   users.balance      == Σ充值(paid) − Σcharge_from_real
+ *   users.bonusBalance == Σ调账 − Σcharge_from_bonus
+ *   available          == balance + bonusBalance − Σ在途预占
  *
  * 用法（在 apps/api 下）：
  *   pnpm ledger:reconcile
@@ -44,7 +46,8 @@ async function main(): Promise<void> {
     let failed = 0;
     for (const user of users) {
       const row = await computeLedgerIdentity(prisma, user.id);
-      const ok = row.balanceMatches && row.availableMatches;
+      const ok =
+        row.balanceMatches && row.bonusBalanceMatches && row.availableMatches;
       if (!ok) failed += 1;
       console.log(
         JSON.stringify(
@@ -54,12 +57,17 @@ async function main(): Promise<void> {
             rechargeFen: fen(row.rechargeFen),
             adjustmentFen: fen(row.adjustmentFen),
             settledFen: fen(row.settledFen),
+            settledFromRealFen: fen(row.settledFromRealFen),
+            settledFromBonusFen: fen(row.settledFromBonusFen),
             reservedFen: fen(row.reservedFen),
             balanceFen: fen(row.balanceFen),
+            bonusBalanceFen: fen(row.bonusBalanceFen),
             availableFen: fen(row.availableFen),
             expectedBalanceFen: fen(row.expectedBalanceFen),
+            expectedBonusBalanceFen: fen(row.expectedBonusBalanceFen),
             expectedAvailableFen: fen(row.expectedAvailableFen),
             balanceMatches: row.balanceMatches,
+            bonusBalanceMatches: row.bonusBalanceMatches,
             availableMatches: row.availableMatches,
             ok,
           },

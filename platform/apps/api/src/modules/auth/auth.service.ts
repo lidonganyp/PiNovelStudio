@@ -121,6 +121,8 @@ export class AuthService {
       role: user.role,
       status: user.status,
       balance: user.balance.toString(),
+      bonusBalance: user.bonusBalance.toString(),
+      totalBalance: (user.balance + user.bonusBalance).toString(),
       createdAt: user.createdAt.toISOString(),
     };
   }

@@ -38,12 +38,40 @@ export class ProjectsController {
     );
   }
 
+  @Get('trash')
+  listTrash(
+    @CurrentUser() user: AuthUserPayload,
+    @Query() query: PaginationDto,
+  ): Promise<unknown> {
+    return this.projects.listTrash(
+      user.sub,
+      query.page ?? 1,
+      query.pageSize ?? 20,
+    );
+  }
+
   @Post()
   create(
     @CurrentUser() user: AuthUserPayload,
     @Body() dto: CreateProjectDto,
   ): Promise<unknown> {
     return this.projects.create(user.sub, dto);
+  }
+
+  @Get(':id/export')
+  exportBook(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<unknown> {
+    return this.projects.exportBook(user.sub, id);
+  }
+
+  @Post(':id/restore')
+  restore(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<unknown> {
+    return this.projects.restore(user.sub, id);
   }
 
   @Get(':id')

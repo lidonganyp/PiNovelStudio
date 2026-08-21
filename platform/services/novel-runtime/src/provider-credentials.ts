@@ -35,6 +35,19 @@ const PROVIDER_ENV_KEY_MAP: Record<string, { key: string; baseUrlKey?: string }>
   gpt: { key: "GPT_API_KEY", baseUrlKey: "GPT_BASE_URL" },
 };
 
+export function resolveProviderEnvMapping(
+  providerKey: string,
+): { key: string; baseUrlKey?: string } | undefined {
+  const lower = providerKey.toLowerCase();
+  if (PROVIDER_ENV_KEY_MAP[lower]) return PROVIDER_ENV_KEY_MAP[lower];
+  if (lower.includes("gemini") || lower.includes("aimagic")) return PROVIDER_ENV_KEY_MAP.gemini;
+  if (lower.includes("gpt") || lower.includes("openai")) return PROVIDER_ENV_KEY_MAP.gpt;
+  if (lower.includes("claude") || lower.includes("anthropic")) return PROVIDER_ENV_KEY_MAP.claude;
+  if (lower.includes("glm")) return PROVIDER_ENV_KEY_MAP.glm;
+  if (lower.includes("ark") || lower.includes("doubao")) return PROVIDER_ENV_KEY_MAP.ark;
+  return undefined;
+}
+
 export class ProviderCredentialsError extends Error {
   constructor(
     message: string,
@@ -136,13 +149,13 @@ export function createProviderCredentialsClient(
       const injected: string[] = [];
       const skipped: string[] = [];
       for (const cred of credentials) {
-        const mapping = PROVIDER_ENV_KEY_MAP[cred.providerKey.toLowerCase()];
+        const mapping = resolveProviderEnvMapping(cred.providerKey);
         if (!mapping) {
           skipped.push(cred.providerKey);
           continue;
         }
-        // 容器 env 优先：已存在的直连密钥不覆盖
-        if (process.env[mapping.key]) {
+        // env 模式：容器已注入的直连密钥优先。platform 模式：以后台配置为准。
+        if (process.env[mapping.key] && config.providerCredentialsSource !== "platform") {
           skipped.push(mapping.key);
           continue;
         }

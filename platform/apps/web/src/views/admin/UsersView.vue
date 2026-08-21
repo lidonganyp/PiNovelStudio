@@ -4,7 +4,7 @@
  */
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { fenToYuan } from '../../api/billing';
+import { fenToYuan, yuanToFen } from '../../api/billing';
 import {
   adjustUserBalance,
   getAdminUser,
@@ -46,8 +46,13 @@ async function openUser(id: number): Promise<void> {
 
 async function onAdjust(): Promise<void> {
   if (!detail.value) return;
-  if (!Number.isInteger(adjustForm.amount) || adjustForm.amount === 0) {
-    ElMessage.warning('调账金额必须是非零整数（分）');
+  if (!Number.isFinite(adjustForm.amount) || adjustForm.amount === 0) {
+    ElMessage.warning('调账金额必须是非零数字（元）');
+    return;
+  }
+  const amountFen = yuanToFen(adjustForm.amount);
+  if (amountFen === 0) {
+    ElMessage.warning('调账金额至少 0.01 元');
     return;
   }
   if (!adjustForm.reason.trim()) {
@@ -55,7 +60,7 @@ async function onAdjust(): Promise<void> {
     return;
   }
   await adjustUserBalance(detail.value.id, {
-    amount: adjustForm.amount,
+    amount: amountFen,
     reason: adjustForm.reason.trim(),
   });
   ElMessage.success('调账已生效');
@@ -119,8 +124,11 @@ onMounted(() => {
       <el-table-column prop="nickname" label="昵称" width="120" />
       <el-table-column prop="role" label="角色" width="80" />
       <el-table-column prop="status" label="状态" width="80" />
-      <el-table-column label="余额" width="110">
+      <el-table-column label="充值余额" width="100">
         <template #default="{ row }">¥{{ fenToYuan(row.balance) }}</template>
+      </el-table-column>
+      <el-table-column label="赠送余额" width="100">
+        <template #default="{ row }">¥{{ fenToYuan(row.bonusBalance) }}</template>
       </el-table-column>
       <el-table-column label="累计消耗" width="110">
         <template #default="{ row }">¥{{ fenToYuan(row.spent) }}</template>
@@ -139,11 +147,16 @@ onMounted(() => {
 
   <el-drawer v-model="drawer" size="480px" :title="detail?.email ?? '用户详情'">
     <template v-if="detail">
-      <p>余额 ¥{{ fenToYuan(detail.balance) }} · 累计消耗 ¥{{ fenToYuan(detail.spent) }}</p>
+      <p>
+        充值余额 ¥{{ fenToYuan(detail.balance) }} · 赠送余额 ¥{{ fenToYuan(detail.bonusBalance) }}
+      </p>
+      <p>
+        累计消耗 ¥{{ fenToYuan(detail.spent) }}（真实 ¥{{ fenToYuan(detail.spentFromReal) }} · 虚拟 ¥{{ fenToYuan(detail.spentFromBonus) }}）
+      </p>
       <p>状态 {{ detail.status }} · 角色 {{ detail.role }}</p>
       <el-form label-position="top">
-        <el-form-item label="调账金额（分，可负）">
-          <el-input-number v-model="adjustForm.amount" :step="100" />
+        <el-form-item label="调账金额（元，可负；作用于赠送余额）">
+          <el-input-number v-model="adjustForm.amount" :step="1" :precision="2" />
         </el-form-item>
         <el-form-item label="原因">
           <el-input v-model="adjustForm.reason" maxlength="500" />
