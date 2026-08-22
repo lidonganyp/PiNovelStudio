@@ -6,7 +6,7 @@
  * 从多个种子源构造本章 ChapterSeed：
  *  - config.json（世界观、类型、角色列表、字数预算）
  *  - 角色档案（characters/*.md）
- *  - 前章 skeleton.json（第 1 章例外）
+ *  - 前章承接：chapter-continuity/{N-1}.json、已接受正文、或 skeleton.json（第 1 章例外）
  *  - narrative-state.json
  *  - detail ledger / unsettled-details.json
  *  - foreshadowing / closure tracker（arc-registry.json）
@@ -581,6 +581,25 @@ function loadPreviousChapterTextContinuation(
     } catch {
       // Try the next accepted chapter-file convention.
     }
+  }
+
+  // Platform runtime no longer writes previous-chapter prose. A continuity
+  // snapshot with a real previous-chapter summary is sufficient for chapter 2+.
+  if (
+    snapshot &&
+    snapshot.chapterNumber === previousNumber &&
+    typeof snapshot.lastEventSummary === "string" &&
+    snapshot.lastEventSummary.trim().length > 0
+  ) {
+    return {
+      available: true,
+      lastEventId: `chapter-continuity:${previousNumber}`,
+      lastEventSummary: snapshot.lastEventSummary,
+      openHooks: snapshot.openHooks,
+      introducedCharacters: snapshot.introducedCharacters,
+      unresolvedTensions: snapshot.unresolvedTensions,
+      sourceIds: [`chapter-continuity/${previousNumber}.json`],
+    };
   }
   return null;
 }

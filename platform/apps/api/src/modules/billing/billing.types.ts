@@ -29,6 +29,11 @@ export interface SettleCallInput {
   model: string;
   tokensIn: number;
   tokensOut: number;
+  /**
+   * 结算超出预占余量时按余量封顶收费而不是拒绝（402）。
+   * 用于内容已生成、丢弃即浪费的对话式结算；默认 false = 超占即抛 HoldExhaustedException。
+   */
+  capAtHold?: boolean;
 }
 
 export interface SettleCallResult {

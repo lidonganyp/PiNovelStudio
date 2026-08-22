@@ -52,9 +52,9 @@ export const CharacterStateSummarySchema = Type.Object({
 });
 export type CharacterStateSummary = Static<typeof CharacterStateSummarySchema>;
 
-/** 前章承接摘要（来自前章 skeleton.json） */
+/** 前章承接摘要（来自 chapter-continuity 快照、已接受正文或 skeleton.json） */
 export const PreviousChapterContinuationSchema = Type.Object({
-  available: Type.Boolean({ description: "是否存在前章 skeleton" }),
+  available: Type.Boolean({ description: "是否存在前章承接（快照 / 正文 / skeleton）" }),
   lastEventId: Type.Optional(Type.String()),
   lastEventSummary: Type.Optional(Type.String()),
   endingEmotion: Type.Optional(Type.String()),

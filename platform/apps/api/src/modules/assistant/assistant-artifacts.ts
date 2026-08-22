@@ -5,24 +5,18 @@
 import { Logger } from '@nestjs/common';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { JobsService } from '../jobs/jobs.service';
+import { assertArtifactAllowed } from '../context/assistant-contract';
+import { FAILURE_CODES, FailureHttpException, makeFailure } from '../context/failure-envelope';
+import { isUsableStoryOutline } from '../jobs/book-context';
+import type { AssistantAction } from '../context/types';
 import {
-  CHARACTERS_BLOCK_RE,
-  CHAPTER_SEED_BLOCK_RE,
-  extractMarkedBlock,
-  inferCharactersFromText,
-  inferGenerateChapterNumber,
   looksLikeOutline,
-  OUTLINE_BLOCK_RE,
-  parseChapterSeed,
-  parseCharacterLines,
   parseOutlineChapters,
-  stripGenerateChapterMarker,
-  userAskedForCharacters,
-  userAskedForOutline,
   type OutlineChapter,
   type ParsedCharacter,
   type ParsedChapterSeed,
 } from './assistant-markers';
+import type { PlannerEnvelope } from './planner-envelope';
 
 const logger = new Logger('AssistantArtifacts');
 
@@ -32,6 +26,8 @@ export interface AssistantArtifactsView {
   chaptersTouched: number[];
   generationJobId?: string;
   focusTab?: 'outline' | 'characters' | 'chapter' | 'seed';
+  publicEntry?: 'novel_generate_chapter';
+  records: Array<{ type: 'story_outline' | 'chapter_seed' | 'query_answer'; saved: boolean; id?: number }>;
 }
 
 export interface AssistantArtifactResult {
@@ -46,129 +42,148 @@ export async function applyAssistantArtifacts(input: {
   jobs: JobsService;
   userId: number;
   projectId: number;
-  content: string;
+  content?: string;
   userContent: string;
+  action: AssistantAction;
+  chapterNumber?: number;
+  confirmGeneration?: boolean;
+  envelope: PlannerEnvelope;
 }): Promise<AssistantArtifactResult> {
-  let content = input.content;
+  let content = input.envelope.reply;
   const metadata: Record<string, unknown> = {};
   const artifacts: AssistantArtifactsView = {
     outlineSaved: false,
     charactersSaved: 0,
     chaptersTouched: [],
+    records: [],
   };
-
-  const outlineBlock = extractMarkedBlock(content, OUTLINE_BLOCK_RE);
-  let outlineMarkdown = outlineBlock?.inner ?? '';
-  if (outlineBlock) content = outlineBlock.stripped;
-  if (
-    !outlineMarkdown &&
-    userAskedForOutline(input.userContent) &&
-    looksLikeOutline(content)
-  ) {
-    outlineMarkdown = content.trim();
+  const outlineMarkdown = input.envelope.storyOutline?.trim() ?? '';
+  const characters = uniqueCharacters(input.envelope.characters ?? []);
+  const parsedSeed: ParsedChapterSeed | null = input.envelope.chapterSeed
+    ? {
+        chapterNumber: input.chapterNumber ?? input.envelope.chapterSeed.chapterNumber ?? 0,
+        intent: input.envelope.chapterSeed.intent,
+        mustInclude: input.envelope.chapterSeed.mustInclude,
+        forbiddenFacts: input.envelope.chapterSeed.forbiddenFacts,
+        characterMotives: input.envelope.chapterSeed.characterMotives,
+        promises: input.envelope.chapterSeed.promises,
+        endingGoal: input.envelope.chapterSeed.endingGoal,
+      }
+    : null;
+  if (parsedSeed && parsedSeed.chapterNumber < 1) {
+    throw new FailureHttpException(makeFailure({
+      stage: 'assistant.action',
+      gate: 'request_schema',
+      code: FAILURE_CODES.missingChapterNumber,
+      severity: 'preflight',
+      reason: '章节规划或正文生成必须指定章节号',
+      recoverable: false,
+    }));
   }
 
-  let outlineChapters: OutlineChapter[] = [];
-  if (outlineMarkdown && looksLikeOutline(outlineMarkdown)) {
-    await upsertStoryOutline(input.prisma, input.userId, input.projectId, outlineMarkdown);
-    outlineChapters = parseOutlineChapters(outlineMarkdown);
-    await replaceOutlineNodes(
-      input.prisma,
-      input.userId,
-      input.projectId,
-      outlineMarkdown,
-      outlineChapters,
-    );
-    const touched = await ensureChapterShells(
-      input.prisma,
-      input.userId,
-      input.projectId,
-      outlineChapters,
-    );
-    artifacts.outlineSaved = true;
-    artifacts.chaptersTouched = touched;
-    artifacts.focusTab = 'outline';
-    metadata.is_outline = true;
-    metadata.chapters_touched = touched;
-  }
-
-  const charactersBlock = extractMarkedBlock(content, CHARACTERS_BLOCK_RE);
-  if (charactersBlock) content = charactersBlock.stripped;
-  const characters = uniqueCharacters([
-    ...parseCharacterLines(charactersBlock?.inner ?? ''),
-    ...inferCharactersFromText(charactersBlock?.inner || content),
-  ]);
-  const shouldSaveCharacters =
-    characters.length > 0 &&
-    (Boolean(charactersBlock) ||
-      userAskedForCharacters(input.userContent) ||
-      artifacts.outlineSaved);
-  if (shouldSaveCharacters) {
-    artifacts.charactersSaved = await upsertCharacters(
-      input.prisma,
-      input.userId,
-      input.projectId,
-      characters,
-    );
-    if (artifacts.charactersSaved > 0) {
-      metadata.is_characters = true;
-      metadata.characters_count = artifacts.charactersSaved;
-      if (!artifacts.focusTab) artifacts.focusTab = 'characters';
+  if (input.action === 'plan_story_outline') {
+    if (outlineMarkdown && looksLikeOutline(outlineMarkdown) && isUsableStoryOutline(outlineMarkdown)) {
+      assertArtifactAllowed(input.action, 'story_outline');
+      try {
+        await upsertStoryOutline(input.prisma, input.userId, input.projectId, outlineMarkdown);
+        const outlineChapters = parseOutlineChapters(outlineMarkdown);
+        await replaceOutlineNodes(
+          input.prisma,
+          input.userId,
+          input.projectId,
+          outlineMarkdown,
+          outlineChapters,
+        );
+        const touched = await ensureChapterShells(
+          input.prisma,
+          input.userId,
+          input.projectId,
+          outlineChapters,
+        );
+        artifacts.outlineSaved = true;
+        artifacts.chaptersTouched = touched;
+        artifacts.focusTab = 'outline';
+        artifacts.records.push({ type: 'story_outline', saved: true });
+        metadata.is_outline = true;
+        metadata.chapters_touched = touched;
+      } catch (error: unknown) {
+        if (error instanceof FailureHttpException) throw error;
+        logger.warn(`story outline save failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw new FailureHttpException(makeFailure({
+          stage: 'assistant.artifact',
+          gate: 'story_outline',
+          code: FAILURE_CODES.artifactSaveFailed,
+          severity: 'recoverable',
+          reason: '全书大纲保存失败，请稍后重试',
+          recoverable: true,
+          retryPlan: 'retry_same_stage',
+        }));
+      }
+    }
+    if (characters.length > 0) {
+      artifacts.charactersSaved = await upsertCharacters(
+        input.prisma,
+        input.userId,
+        input.projectId,
+        characters,
+      );
+      if (artifacts.charactersSaved > 0) {
+        metadata.is_characters = true;
+        metadata.characters_count = artifacts.charactersSaved;
+      }
     }
   }
 
-  const seedBlock = extractMarkedBlock(content, CHAPTER_SEED_BLOCK_RE);
-  let parsedSeed: ParsedChapterSeed | null = null;
-  if (seedBlock) {
-    content = seedBlock.stripped;
-    parsedSeed = parseChapterSeed(seedBlock.inner);
-    if (!parsedSeed) {
-      content = `${content}\n\n⚠️ 章节种子缺少有效章节号，未保存。`.trim();
-    } else {
+  if (input.action === 'plan_chapter' || input.action === 'generate_chapter') {
+    const chapterNumber = input.chapterNumber;
+    if (!chapterNumber) {
+      throw new FailureHttpException(makeFailure({
+        stage: 'assistant.action',
+        gate: 'request_schema',
+        code: FAILURE_CODES.missingChapterNumber,
+        severity: 'preflight',
+        reason: '章节规划或正文生成必须指定章节号',
+        recoverable: false,
+      }));
+    }
+    if (parsedSeed) {
+      assertArtifactAllowed(input.action, 'chapter_seed');
+      const seed = { ...parsedSeed, chapterNumber };
       await ensureChapterWithSeed(
         input.prisma,
         input.userId,
         input.projectId,
-        parsedSeed.chapterNumber,
-        parsedSeed,
+        chapterNumber,
+        seed,
       );
-      artifacts.chaptersTouched = uniqueNumbers([
-        ...artifacts.chaptersTouched,
-        parsedSeed.chapterNumber,
-      ]);
+      artifacts.chaptersTouched = uniqueNumbers([...artifacts.chaptersTouched, chapterNumber]);
+      artifacts.records.push({ type: 'chapter_seed', saved: true });
       metadata.is_chapter_seed = true;
-      metadata.chapter_number = parsedSeed.chapterNumber;
+      metadata.chapter_number = chapterNumber;
       artifacts.focusTab = 'seed';
     }
   }
 
-  content = stripGenerateChapterMarker(content);
-  const chapterNumber = inferGenerateChapterNumber(input.userContent, input.content);
-  if (chapterNumber !== null) {
+  if (input.action === 'generate_chapter') {
+    if (input.confirmGeneration !== true) {
+      throw new FailureHttpException(makeFailure({
+        stage: 'assistant.generate',
+        gate: 'confirm',
+        code: FAILURE_CODES.generationUnconfirmed,
+        severity: 'preflight',
+        reason: '生成正文需要明确确认',
+        recoverable: false,
+      }));
+    }
+    const chapterNumber = input.chapterNumber as number;
     try {
-      const seed =
-        parsedSeed?.chapterNumber === chapterNumber
-          ? parsedSeed
-          : seedFromOutline(outlineChapters, chapterNumber) ?? {
-              chapterNumber,
-              intent: input.userContent.slice(0, 200) || `撰写第${chapterNumber}章`,
-              mustInclude: '',
-              forbiddenFacts: '',
-              characterMotives: '',
-              promises: '',
-              endingGoal: `完成第${chapterNumber}章`,
-            };
       const chapter = await ensureChapterWithSeed(
         input.prisma,
         input.userId,
         input.projectId,
         chapterNumber,
-        seed ?? undefined,
+        parsedSeed ? { ...parsedSeed, chapterNumber } : undefined,
       );
-      artifacts.chaptersTouched = uniqueNumbers([
-        ...artifacts.chaptersTouched,
-        chapterNumber,
-      ]);
       const job = (await input.jobs.submitChapterGeneration(
         input.userId,
         input.projectId,
@@ -179,13 +194,24 @@ export async function applyAssistantArtifacts(input: {
         metadata.chapter_number = chapterNumber;
         metadata.chapter_job_id = job.jobId;
         artifacts.generationJobId = job.jobId;
+        artifacts.publicEntry = 'novel_generate_chapter';
         artifacts.focusTab = 'chapter';
-        content = `${content}\n\n已提交第${chapterNumber}章生成任务。章节正文由系统内置生成流程撰写，不会使用聊天稿。请在上方任务面板查看进度。`.trim();
+        artifacts.chaptersTouched = uniqueNumbers([...artifacts.chaptersTouched, chapterNumber]);
+        content = `${content}\n\n已提交第${chapterNumber}章生成任务。章节正文由 novel_generate_chapter 统一链路撰写，不会使用聊天稿。请在上方任务面板查看进度。`.trim();
       }
     } catch (error: unknown) {
+      if (error instanceof FailureHttpException) throw error;
       const message = error instanceof Error ? error.message : String(error);
       logger.warn(`assistant chapter generate dispatch failed: ${message}`);
-      content = `${content}\n\n⚠️ 第${chapterNumber}章未能开始生成：${message}`.trim();
+      throw new FailureHttpException(makeFailure({
+        stage: 'jobs.submit',
+        gate: 'submit_chapter_generation',
+        code: FAILURE_CODES.jobSubmitFailed,
+        severity: 'recoverable',
+        reason: '章节任务提交失败，请稍后重试或先补章节种子',
+        recoverable: true,
+        retryPlan: 'retry_same_stage',
+      }));
     }
   }
 
@@ -201,24 +227,6 @@ export async function applyAssistantArtifacts(input: {
     metadata: { ...metadata, artifacts },
     artifacts,
     generationJobId: artifacts.generationJobId,
-  };
-}
-
-function seedFromOutline(
-  chapters: OutlineChapter[],
-  chapterNumber: number,
-): ParsedChapterSeed | null {
-  const found = chapters.find((item) => item.chapterNumber === chapterNumber);
-  if (!found) return null;
-  const summary = found.summary || found.title;
-  return {
-    chapterNumber,
-    intent: summary,
-    mustInclude: summary,
-    forbiddenFacts: '',
-    characterMotives: '',
-    promises: '',
-    endingGoal: `完成第${chapterNumber}章「${found.title}」的既定情节`,
   };
 }
 
@@ -335,15 +343,14 @@ async function ensureChapterShells(
 ): Promise<number[]> {
   const touched: number[] = [];
   for (const item of chapters) {
-    await ensureChapterWithSeed(prisma, userId, projectId, item.chapterNumber, {
-      chapterNumber: item.chapterNumber,
-      intent: item.summary || item.title,
-      mustInclude: item.summary,
-      forbiddenFacts: '',
-      characterMotives: '',
-      promises: '',
-      endingGoal: `完成第${item.chapterNumber}章「${item.title}」的既定情节`,
-    }, item.title);
+    await ensureChapterWithSeed(
+      prisma,
+      userId,
+      projectId,
+      item.chapterNumber,
+      undefined,
+      item.title,
+    );
     touched.push(item.chapterNumber);
   }
   return touched;

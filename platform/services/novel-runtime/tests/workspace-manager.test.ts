@@ -14,7 +14,7 @@
  *        chapter_seed (JSON)   → series/chapter-seed.json
  *        narrative_state (JSON)→ narrative-state-store.json
  *        narrative_state (bad) → narrative-state-store.json = {}
- *   4. previousChapterText + previousChapterNumber → chapters/ch{N-1}.md
+ *   4. previousChapterText + previousChapterNumber → chapter-continuity snapshot, 不写全文文件
  *   5. cleanupWorkspace 删除整个 {jobId}/ 目录
  *   6. cleanupWorkspace 幂等：目录不存在时不报错
  *   7. 路径穿越防护：非法 jobId / workspaceId 被拒
@@ -25,10 +25,17 @@
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { createWorkspaceManager, WorkspaceManagerError } from "../src/workspace-manager.js";
+
+const DIST_WORKSPACE_MANAGER = join(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "../dist/workspace-manager.js",
+);
 
 // 测试根目录：每次测试套件运行使用独立子目录
 const TEST_ROOT = join(tmpdir(), `wm-test-${process.pid}-${Date.now()}`);
@@ -247,20 +254,74 @@ describe("P0-4 workspace-manager.materializeWorkspace", () => {
     );
   });
 
-  test("previousChapterText + previousChapterNumber → chapters/ch{N-1}.md", () => {
+  test("previousChapterText is not written as a full chapter file", () => {
     const wm = makeManager();
     const result = wm.materializeWorkspace({
       jobId: "job-prev-1",
       workspaceId: "u1_p1",
       projectConfig: { genre: "武侠" },
       documents: [],
-      previousChapterText: "前一章结尾的悬念。",
+      previousChapterText: `${"很长的前文。".repeat(12)}前一章结尾的悬念。`,
       previousChapterNumber: 4,
     });
 
-    const text = readText(join(result.workspacePath, "chapters", "ch4.md"));
-    assert.ok(text.includes("前一章结尾的悬念"));
+    assert.ok(!existsSync(join(result.workspacePath, "chapters", "chapter-4.md")));
+    const snapshot = JSON.parse(
+      readText(join(result.workspacePath, "chapter-continuity", "4.json")),
+    ) as { lastEventSummary: string };
+    assert.ok(snapshot.lastEventSummary.includes("前一章结尾的悬念"));
+    assert.ok(!snapshot.lastEventSummary.includes("很长的前文。很长的前文。"));
     wm.cleanupWorkspace("job-prev-1");
+  });
+
+  test("writes continuation snapshot without silently reanchoring state hashes", () => {
+    const wm = makeManager();
+    const previousText = "沈砚握紧铜哨：不要相信沈建国。";
+    const actualHash = createHash("sha256").update(previousText, "utf8").digest("hex").slice(0, 12);
+    const result = wm.materializeWorkspace({
+      jobId: "job-reanchor-1",
+      workspaceId: "p128",
+      projectConfig: { genre: "都市" },
+      documents: [
+        {
+          type: "narrative_state",
+          content: JSON.stringify({
+            workspaceId: "p128",
+            lastCommittedChapter: "ch1",
+            canon: [
+              {
+                sourceChapter: "ch1",
+                sourceRef: "ch1#finalText:39e1530b9e06:12-40",
+                fact: "铜哨再现",
+              },
+            ],
+            character: [],
+            promise: [],
+            pattern: [],
+          }),
+        },
+      ],
+      previousChapterContinuation: {
+        chapterNumber: 1,
+        endingState: "沈砚握紧铜哨：不要相信沈建国。",
+        lastSceneSummary: "沈砚握紧铜哨：不要相信沈建国。",
+        changedCharacters: ["沈砚"],
+        unresolvedPromises: ["不要相信沈建国"],
+        tailExcerpt: "沈砚握紧铜哨：不要相信沈建国。",
+        sourceChapterHash: actualHash,
+      },
+    });
+    const store = JSON.parse(
+      readText(join(result.workspacePath, "narrative-state-store.json")),
+    ) as { canon: Array<{ sourceRef: string }> };
+    assert.equal(store.canon[0].sourceRef, "ch1#finalText:39e1530b9e06:12-40");
+    assert.ok(!existsSync(join(result.workspacePath, "chapters", "chapter-1.md")));
+    const snapshot = JSON.parse(
+      readText(join(result.workspacePath, "chapter-continuity", "1.json")),
+    ) as { lastEventSummary: string; finalTextHash: string };
+    assert.ok(snapshot.lastEventSummary.includes("不要相信沈建国"));
+    assert.equal(snapshot.finalTextHash, actualHash);
+    wm.cleanupWorkspace("job-reanchor-1");
   });
 
   test("previousChapterNumber=0 不写前章", () => {
@@ -322,7 +383,7 @@ describe("P0-4 workspace-manager.materializeWorkspace", () => {
     wm.cleanupWorkspace("job-extra-1");
   });
 
-  test("缺风格档案时写入默认 fingerprint JSON，空题材回填都市", () => {
+  test("does not invent style, constitution, worldbuilding, or genre", () => {
     const wm = makeManager();
     const result = wm.materializeWorkspace({
       jobId: "job-defaults-1",
@@ -332,14 +393,10 @@ describe("P0-4 workspace-manager.materializeWorkspace", () => {
     });
 
     const cfg = readJson<{ genre: string }>(join(result.workspacePath, "config.json"));
-    assert.equal(cfg.genre, "都市");
-    const profile = readJson<{ id: string; editorialGuidance: string[] }>(
-      join(result.workspacePath, "styles", "profile.json"),
-    );
-    assert.equal(profile.id, "platform-default");
-    assert.ok(profile.editorialGuidance.length > 0);
-    assert.ok(existsSync(join(result.workspacePath, "CORE-WRITING-PRINCIPLES.md")));
-    assert.ok(existsSync(join(result.workspacePath, "WORLDBUILDING-CANON.md")));
+    assert.equal(cfg.genre, "");
+    assert.equal(existsSync(join(result.workspacePath, "styles", "profile.json")), false);
+    assert.equal(existsSync(join(result.workspacePath, "CORE-WRITING-PRINCIPLES.md")), false);
+    assert.equal(existsSync(join(result.workspacePath, "WORLDBUILDING-CANON.md")), false);
     wm.cleanupWorkspace("job-defaults-1");
   });
 });
@@ -566,7 +623,8 @@ describe("P0-4 workspace-manager 综合场景", () => {
     assert.ok(existsSync(join(result.workspacePath, "styles", "profile.json")));
     assert.ok(existsSync(join(result.workspacePath, "series", "chapter-seed.json")));
     assert.ok(existsSync(join(result.workspacePath, "narrative-state-store.json")));
-    assert.ok(existsSync(join(result.workspacePath, "chapters", "ch5.md")));
+    assert.ok(existsSync(join(result.workspacePath, "chapter-continuity", "5.json")));
+    assert.ok(!existsSync(join(result.workspacePath, "chapters", "chapter-5.md")));
 
     wm.cleanupWorkspace("job-full-1");
     assert.ok(!existsSync(result.tempProjectRoot));
@@ -597,5 +655,17 @@ describe("P0-4 workspace-manager 综合场景", () => {
     } finally {
       process.chdir(originalCwd);
     }
+  });
+});
+
+describe("production dist workspace-manager", () => {
+  test("does not ship invented default materials", () => {
+    assert.equal(existsSync(DIST_WORKSPACE_MANAGER), true, "runtime dist/workspace-manager.js is missing; run npm run build");
+    const js = readFileSync(DIST_WORKSPACE_MANAGER, "utf8");
+    assert.equal(js.includes("platform-default"), false);
+    assert.equal(js.includes("ensureRequiredWorkspaceMaterials"), false);
+    assert.equal(js.includes('|| "都市"'), false);
+    assert.equal(js.includes("以项目题材为准，保持内部自洽"), false);
+    assert.equal(js.includes("不违背已确立的人物身份、能力与关系"), false);
   });
 });

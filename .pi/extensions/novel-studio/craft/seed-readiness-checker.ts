@@ -185,7 +185,7 @@ export class SeedReadinessChecker {
     }
 
     if (seed.previousChapterContinuation.available) {
-      observed.push("前章 skeleton 已加载");
+      observed.push("前章承接已加载");
       if (seed.previousChapterContinuation.lastEventSummary) {
         observed.push(`lastEvent=${seed.previousChapterContinuation.lastEventSummary.slice(0, 30)}`);
       }
@@ -201,8 +201,8 @@ export class SeedReadinessChecker {
       };
     }
 
-    missing.push(`第${seed.chapterNumber}章缺少前章 skeleton.json`);
-    suggestions.push(`先生成章节 ${seed.chapterNumber - 1}，或从其他工作区复制 skeleton.json 到 series/skeleton.json`);
+    missing.push(`第${seed.chapterNumber}章缺少前章承接（chapter-continuity 快照、前章正文或 skeleton.json）`);
+    suggestions.push(`先生成并提交章节 ${seed.chapterNumber - 1}，确保写入 chapter-continuity/${seed.chapterNumber - 1}.json；平台生成路径不应再复制 skeleton.json`);
     return {
       dimension: "previousContinuation",
       sufficient: false,
@@ -301,7 +301,7 @@ export function formatSeedReadinessBlockMessage(report: SeedReadinessReport): st
   const suggestionMap: Record<string, string> = {
     worldConstraint: "世界约束：在 config.json 中补充 genre / subGenres / immutableFacts",
     characterState: "角色状态：在 characters/ 下创建角色档案，或在 config.json.characters 中注册角色",
-    previousContinuation: "前章承接：先生成前一章，或将前章 skeleton.json 复制到 series/skeleton.json",
+    previousContinuation: "前章承接：先生成并提交前一章，写入 chapter-continuity 快照；不要把整章正文塞进下一章",
     currentPressure: "当前压力：补充未结账细节（unsettled-details.json）、待回收伏笔（arc-registry.json）或角色未解张力",
   };
 

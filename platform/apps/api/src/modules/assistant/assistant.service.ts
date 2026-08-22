@@ -8,21 +8,36 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { decryptSecret } from '../../common/crypto/aes-gcm';
 import { PrismaService } from '../../prisma/prisma.service';
 import { requireOwnedProject } from '../../common/ownership';
 import { env } from '../../config/env';
 import { BillingService } from '../billing/billing.service';
-import { fenToString } from '../billing/money';
+import { computeChargeFen, fenToString } from '../billing/money';
 import { InsufficientBalanceException } from '../billing/billing.errors';
 import { JobsService } from '../jobs/jobs.service';
 import { RatesService } from '../rates/rates.service';
 import { applyAssistantArtifacts } from './assistant-artifacts';
 import { buildAssistantSystemPrompt } from './assistant-prompt';
+import { parsePlannerEnvelope } from './planner-envelope';
+import { parseAssistantRequest } from '../context/assistant-contract';
+import { compileProjectContext } from '../context/context-compiler';
+import { envelopeFromUnknown, FailureHttpException, FAILURE_CODES, makeFailure } from '../context/failure-envelope';
+import { ASSISTANT_ACTIONS, type AssistantAction } from '../context/types';
+import { isUsableStoryOutline } from '../jobs/book-context';
+import { shouldPreflightAuthorContract } from './assistant-markers';
 import {
   completePlannerChat,
-  plannerUserFacingError,
   type PlannerChatMessage,
 } from './planner-client';
 
@@ -30,6 +45,21 @@ export class PostAssistantMessageDto {
   @IsString()
   @MinLength(1)
   content!: string;
+
+  /** 缺省 = auto 模式：动作由规划模型根据消息内容判断。 */
+  @IsOptional()
+  @IsIn(ASSISTANT_ACTIONS)
+  action?: AssistantAction;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  chapterNumber?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  confirmGeneration?: boolean;
 }
 
 function isMissingEffectiveRateError(error: unknown): boolean {
@@ -43,6 +73,12 @@ function isMissingEffectiveRateError(error: unknown): boolean {
 /** 规划上下文：最多携带最近 10 条历史，单条超长时截断。 */
 const MAX_HISTORY_MESSAGE_CHARS = 4000;
 
+/** 助手预占 token 预算：输入覆盖全书工作集+历史，输出覆盖整本大纲 JSON envelope。 */
+const ASSISTANT_MAX_TOKENS_IN = 16_000;
+const ASSISTANT_MAX_TOKENS_OUT = 10_000;
+/** 费率不可用（stub/dev）或低余额降级时的保底预占（分）。 */
+const ASSISTANT_FALLBACK_MAX_CHARGE = 50n;
+
 @Injectable()
 export class AssistantService {
   private readonly logger = new Logger(AssistantService.name);
@@ -55,12 +91,25 @@ export class AssistantService {
   ) {}
 
   async list(userId: number, projectId: number): Promise<unknown[]> {
-    await requireOwnedProject(this.prisma, userId, projectId);
-    const rows = await this.prisma.novelAssistantMessage.findMany({
-      where: { projectId, userId, deletedAt: null },
-      orderBy: { createdAt: 'asc' },
-    });
-    return rows.map((row) => this.toView(row));
+    try {
+      await requireOwnedProject(this.prisma, userId, projectId);
+      const rows = await this.prisma.novelAssistantMessage.findMany({
+        where: { projectId, userId, deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+      });
+      return rows.map((row) => this.toView(row));
+    } catch (error: unknown) {
+      if (error instanceof FailureHttpException || error instanceof NotFoundException) throw error;
+      throw new FailureHttpException(makeFailure({
+        stage: 'assistant.history',
+        gate: 'list',
+        code: FAILURE_CODES.historyLoadFailed,
+        severity: 'recoverable',
+        reason: '对话历史加载失败，请刷新后重试',
+        recoverable: true,
+        retryPlan: 'retry_same_stage',
+      }));
+    }
   }
 
   /** 新建对话：软删除当前项目全部消息，规划上下文从零开始。 */
@@ -94,7 +143,7 @@ export class AssistantService {
   async post(
     userId: number,
     projectId: number,
-    content: string,
+    contentOrDto: string | PostAssistantMessageDto,
     onDelta?: (delta: string) => void,
   ): Promise<{
     userMessage: Record<string, unknown>;
@@ -107,14 +156,33 @@ export class AssistantService {
       chaptersTouched: number[];
       generationJobId?: string;
       focusTab?: 'outline' | 'characters' | 'chapter' | 'seed';
+      publicEntry?: 'novel_generate_chapter';
+      records: Array<{ type: 'story_outline' | 'chapter_seed' | 'query_answer'; saved: boolean; id?: number }>;
     };
+    action?: AssistantAction;
+    /** 实际执行的章节号（显式请求或模型判断）。 */
+    chapterNumber?: number;
   }> {
-    if (env.PLANNER_MODE === 'disabled') {
+    const request = parseAssistantRequest(
+      typeof contentOrDto === 'string' ? { content: contentOrDto } : contentOrDto,
+    );
+    const content = request.content;
+    const isGenerationRequest = shouldPreflightAuthorContract(request.action, content);
+    if (
+      env.PLANNER_MODE === 'disabled' &&
+      !isGenerationRequest
+    ) {
       throw new ServiceUnavailableException('助手规划能力尚未在此环境启用');
     }
     await requireOwnedProject(this.prisma, userId, projectId);
+    if (isGenerationRequest) {
+      await this.jobs.assertAuthorContract(userId, projectId);
+      if (env.PLANNER_MODE === 'disabled') {
+        throw new ServiceUnavailableException('助手规划能力尚未在此环境启用');
+      }
+    }
     const jobId = randomUUID();
-    const maxCharge = 50n;
+    const maxCharge = await this.estimateAssistantMaxCharge();
     await this.prisma.novelGenerationJob.create({
       data: {
         jobId,
@@ -129,17 +197,27 @@ export class AssistantService {
     try {
       await this.billing.createHold({ userId, jobId, amount: maxCharge });
     } catch (error: unknown) {
-      await this.prisma.novelGenerationJob.update({
-        where: { jobId },
-        data: {
-          status: error instanceof InsufficientBalanceException ? 'insufficient_balance' : 'failed',
-          failureMessage: error instanceof InsufficientBalanceException
-            ? '可用余额不足'
-            : 'billing hold creation failed',
-          completedAt: new Date(),
-        },
-      });
-      throw error;
+      if (error instanceof InsufficientBalanceException && maxCharge > ASSISTANT_FALLBACK_MAX_CHARGE) {
+        // 低余额降级：按费率预估的全额预占失败时，改用保底预占让对话仍可用；
+        // 结算走 capAtHold 按预占封顶，不会丢弃已生成的回复。
+        try {
+          await this.billing.createHold({
+            userId,
+            jobId,
+            amount: ASSISTANT_FALLBACK_MAX_CHARGE,
+          });
+          await this.prisma.novelGenerationJob.update({
+            where: { jobId },
+            data: { maxCharge: ASSISTANT_FALLBACK_MAX_CHARGE },
+          });
+        } catch (retryError: unknown) {
+          await this.closeFailedHoldCreation(jobId, retryError);
+          throw retryError;
+        }
+      } else {
+        await this.closeFailedHoldCreation(jobId, error);
+        throw error;
+      }
     }
 
     let userMessage: {
@@ -164,7 +242,15 @@ export class AssistantService {
         `assistant user message persistence failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       await this.closeFailedAssistantJob(jobId);
-      throw error;
+      throw new FailureHttpException(makeFailure({
+        stage: 'assistant.persist',
+        gate: 'user_message',
+        code: FAILURE_CODES.messageSaveFailed,
+        severity: 'recoverable',
+        reason: '聊天消息保存失败，请稍后重试',
+        recoverable: true,
+        retryPlan: 'retry_same_stage',
+      }));
     }
 
     let reply: string;
@@ -172,12 +258,16 @@ export class AssistantService {
     let tokensOut = 1;
     let metadata: Record<string, unknown> = {};
     let generationJobId: string | undefined;
+    let resolvedAction: AssistantAction | undefined = request.action;
+    let resolvedChapterNumber: number | undefined = request.chapterNumber;
     let artifacts: {
       outlineSaved: boolean;
       charactersSaved: number;
       chaptersTouched: number[];
       generationJobId?: string;
       focusTab?: 'outline' | 'characters' | 'chapter' | 'seed';
+      publicEntry?: 'novel_generate_chapter';
+      records: Array<{ type: 'story_outline' | 'chapter_seed' | 'query_answer'; saved: boolean; id?: number }>;
     } | undefined;
     try {
       if (env.PLANNER_MODE === 'http') {
@@ -186,22 +276,64 @@ export class AssistantService {
           baseUrl: endpoint.baseUrl,
           apiKey: endpoint.apiKey,
           model: endpoint.model,
-          messages: await this.buildPlannerMessages(userId, projectId, content),
+          messages: await this.buildPlannerMessages(
+            userId,
+            projectId,
+            content,
+            request.action,
+            request.chapterNumber,
+          ),
           timeoutMs: env.PLANNER_REQUEST_TIMEOUT_MS,
-          onDelta,
         });
+        const envelope = parsePlannerEnvelope(planned.text, request.action);
+        onDelta?.(envelope.reply);
+        // auto 模式：动作由模型判断；generate_chapter 视为模型已确认用户明确要求生成。
+        const action = envelope.action ?? request.action;
+        if (!action) {
+          // 理论不可达：显式模式契约已校验，auto 模式 envelope.action 必填。
+          throw new FailureHttpException(makeFailure({
+            stage: 'assistant.planner',
+            gate: 'planner_schema',
+            code: FAILURE_CODES.plannerSchemaInvalid,
+            severity: 'recoverable',
+            reason: '规划结果缺少动作判断，请重试',
+            recoverable: true,
+            retryPlan: 'retry_same_stage',
+          }));
+        }
+        const chapterNumber = request.chapterNumber ?? envelope.chapterSeed?.chapterNumber;
+        if (
+          (action === 'plan_chapter' || action === 'generate_chapter') &&
+          chapterNumber === undefined
+        ) {
+          throw new FailureHttpException(makeFailure({
+            stage: 'assistant.action',
+            gate: 'request_schema',
+            code: FAILURE_CODES.missingChapterNumber,
+            severity: 'preflight',
+            reason: '请说明章节号，例如「规划第3章」或「生成第3章正文」',
+            recoverable: false,
+          }));
+        }
+        const confirmGeneration =
+          request.action === undefined ? true : request.confirmGeneration;
         const applied = await applyAssistantArtifacts({
           prisma: this.prisma,
           jobs: this.jobs,
           userId,
           projectId,
-          content: planned.text,
           userContent: content,
+          action,
+          chapterNumber,
+          confirmGeneration,
+          envelope,
         });
         reply = applied.content;
         metadata = applied.metadata;
         generationJobId = applied.generationJobId;
         artifacts = applied.artifacts;
+        resolvedAction = action;
+        resolvedChapterNumber = chapterNumber;
         tokensIn = planned.tokensIn;
         tokensOut = planned.tokensOut;
       } else {
@@ -213,11 +345,12 @@ export class AssistantService {
         `planner completion failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       await this.closeFailedAssistantJob(jobId);
-      throw new ServiceUnavailableException(
-        error instanceof ServiceUnavailableException
-          ? error.message
-          : plannerUserFacingError(error),
-      );
+      if (error instanceof FailureHttpException) throw error;
+      throw new FailureHttpException(envelopeFromUnknown(error, {
+        stage: 'assistant.planner',
+        gate: 'planner_chat',
+        code: FAILURE_CODES.plannerFailed,
+      }));
     }
     const chunks = [reply];
 
@@ -229,6 +362,8 @@ export class AssistantService {
         model: env.PLANNER_MODEL,
         tokensIn,
         tokensOut,
+        // 回复已生成：结算超出预占余量时按余量封顶收费，不因计费丢弃内容。
+        capAtHold: true,
       });
     } catch (error: unknown) {
       // Phase 4: stub/dev may have no planner ModelRate. Skip charge, still
@@ -290,7 +425,40 @@ export class AssistantService {
       chunks,
       generationJobId,
       artifacts,
+      action: resolvedAction,
+      chapterNumber: resolvedChapterNumber,
     };
+  }
+
+  /** 按规划模型费率预估本轮预占（分）；费率不可用（stub/dev）回退保底值。 */
+  private async estimateAssistantMaxCharge(): Promise<bigint> {
+    try {
+      const snapshot = await this.rates.buildRateSnapshot(env.PLANNER_MODEL);
+      const charge = computeChargeFen({
+        tokensIn: ASSISTANT_MAX_TOKENS_IN,
+        tokensOut: ASSISTANT_MAX_TOKENS_OUT,
+        inputPricePerMillion: BigInt(snapshot.inputPricePerMillion),
+        outputPricePerMillion: BigInt(snapshot.outputPricePerMillion),
+        multiplierPercent: snapshot.multiplierPercent ?? 100,
+      });
+      return charge > 0n ? charge : ASSISTANT_FALLBACK_MAX_CHARGE;
+    } catch {
+      return ASSISTANT_FALLBACK_MAX_CHARGE;
+    }
+  }
+
+  /** 预占创建失败：按失败原因关闭任务并保持既有 402/500 语义。 */
+  private async closeFailedHoldCreation(jobId: string, error: unknown): Promise<void> {
+    await this.prisma.novelGenerationJob.update({
+      where: { jobId },
+      data: {
+        status: error instanceof InsufficientBalanceException ? 'insufficient_balance' : 'failed',
+        failureMessage: error instanceof InsufficientBalanceException
+          ? '可用余额不足'
+          : 'billing hold creation failed',
+        completedAt: new Date(),
+      },
+    });
   }
 
   private async resolvePlannerEndpoint(): Promise<{
@@ -326,25 +494,49 @@ export class AssistantService {
     userId: number,
     projectId: number,
     currentUserContent: string,
+    action?: AssistantAction,
+    chapterNumber?: number,
   ): Promise<PlannerChatMessage[]> {
-    const [project, outline, characters, chapters, history] = await Promise.all([
+    const [project, documents, characters, chapters, history, outlineNodes] = await Promise.all([
       this.prisma.novelProject.findFirst({
         where: { id: projectId, userId, deletedAt: null },
       }),
-      this.prisma.novelDocument.findFirst({
-        where: { projectId, userId, documentType: 'story_outline', deletedAt: null },
-        select: { content: true },
+      this.prisma.novelDocument.findMany({
+        where: {
+          projectId,
+          userId,
+          deletedAt: null,
+          documentType: {
+            in: [
+              'story_outline',
+              'creative_constitution',
+              'worldbuilding',
+              'style_profile',
+              'narrative_state',
+            ],
+          },
+        },
+        select: { id: true, documentType: true, content: true, currentVersion: true },
       }),
       this.prisma.novelCharacter.findMany({
         where: { projectId, userId, deletedAt: null },
         orderBy: { id: 'asc' },
-        select: { name: true },
+        select: {
+          name: true,
+          roleType: true,
+          identity: true,
+          goals: true,
+          motivation: true,
+          currentState: true,
+          relationships: true,
+          personality: true,
+        },
       }),
       this.prisma.novelChapter.findMany({
         where: { projectId, userId, deletedAt: null },
         orderBy: { chapterNumber: 'desc' },
-        select: { chapterNumber: true },
-        take: 1,
+        select: { id: true, chapterNumber: true, content: true, seed: true },
+        take: 8,
       }),
       this.prisma.novelAssistantMessage.findMany({
         where: { projectId, userId, deletedAt: null },
@@ -352,8 +544,51 @@ export class AssistantService {
         take: 10,
         select: { role: true, content: true },
       }),
+      this.prisma.novelOutlineNode.findMany({
+        where: { projectId, userId, deletedAt: null },
+        orderBy: { sortOrder: 'asc' },
+        select: { title: true, summary: true, nodeType: true },
+      }),
     ]);
+    const byType = new Map(documents.map((row) => [row.documentType, row]));
     const lastChapterNumber = chapters[0]?.chapterNumber ?? 0;
+    const targetChapter = chapterNumber ?? lastChapterNumber + 1;
+    const previousChapter = chapters.find((row) => row.chapterNumber === targetChapter - 1)
+      ?? (targetChapter > 1 ? chapters.find((row) => row.chapterNumber === lastChapterNumber) : undefined);
+    const currentChapter = chapters.find((row) => row.chapterNumber === targetChapter);
+    const seed = currentChapter?.seed
+      ? {
+          chapterNumber: targetChapter,
+          intent: currentChapter.seed.intent,
+          mustInclude: currentChapter.seed.mustInclude,
+          forbiddenFacts: currentChapter.seed.forbiddenFacts,
+          characterMotives: currentChapter.seed.characterMotives,
+          promises: currentChapter.seed.promises,
+          endingGoal: currentChapter.seed.endingGoal,
+        }
+      : undefined;
+    const chapterNode = outlineNodes.find((row) => row.title.includes(`第${targetChapter}章`));
+    const outline = byType.get('story_outline');
+    const outlineText = outline?.content?.trim() ?? '';
+    const compiled = compileProjectContext({
+      storyOutline: outline,
+      constitution: byType.get('creative_constitution'),
+      worldbuilding: byType.get('worldbuilding'),
+      styleProfile: byType.get('style_profile'),
+      narrativeState: byType.get('narrative_state'),
+      chapterSeed: seed,
+      currentChapterOutline: chapterNode
+        ? { content: `${chapterNode.title}\n${chapterNode.summary}`.trim() }
+        : undefined,
+      characters,
+      previousChapter: previousChapter
+        ? { chapterNumber: previousChapter.chapterNumber, content: previousChapter.content }
+        : undefined,
+      evidenceQuery: action === 'query_project' && previousChapter
+        ? { query: currentUserContent.slice(0, 40), purpose: 'query_project' }
+        : undefined,
+      enforceStateHash: action === 'generate_chapter',
+    });
     const system: PlannerChatMessage = {
       role: 'system',
       content: buildAssistantSystemPrompt({
@@ -361,10 +596,12 @@ export class AssistantService {
         genre: project?.genre ?? '',
         description: project?.description ?? '',
         workflowState: project?.workflowState ?? 'project_created',
-        hasOutline: Boolean(outline?.content?.trim()),
+        hasOutline: isUsableStoryOutline(outlineText),
         characterNames: characters.map((row) => row.name),
         chapterCount: lastChapterNumber > 0 ? lastChapterNumber : 0,
         nextChapterNumber: lastChapterNumber + 1,
+        action,
+        bookContext: compiled.bookBrief,
       }),
     };
     const chronological = [...history].reverse();

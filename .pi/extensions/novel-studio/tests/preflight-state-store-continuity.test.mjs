@@ -463,6 +463,62 @@ describe("PREFLIGHT-STATE-STORE-CONTINUITY-1: 前章连续性预检（state stor
     cleanupTestWorkspace();
   });
 
+  it("8b. continuity-snapshot: 无章节全文但 chapter-continuity hash 匹配 → 通过", () => {
+    const chapterNumber = 3;
+    const prevText = "第二章结尾只作为 hash 来源，不进 workspace 全文。";
+    setupBaseWorkspace();
+    writeStateStore(buildValidStateStore(chapterNumber - 1, prevText));
+    const hash = computeHash12(prevText);
+    mkdirSync(join(testWorkspacePath, "chapter-continuity"), { recursive: true });
+    writeFileSync(
+      join(testWorkspacePath, "chapter-continuity", `${chapterNumber - 1}.json`),
+      JSON.stringify({
+        chapterNumber: chapterNumber - 1,
+        lastEventSummary: "第二章结尾。",
+        finalTextHash: hash,
+      }),
+    );
+
+    const report = runPreflight(chapterNumber);
+
+    assert.equal(report.passed, true, "continuity snapshot 匹配时应通过");
+    cleanupTestWorkspace();
+  });
+
+  it("8c. snapshot-only: 无章节全文时 seed_readiness 不得因缺 skeleton.json 阻断", () => {
+    const chapterNumber = 2;
+    const prevText = "沈砚握紧铜哨：不要相信沈建国。";
+    setupBaseWorkspace();
+    writeStateStore(buildValidStateStore(chapterNumber - 1, prevText));
+    mkdirSync(join(testWorkspacePath, "chapter-continuity"), { recursive: true });
+    writeFileSync(
+      join(testWorkspacePath, "chapter-continuity", `${chapterNumber - 1}.json`),
+      JSON.stringify({
+        chapterNumber: chapterNumber - 1,
+        openHooks: ["不要相信沈建国"],
+        introducedCharacters: ["沈砚"],
+        unresolvedTensions: ["不要相信沈建国"],
+        lastEventSummary: "沈砚握紧铜哨：不要相信沈建国。",
+        finalTextHash: computeHash12(prevText),
+        sourceRefs: [`chapter-continuity/${chapterNumber - 1}.json`],
+        createdAt: "2026-08-21T12:00:00.000Z",
+      }),
+    );
+
+    const { preflightWorkspace } = preflightMod;
+    const report = preflightWorkspace({
+      workspacePath: testWorkspacePath,
+      workspaceId: testWorkspaceId,
+      chapterId: String(chapterNumber),
+      chapterNumber,
+    });
+
+    const seedBlock = report.blockingItems.find((item) => item.check === "seed_readiness");
+    assert.equal(seedBlock, undefined, seedBlock?.fixInstruction ?? "seed_readiness should not block");
+    assert.equal(report.passed, true, JSON.stringify(report.blockingItems, null, 2));
+    cleanupTestWorkspace();
+  });
+
   it("9. 第1章不触发连续性检查（无前章）", () => {
     setupBaseWorkspace();
     // 不写 skeleton，不写 state store

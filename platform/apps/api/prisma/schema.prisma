@@ -397,6 +397,7 @@ model NovelGenerationJob {
   settledAmount   BigInt    @default(0) @map("settled_amount")
   progressStage   String    @default("checking_materials") @map("progress_stage")
   failureMessage  String?   @map("failure_message")
+  failure         Json?
   startedAt       DateTime  @default(now()) @map("started_at")
   completedAt     DateTime? @map("completed_at")
 

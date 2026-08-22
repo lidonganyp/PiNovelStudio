@@ -134,11 +134,12 @@ function onDelete(chapter: Chapter): void {
   padding: 4px 4px 10px;
 }
 .chapter-item {
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 8px 10px;
   margin-bottom: 6px;
   cursor: pointer;
   border: 1px solid transparent;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
 }
 .chapter-item:hover {
   background: var(--el-fill-color-light);
@@ -146,6 +147,7 @@ function onDelete(chapter: Chapter): void {
 .chapter-item.active {
   background: var(--el-color-primary-light-9);
   border-color: var(--el-color-primary-light-7);
+  box-shadow: inset 3px 0 0 var(--el-color-primary);
 }
 .row-main {
   display: flex;
@@ -156,6 +158,7 @@ function onDelete(chapter: Chapter): void {
   color: var(--el-color-primary);
   font-weight: 600;
   min-width: 20px;
+  font-variant-numeric: tabular-nums;
 }
 .name {
   overflow: hidden;
@@ -171,8 +174,21 @@ function onDelete(chapter: Chapter): void {
 .words {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
 }
+/* 删除按钮默认收起，hover 行时浮现，保持目录整洁 */
 .del {
   margin-left: auto;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.chapter-item:hover .del,
+.chapter-item.active .del {
+  opacity: 1;
+}
+@media (hover: none) {
+  .del {
+    opacity: 1;
+  }
 }
 </style>

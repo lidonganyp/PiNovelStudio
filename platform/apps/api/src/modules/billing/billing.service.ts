@@ -130,6 +130,11 @@ export class BillingService {
       outputPricePerMillion: BigInt(snapshot.outputPricePerMillion),
       multiplierPercent: snapshot.multiplierPercent ?? 100,
     });
+    // capAtHold：结算超出预占余量时按余量封顶（内容已生成的对话式结算，丢弃即浪费）。
+    const clampedCharge = (holdAmount: bigint, settledAmount: bigint): bigint => {
+      const remaining = holdAmount - settledAmount;
+      return remaining < 0n ? 0n : (charge > remaining ? remaining : charge);
+    };
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -156,7 +161,10 @@ export class BillingService {
         if (hold.status !== HOLD_ACTIVE) {
           throw new ConflictException('预占已结束，无法继续结算');
         }
-        if (hold.settledAmount + charge > hold.amount) {
+        const effectiveCharge = input.capAtHold
+          ? clampedCharge(hold.amount, hold.settledAmount)
+          : charge;
+        if (!input.capAtHold && hold.settledAmount + charge > hold.amount) {
           throw new HoldExhaustedException();
         }
 
@@ -165,12 +173,12 @@ export class BillingService {
         // hold 预占校验保证 充值+赠送-在途 >= charge，两账户均不会扣成负数。
         let chargeFromReal = 0n;
         let chargeFromBonus = 0n;
-        if (charge > 0n) {
+        if (effectiveCharge > 0n) {
           const user = await tx.user.findUniqueOrThrow({
             where: { id: hold.userId },
           });
-          chargeFromReal = user.balance >= charge ? charge : user.balance;
-          chargeFromBonus = charge - chargeFromReal;
+          chargeFromReal = user.balance >= effectiveCharge ? effectiveCharge : user.balance;
+          chargeFromBonus = effectiveCharge - chargeFromReal;
           await tx.user.update({
             where: { id: hold.userId },
             data: {
@@ -182,7 +190,7 @@ export class BillingService {
 
         const updatedHold = await tx.novelBalanceHold.update({
           where: { id: hold.id },
-          data: { settledAmount: { increment: charge } },
+          data: { settledAmount: { increment: effectiveCharge } },
         });
         const created = await tx.novelGenerationCall.create({
           data: {
@@ -195,7 +203,7 @@ export class BillingService {
             tokensIn: input.tokensIn,
             tokensOut: input.tokensOut,
             rateSnapshot: snapshot as unknown as Prisma.InputJsonValue,
-            actualCharge: charge,
+            actualCharge: effectiveCharge,
             chargeFromReal,
             chargeFromBonus,
           },

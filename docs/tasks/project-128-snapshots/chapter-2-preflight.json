@@ -1,0 +1,65 @@
+{
+  "capturedAt": "2026-08-22T04:45:15.064Z",
+  "hashCheck": "passed",
+  "bookBriefTokens": 5137,
+  "manifestTokens": 5115,
+  "includedBlocks": [
+    "storyOutline",
+    "chapterSeed",
+    "characterStates",
+    "previousChapterContinuation"
+  ],
+  "omittedBlocks": [
+    {
+      "name": "creativeConstitution",
+      "reason": "constitution_missing"
+    },
+    {
+      "name": "worldbuilding",
+      "reason": "worldbuilding_missing"
+    },
+    {
+      "name": "currentChapterOutline",
+      "reason": "current_chapter_outline_missing"
+    },
+    {
+      "name": "canonState"
+    },
+    {
+      "name": "promiseLedger"
+    },
+    {
+      "name": "patternMemory",
+      "reason": "pattern_stripped_from_production_context"
+    },
+    {
+      "name": "styleProfile",
+      "reason": "style_profile_missing"
+    },
+    {
+      "name": "selectedEvidenceSpans",
+      "reason": "no_evidence_requested"
+    }
+  ],
+  "previousChapterFullTextInBrief": false,
+  "defaultsInjected": false,
+  "generationReady": false,
+  "blocking": [
+    "项目类型为空",
+    "缺少作者确认的风格档案",
+    "缺少作者确认的世界观",
+    "缺少作者确认的创作宪法"
+  ],
+  "gaps": [
+    "项目类型为空",
+    "缺少作者确认的风格档案",
+    "缺少作者确认的世界观",
+    "缺少作者确认的创作宪法",
+    "角色目标/动机/当前状态均为空",
+    "canon 事实为空，尚未经作者确认",
+    "未结伏笔为空",
+    "项目简介为空"
+  ],
+  "staleJobId": "315869d1-c1ff-4a11-9abb-27633fa74f01",
+  "note": "job 315869d1 发生在 Runtime 重建前且 modelCallCount=0，不能作为当前代码结论。缺少作者确认资料时不得提交第二章生成，也不会用默认题材/风格/世界观代替。"
+}

@@ -1,5 +1,7 @@
 /** 章节 HTTP 调度的交付契约回归测试。 */
 import { describe, expect, it, vi } from 'vitest';
+import { FAILURE_CODES, makeFailure } from '../context/failure-envelope';
+import { JobFailureError } from './job-failure';
 import { JobsService } from './jobs.service';
 
 function makeService(runtimeResult: unknown) {
@@ -18,6 +20,8 @@ function makeService(runtimeResult: unknown) {
       findMany: vi.fn().mockResolvedValue([
         { documentType: 'style_profile', title: '风格', content: '{"voice":"冷峻"}', updatedAt: new Date(), id: 1 },
         { documentType: 'narrative_state', title: '状态', content: '{"chapters":[]}', updatedAt: new Date(), id: 2 },
+        { documentType: 'creative_constitution', title: '宪法', content: '# 创作宪法\n不违背已确认身份', updatedAt: new Date(), id: 3 },
+        { documentType: 'worldbuilding', title: '世界观', content: '# 世界观\n铜哨是旧案证物', updatedAt: new Date(), id: 4 },
       ]),
     },
     novelChapter: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -495,6 +499,11 @@ describe('JobsService HTTP generation delivery contract', () => {
         status: 'failed',
         settledAmount: 12n,
         failureMessage: 'fact guard blocked',
+        failure: expect.objectContaining({
+          code: 'generation_failed',
+          stage: 'runtime.generate',
+          reason: 'fact guard blocked',
+        }),
       }),
     }));
     expect(runtime.invoke).toHaveBeenCalledWith(
@@ -510,12 +519,13 @@ describe('JobsService HTTP generation delivery contract', () => {
     };
     expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'style_profile')?.content)
       .toBe('{"voice":"冷峻"}');
-    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'narrative_state')?.content)
-      .toBe('{"chapters":[]}');
+    const narrative = runtimeInput.workspaceDocuments.find((doc) => doc.type === 'narrative_state')?.content;
+    expect(narrative).toBeTruthy();
+    expect(JSON.parse(narrative ?? '')).toMatchObject({ chapters: [] });
   });
 
-  it('injects a default style fingerprint and constitution when the project omitted them', async () => {
-    const { service, prisma, runtime } = makeService({
+  it('does not invent default style, constitution, worldbuilding, or genre', async () => {
+    const { service, prisma, runtime, billing } = makeService({
       status: 'ok',
       result: { status: 'blocked', reason: 'preflight' },
     });
@@ -528,20 +538,260 @@ describe('JobsService HTTP generation delivery contract', () => {
 
     await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration(input);
 
+    expect(runtime.invoke).not.toHaveBeenCalled();
+    expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
+    expect(prisma.novelGenerationJob.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({
+          code: 'runtime_preflight_failed',
+          gate: 'author_contract',
+          stage: 'runtime.preflight',
+        }),
+      }),
+    }));
+    const failure = prisma.novelGenerationJob.update.mock.calls.at(-1)?.[0]?.data?.failure as {
+      reason?: string;
+      userActionRequired?: string[];
+    };
+    expect(JSON.stringify(failure)).not.toContain('platform-default');
+    expect(failure.userActionRequired).toEqual(expect.arrayContaining([
+      '项目类型为空',
+      '缺少作者确认的风格档案',
+      '缺少作者确认的世界观',
+      '缺少作者确认的创作宪法',
+    ]));
+  });
+
+  it('passes compact canon and promises without filling empty ledgers', async () => {
+    const { service, runtime } = makeService({
+      status: 'ok',
+      result: { status: 'blocked', reason: 'preflight' },
+    });
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration(input);
+
     const runtimeInput = runtime.invoke.mock.calls[0][2] as {
-      projectConfig: { genre: string };
+      workspaceDocuments: Array<{ type: string; content: string }>;
+      contextManifest: { blocks: Array<{ name: string; included: boolean }> };
+    };
+    const narrative = JSON.parse(
+      runtimeInput.workspaceDocuments.find((doc) => doc.type === 'narrative_state')?.content ?? '{}',
+    ) as { canon: unknown[]; promise: unknown[] };
+    expect(narrative.canon ?? []).toEqual([]);
+    expect(narrative.promise ?? []).toEqual([]);
+    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'style_profile')?.content)
+      .toBe('{"voice":"冷峻"}');
+    expect(JSON.stringify(runtimeInput)).not.toContain('platform-default');
+    expect(runtimeInput.contextManifest.blocks.find((block) => block.name === 'canonState')?.included)
+      .toBe(false);
+    expect(runtimeInput.contextManifest.blocks.find((block) => block.name === 'promiseLedger')?.included)
+      .toBe(false);
+  });
+
+  it('persists a 422 seed_readiness envelope as runtime_preflight_failed', async () => {
+    const { service, prisma, runtime, billing } = makeService({
+      status: 'ok',
+      result: { status: 'blocked', reason: 'preflight' },
+    });
+    runtime.invoke = vi.fn().mockRejectedValue(new JobFailureError(makeFailure({
+      stage: 'preflight',
+      gate: 'seed_readiness',
+      code: FAILURE_CODES.runtimePreflightFailed,
+      severity: 'preflight',
+      reason: '[seed_readiness] ChapterSeed 种子可生长性不足（score=70/100, status=blocked）',
+      recoverable: false,
+      fixInstructions: ['补充前章承接'],
+    })));
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration(input);
+
+    expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
+    expect(prisma.novelGenerationJob.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({
+          code: 'runtime_preflight_failed',
+          gate: 'seed_readiness',
+          stage: 'preflight',
+          reason: expect.stringContaining('seed_readiness'),
+        }),
+      }),
+    }));
+  });
+
+  it('compiles book working set instead of stuffing previous-chapter prose', async () => {
+    const { service, prisma, runtime } = makeService({
+      status: 'ok',
+      result: { status: 'blocked', reason: 'preflight' },
+    });
+    prisma.novelCharacter.findMany = vi.fn().mockResolvedValue([{
+      name: '沈砚', aliases: [], roleType: 'protagonist', identity: '重生者',
+      goals: '', motivation: '', personality: '', abilities: '', relationships: '',
+      secrets: '', characterArc: '', currentState: '', notes: '', sortOrder: 0,
+    }]);
+    prisma.novelDocument.findMany = vi.fn().mockResolvedValue([
+      {
+        documentType: 'story_outline',
+        title: '故事大纲',
+        content: '[[CHAPTER_SEED_START]]\n章节号：2\n意图：复述第一章\n[[CHAPTER_SEED_END]]',
+        updatedAt: new Date(),
+        id: 1,
+      },
+      {
+        documentType: 'creative_constitution',
+        title: '宪法',
+        content: '# 创作宪法\n不违背已确认身份',
+        updatedAt: new Date(),
+        id: 3,
+      },
+      {
+        documentType: 'worldbuilding',
+        title: '世界观',
+        content: '# 世界观\n铜哨是旧案证物',
+        updatedAt: new Date(),
+        id: 4,
+      },
+      {
+        documentType: 'style_profile',
+        title: '风格',
+        content: '{"voice":"冷峻"}',
+        updatedAt: new Date(),
+        id: 5,
+      },
+      {
+        documentType: 'narrative_state',
+        title: '状态',
+        content: JSON.stringify({
+          canon: [
+            { id: 'canon:accepted-chapter:1', fact: '第1章接受稿末段：整章结尾原文，电动车穿过跨江大桥……' },
+            { id: 'canon:whistle', fact: '现实中出现了十五年前遗失的铜哨' },
+          ],
+          character: [
+            { characterId: '沈砚', field: 'acceptedChapterEvidence', value: '大段正文' },
+            { characterId: '沈砚', field: 'participation', value: 'present' },
+          ],
+          promise: [{ description: '不要相信沈建国', status: 'open', sourceChapter: 'ch1' }],
+          pattern: [{ patternType: 'sentence_risk', description: '翻译腔' }],
+        }),
+        updatedAt: new Date(),
+        id: 2,
+      },
+    ]);
+    prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
+      content: '很长的前文。苏晴离开了。沈砚握紧铜哨：不要相信沈建国。',
+      chapterNumber: 1,
+    });
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration({
+      ...input,
+      chapterNumber: 2,
+    });
+
+    const runtimeInput = runtime.invoke.mock.calls[0][2] as {
+      previousChapterText?: string;
+      previousChapterContinuation?: { tailExcerpt?: string };
       workspaceDocuments: Array<{ type: string; content: string }>;
     };
-    expect(runtimeInput.projectConfig.genre).toBe('都市');
-    const style = runtimeInput.workspaceDocuments.find((doc) => doc.type === 'style_profile')?.content ?? '';
-    expect(style).toContain('editorialGuidance');
-    expect(style).toContain('platform-default');
-    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'creative_constitution')?.content)
-      .toContain('创作宪法');
-    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'worldbuilding')?.content)
-      .toContain('世界观');
-    expect(runtimeInput.workspaceDocuments.find((doc) => doc.type === 'explicit_outline')?.content)
-      .toContain('内容摘要：推进本章冲突');
+    const explicit = runtimeInput.workspaceDocuments.find((doc) => doc.type === 'explicit_outline')?.content ?? '';
+    const outline = runtimeInput.workspaceDocuments.find((doc) => doc.type === 'story_outline')?.content ?? '';
+    const narrative = JSON.parse(
+      runtimeInput.workspaceDocuments.find((doc) => doc.type === 'narrative_state')?.content ?? '{}',
+    ) as { canon: Array<{ id?: string; fact?: string }>; pattern: unknown[] };
+
+    expect(explicit).not.toContain('很长的前文');
+    expect(explicit).not.toContain('电动车穿过跨江大桥');
+    expect(explicit).toContain('伏笔埋设：不要相信沈建国');
+    expect(outline).not.toContain('CHAPTER_SEED');
+    expect(outline).not.toContain('很长的前文');
+    expect(JSON.stringify(runtimeInput)).toContain('不要相信沈建国');
+    expect(runtimeInput.previousChapterText).toBeUndefined();
+    expect(runtimeInput.previousChapterContinuation?.tailExcerpt).toContain('不要相信沈建国');
+    expect(runtimeInput.previousChapterContinuation?.tailExcerpt).not.toContain('很长的前文');
+    expect(narrative.canon.map((row) => row.id)).toEqual(['canon:whistle']);
+    expect(narrative.pattern).toEqual([]);
+    expect(JSON.stringify(runtimeInput)).not.toContain('很长的前文。苏晴离开了。沈砚握紧铜哨：不要相信沈建国。');
+  });
+
+  it('blocks generation when narrative state hash does not match previous chapter text', async () => {
+    const { service, prisma, runtime, billing } = makeService({
+      status: 'ok',
+      result: { status: 'ok', text: '不应生成', metering: { modelCallCount: 1 } },
+    });
+    prisma.novelDocument.findMany = vi.fn().mockResolvedValue([
+      {
+        documentType: 'narrative_state',
+        title: '状态',
+        content: JSON.stringify({
+          canon: [{
+            id: 'canon:whistle',
+            sourceChapter: 'ch1',
+            sourceRef: 'ch1#finalText:39e1530b9e06:12-40',
+            fact: '现实中出现了十五年前遗失的铜哨',
+          }],
+          character: [],
+          promise: [],
+        }),
+        updatedAt: new Date(),
+        id: 2,
+      },
+    ]);
+    prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
+      content: '很长的前文。苏晴离开了。沈砚握紧铜哨：不要相信沈建国。',
+      chapterNumber: 1,
+    });
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration({
+      ...input,
+      chapterNumber: 2,
+    });
+
+    expect(runtime.invoke).not.toHaveBeenCalled();
+    expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
+    expect(prisma.novelGenerationJob.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        failureMessage: expect.stringContaining('哈希'),
+        failure: expect.objectContaining({
+          code: 'state_store_hash_mismatch',
+          stage: 'runtime.preflight',
+          recoverable: false,
+        }),
+      }),
+    }));
+  });
+
+  it('returns the stored failure envelope from getJob', async () => {
+    const { service, prisma } = makeService({ status: 'ok', result: {} });
+    prisma.novelGenerationJob.findFirst = vi.fn().mockResolvedValue({
+      jobId: 'job-1',
+      projectId: 2,
+      chapterId: 3,
+      jobType: 'chapter_generation',
+      status: 'failed',
+      progressStage: 'checking_materials',
+      maxCharge: 100n,
+      settledAmount: 0n,
+      failureMessage: '前章叙事状态与正文哈希不一致',
+      failure: {
+        stage: 'runtime.preflight',
+        gate: 'narrative_state',
+        code: 'state_store_hash_mismatch',
+        severity: 'preflight',
+        reason: '前章叙事状态与正文哈希不一致',
+        recoverable: false,
+      },
+      startedAt: new Date(),
+      completedAt: new Date(),
+    });
+    const view = await service.getJob(1, 'job-1') as {
+      failure: { code: string; stage: string; retryPlan?: string };
+      failureMessage: string;
+    };
+    expect(view.failureMessage).toContain('哈希');
+    expect(view.failure.code).toBe('state_store_hash_mismatch');
+    expect(view.failure.stage).toBe('runtime.preflight');
+    expect(view.failure.retryPlan).toBeUndefined();
   });
 
   it('marks a non-empty ok chapter as succeeded only after its hold is finalized', async () => {
@@ -598,6 +848,10 @@ describe('JobsService HTTP generation delivery contract', () => {
       data: expect.objectContaining({
         status: 'failed',
         failureMessage: '章节生成未调用模型，未产出可交付正文',
+        failure: expect.objectContaining({
+          code: 'generation_failed',
+          stage: 'runtime.generate',
+        }),
       }),
     }));
   });
@@ -612,6 +866,47 @@ describe('JobsService HTTP generation delivery contract', () => {
       data: expect.objectContaining({
         status: 'failed',
         failureMessage: 'no active production release set',
+        failure: expect.objectContaining({
+          code: 'generation_failed',
+          stage: 'runtime.generate',
+          recoverable: true,
+          retryPlan: 'retry_same_stage',
+        }),
+      }),
+    }));
+  });
+
+  it('stores narrative_state_commit_failed when runtime state cannot be committed', async () => {
+    const { service, prisma, billing } = makeService({
+      status: 'ok',
+      result: { status: 'ok', text: '可交付正文', runtimeState: 'not-an-object' },
+      metering: { modelCallCount: 1 },
+    });
+    prisma.$transaction = vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      novelChapter: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          version: 2, title: '第1章', content: '可交付正文', wordCount: 5,
+        }),
+      },
+      novelChapterVersion: { create: vi.fn() },
+      novelChapterSeed: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      novelProject: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      novelDocument: { findFirst: vi.fn() },
+      novelDocumentVersion: { create: vi.fn() },
+      novelGenerationJob: { update: vi.fn() },
+    }));
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration(input);
+
+    expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
+    expect(prisma.novelGenerationJob.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        failure: expect.objectContaining({
+          code: 'narrative_state_commit_failed',
+          stage: 'runtime.commit',
+        }),
       }),
     }));
   });

@@ -19,6 +19,18 @@ export const JOB_STAGES: Array<{ value: string; label: string }> = [
   { value: 'saving_chapter', label: '保存章节' },
 ];
 
+export interface JobFailure {
+  stage: string;
+  gate: string;
+  code: string;
+  severity: string;
+  reason: string;
+  recoverable: boolean;
+  retryPlan?: string;
+  userActionRequired?: string[];
+  fixInstructions?: string[];
+}
+
 /** 任务视图。 */
 export interface NovelJob {
   jobId: string;
@@ -30,6 +42,7 @@ export interface NovelJob {
   maxCharge: string;
   settledAmount: string;
   failureMessage: string | null;
+  failure?: JobFailure | null;
   startedAt: string;
   completedAt: string | null;
 }

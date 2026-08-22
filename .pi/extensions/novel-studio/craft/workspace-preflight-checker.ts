@@ -8,7 +8,7 @@
  * 检查项：
  *  1. config.json 存在且包含 genre / subGenres / characters
  *  2. 角色档案目录存在且非空
- *  3. 第 2 章及以后存在前章 skeleton.json
+ *  3. 第 2 章及以后存在前章连续性证据（state store / chapter-continuity / skeleton）
  *  4. ChapterSeed 可生长性（worldConstraint / characterState / previousContinuation / currentPressure / candidateAnchors）
  *  5. 显式章纲 ch{N}-outline-explicit.md 解析（事件数/内容摘要/参与角色）
  *  6. style fingerprint / fewshot / runtime manifest 可读
@@ -110,8 +110,8 @@ export interface PreflightWorkspaceOptions {
 //       而非 candidate:*（staged 未提交 → 阻断）
 //     - sourceRef 中的 hash 必须与 chapters/{N-1}.md 实际 SHA-256 前 12 位匹配
 //     - chapters/{N-1}.md 必须存在（state 声称 committed 但文件缺失 → 阻断）
-//  2. state store 文件不存在 → 回退 legacy skeleton.json 检查（向后兼容旧 workspace）
-//  3. 两者都缺失 → 阻断 previous_skeleton_missing
+//  2. state store 文件不存在 → 回退 chapter-continuity 快照，再回退 legacy skeleton.json
+//  3. 三者都缺失 → 阻断 previous_skeleton_missing
 //
 // 严禁：不自动生成或伪造 skeleton.json。
 // ============================================================================
@@ -134,6 +134,19 @@ function resolvePreviousChapterFile(
   if (resolved?.path) return resolved.path;
   const bare = join(workspacePath, "chapters", `${previousChapter}.md`);
   return existsSync(bare) ? bare : null;
+}
+
+function readContinuityHash(workspacePath: string, previousChapter: number): string | null {
+  const path = join(workspacePath, "chapter-continuity", `${previousChapter}.json`);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as { finalTextHash?: unknown };
+    return typeof parsed.finalTextHash === "string" && parsed.finalTextHash.length === 12
+      ? parsed.finalTextHash.toLowerCase()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function validateStateStoreContinuity(
@@ -194,9 +207,9 @@ function validateStateStoreContinuity(
       };
     }
 
-    // 前章已提交但无权威状态条目：章节文件必须存在（无 entry 可 hash 校验，仅验证文件存在）。
+    // 前章已提交但无权威状态条目：章节文件或 continuity 快照必须存在。
     const prevChapterPath = resolvePreviousChapterFile(workspacePath, previousChapter);
-    if (!prevChapterPath) {
+    if (!prevChapterPath && !readContinuityHash(workspacePath, previousChapter)) {
       return {
         valid: false,
         reason: `state-store-chapter-file-missing: no compatible chapter file found for ${previousChapterId} (committed with no state entries)`,
@@ -228,18 +241,20 @@ function validateStateStoreContinuity(
   const stateHash = hashMatch[1].toLowerCase();
 
   const prevChapterPath = resolvePreviousChapterFile(workspacePath, previousChapter);
-  if (!prevChapterPath) {
+  const continuityHash = readContinuityHash(workspacePath, previousChapter);
+  if (!prevChapterPath && !continuityHash) {
     return {
       valid: false,
       reason: `state-store-chapter-file-missing: no compatible chapter file found for ${previousChapterId}`,
     };
   }
 
-  const prevChapterText = readFileSync(prevChapterPath, "utf-8");
-  const actualHash = createHash("sha256")
-    .update(prevChapterText, "utf8")
-    .digest("hex")
-    .slice(0, 12);
+  const actualHash = prevChapterPath
+    ? createHash("sha256")
+        .update(readFileSync(prevChapterPath, "utf-8"), "utf8")
+        .digest("hex")
+        .slice(0, 12)
+    : (continuityHash as string);
 
   if (stateHash !== actualHash) {
     return {
@@ -248,7 +263,7 @@ function validateStateStoreContinuity(
     };
   }
 
-  return { valid: true, source: "state-store" };
+  return { valid: true, source: prevChapterPath ? "state-store" : "state-store-continuity-snapshot" };
 }
 
 /**
@@ -338,7 +353,7 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
   //
   // PREFLIGHT-STATE-STORE-CONTINUITY-1：真相源迁移
   //  - 优先校验 narrative-state-store.json（统一主链路 FinalStateCommit 写入）
-  //  - state store 不存在时回退 legacy series/skeleton.json（向后兼容旧 workspace）
+  //  - state store 不存在时回退 chapter-continuity 快照，再回退 legacy skeleton.json
   //  - state store 存在但无效（陈旧/candidate-only/hash 不符/workspace 不匹配）→ 阻断，
   //    不回退 skeleton（state store 存在即权威，无效是真问题）
   //  - 严禁自动生成或伪造 skeleton.json
@@ -353,16 +368,24 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
         detail: { source: continuity.source, skeletonOptional: true },
       };
     } else if (continuity.reason === "state-store-absent") {
-      // state store 文件不存在 → 回退 legacy skeleton 检查
+      // state store 文件不存在 → 回退 continuity snapshot，再回退 legacy skeleton
+      const previousChapter = chapterNumber - 1;
+      const continuityHash = readContinuityHash(workspacePath, previousChapter);
       const skeletonPath = join(workspacePath, "series", "skeleton.json");
-      if (!existsSync(skeletonPath)) {
+      if (continuityHash) {
+        checks.previousSkeleton = {
+          passed: true,
+          detail: { source: "continuity-snapshot", skeletonOptional: true },
+        };
+      } else if (!existsSync(skeletonPath)) {
         blockingItems.push({
           check: "previous_skeleton_missing",
-          reason: `前章连续性证据缺失（章节 ${chapterNumber - 1}）：narrative-state-store.json 不存在且 series/skeleton.json 不存在`,
-          fixInstruction: `先生成章节 ${chapterNumber - 1}（统一主链路会自动提交 narrative-state-store.json，含 sourceChapter=ch${chapterNumber - 1} 与 finalText hash）；或从其他工作区复制 skeleton.json 到 series/skeleton.json`,
+          reason: `前章连续性证据缺失（章节 ${chapterNumber - 1}）：narrative-state-store.json、chapter-continuity/${chapterNumber - 1}.json 与 series/skeleton.json 均不存在`,
+          fixInstruction: `先生成章节 ${chapterNumber - 1}（统一主链路会提交 narrative-state-store.json 并写入 chapter-continuity/${chapterNumber - 1}.json）；不要把整章正文塞进下一章`,
           evidence: {
             chapterNumber,
             missingStateStore: "narrative-state-store.json",
+            missingContinuity: `chapter-continuity/${chapterNumber - 1}.json`,
             missingSkeleton: "series/skeleton.json",
           },
         });
@@ -389,7 +412,7 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
       blockingItems.push({
         check: "previous_state_store_invalid",
         reason: `前章 narrative-state-store 无效：${continuity.reason}`,
-        fixInstruction: `检查 workspaces/${workspaceId}/narrative-state-store.json 是否有 ch${chapterNumber - 1} 的 committed finalText 状态（sourceChapter=ch${chapterNumber - 1}，sourceRef=ch${chapterNumber - 1}#finalText:{hash}，hash 须与 chapters/${chapterNumber - 1}.md 实际 SHA-256 前 12 位匹配）；或重新生成章节 ${chapterNumber - 1}`,
+        fixInstruction: `检查 workspaces/${workspaceId}/narrative-state-store.json 是否有 ch${chapterNumber - 1} 的 committed finalText 状态（sourceChapter=ch${chapterNumber - 1}，sourceRef=ch${chapterNumber - 1}#finalText:{hash}）。hash 须与 chapter-continuity/${chapterNumber - 1}.json 的 finalTextHash 一致；若存在 chapters/${chapterNumber - 1}.md，则以该正文 SHA-256 前 12 位为准。不要为通过预检而复制 skeleton.json 或塞入整章正文`,
         evidence: { chapterNumber, reason: continuity.reason },
       });
       checks.previousSkeleton = {

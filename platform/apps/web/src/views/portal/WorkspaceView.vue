@@ -5,9 +5,9 @@
  * 生成流程：SeedEditor 保存种子 → 提交生成 → GenerationPanel 轮询 → 成功后刷新章节。
  */
 import { computed, onMounted, provide, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { fenToYuan } from '../../api/billing';
+import { ArrowLeft } from '@element-plus/icons-vue';
 import { useAuthStore } from '../../stores/auth';
 import {
   getProject,
@@ -30,6 +30,7 @@ import GenerationPanel from '../../components/workspace/GenerationPanel.vue';
 import FeedbackPanel from '../../components/workspace/FeedbackPanel.vue';
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 const projectId = computed(() => Number(route.params.id));
 
@@ -120,10 +121,17 @@ defineExpose({ loadChapters, patchChapter });
 <template>
   <div v-if="project" class="workspace">
     <div class="workspace-header">
+      <el-button
+        :icon="ArrowLeft"
+        circle
+        class="back-btn"
+        title="返回项目列表"
+        @click="router.push({ name: 'portal-home' })"
+      />
       <span class="project-title" :title="project.title">{{ project.title }}</span>
       <el-tag v-if="project.genre" size="small">{{ project.genre }}</el-tag>
       <span v-for="sub in project.subGenres" :key="sub" class="sub-genre">{{ sub }}</span>
-      <span class="balance">余额 ¥{{ auth.user ? fenToYuan(auth.user.totalBalance) : '-' }}</span>
+      <span class="spacer" />
       <span class="workflow">流程：{{ project.workflowState }}</span>
     </div>
 
@@ -203,18 +211,24 @@ defineExpose({ loadChapters, patchChapter });
 </template>
 
 <style scoped>
+/* 高度由 PortalLayout 的 workspace-main（flex 列容器）提供，不再使用负 margin。 */
 .workspace {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 60px);
-  margin: -20px;
+  background: #fff;
 }
 .workspace-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 10px 16px;
-  border-bottom: 1px solid var(--el-border-color);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  background: #fff;
+}
+.back-btn {
+  flex-shrink: 0;
 }
 .project-title {
   font-size: 16px;
@@ -230,15 +244,15 @@ defineExpose({ loadChapters, patchChapter });
   border: 1px solid var(--el-border-color);
   border-radius: 4px;
   padding: 0 6px;
+  white-space: nowrap;
 }
-.balance {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
+.spacer {
+  flex: 1;
 }
 .workflow {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  white-space: nowrap;
 }
 .workspace-body {
   flex: 1;
@@ -246,23 +260,23 @@ defineExpose({ loadChapters, patchChapter });
   min-height: 0;
 }
 .left-pane {
-  width: 260px;
+  width: 264px;
   flex-shrink: 0;
-  border-right: 1px solid var(--el-border-color);
+  border-right: 1px solid var(--el-border-color-lighter);
   overflow-y: auto;
-  padding: 8px;
+  padding: 10px 8px;
 }
 .center-pane {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 0 12px;
+  padding: 0 16px;
 }
 .right-pane {
   width: 360px;
   flex-shrink: 0;
-  border-left: 1px solid var(--el-border-color);
+  border-left: 1px solid var(--el-border-color-lighter);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -274,6 +288,11 @@ defineExpose({ loadChapters, patchChapter });
 }
 .content-tabs :deep(.el-tabs__content) {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+}
+/* 面板定高：章节编辑器才能按 100% 撑满并让 textarea 内部滚动 */
+.content-tabs :deep(.el-tab-pane) {
+  height: 100%;
 }
 </style>

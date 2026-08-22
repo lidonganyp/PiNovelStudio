@@ -88,6 +88,7 @@ export function useJobPolling(): UseJobPollingReturn {
       maxCharge: '0',
       settledAmount: '0',
       failureMessage: null,
+      failure: null,
       startedAt: new Date().toISOString(),
       completedAt: null,
     };

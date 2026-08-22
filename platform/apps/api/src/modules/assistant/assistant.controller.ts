@@ -21,6 +21,7 @@ import {
   AssistantService,
   PostAssistantMessageDto,
 } from './assistant.service';
+import { envelopeFromUnknown, FAILURE_CODES } from '../context/failure-envelope';
 
 @Controller('projects/:id/assistant/messages')
 @UseGuards(JwtAuthGuard)
@@ -63,7 +64,7 @@ export class AssistantController {
   ): Promise<unknown> {
     const wantsSse = (request.headers.accept ?? '').includes('text/event-stream');
     if (!wantsSse) {
-      return this.assistant.post(user.sub, projectId, dto.content);
+      return this.assistant.post(user.sub, projectId, dto);
     }
 
     let started = false;
@@ -86,22 +87,38 @@ export class AssistantController {
       const result = await this.assistant.post(
         user.sub,
         projectId,
-        dto.content,
-        (delta) => writeEvent({ delta }),
+        dto,
+        (delta) => writeEvent({ type: 'delta', delta }),
       );
+      if (result.artifacts) {
+        writeEvent({ type: 'artifact', artifacts: result.artifacts });
+      }
+      if (result.generationJobId) {
+        writeEvent({
+          type: 'job_submitted',
+          jobId: result.generationJobId,
+          chapterNumber: result.chapterNumber ?? dto.chapterNumber,
+          publicEntry: 'novel_generate_chapter',
+        });
+      }
       writeEvent({
+        type: 'done',
         done: true,
         message: result.assistantMessage,
+        action: result.action,
         generationJobId: result.generationJobId,
         artifacts: result.artifacts,
       });
       reply.raw.end();
       return reply;
     } catch (error: unknown) {
-      const message =
-        error instanceof Error ? error.message : '规划模型调用失败，请稍后重试';
+      const failure = envelopeFromUnknown(error, {
+        stage: 'assistant.sse',
+        gate: 'stream',
+        code: FAILURE_CODES.sseInterrupted,
+      });
       if (started) {
-        writeEvent({ error: message });
+        writeEvent({ type: 'failure', failure });
         reply.raw.end();
         return reply;
       }

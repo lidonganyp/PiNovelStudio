@@ -16,7 +16,7 @@
  *          series/outline.md            ← story_outline（可选）
  *          styles/profile.json          ← style_profile（可选）
  *          narrative-state-store.json   ← narrative_state（可选，承接前章状态）
- *          chapters/ch{N-1}.md          ← 前章正文（可选，承接连贯性）
+ *          chapters/chapter-{N-1}.md    ← 前章正文（可选，承接连贯性）
  *      - 返回 tempProjectRoot = {tempWorkspaceRoot}/{jobId}
  *   2. 调用方（invoke.ts）将 _projectRoot 设为 tempProjectRoot
  *   3. PiNovelStudio 在 tempProjectRoot/workspaces/{workspaceId}/ 下写入章节/状态/trace
@@ -31,7 +31,8 @@
  *   - 文档内容直接来自 platform-api DB（经内部 API 传入），不经客户端
  */
 
-import { existsSync, mkdirSync, writeFileSync, rmSync, renameSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import type * as pino from "pino";
 
@@ -81,10 +82,26 @@ export interface MaterializeWorkspaceInput {
   documents: WorkspaceDocument[];
   /** 当前章节号（用于 explicit_outline 写入 ch{N}-outline-explicit.md） */
   chapterNumber?: number;
-  /** 前一章正文（可选，写入 chapters/ch{N-1}.md 用于连贯性） */
+  /**
+   * @deprecated 生产路径禁止传全文。若仍传入，只会抽取续接摘要，不会落盘章节正文。
+   */
   previousChapterText?: string;
-  /** 前一章序号（与 previousChapterText 配合） */
+  /** 前一章序号（与 continuation 配合） */
   previousChapterNumber?: number;
+  /** 前章续接（正式生成路径）；不得含全文 */
+  previousChapterContinuation?: PreviousChapterContinuation;
+  /** 编译清单，写入 traces，不进入正文模型 */
+  contextManifest?: unknown;
+}
+
+export interface PreviousChapterContinuation {
+  chapterNumber: number;
+  endingState: string;
+  lastSceneSummary: string;
+  changedCharacters: string[];
+  unresolvedPromises: string[];
+  tailExcerpt?: string;
+  sourceChapterHash: string;
 }
 
 /** materializeWorkspace 输出 */
@@ -187,12 +204,13 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
         mkdirSync(join(workspacePath, "series"), { recursive: true });
         mkdirSync(join(workspacePath, "styles"), { recursive: true });
         mkdirSync(join(workspacePath, "traces"), { recursive: true });
+        mkdirSync(join(workspacePath, "chapter-continuity"), { recursive: true });
 
         // 写入 config.json（项目级配置）
         atomicWriteJson(
           join(workspacePath, "config.json"),
           {
-            genre: (input.projectConfig.genre ?? "").trim() || "都市",
+            genre: (input.projectConfig.genre ?? "").trim(),
             subGenres: input.projectConfig.subGenres ?? [],
             worldKeyTerms: input.projectConfig.worldKeyTerms ?? [],
             characters: input.projectConfig.characters ?? [],
@@ -200,21 +218,17 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
           },
         );
 
-        // 写入前一章正文（可选，承接连贯性）
-        if (input.previousChapterText && input.previousChapterNumber && input.previousChapterNumber > 0) {
-          const prevChapterPath = join(
-            workspacePath,
-            "chapters",
-            `ch${input.previousChapterNumber}.md`,
-          );
-          atomicWriteText(prevChapterPath, input.previousChapterText);
-        }
-
         // 写入各类型文档
         for (const doc of input.documents) {
           writeDocumentByType(workspacePath, doc, input.chapterNumber);
         }
-        ensureRequiredWorkspaceMaterials(workspacePath);
+        const continuation = resolveContinuation(input);
+        if (continuation) {
+          writeChapterContinuitySnapshot(workspacePath, continuation);
+        }
+        if (input.contextManifest) {
+          atomicWriteJson(join(workspacePath, "traces", "context-manifest.json"), input.contextManifest);
+        }
 
         logger?.info(
           {
@@ -222,7 +236,8 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
             workspaceId: input.workspaceId,
             workspacePath,
             documentCount: input.documents.length,
-            hasPreviousChapter: !!input.previousChapterText,
+            hasPreviousChapterContinuation: Boolean(continuation),
+            wrotePreviousChapterText: false,
           },
           "temp workspace materialized",
         );
@@ -363,51 +378,81 @@ function writeDocumentByType(workspacePath: string, doc: WorkspaceDocument, chap
   }
 }
 
-const DEFAULT_STYLE_PROFILE = {
-  name: "platform-default",
-  id: "platform-default",
-  version: "1.0",
-  profileRole: "workspace_author_style",
-  usagePolicy: {
-    rawPrompt: "not_applicable",
-    editorialCandidate: "full_chapter_required",
-    fullChapterOptimization: "required",
-    selectionAuthority: "user_feedback",
-    statisticsRole: "diagnostic_only",
-  },
-  editorialGuidance: [
-    "叙述保持第三人称有限，锚定主角当下可感知的范围。",
-    "情绪优先通过身体反应、静默或动作呈现，不直接替人物命名。",
-    "汉语表达自然直接，少用翻译腔、外貌清单和解释性独白。",
-    "章末优先停在仍有叙事压力的动作、状态或静物细节上。",
-  ],
-  characterVoiceGuidance: {},
-};
-
-const DEFAULT_CREATIVE_CONSTITUTION = [
-  "# 创作宪法",
-  "",
-  "- 不违背已确立的人物身份、能力与关系。",
-  "- 不引入未声明的世界观规则。",
-  "- 本章必须推进既定冲突，并在章末留下可续写的压力。",
-].join("\n");
-
-const DEFAULT_WORLDBUILDING = [
-  "# 世界观",
-  "",
-  "以项目题材为准，保持内部自洽；未声明的规则不得突然生效。",
-].join("\n");
-
-function ensureRequiredWorkspaceMaterials(workspacePath: string): void {
-  if (!existsSync(join(workspacePath, "styles", "profile.json"))) {
-    atomicWriteJson(join(workspacePath, "styles", "profile.json"), DEFAULT_STYLE_PROFILE);
+function resolveContinuation(input: MaterializeWorkspaceInput): PreviousChapterContinuation | null {
+  if (input.previousChapterContinuation && input.previousChapterContinuation.chapterNumber > 0) {
+    return input.previousChapterContinuation;
   }
-  if (!existsSync(join(workspacePath, "CORE-WRITING-PRINCIPLES.md"))) {
-    atomicWriteText(join(workspacePath, "CORE-WRITING-PRINCIPLES.md"), DEFAULT_CREATIVE_CONSTITUTION);
+  if (input.previousChapterText && input.previousChapterNumber && input.previousChapterNumber > 0) {
+    const tail = excerptLastSentences(input.previousChapterText);
+    return {
+      chapterNumber: input.previousChapterNumber,
+      endingState: tail,
+      lastSceneSummary: tail,
+      changedCharacters: [],
+      unresolvedPromises: [],
+      tailExcerpt: tail,
+      sourceChapterHash: createHash("sha256").update(input.previousChapterText, "utf8").digest("hex").slice(0, 12),
+    };
   }
-  if (!existsSync(join(workspacePath, "WORLDBUILDING-CANON.md"))) {
-    atomicWriteText(join(workspacePath, "WORLDBUILDING-CANON.md"), DEFAULT_WORLDBUILDING);
+  return null;
+}
+
+function excerptLastSentences(text: string, maxChars = 160): string {
+  const trimmed = text.replace(/^\uFEFF/, "").trim();
+  if (!trimmed) return "";
+  const sentences = trimmed
+    .split(/(?<=[。！？!?])\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const tail: string[] = [];
+  let used = 0;
+  for (let index = sentences.length - 1; index >= 0; index -= 1) {
+    const sentence = sentences[index];
+    if (used > 0 && used + sentence.length > maxChars) break;
+    tail.unshift(sentence);
+    used += sentence.length;
+    if (tail.length >= 2) break;
   }
+  return tail.join("");
+}
+
+function writeChapterContinuitySnapshot(
+  workspacePath: string,
+  continuation: PreviousChapterContinuation,
+): void {
+  const statePath = join(workspacePath, "narrative-state-store.json");
+  const openHooks = [...continuation.unresolvedPromises];
+  const introducedCharacters = [...continuation.changedCharacters];
+  if (existsSync(statePath) && openHooks.length === 0) {
+    try {
+      const parsed = JSON.parse(readFileSync(statePath, "utf-8")) as {
+        promise?: Array<{ description?: string; status?: string }>;
+        character?: Array<{ characterId?: string }>;
+      };
+      for (const item of parsed.promise ?? []) {
+        if (!item?.description?.trim()) continue;
+        const status = item.status ?? "open";
+        if (status === "open" || status === "advancing" || status === "delayed") {
+          openHooks.push(item.description.trim());
+        }
+      }
+      for (const item of parsed.character ?? []) {
+        if (item.characterId) introducedCharacters.push(item.characterId);
+      }
+    } catch {
+      /* 快照是 advisory，解析失败不阻断 */
+    }
+  }
+  atomicWriteJson(join(workspacePath, "chapter-continuity", `${continuation.chapterNumber}.json`), {
+    chapterNumber: continuation.chapterNumber,
+    openHooks: [...new Set(openHooks)].slice(0, 12),
+    introducedCharacters: [...new Set(introducedCharacters)],
+    unresolvedTensions: [...new Set(openHooks)].slice(0, 12),
+    lastEventSummary: continuation.lastSceneSummary || continuation.tailExcerpt || continuation.endingState,
+    finalTextHash: continuation.sourceChapterHash,
+    sourceRefs: [`chapter-continuity/${continuation.chapterNumber}.json`],
+    createdAt: new Date().toISOString(),
+  });
 }
 
 /** 原子写文本：先写 .tmp 再 rename */

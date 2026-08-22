@@ -2,14 +2,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildExplicitOutlineMarkdown,
-  DEFAULT_PROJECT_GENRE,
   describeGenerationFailure,
   resolveProjectGenre,
 } from './runtime-workspace-defaults';
 
 describe('runtime workspace defaults', () => {
-  it('fills a blank genre so preflight sees a world type', () => {
-    expect(resolveProjectGenre('')).toBe(DEFAULT_PROJECT_GENRE);
+  it('does not invent a genre when the author left it blank', () => {
+    expect(resolveProjectGenre('')).toBe('');
+    expect(resolveProjectGenre('   ')).toBe('');
     expect(resolveProjectGenre('  玄幻  ')).toBe('玄幻');
   });
 
@@ -31,6 +31,21 @@ describe('runtime workspace defaults', () => {
     expect(markdown).not.toMatch(/^必须包含：/m);
     expect(markdown).toMatch(/^\s*参与角色：.+$/m);
     expect(markdown).toMatch(/^\s*内容摘要：.+$/m);
+  });
+
+  it('attaches open promises as foreshadowing instead of previous-chapter prose', () => {
+    const markdown = buildExplicitOutlineMarkdown({
+      intent: '追查铜哨来历',
+      mustInclude: '',
+      forbiddenFacts: '',
+      characterMotives: '',
+      promises: '',
+      endingGoal: '留下新的未完成压力',
+      characterNames: ['沈砚'],
+      openPromises: ['铜哨不该出现在现实', '不要相信沈建国'],
+    });
+    expect(markdown).toContain('伏笔埋设：铜哨不该出现在现实；不要相信沈建国');
+    expect(markdown).not.toContain('上一章结尾原文');
   });
 
   it('keeps the real runtime failure reason instead of a generic label', () => {

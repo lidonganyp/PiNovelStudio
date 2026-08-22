@@ -3,6 +3,7 @@
  */
 import { Injectable } from '@nestjs/common';
 import { env } from '../../config/env';
+import { runtimeInvokeFailure } from './job-failure';
 
 export interface RuntimeInvokeResult {
   status: string;
@@ -49,9 +50,11 @@ export class RuntimeClient {
     } finally {
       clearTimeout(timeout);
     }
-    const body = (await response.json()) as RuntimeInvokeResult;
+    const body = (await response.json()) as RuntimeInvokeResult & {
+      metering?: { modelCallCount?: number };
+    };
     if (!response.ok) {
-      throw new Error(describeRuntimeInvokeError(response.status, body));
+      throw runtimeInvokeFailure(body, body.metering?.modelCallCount);
     }
     return body;
   }
@@ -69,25 +72,4 @@ export function describeRuntimeFetchFailure(baseUrl: string, error: unknown): st
     return `无法连接章节生成运行时（${baseUrl}）。请确认 novel-runtime 已启动。`;
   }
   return `runtime invoke failed: ${joined}`.slice(0, 1000);
-}
-
-export function describeRuntimeInvokeError(status: number, body: unknown): string {
-  if (body && typeof body === 'object') {
-    const value = body as {
-      message?: unknown;
-      code?: unknown;
-      failureEnvelope?: { reason?: unknown };
-    };
-    const envelope = value.failureEnvelope?.reason;
-    if (typeof envelope === 'string' && envelope.trim()) {
-      return envelope.trim().slice(0, 1000);
-    }
-    if (typeof value.message === 'string' && value.message.trim()) {
-      return value.message.trim().slice(0, 1000);
-    }
-    if (typeof value.code === 'string' && value.code.trim()) {
-      return `runtime invoke ${status}: ${value.code}`;
-    }
-  }
-  return `runtime invoke ${status}`;
 }

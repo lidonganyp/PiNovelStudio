@@ -335,7 +335,7 @@ describe('小说业务 API e2e', () => {
       method: 'POST',
       url: `/api/projects/${projectId}/assistant/messages`,
       headers: { authorization: `Bearer ${tokenA}` },
-      payload: { content: '帮我规划下一章' },
+      payload: { content: '帮我规划下一章', action: 'query_project' },
     });
     expect(posted.statusCode).toBe(201);
     expect(posted.json().assistantMessage.role).toBe('assistant');
@@ -346,6 +346,15 @@ describe('小说业务 API e2e', () => {
       headers: { authorization: `Bearer ${tokenA}` },
     });
     expect(history.json().length).toBeGreaterThanOrEqual(2);
+
+    const autoPosted = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/assistant/messages`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { content: '帮我看看现在的进度' },
+    });
+    expect(autoPosted.statusCode).toBe(201);
+    expect(autoPosted.json().assistantMessage.role).toBe('assistant');
 
     const summary = await app.inject({
       method: 'GET',

@@ -88,7 +88,6 @@ async function save(): Promise<void> {
     <el-input
       v-model="content"
       type="textarea"
-      :autosize="{ minRows: 18 }"
       class="content-area"
       placeholder="章节正文（可手写，或填写种子后由系统生成）"
     />
@@ -105,6 +104,7 @@ async function save(): Promise<void> {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
 .chapter-no {
@@ -112,19 +112,29 @@ async function save(): Promise<void> {
   white-space: nowrap;
 }
 .title-input {
-  max-width: 320px;
+  flex: 1;
+  min-width: 200px;
+  max-width: 420px;
 }
 .word-count {
   margin-left: auto;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .content-area {
   flex: 1;
+  min-height: 0;
 }
+/* 正文阅读感：更大字号与行高，适合长篇中文文本；
+   高度固定为容器高（约等于视口高），长文在 textarea 内部滚动 */
 .content-area :deep(textarea) {
   height: 100%;
   resize: none;
+  overflow-y: auto;
+  font-size: 15px;
+  line-height: 1.9;
+  padding: 14px 16px;
 }
 </style>

@@ -141,10 +141,28 @@ watch(
       v-if="job.status === 'failed'"
       type="error"
       :closable="false"
-      :title="job.failureMessage ?? '生成失败'"
+      :title="job.failure?.reason ?? job.failureMessage ?? '生成失败'"
       class="failure"
     >
-      <el-button size="small" type="danger" plain @click="retry">重试</el-button>
+      <div v-if="job.failure" class="failure-meta">
+        {{ job.failure.code }} · {{ job.failure.stage }}
+        <span v-if="job.failure.gate"> / {{ job.failure.gate }}</span>
+      </div>
+      <div v-if="job.failure?.userActionRequired?.length">
+        {{ job.failure.userActionRequired.join('；') }}
+      </div>
+      <div v-if="job.failure?.fixInstructions?.length" class="fix">
+        {{ job.failure.fixInstructions.join('；') }}
+      </div>
+      <el-button
+        v-if="job.failure?.recoverable !== false"
+        size="small"
+        type="danger"
+        plain
+        @click="retry"
+      >
+        重试
+      </el-button>
     </el-alert>
     <el-alert
       v-else-if="job.status === 'insufficient_balance'"
@@ -223,9 +241,16 @@ watch(
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin: 8px 0;
+  font-variant-numeric: tabular-nums;
 }
 .failure {
   margin: 8px 0;
+}
+.failure-meta,
+.fix {
+  font-size: 12px;
+  opacity: 0.86;
+  margin: 4px 0;
 }
 .failure :deep(.el-alert__content) {
   display: flex;

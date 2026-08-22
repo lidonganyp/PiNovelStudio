@@ -242,11 +242,23 @@ export function createInvokeRouter(
           chapterNumber: toolName === "novel_generate_chapter"
             ? input.chapterNumber as number | undefined
             : undefined,
-          previousChapterText: toolName === "novel_generate_chapter"
-            ? input.previousChapterText as string | undefined
-            : undefined,
+          previousChapterText: undefined,
           previousChapterNumber: toolName === "novel_generate_chapter"
             ? input.previousChapterNumber as number | undefined
+            : undefined,
+          previousChapterContinuation: toolName === "novel_generate_chapter"
+            ? input.previousChapterContinuation as {
+                chapterNumber: number;
+                endingState: string;
+                lastSceneSummary: string;
+                changedCharacters: string[];
+                unresolvedPromises: string[];
+                tailExcerpt?: string;
+                sourceChapterHash: string;
+              } | undefined
+            : undefined,
+          contextManifest: toolName === "novel_generate_chapter"
+            ? input.contextManifest
             : undefined,
         });
         materializedJobId = jobCtx.jobId;
@@ -259,6 +271,8 @@ export function createInvokeRouter(
           projectConfig: undefined,
           previousChapterText: undefined,
           previousChapterNumber: undefined,
+          previousChapterContinuation: undefined,
+          contextManifest: undefined,
           _projectRoot: materialized.tempProjectRoot,
           workspaceId,
         };

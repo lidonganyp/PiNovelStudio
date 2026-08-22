@@ -1,0 +1,174 @@
+/**
+ * 全局样式：字体渲染、页面背景、等宽数字工具类、认证页共享布局。
+ * 加载顺序必须在 element-plus/dist/index.css 之后，保证同优先级下覆盖生效。
+ */
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: #f5f6f8;
+}
+
+/* 动态数字（余额 / 字数 / tokens / 时间）使用等宽数字，避免跳动 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 认证页（登录 / 注册）共享布局 ---------- */
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  background: #f3f5f9;
+}
+
+/* 左侧品牌区：深色墨蓝渐变 + 双侧光晕装饰 */
+.auth-brand {
+  position: relative;
+  width: 460px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 64px 56px;
+  color: #fff;
+  background: linear-gradient(155deg, #17233f 0%, #1e3a6e 58%, #2c5aa8 100%);
+  overflow: hidden;
+}
+.auth-brand::before,
+.auth-brand::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.auth-brand::before {
+  width: 420px;
+  height: 420px;
+  right: -160px;
+  top: -140px;
+  background: radial-gradient(circle, rgba(94, 140, 255, 0.35), transparent 65%);
+}
+.auth-brand::after {
+  width: 360px;
+  height: 360px;
+  left: -140px;
+  bottom: -120px;
+  background: radial-gradient(circle, rgba(120, 180, 255, 0.22), transparent 65%);
+}
+.auth-brand-inner {
+  position: relative;
+  z-index: 1;
+}
+.auth-brand-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.auth-brand-name {
+  margin-top: 14px;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  opacity: 0.85;
+}
+.auth-slogan {
+  margin: 32px 0 12px;
+  font-size: 30px;
+  line-height: 1.45;
+  font-weight: 600;
+  text-wrap: balance;
+}
+.auth-slogan-sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.8;
+  opacity: 0.75;
+  text-wrap: pretty;
+}
+.auth-features {
+  margin: 40px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.auth-features li {
+  padding: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+.auth-features .f-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.auth-features .f-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.7;
+  opacity: 0.7;
+}
+
+/* 右侧表单区 */
+.auth-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+}
+.auth-card {
+  width: 400px;
+  max-width: 100%;
+  border-radius: 14px;
+  border: 1px solid #e8ebf2;
+  box-shadow: 0 12px 32px rgba(23, 43, 99, 0.08);
+}
+.auth-card .el-card__body {
+  padding: 36px 36px 28px;
+}
+.auth-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+.auth-sub {
+  margin: 6px 0 24px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.auth-submit {
+  width: 100%;
+  margin-top: 4px;
+}
+.auth-footer {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 1080px) {
+  .auth-brand {
+    width: 380px;
+    padding: 48px 36px;
+  }
+  .auth-slogan {
+    font-size: 26px;
+  }
+  .auth-main {
+    padding: 32px 24px;
+  }
+}
+
+@media (max-width: 860px) {
+  .auth-brand {
+    display: none;
+  }
+}

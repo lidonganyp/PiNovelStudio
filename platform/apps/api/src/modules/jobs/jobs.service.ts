@@ -33,11 +33,23 @@ import {
   SETTING_WORD_COUNT_BUDGET,
 } from '../admin/runtime-settings';
 import {
+  assertNoFullPreviousChapter,
+  compileProjectContext,
+} from '../context/context-compiler';
+import { ContextCompileError, FailureHttpException } from '../context/failure-envelope';
+import {
+  jobFailureFromUnknown,
+  readStoredFailure,
+  runtimeInvokeFailure,
+} from './job-failure';
+import {
+  assertAuthorContractForGeneration,
+  compactNarrativeStateJson,
+  isUsableStoryOutline,
+  listAuthorContractGaps,
+} from './book-context';
+import {
   buildExplicitOutlineMarkdown,
-  DEFAULT_CREATIVE_CONSTITUTION,
-  DEFAULT_STYLE_PROFILE,
-  DEFAULT_WORLDBUILDING,
-  describeGenerationFailure,
   resolveProjectGenre,
 } from './runtime-workspace-defaults';
 
@@ -45,25 +57,7 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
-function describeRuntimeChapterFailure(result: unknown, modelCallCount: number | undefined): string {
-  if (result && typeof result === 'object') {
-    const value = result as {
-      failureEnvelope?: { reason?: unknown };
-      reason?: unknown;
-    };
-    const envelope = value.failureEnvelope?.reason;
-    if (typeof envelope === 'string' && envelope.trim()) {
-      return envelope.trim().slice(0, 1000);
-    }
-    if (typeof value.reason === 'string' && value.reason.trim()) {
-      return value.reason.trim().slice(0, 1000);
-    }
-  }
-  if (modelCallCount === 0) {
-    return '章节生成未调用模型，未产出可交付正文';
-  }
-  return 'runtime returned a non-deliverable chapter result';
-}
+
 
 /** Prisma's unique-constraint code is deliberately checked structurally here so
  * the service can translate the database concurrency guard into the public API
@@ -152,7 +146,8 @@ export class JobsService implements OnModuleInit {
           where: { jobId: job.jobId },
           data: {
             status: 'failed',
-            failureMessage: 'generation interrupted by service restart',
+            failureMessage: '生成因服务重启中断，请重新提交',
+            failure: jobFailureFromUnknown(new Error('generation interrupted by service restart')),
             settledAmount,
             completedAt: new Date(),
           },
@@ -170,6 +165,52 @@ export class JobsService implements OnModuleInit {
 
   private recoveryGraceMs(): number {
     return env.NOVEL_RUNTIME_REQUEST_TIMEOUT_MS + 60_000;
+  }
+
+  /**
+   * 聊天生成入口在调用规划模型之前检查作者资料。
+   * 缺失类型/风格/世界观/宪法时直接结构化阻断，不创建任务、不扣规划额度。
+   */
+  async assertAuthorContract(userId: number, projectId: number): Promise<void> {
+    const [project, characters, documents] = await Promise.all([
+      this.prisma.novelProject.findFirst({
+        where: { id: projectId, userId, deletedAt: null },
+        select: { genre: true },
+      }),
+      this.prisma.novelCharacter.findMany({
+        where: { projectId, userId, deletedAt: null },
+        select: { goals: true, motivation: true, currentState: true, relationships: true },
+      }),
+      this.prisma.novelDocument.findMany({
+        where: { projectId, userId, deletedAt: null },
+        select: { documentType: true, content: true },
+      }),
+    ]);
+    if (!project) {
+      throw new NotFoundException('项目不存在');
+    }
+    const byType = new Map(documents.map((row) => [row.documentType, row]));
+    const narrative = byType.get('narrative_state')?.content;
+    const compact = narrative
+      ? compactNarrativeStateJson(narrative).compact
+      : { canon: [], character: [], promise: [] };
+    const outline = byType.get('story_outline')?.content;
+    try {
+      assertAuthorContractForGeneration(listAuthorContractGaps({
+        genre: project.genre,
+        constitution: byType.get('creative_constitution')?.content,
+        worldbuilding: byType.get('worldbuilding')?.content,
+        styleProfile: byType.get('style_profile')?.content,
+        characters,
+        compact,
+        usableStoryOutline: outline && isUsableStoryOutline(outline) ? outline : undefined,
+      }));
+    } catch (error: unknown) {
+      if (error instanceof ContextCompileError) {
+        throw new FailureHttpException(error.envelope);
+      }
+      throw error;
+    }
   }
 
   /** 提交章节生成：校验种子 → 预占 → 建 job → stub/http 执行。 */
@@ -207,13 +248,13 @@ export class JobsService implements OnModuleInit {
     // proceed would create a predictably failed, needlessly reserved job.
     let runtimeWorkspaceInput: Record<string, unknown> | undefined;
     if (env.NOVEL_RUNTIME_MODE !== 'stub') {
-      runtimeWorkspaceInput = await this.buildRuntimeWorkspaceInput({
-        userId,
-        projectId,
-        chapterId,
-        chapterNumber: chapter.chapterNumber,
-      });
       try {
+        runtimeWorkspaceInput = await this.buildRuntimeWorkspaceInput({
+          userId,
+          projectId,
+          chapterId,
+          chapterNumber: chapter.chapterNumber,
+        });
         assertRuntimeWorkspacePayloadFits({
           chapterNumber: chapter.chapterNumber,
           chapterId: String(chapterId),
@@ -221,8 +262,11 @@ export class JobsService implements OnModuleInit {
           ...runtimeWorkspaceInput,
         });
       } catch (error: unknown) {
+        if (error instanceof ContextCompileError) {
+          throw new FailureHttpException(error.envelope);
+        }
         if (error instanceof RuntimeWorkspacePayloadError) {
-          throw new BadRequestException(error.message);
+          throw new FailureHttpException(jobFailureFromUnknown(error));
         }
         throw error;
       }
@@ -263,7 +307,8 @@ export class JobsService implements OnModuleInit {
           status: error instanceof InsufficientBalanceException ? 'insufficient_balance' : 'failed',
           failureMessage: error instanceof InsufficientBalanceException
             ? '可用余额不足'
-            : 'billing hold creation failed',
+            : '计费预占失败',
+          failure: jobFailureFromUnknown(error),
           completedAt: new Date(),
         },
       });
@@ -314,6 +359,7 @@ export class JobsService implements OnModuleInit {
       maxCharge: fenToString(job.maxCharge),
       settledAmount: fenToString(job.settledAmount),
       failureMessage: job.failureMessage,
+      failure: readStoredFailure(job.failure, job.failureMessage),
       startedAt: job.startedAt.toISOString(),
       completedAt: job.completedAt?.toISOString() ?? null,
     };
@@ -497,7 +543,7 @@ export class JobsService implements OnModuleInit {
       );
       await this.closeFailedGenerationIfHoldReleased(
         input.jobId,
-        describeGenerationFailure(error),
+        jobFailureFromUnknown(error),
       );
       throw error;
     }
@@ -540,7 +586,7 @@ export class JobsService implements OnModuleInit {
         typeof (result as { text?: unknown }).text !== 'string' ||
         (result as { text: string }).text.trim().length === 0
       ) {
-        throw new Error(describeRuntimeChapterFailure(invoked.result, modelCallCount));
+        throw runtimeInvokeFailure(invoked.result, modelCallCount);
       }
       const text = (result as { text: string }).text;
       await this.persistGeneratedChapter(
@@ -562,7 +608,7 @@ export class JobsService implements OnModuleInit {
       );
       await this.closeFailedGenerationIfHoldReleased(
         input.jobId,
-        describeGenerationFailure(error),
+        jobFailureFromUnknown(error),
       );
       return;
     }
@@ -570,8 +616,8 @@ export class JobsService implements OnModuleInit {
 
   /**
    * 将 platform-api 的项目资料编译成 runtime workspace 物化输入。
-   * runtime 不直接访问 platform 数据库；省略这些资料会让正式 Preflight
-   * 只能看到默认 genre/空角色，从而把每个 HTTP 生成稳定地阻断。
+   * runtime 不直接访问 platform 数据库。作者未确认的题材、风格、宪法和世界观
+   * 不得用默认值填充；缺失时在预检阶段结构化阻断。
    */
   /**
    * A failed execution may only relinquish its active-job slot after billing
@@ -580,7 +626,7 @@ export class JobsService implements OnModuleInit {
    */
   private async closeFailedGenerationIfHoldReleased(
     jobId: string,
-    failureMessage: string,
+    failure: ReturnType<typeof jobFailureFromUnknown>,
   ): Promise<void> {
     let settledAmount = 0n;
     try {
@@ -610,7 +656,8 @@ export class JobsService implements OnModuleInit {
         where: { jobId },
         data: {
           status: 'failed',
-          failureMessage,
+          failureMessage: failure.reason,
+          failure,
           settledAmount,
           completedAt: new Date(),
         },
@@ -624,7 +671,8 @@ export class JobsService implements OnModuleInit {
 
   /**
    * Compile platform-owned project materials into the isolated runtime
-   * workspace input. The runtime never receives direct database access.
+   * workspace input. Missing author genre/style/world/constitution must
+   * block; the runtime never receives invented defaults.
    */
   private async buildRuntimeWorkspaceInput(input: {
     userId: number;
@@ -662,26 +710,7 @@ export class JobsService implements OnModuleInit {
       throw new Error('runtime workspace context is incomplete');
     }
 
-    const allowedDocumentTypes = new Set([
-      'creative_constitution',
-      'worldbuilding',
-      'story_outline',
-      'style_profile',
-      'narrative_state',
-    ]);
-    const grouped = new Map<string, string[]>();
-    const rawDocuments = new Map<string, string>();
-    for (const document of documents) {
-      if (!allowedDocumentTypes.has(document.documentType)) continue;
-      if (document.documentType === 'style_profile' || document.documentType === 'narrative_state') {
-        // 这两类文档可能是 JSON；必须保留原文，不能加 Markdown 标题或拼接多个 JSON。
-        rawDocuments.set(document.documentType, document.content);
-        continue;
-      }
-      const values = grouped.get(document.documentType) ?? [];
-      values.push(`# ${document.title}\n\n${document.content}`.trim());
-      grouped.set(document.documentType, values);
-    }
+    const byType = new Map(documents.map((document) => [document.documentType, document]));
 
     const characterContent = characters
       .map((character) => {
@@ -717,6 +746,27 @@ export class JobsService implements OnModuleInit {
     });
     if (!seed) throw new Error('runtime workspace chapter seed is missing');
 
+    const compiled = compileProjectContext({
+      storyOutline: byType.get('story_outline'),
+      chapterSeed: { ...seed, chapterNumber: input.chapterNumber },
+      characters,
+      narrativeState: byType.get('narrative_state'),
+      previousChapter: previousChapter ?? undefined,
+      styleProfile: byType.get('style_profile'),
+      worldbuilding: byType.get('worldbuilding'),
+      constitution: byType.get('creative_constitution'),
+    });
+
+    assertAuthorContractForGeneration(listAuthorContractGaps({
+      genre: project.genre,
+      constitution: byType.get('creative_constitution')?.content,
+      worldbuilding: byType.get('worldbuilding')?.content,
+      styleProfile: byType.get('style_profile')?.content,
+      characters,
+      compact: compiled.compact,
+      usableStoryOutline: compiled.usableStoryOutline,
+    }));
+
     const explicitOutline = buildExplicitOutlineMarkdown({
       intent: seed.intent,
       mustInclude: seed.mustInclude,
@@ -725,33 +775,33 @@ export class JobsService implements OnModuleInit {
       promises: seed.promises,
       endingGoal: seed.endingGoal,
       characterNames: characters.map((character) => character.name),
+      openPromises: compiled.compact.promise.map((item) => item.description),
     });
 
     const workspaceDocuments: Array<{ type: string; content: string }> = [
       { type: 'character_profile', content: characterContent },
       { type: 'explicit_outline', content: explicitOutline },
     ];
-    for (const [type, values] of grouped) {
-      workspaceDocuments.push({ type, content: values.join('\n\n') });
+    const constitution = byType.get('creative_constitution')?.content?.trim();
+    const worldbuilding = byType.get('worldbuilding')?.content?.trim();
+    const styleProfile = byType.get('style_profile')?.content?.trim();
+    if (constitution) {
+      workspaceDocuments.push({ type: 'creative_constitution', content: constitution });
     }
-    if (!grouped.has('creative_constitution')) {
-      workspaceDocuments.push({ type: 'creative_constitution', content: DEFAULT_CREATIVE_CONSTITUTION });
+    if (worldbuilding) {
+      workspaceDocuments.push({ type: 'worldbuilding', content: worldbuilding });
     }
-    if (!grouped.has('worldbuilding')) {
-      workspaceDocuments.push({ type: 'worldbuilding', content: DEFAULT_WORLDBUILDING });
+    if (compiled.usableStoryOutline) {
+      workspaceDocuments.push({ type: 'story_outline', content: compiled.usableStoryOutline });
     }
-    for (const type of ['style_profile', 'narrative_state']) {
-      const content = rawDocuments.get(type);
-      if (content !== undefined) workspaceDocuments.push({ type, content });
+    if (compiled.compactNarrativeJson) {
+      workspaceDocuments.push({ type: 'narrative_state', content: compiled.compactNarrativeJson });
     }
-    if (!rawDocuments.has('style_profile')) {
-      workspaceDocuments.push({
-        type: 'style_profile',
-        content: JSON.stringify(DEFAULT_STYLE_PROFILE),
-      });
+    if (styleProfile) {
+      workspaceDocuments.push({ type: 'style_profile', content: styleProfile });
     }
 
-    return {
+    const runtimeInput = {
       projectConfig: {
         genre: resolveProjectGenre(project.genre),
         subGenres: readStringArray(project.subGenres),
@@ -763,9 +813,12 @@ export class JobsService implements OnModuleInit {
         })),
       },
       workspaceDocuments,
-      previousChapterText: previousChapter?.content || undefined,
+      previousChapterContinuation: compiled.previousChapterContinuation,
       previousChapterNumber: previousChapter?.chapterNumber,
+      contextManifest: compiled.manifest,
     };
+    assertNoFullPreviousChapter(runtimeInput, previousChapter?.content);
+    return runtimeInput;
   }
 
   private async persistGeneratedChapter(

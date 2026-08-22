@@ -6,6 +6,7 @@ import {
   extractMarkedBlock,
   inferCharactersFromText,
   inferGenerateChapterNumber,
+  shouldPreflightAuthorContract,
   OUTLINE_BLOCK_RE,
   parseChapterSeed,
   parseCharacterLines,
@@ -82,7 +83,15 @@ describe('unmarked outline and generate inference', () => {
 
   it('infers generate chapter 1 from the user message when the model omits the marker', () => {
     expect(inferGenerateChapterNumber('帮我生成第一章', '好的，开始准备。')).toBe(1);
+    expect(inferGenerateChapterNumber('生成第二章', '')).toBe(2);
     expect(inferGenerateChapterNumber('随便聊聊设定', '好的。')).toBeNull();
+  });
+
+  it('preflights author contract for explicit or locally recognized generate requests', () => {
+    expect(shouldPreflightAuthorContract('generate_chapter', '随便聊聊')).toBe(true);
+    expect(shouldPreflightAuthorContract(undefined, '生成第二章')).toBe(true);
+    expect(shouldPreflightAuthorContract('query_project', '生成第二章')).toBe(false);
+    expect(shouldPreflightAuthorContract(undefined, '帮我规划下一章')).toBe(false);
   });
 
   it('infers labeled characters without pipe rows', () => {

@@ -4,6 +4,12 @@
  */
 import { http, tokenStorage } from './http';
 
+export type AssistantAction =
+  | 'plan_story_outline'
+  | 'plan_chapter'
+  | 'query_project'
+  | 'generate_chapter';
+
 /** 助手消息视图。 */
 export interface AssistantMessage {
   id: number;
@@ -12,21 +18,50 @@ export interface AssistantMessage {
   createdAt: string;
 }
 
-/** SSE 事件：增量文本或完成信号。 */
 export interface AssistantArtifacts {
   outlineSaved?: boolean;
   charactersSaved?: number;
   chaptersTouched?: number[];
   generationJobId?: string;
   focusTab?: 'outline' | 'characters' | 'chapter' | 'seed';
+  publicEntry?: 'novel_generate_chapter';
+}
+
+export interface FailureEnvelope {
+  stage: string;
+  gate: string;
+  code: string;
+  severity: string;
+  reason: string;
+  recoverable: boolean;
+  retryPlan?: string;
+  userActionRequired?: string[];
+  fixInstructions?: string[];
+}
+
+export interface AssistantRequest {
+  content: string;
+  /** 缺省 = auto 模式：动作由助手智能体根据消息内容判断。 */
+  action?: AssistantAction;
+  chapterNumber?: number;
+  confirmGeneration?: boolean;
 }
 
 export type AssistantStreamEvent =
-  | { delta: string }
-  | { error: string }
+  | { type: 'delta'; delta: string }
+  | { type: 'artifact'; artifacts?: AssistantArtifacts }
   | {
+      type: 'job_submitted';
+      jobId: string;
+      chapterNumber?: number;
+      publicEntry: 'novel_generate_chapter';
+    }
+  | { type: 'failure'; failure: FailureEnvelope }
+  | {
+      type: 'done';
       done: true;
       message: AssistantMessage;
+      action?: AssistantAction;
       generationJobId?: string;
       artifacts?: AssistantArtifacts;
     };
@@ -55,13 +90,21 @@ export function deleteMessage(
     .then((r) => r.data);
 }
 
+export function userFacingFailure(failure: FailureEnvelope | string): string {
+  const text = typeof failure === 'string' ? failure : failure.reason;
+  if (/stack|api[_-]?key|postgres|aimagichub|openai|anthropic|bearer\s+/i.test(text)) {
+    return '操作失败，请稍后重试或按提示补全资料';
+  }
+  return text;
+}
+
 /**
  * 发送消息并流式消费 SSE 响应。
  * 每个事件回调一次；连接失败抛错由调用方处理。
  */
 export async function sendMessageStream(
   projectId: number,
-  content: string,
+  request: AssistantRequest,
   onEvent: (event: AssistantStreamEvent) => void,
 ): Promise<void> {
   const token = tokenStorage.get();
@@ -74,18 +117,27 @@ export async function sendMessageStream(
         Accept: 'text/event-stream',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(request),
     },
   );
   if (!response.ok || !response.body) {
+    let failure: FailureEnvelope | undefined;
     let message = '请求失败';
     try {
-      const data = (await response.json()) as { message?: string };
+      const data = (await response.json()) as {
+        message?: string;
+        failure?: FailureEnvelope;
+      };
+      if (data.failure) failure = data.failure;
       if (typeof data.message === 'string') message = data.message;
     } catch {
       /* 保留默认文案 */
     }
-    throw new Error(message);
+    if (failure) {
+      onEvent({ type: 'failure', failure });
+      throw new Error(userFacingFailure(failure));
+    }
+    throw new Error(userFacingFailure(message));
   }
 
   const reader = response.body.getReader();
@@ -105,10 +157,45 @@ export async function sendMessageStream(
       for (const line of raw.split('\n')) {
         if (!line.startsWith('data: ')) continue;
         try {
-          const event = JSON.parse(line.slice(6)) as AssistantStreamEvent;
-          if ('error' in event) streamError = event.error;
-          if ('done' in event) completed = true;
-          onEvent(event);
+          const event = JSON.parse(line.slice(6)) as Record<string, unknown>;
+          if (event.type === 'delta' && typeof event.delta === 'string') {
+            onEvent({ type: 'delta', delta: event.delta });
+            continue;
+          }
+          if (!event.type && typeof event.delta === 'string') {
+            onEvent({ type: 'delta', delta: event.delta });
+            continue;
+          }
+          if (event.type === 'failure' || typeof event.error === 'string') {
+            const failure = (event.failure as FailureEnvelope | undefined) ?? {
+              stage: 'assistant.sse',
+              gate: 'stream',
+              code: 'sse_interrupted',
+              severity: 'recoverable',
+              reason: typeof event.error === 'string' ? event.error : '规划连接中断',
+              recoverable: true,
+            };
+            streamError = userFacingFailure(failure);
+            onEvent({ type: 'failure', failure });
+            continue;
+          }
+          if (event.type === 'artifact') {
+            onEvent({ type: 'artifact', artifacts: event.artifacts as AssistantArtifacts });
+            continue;
+          }
+          if (event.type === 'job_submitted' && typeof event.jobId === 'string') {
+            onEvent({
+              type: 'job_submitted',
+              jobId: event.jobId,
+              chapterNumber: typeof event.chapterNumber === 'number' ? event.chapterNumber : undefined,
+              publicEntry: 'novel_generate_chapter',
+            });
+            continue;
+          }
+          if (event.type === 'done' || event.done === true) {
+            completed = true;
+            onEvent(event as unknown as AssistantStreamEvent);
+          }
         } catch {
           /* 跳过无法解析的行 */
         }

@@ -176,6 +176,15 @@ export function inferCharactersFromText(text: string): ParsedCharacter[] {
   return uniqueCharacters(parsed);
 }
 
+export function shouldPreflightAuthorContract(
+  action: string | undefined,
+  userContent: string,
+): boolean {
+  if (action === 'generate_chapter') return true;
+  if (action !== undefined) return false;
+  return inferGenerateChapterNumber(userContent, '') !== null;
+}
+
 export function inferGenerateChapterNumber(
   userContent: string,
   reply: string,

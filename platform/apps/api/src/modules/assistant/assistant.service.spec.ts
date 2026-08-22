@@ -1,5 +1,7 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
+import { env } from '../../config/env';
+import { FailureHttpException, FAILURE_CODES, makeFailure } from '../context/failure-envelope';
 import { AssistantService } from './assistant.service';
 
 function makeService() {
@@ -42,7 +44,10 @@ function makeService() {
     finalizeHoldInTransaction: vi.fn().mockResolvedValue({ status: 'settled', settledAmount: 4n }),
   };
   const rates = { findEffectiveRate: vi.fn() };
-  const jobs = { submitChapterGeneration: vi.fn() };
+  const jobs = {
+    submitChapterGeneration: vi.fn(),
+    assertAuthorContract: vi.fn().mockResolvedValue(undefined),
+  };
   return {
     service: new AssistantService(
       prisma as never,
@@ -52,6 +57,7 @@ function makeService() {
     ),
     prisma,
     billing,
+    jobs,
     tx,
   };
 }
@@ -104,7 +110,7 @@ describe('AssistantService billing delivery contract', () => {
     const { service, prisma, billing } = makeService();
     prisma.novelAssistantMessage.create.mockRejectedValueOnce(new Error('message write failed'));
 
-    await expect(service.post(1, 2, 'hello')).rejects.toThrow('message write failed');
+    await expect(service.post(1, 2, 'hello')).rejects.toThrow('聊天消息保存失败，请稍后重试');
     expect(billing.settleCall).not.toHaveBeenCalled();
     expect(billing.finalizeHold).toHaveBeenCalledWith({
       jobId: expect.any(String),
@@ -113,5 +119,86 @@ describe('AssistantService billing delivery contract', () => {
     expect(prisma.novelGenerationJob.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: 'failed', settledAmount: 4n }),
     }));
+  });
+
+  it('blocks generate-chapter chat on author_contract before planner, hold, or job create', async () => {
+    const { service, prisma, billing, jobs } = makeService();
+    const authorBlock = new FailureHttpException(makeFailure({
+      stage: 'runtime.preflight',
+      gate: 'author_contract',
+      code: FAILURE_CODES.runtimePreflightFailed,
+      severity: 'preflight',
+      reason: '缺少作者确认的生成资料，已阻断；不会用默认题材、风格或世界观代替',
+      recoverable: false,
+      userActionRequired: [
+        '项目类型为空',
+        '缺少作者确认的风格档案',
+        '缺少作者确认的世界观',
+        '缺少作者确认的创作宪法',
+      ],
+    }));
+    jobs.assertAuthorContract.mockRejectedValue(authorBlock);
+
+    await expect(service.post(1, 128, '生成第二章')).rejects.toMatchObject({
+      envelope: expect.objectContaining({
+        gate: 'author_contract',
+        code: 'runtime_preflight_failed',
+        userActionRequired: expect.arrayContaining([
+          '项目类型为空',
+          '缺少作者确认的风格档案',
+          '缺少作者确认的世界观',
+          '缺少作者确认的创作宪法',
+        ]),
+      }),
+    });
+    expect(jobs.assertAuthorContract).toHaveBeenCalledWith(1, 128);
+    expect(jobs.submitChapterGeneration).not.toHaveBeenCalled();
+    expect(billing.createHold).not.toHaveBeenCalled();
+    expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
+  });
+
+  it('runs generation author preflight before the planner-disabled guard', async () => {
+    const { service, prisma, billing, jobs } = makeService();
+    const authorBlock = new FailureHttpException(makeFailure({
+      stage: 'runtime.preflight',
+      gate: 'author_contract',
+      code: FAILURE_CODES.runtimePreflightFailed,
+      severity: 'preflight',
+      reason: 'author materials are incomplete',
+      recoverable: false,
+      userActionRequired: ['project genre is empty'],
+    }));
+    jobs.assertAuthorContract.mockRejectedValue(authorBlock);
+    const previousPlannerMode = env.PLANNER_MODE;
+    env.PLANNER_MODE = 'disabled';
+    try {
+      await expect(service.post(1, 128, '生成第二章')).rejects.toMatchObject({
+        envelope: expect.objectContaining({
+          code: FAILURE_CODES.runtimePreflightFailed,
+          gate: 'author_contract',
+        }),
+      });
+    } finally {
+      env.PLANNER_MODE = previousPlannerMode;
+    }
+    expect(jobs.assertAuthorContract).toHaveBeenCalledWith(1, 128);
+    expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
+    expect(billing.createHold).not.toHaveBeenCalled();
+  });
+
+  it('keeps generation blocked after a successful preflight when the planner is disabled', async () => {
+    const { service, prisma, billing, jobs } = makeService();
+    const previousPlannerMode = env.PLANNER_MODE;
+    env.PLANNER_MODE = 'disabled';
+    try {
+      await expect(service.post(1, 128, '生成第二章')).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+    } finally {
+      env.PLANNER_MODE = previousPlannerMode;
+    }
+    expect(jobs.assertAuthorContract).toHaveBeenCalledWith(1, 128);
+    expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
+    expect(billing.createHold).not.toHaveBeenCalled();
   });
 });
