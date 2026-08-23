@@ -373,12 +373,16 @@ model NovelFeedback {
   jobId           String?   @map("job_id")
   type            String
   content         String    @default("")
+  status          String    @default("pending") // pending | replied
+  replyContent    String?   @map("reply_content")
+  repliedAt       DateTime? @map("replied_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   adminUserId     Int?      @map("admin_user_id")
   adminUser       User?     @relation("FeedbackAdmin", fields: [adminUserId], references: [id])
 
   @@index([projectId])
   @@index([userId])
+  @@index([status, createdAt])
   @@map("novel_feedback")
 }
 

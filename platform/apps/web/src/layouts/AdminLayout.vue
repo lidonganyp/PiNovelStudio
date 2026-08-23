@@ -26,6 +26,7 @@ function onLogout(): void {
         <el-menu-item index="/admin/revenue">收入</el-menu-item>
         <el-menu-item index="/admin/orders">充值订单</el-menu-item>
         <el-menu-item index="/admin/audit">审计日志</el-menu-item>
+        <el-menu-item index="/admin/feedback">用户反馈</el-menu-item>
         <el-menu-item index="/admin/settings">系统设置</el-menu-item>
       </el-menu>
     </el-aside>

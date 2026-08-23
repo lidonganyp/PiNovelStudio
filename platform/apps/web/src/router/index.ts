@@ -109,6 +109,11 @@ const router = createRouter({
           component: () => import('../views/admin/AuditView.vue'),
         },
         {
+          path: 'feedback',
+          name: 'admin-feedback',
+          component: () => import('../views/admin/FeedbackView.vue'),
+        },
+        {
           path: 'settings',
           name: 'admin-settings',
           component: () => import('../views/admin/SettingsView.vue'),

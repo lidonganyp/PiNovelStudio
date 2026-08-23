@@ -1,5 +1,5 @@
 /**
- * 管理后台 API：用户、调账、封禁、模型/费率、用量、收入、审计、设置。
+ * 管理后台 API：用户、调账、封禁、模型/费率、用量、收入、审计、反馈、设置。
  */
 import {
   Body,
@@ -21,6 +21,7 @@ import { AdminService } from './admin.service';
 import { FeedbackService } from '../feedback/feedback.service';
 import {
   AdjustBalanceDto,
+  AdminFeedbackQueryDto,
   AdminUserQueryDto,
   AuditLogQueryDto,
   CreateProviderDto,
@@ -28,12 +29,12 @@ import {
   LookupRateQueryDto,
   PatchRateDto,
   PutSettingsBodyDto,
+  ReplyFeedbackDto,
   RevenueQueryDto,
   UpsertProviderDto,
   UpdateUserStatusDto,
   UsageQueryDto,
 } from './dto/admin.dto';
-import { PaginationDto } from '../../common/dto/pagination.dto';
 
 @Controller('admin')
 @UseGuards(AdminGuard)
@@ -213,8 +214,28 @@ export class AdminController {
   }
 
   @Get('feedback')
-  listFeedback(@Query() query: PaginationDto): Promise<unknown> {
-    return this.feedback.adminList(query.page ?? 1, query.pageSize ?? 20);
+  listFeedback(@Query() query: AdminFeedbackQueryDto): Promise<unknown> {
+    return this.feedback.adminList(
+      query.page ?? 1,
+      query.pageSize ?? 20,
+      query.q,
+      query.type,
+      query.status,
+    );
+  }
+
+  @Get('feedback/:id')
+  getFeedback(@Param('id', ParseIntPipe) id: number): Promise<unknown> {
+    return this.feedback.adminGet(id);
+  }
+
+  @Post('feedback/:id/reply')
+  replyFeedback(
+    @CurrentUser() actor: AuthUserPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReplyFeedbackDto,
+  ): Promise<unknown> {
+    return this.feedback.adminReply(actor.sub, id, dto.content);
   }
 
   @Put('settings')

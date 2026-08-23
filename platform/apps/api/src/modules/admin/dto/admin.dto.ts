@@ -31,6 +31,23 @@ export class AuditLogQueryDto extends PaginationDto {
   action?: string;
 }
 
+export class AdminFeedbackQueryDto extends PaginationDto {
+  @IsOptional()
+  @IsIn(['quality', 'factual', 'other'])
+  type?: 'quality' | 'factual' | 'other';
+
+  @IsOptional()
+  @IsIn(['pending', 'replied'])
+  status?: 'pending' | 'replied';
+}
+
+export class ReplyFeedbackDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(5000)
+  content!: string;
+}
+
 export class AdjustBalanceDto {
   @Type(() => Number)
   @IsInt()

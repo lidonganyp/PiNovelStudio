@@ -1,5 +1,5 @@
 /**
- * 管理后台 API：概览 / 用户 / 模型费率 / 用量 / 收入 / 审计 / 设置。
+ * 管理后台 API：概览 / 用户 / 模型费率 / 用量 / 收入 / 审计 / 反馈 / 设置。
  */
 import { http } from './http';
 
@@ -375,4 +375,55 @@ export function putSettings(
   items: Array<{ key: string; value: unknown }>,
 ): Promise<SettingRow[]> {
   return http.put('/admin/settings', { items }).then((r) => r.data);
+}
+
+export type AdminFeedbackStatus = 'pending' | 'replied';
+export type AdminFeedbackType = 'quality' | 'factual' | 'other';
+
+export interface AdminFeedbackItem {
+  id: number;
+  projectId: number;
+  projectTitle: string;
+  userId: number;
+  userEmail: string;
+  userNickname: string;
+  chapterId: number | null;
+  chapterNumber: number | null;
+  chapterTitle: string | null;
+  type: string;
+  content: string;
+  status: AdminFeedbackStatus;
+  replyContent: string | null;
+  repliedAt: string | null;
+  adminUserId: number | null;
+  adminNickname: string | null;
+  createdAt: string;
+}
+
+export interface AdminFeedbackList {
+  items: AdminFeedbackItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export function listAdminFeedback(params: {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+  type?: AdminFeedbackType;
+  status?: AdminFeedbackStatus;
+}): Promise<AdminFeedbackList> {
+  return http.get('/admin/feedback', { params }).then((r) => r.data);
+}
+
+export function getAdminFeedback(id: number): Promise<AdminFeedbackItem> {
+  return http.get(`/admin/feedback/${id}`).then((r) => r.data);
+}
+
+export function replyAdminFeedback(
+  id: number,
+  content: string,
+): Promise<AdminFeedbackItem> {
+  return http.post(`/admin/feedback/${id}/reply`, { content }).then((r) => r.data);
 }

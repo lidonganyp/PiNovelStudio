@@ -10,6 +10,10 @@ export interface FeedbackItem {
   chapterId: number | null;
   type: string;
   content: string;
+  status: 'pending' | 'replied';
+  replyContent: string | null;
+  repliedAt: string | null;
+  adminNickname?: string | null;
   createdAt: string;
 }
 
