@@ -1,6 +1,8 @@
 /** Exact payment amount conversions shared by live payment adapters. */
 
 export const MAX_SAFE_PAYMENT_AMOUNT_FEN = BigInt(Number.MAX_SAFE_INTEGER);
+export const MIN_TOPUP_AMOUNT_FEN = 100n;
+export const MAX_TOPUP_AMOUNT_FEN = 100_000n;
 
 export function fenToYuan(amountFen: bigint): string {
   if (amountFen < 0n) throw new Error('payment amount cannot be negative');

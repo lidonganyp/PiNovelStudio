@@ -2,7 +2,7 @@
 /**
  * 充值页：选择金额与渠道，下单后轮询状态；stub 模式可模拟渠道通知。
  */
-import { onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import QRCode from 'qrcode';
 import { ElMessage } from 'element-plus';
 import { getBillingSummary, fenToYuan, yuanToFen } from '../../api/billing';
@@ -17,10 +17,14 @@ import type { PaymentChannel, PaymentConfig, PaymentOrder } from '../../api/paym
 import { useAuthStore } from '../../stores/auth';
 
 const AMOUNTS = [10, 30, 50, 100, 300];
+const MIN_CUSTOM_AMOUNT = 1;
+const MAX_CUSTOM_AMOUNT = 1000;
 
 const auth = useAuthStore();
 const summary = ref<BillingSummary | null>(null);
-const selectedAmount = ref<number>(30);
+const selectedAmount = ref<number | null>(30);
+const customAmountSelected = ref(false);
+const customAmountInput = ref('');
 const channel = ref<PaymentChannel>('alipay');
 const order = ref<PaymentOrder | null>(null);
 const submitting = ref(false);
@@ -28,6 +32,33 @@ const simulating = ref(false);
 const qrImage = ref('');
 const config = ref<PaymentConfig | null>(null);
 let timer: ReturnType<typeof setInterval> | null = null;
+
+const customAmount = computed<number | null>(() => {
+  if (!/^\d+$/.test(customAmountInput.value)) return null;
+  const parsed = Number(customAmountInput.value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+});
+
+const effectiveAmount = computed<number | null>(() =>
+  customAmountSelected.value ? customAmount.value : selectedAmount.value,
+);
+
+const canSubmit = computed(() => {
+  const amount = effectiveAmount.value;
+  return amount !== null
+    && Number.isInteger(amount)
+    && amount >= MIN_CUSTOM_AMOUNT
+    && amount <= MAX_CUSTOM_AMOUNT;
+});
+
+const customAmountError = computed(() => {
+  if (!customAmountSelected.value || customAmountInput.value === '') return '';
+  if (!/^\d+$/.test(customAmountInput.value)) return '请输入 1-1000 的整数金额';
+  if (customAmount.value === null || customAmount.value < MIN_CUSTOM_AMOUNT || customAmount.value > MAX_CUSTOM_AMOUNT) {
+    return '自定义金额必须是 1-1000 的整数';
+  }
+  return '';
+});
 
 watch(
   () => order.value?.qrContent,
@@ -74,12 +105,17 @@ async function poll(): Promise<void> {
 }
 
 async function startOrder(): Promise<void> {
+  const amount = effectiveAmount.value;
+  if (amount === null || amount < MIN_CUSTOM_AMOUNT || amount > MAX_CUSTOM_AMOUNT || !Number.isInteger(amount)) {
+    ElMessage.warning('充值金额必须是 1-1000 的整数');
+    return;
+  }
   submitting.value = true;
   stopPolling();
   try {
     order.value = await createPaymentOrder({
       channel: channel.value,
-      amount: yuanToFen(selectedAmount.value),
+      amount: yuanToFen(amount),
     });
     timer = setInterval(() => {
       void poll();
@@ -87,6 +123,20 @@ async function startOrder(): Promise<void> {
   } finally {
     submitting.value = false;
   }
+}
+
+function selectPreset(amount: number): void {
+  selectedAmount.value = amount;
+  customAmountSelected.value = false;
+}
+
+function selectCustomAmount(): void {
+  customAmountSelected.value = true;
+  selectedAmount.value = null;
+}
+
+function onCustomAmountInput(value: string): void {
+  customAmountInput.value = value.replace(/\D/g, '').slice(0, 4);
 }
 
 function openPayUrl(): void {
@@ -136,13 +186,41 @@ void loadSummary();
           v-for="amount in AMOUNTS"
           :key="amount"
           class="amount-card"
-          :class="{ selected: amount === selectedAmount }"
-          @click="selectedAmount = amount"
+          :class="{ selected: !customAmountSelected && amount === selectedAmount }"
+          @click="selectPreset(amount)"
         >
           <span class="num">¥{{ amount }}</span>
         </div>
+        <div
+          class="amount-card custom-card"
+          :class="{ selected: customAmountSelected }"
+          @click="selectCustomAmount"
+        >
+          <span class="num">自定义</span>
+        </div>
       </div>
-      <el-button type="primary" size="large" :loading="submitting" @click="startOrder">
+      <div v-if="customAmountSelected" class="custom-amount-field">
+        <el-input
+          :model-value="customAmountInput"
+          type="text"
+          inputmode="numeric"
+          maxlength="4"
+          placeholder="请输入 1-1000 的整数"
+          aria-label="自定义充值金额"
+          @update:model-value="onCustomAmountInput"
+        >
+          <template #prepend>¥</template>
+        </el-input>
+        <p v-if="customAmountError" class="field-error">{{ customAmountError }}</p>
+        <p v-else class="field-hint">最低 ¥1，最高 ¥1000，仅支持整数</p>
+      </div>
+      <el-button
+        type="primary"
+        size="large"
+        :loading="submitting"
+        :disabled="!canSubmit"
+        @click="startOrder"
+      >
         立即充值
       </el-button>
     </el-card>
@@ -223,6 +301,24 @@ void loadSummary();
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
   font-weight: 600;
+}
+.custom-card {
+  border-style: dashed;
+}
+.custom-amount-field {
+  max-width: 320px;
+  margin: -4px 0 20px;
+}
+.field-error,
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+.field-error {
+  color: var(--el-color-danger);
+}
+.field-hint {
+  color: var(--el-text-color-secondary);
 }
 .num {
   font-size: 18px;
