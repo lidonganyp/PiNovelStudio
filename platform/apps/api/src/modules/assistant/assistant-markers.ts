@@ -109,6 +109,11 @@ export function parseChineseChapterNumber(raw: string): number | null {
   const digits = Number.parseInt(raw, 10);
   if (Number.isInteger(digits) && digits >= 1) return digits;
   if (raw in ZH_NUM) return ZH_NUM[raw];
+  const normalized = raw.trim();
+  const match = normalized.match(/^([一二三四五六七八九])?十([一二三四五六七八九])?$/);
+  if (match) {
+    return (match[1] ? ZH_NUM[match[1]] * 10 : 10) + (match[2] ? ZH_NUM[match[2]] : 0);
+  }
   return null;
 }
 
@@ -192,7 +197,7 @@ export function inferGenerateChapterNumber(
   const marked = extractGenerateChapterNumber(reply);
   if (marked !== null) return marked;
   const match = userContent.match(
-    /(?:生成|写|来)\s*(?:一)?\s*第?\s*(\d+|[一二三四五六七八九十]+)\s*章/,
+    /(?:生成|写|来|续写|接着写|继续写)\s*(?:一)?\s*第?\s*(\d+|[一二三四五六七八九十]+)\s*章/,
   );
   if (!match) return null;
   return parseChineseChapterNumber(match[1]);

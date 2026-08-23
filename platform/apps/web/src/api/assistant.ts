@@ -114,6 +114,11 @@ export type AssistantStreamEvent =
       generationJobId?: string;
       artifacts?: AssistantArtifacts;
       steward?: StewardView;
+      contextManifest?: {
+        totalTokenBudget: number;
+        totalTokensUsed: number;
+        blocks: Array<{ name: string; included: boolean; tokensUsed: number; omittedReason?: string }>;
+      };
     };
 
 export function listMessages(projectId: number): Promise<AssistantMessage[]> {

@@ -112,6 +112,7 @@ export class AssistantController {
         generationJobId: result.generationJobId,
         artifacts: result.artifacts,
         steward: result.steward,
+        contextManifest: result.contextManifest,
       });
       reply.raw.end();
       return reply;

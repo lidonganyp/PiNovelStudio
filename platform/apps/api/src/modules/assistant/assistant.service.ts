@@ -35,7 +35,7 @@ import { parsePlannerEnvelope } from './planner-envelope';
 import { parseAssistantRequest } from '../context/assistant-contract';
 import { compileProjectContext } from '../context/context-compiler';
 import { envelopeFromUnknown, FailureHttpException, FAILURE_CODES, makeFailure } from '../context/failure-envelope';
-import { ASSISTANT_ACTIONS, type AssistantAction } from '../context/types';
+import { ASSISTANT_ACTIONS, type AssistantAction, type ContextManifest } from '../context/types';
 import { isUsableStoryOutline } from '../jobs/book-context';
 import {
   inferGenerateChapterNumber,
@@ -198,6 +198,7 @@ export class AssistantService {
     /** 实际执行的章节号（显式请求或模型判断）。 */
     chapterNumber?: number;
     steward?: StewardResult;
+    contextManifest?: ContextManifest;
   }> {
     const request = parseAssistantRequest(
       typeof contentOrDto === 'string' ? { content: contentOrDto } : contentOrDto,
@@ -304,20 +305,23 @@ export class AssistantService {
       records: Array<{ type: 'story_outline' | 'chapter_seed' | 'query_answer'; saved: boolean; id?: number }>;
     } | undefined;
     let steward: StewardResult | undefined;
+    let contextManifest: ContextManifest | undefined;
     try {
       if (env.PLANNER_MODE === 'http') {
         const endpoint = await this.resolvePlannerEndpoint();
+        const plannerContext = await this.buildPlannerMessages(
+          userId,
+          projectId,
+          content,
+          request.action,
+          request.chapterNumber,
+        );
+        contextManifest = plannerContext.manifest;
         const planned = await completePlannerChat({
           baseUrl: endpoint.baseUrl,
           apiKey: endpoint.apiKey,
           model: endpoint.model,
-          messages: await this.buildPlannerMessages(
-            userId,
-            projectId,
-            content,
-            request.action,
-            request.chapterNumber,
-          ),
+          messages: plannerContext.messages,
           timeoutMs: env.PLANNER_REQUEST_TIMEOUT_MS,
         });
         const envelope = parsePlannerEnvelope(planned.text, request.action);
@@ -520,6 +524,7 @@ export class AssistantService {
       action: resolvedAction,
       chapterNumber: resolvedChapterNumber,
       steward,
+      contextManifest,
     };
   }
 
@@ -589,7 +594,7 @@ export class AssistantService {
     currentUserContent: string,
     action?: AssistantAction,
     chapterNumber?: number,
-  ): Promise<PlannerChatMessage[]> {
+  ): Promise<{ messages: PlannerChatMessage[]; manifest: ContextManifest }> {
     const [project, documents, characters, chapters, history, outlineNodes] = await Promise.all([
       this.prisma.novelProject.findFirst({
         where: { id: projectId, userId, deletedAt: null },
@@ -599,15 +604,6 @@ export class AssistantService {
           projectId,
           userId,
           deletedAt: null,
-          documentType: {
-            in: [
-              'story_outline',
-              'creative_constitution',
-              'worldbuilding',
-              'style_profile',
-              'narrative_state',
-            ],
-          },
         },
         select: { id: true, documentType: true, content: true, currentVersion: true },
       }),
@@ -623,13 +619,24 @@ export class AssistantService {
           currentState: true,
           relationships: true,
           personality: true,
+          abilities: true,
+          secrets: true,
+          characterArc: true,
+          notes: true,
         },
       }),
       this.prisma.novelChapter.findMany({
         where: { projectId, userId, deletedAt: null },
         orderBy: { chapterNumber: 'desc' },
-        select: { id: true, chapterNumber: true, content: true, seed: true },
-        take: 8,
+        select: {
+          id: true,
+          chapterNumber: true,
+          title: true,
+          status: true,
+          wordCount: true,
+          content: true,
+          seed: true,
+        },
       }),
       this.prisma.novelAssistantMessage.findMany({
         where: { projectId, userId, deletedAt: null },
@@ -640,14 +647,27 @@ export class AssistantService {
       this.prisma.novelOutlineNode.findMany({
         where: { projectId, userId, deletedAt: null },
         orderBy: { sortOrder: 'asc' },
-        select: { title: true, summary: true, nodeType: true },
+        select: {
+          title: true,
+          summary: true,
+          nodeType: true,
+          narrativeGoal: true,
+          conflict: true,
+          turningPoint: true,
+          endingHook: true,
+        },
       }),
     ]);
     const byType = new Map(documents.map((row) => [row.documentType, row]));
-    const lastChapterNumber = chapters[0]?.chapterNumber ?? 0;
+    const lastChapterNumber = chapters.reduce(
+      (max, row) => Math.max(max, row.chapterNumber),
+      0,
+    );
     const targetChapter = chapterNumber ?? lastChapterNumber + 1;
     const previousChapter = chapters.find((row) => row.chapterNumber === targetChapter - 1)
-      ?? (targetChapter > 1 ? chapters.find((row) => row.chapterNumber === lastChapterNumber) : undefined);
+      ?? chapters
+        .filter((row) => row.chapterNumber < targetChapter)
+        .sort((left, right) => right.chapterNumber - left.chapterNumber)[0];
     const currentChapter = chapters.find((row) => row.chapterNumber === targetChapter);
     const seed = currentChapter?.seed
       ? {
@@ -665,19 +685,63 @@ export class AssistantService {
     const outlineText = outline?.content?.trim() ?? '';
     const compiled = compileProjectContext({
       storyOutline: outline,
+      chapterCatalog: chapters.map((row) => ({
+        chapterNumber: row.chapterNumber,
+        title: row.title,
+        status: row.status,
+        wordCount: row.wordCount,
+        content: row.content,
+        seed: row.seed,
+        outlineSummary: outlineNodes
+          .filter((node) => node.title.includes(`第${row.chapterNumber}章`))
+          .map((node) => [node.title, node.summary, node.narrativeGoal, node.conflict, node.turningPoint, node.endingHook]
+            .filter(Boolean).join('；'))
+          .join('\n'),
+      })),
+      supportingMaterials: documents
+        .filter((row) => ![
+          'story_outline',
+          'creative_constitution',
+          'worldbuilding',
+          'style_profile',
+          'narrative_state',
+          'material_proposal',
+        ].includes(row.documentType))
+        .map((row) => ({ documentType: row.documentType, title: row.documentType, content: row.content })),
       constitution: byType.get('creative_constitution'),
-      worldbuilding: byType.get('worldbuilding'),
+      worldbuilding: byType.get('worldbuilding')
+        ? {
+            ...byType.get('worldbuilding'),
+            content: [
+              byType.get('worldbuilding')?.content,
+              Array.isArray(project?.worldKeyTerms) && project.worldKeyTerms.length > 0
+                ? `\n世界观关键词：${project.worldKeyTerms.join('、')}`
+                : '',
+            ].filter(Boolean).join(''),
+          }
+        : (Array.isArray(project?.worldKeyTerms) && project.worldKeyTerms.length > 0
+            ? { content: `世界观关键词：${project.worldKeyTerms.join('、')}` }
+            : undefined),
       styleProfile: byType.get('style_profile'),
       narrativeState: byType.get('narrative_state'),
       chapterSeed: seed,
       currentChapterOutline: chapterNode
-        ? { content: `${chapterNode.title}\n${chapterNode.summary}`.trim() }
+        ? {
+            content: [
+              chapterNode.title,
+              chapterNode.summary,
+              chapterNode.narrativeGoal && `叙事目标：${chapterNode.narrativeGoal}`,
+              chapterNode.conflict && `冲突：${chapterNode.conflict}`,
+              chapterNode.turningPoint && `转折：${chapterNode.turningPoint}`,
+              chapterNode.endingHook && `章末钩子：${chapterNode.endingHook}`,
+            ].filter(Boolean).join('\n').trim(),
+          }
         : undefined,
       characters,
       previousChapter: previousChapter
         ? { chapterNumber: previousChapter.chapterNumber, content: previousChapter.content }
         : undefined,
-      evidenceQuery: action === 'query_project' && previousChapter
+      evidenceQuery: action === 'query_project'
         ? { query: currentUserContent.slice(0, 40), purpose: 'query_project' }
         : undefined,
       enforceStateHash: action === 'generate_chapter',
@@ -691,7 +755,7 @@ export class AssistantService {
         workflowState: project?.workflowState ?? 'project_created',
         hasOutline: isUsableStoryOutline(outlineText),
         characterNames: characters.map((row) => row.name),
-        chapterCount: lastChapterNumber > 0 ? lastChapterNumber : 0,
+         chapterCount: chapters.length,
         nextChapterNumber: lastChapterNumber + 1,
         action,
         bookContext: compiled.bookBrief,
@@ -704,7 +768,10 @@ export class AssistantService {
       // 单条历史截断，防超长消息撑爆规划模型上下文。
       return [{ role: row.role, content: row.content.slice(0, MAX_HISTORY_MESSAGE_CHARS) }];
     });
-    return [system, ...prior, { role: 'user', content: currentUserContent }];
+    return {
+      messages: [system, ...prior, { role: 'user', content: currentUserContent }],
+      manifest: compiled.manifest,
+    };
   }
 
   private async closeFailedAssistantJob(jobId: string): Promise<void> {

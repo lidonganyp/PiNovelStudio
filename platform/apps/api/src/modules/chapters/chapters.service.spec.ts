@@ -3,6 +3,84 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChaptersService } from './chapters.service';
 
 describe('ChaptersService chapter-number uniqueness', () => {
+  it('updates and returns a manually changed chapter number', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const saved = {
+      id: 3,
+      projectId: 2,
+      userId: 1,
+      chapterNumber: 7,
+      title: '标题',
+      content: '正文',
+      wordCount: 2,
+      status: 'draft',
+      version: 2,
+      generationJobId: null,
+      seed: null,
+    };
+    const prisma = {
+      novelProject: {
+        findFirst: vi.fn().mockResolvedValue({ id: 2, userId: 1, deletedAt: null }),
+      },
+      novelChapter: {
+        findFirst: vi.fn()
+          .mockResolvedValueOnce({ ...saved, chapterNumber: 3, version: 1 })
+          .mockResolvedValueOnce(null),
+      },
+      $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({
+          novelChapter: {
+            updateMany,
+            findUniqueOrThrow: vi.fn().mockResolvedValue(saved),
+          },
+          novelChapterVersion: { create: vi.fn() },
+        }),
+      ),
+    };
+    const service = new ChaptersService(prisma as never);
+
+    await expect(service.update(1, 2, 3, {
+      chapterNumber: 7,
+      title: '标题',
+      content: '正文',
+      expectedVersion: 1,
+    })).resolves.toMatchObject({ chapterNumber: 7 });
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ chapterNumber: 7 }),
+    }));
+  });
+
+  it('rejects a manually changed chapter number already used by another chapter', async () => {
+    const prisma = {
+      novelProject: {
+        findFirst: vi.fn().mockResolvedValue({ id: 2, userId: 1, deletedAt: null }),
+      },
+      novelChapter: {
+        findFirst: vi.fn()
+          .mockResolvedValueOnce({
+            id: 3,
+            projectId: 2,
+            userId: 1,
+            chapterNumber: 3,
+            title: '',
+            content: '',
+            wordCount: 0,
+            status: 'draft',
+            version: 1,
+            generationJobId: null,
+            seed: null,
+          })
+          .mockResolvedValueOnce({ id: 8, chapterNumber: 7 }),
+      },
+    };
+    const service = new ChaptersService(prisma as never);
+
+    await expect(service.update(1, 2, 3, {
+      chapterNumber: 7,
+      expectedVersion: 1,
+    })).rejects.toMatchObject({ status: 409 });
+  });
+
   it('maps a concurrent duplicate chapter number insert to a conflict', async () => {
     const prisma = {
       novelProject: {

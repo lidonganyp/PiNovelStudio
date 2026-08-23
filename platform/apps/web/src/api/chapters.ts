@@ -78,7 +78,12 @@ export function createChapter(
 export function updateChapter(
   projectId: number,
   chapterId: number,
-  input: { title?: string; content?: string; expectedVersion: number },
+  input: {
+    chapterNumber?: number;
+    title?: string;
+    content?: string;
+    expectedVersion: number;
+  },
 ): Promise<Chapter> {
   return http
     .put(`/projects/${projectId}/chapters/${chapterId}`, input)

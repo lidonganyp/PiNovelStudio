@@ -33,6 +33,10 @@ export interface CompilerCharacter {
   currentState?: string;
   relationships?: string;
   personality?: string;
+  abilities?: string;
+  secrets?: string;
+  characterArc?: string;
+  notes?: string;
   aliases?: unknown;
 }
 
@@ -46,8 +50,20 @@ export interface CompilerSeed {
   endingGoal: string;
 }
 
+export interface CompilerChapter {
+  chapterNumber: number;
+  title?: string | null;
+  status?: string | null;
+  wordCount?: number | null;
+  content: string;
+  seed?: Partial<CompilerSeed> | null;
+  outlineSummary?: string | null;
+}
+
 export interface CompileProjectContextInput {
   storyOutline?: { id?: number; content: string; currentVersion?: number };
+  chapterCatalog?: CompilerChapter[];
+  supportingMaterials?: Array<{ documentType: string; title?: string; content: string }>;
   chapterSeed?: CompilerSeed;
   characters: CompilerCharacter[];
   narrativeState?: { id?: number; content: string; currentVersion?: number };
@@ -128,6 +144,42 @@ export function compileProjectContext(input: CompileProjectContextInput): Compil
     omittedReason: input.storyOutline?.content
       ? 'polluted_or_unusable_story_outline'
       : 'story_outline_missing',
+  });
+
+  const chapterCatalogText = (input.chapterCatalog ?? [])
+    .slice()
+    .sort((left, right) => left.chapterNumber - right.chapterNumber)
+    .map((chapter) => {
+      const seed = chapter.seed;
+      const seedSummary = [seed?.intent, seed?.promises, seed?.endingGoal]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join('；');
+      const tail = chapter.content?.trim() ? excerptLastSentences(chapter.content, 120) : '';
+      return [
+        `第${chapter.chapterNumber}章｜${chapter.title?.trim() || '未命名'}`,
+        `状态：${chapter.status || 'unknown'}｜字数：${chapter.wordCount ?? 0}`,
+        seedSummary ? `种子：${seedSummary}` : '',
+        chapter.outlineSummary?.trim() ? `章节节点：${chapter.outlineSummary.trim()}` : '',
+        tail ? `停点摘要：${tail}` : '',
+      ].filter(Boolean).join('；');
+    }).join('\n');
+  const chapterCatalogClip = includeBlock(blocks, {
+    name: 'chapterCatalog',
+    sourceType: 'novel_chapters.catalog',
+    authorConfirmed: Boolean(input.chapterCatalog?.length),
+    text: chapterCatalogText,
+    omittedReason: 'chapter_catalog_missing',
+  });
+  const supportingMaterialsText = (input.supportingMaterials ?? [])
+    .filter((material) => material.content.trim())
+    .map((material) => `【${material.documentType}】${material.title?.trim() || ''}\n${material.content.trim()}`)
+    .join('\n\n');
+  const supportingMaterialsClip = includeBlock(blocks, {
+    name: 'supportingMaterials',
+    sourceType: 'novel_documents.additional',
+    authorConfirmed: Boolean(input.supportingMaterials?.length),
+    text: supportingMaterialsText,
+    omittedReason: 'additional_materials_missing',
   });
 
   const constitutionClip = includeBlock(blocks, {
@@ -246,10 +298,17 @@ export function compileProjectContext(input: CompileProjectContextInput): Compil
     });
   }
 
-  const selectedEvidenceSpans = input.evidenceQuery && input.previousChapter
-    ? searchChapterSpans({
-        chapterNumber: input.previousChapter.chapterNumber,
-        content: input.previousChapter.content,
+  const evidenceChapters = input.chapterCatalog?.length
+    ? input.chapterCatalog.map((chapter) => ({
+        chapterNumber: chapter.chapterNumber,
+        content: chapter.content,
+      }))
+    : input.previousChapter
+      ? [{ chapterNumber: input.previousChapter.chapterNumber, content: input.previousChapter.content }]
+      : [];
+  const selectedEvidenceSpans = input.evidenceQuery && evidenceChapters.length > 0
+    ? searchChapterCollectionSpans({
+        chapters: evidenceChapters,
         query: input.evidenceQuery.query,
         purpose: input.evidenceQuery.purpose,
       })
@@ -282,6 +341,8 @@ export function compileProjectContext(input: CompileProjectContextInput): Compil
     section('创作宪法', constitutionClip.text),
     section('世界观', worldClip.text),
     section('大纲', outlineClip.text),
+    section('章节目录与历史节点', chapterCatalogClip.text),
+    section('其他项目资料', supportingMaterialsClip.text),
     section('本章规划', chapterOutlineClip.text),
     section('章节种子', seedClip.text),
     section('角色', characterClip.text),
@@ -343,12 +404,39 @@ export function searchChapterSpans(input: {
   return spans;
 }
 
+export function searchChapterCollectionSpans(input: {
+  chapters: Array<{ chapterNumber: number; content: string }>;
+  query: string;
+  purpose: string;
+}): EvidenceSpan[] {
+  const query = input.query.trim();
+  if (!query) return [];
+  return input.chapters
+    .flatMap((chapter) => searchChapterSpans({
+      chapterNumber: chapter.chapterNumber,
+      content: chapter.content,
+      query,
+      purpose: input.purpose,
+    }))
+    .slice(0, MAX_EVIDENCE_SPANS);
+}
+
 function section(title: string, text: string): string {
   return text.trim() ? `## ${title}\n${text.trim()}` : '';
 }
 
 function characterLine(row: CompilerCharacter): string {
-  const extras = [row.goals, row.motivation, row.currentState].filter((item) => item?.trim());
+  const extras = [
+    row.goals && `目标：${row.goals}`,
+    row.motivation && `动机：${row.motivation}`,
+    row.currentState && `当前状态：${row.currentState}`,
+    row.relationships && `关系：${row.relationships}`,
+    row.personality && `性格：${row.personality}`,
+    row.abilities && `能力/装备：${row.abilities}`,
+    row.secrets && `秘密：${row.secrets}`,
+    row.characterArc && `人物弧：${row.characterArc}`,
+    row.notes && `备注：${row.notes}`,
+  ].filter((item): item is string => Boolean(item?.trim()));
   const suffix = extras.length > 0 ? `；${extras.join('；')}` : '';
   return `${row.name}（${row.roleType}）：${row.identity}${suffix}`;
 }

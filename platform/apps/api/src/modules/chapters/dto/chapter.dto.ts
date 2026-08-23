@@ -23,6 +23,12 @@ export class CreateChapterDto {
 }
 
 export class UpdateChapterDto {
+  @Type(() => Number)
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  chapterNumber?: number;
+
   @IsOptional()
   @IsString()
   @MaxLength(200)

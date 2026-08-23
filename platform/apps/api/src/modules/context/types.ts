@@ -98,6 +98,8 @@ export type ContextBlockName =
   | 'creativeConstitution'
   | 'worldbuilding'
   | 'storyOutline'
+  | 'chapterCatalog'
+  | 'supportingMaterials'
   | 'currentChapterOutline'
   | 'chapterSeed'
   | 'characterStates'
@@ -133,6 +135,8 @@ export const DEFAULT_BLOCK_TOKEN_BUDGETS: Record<ContextBlockName, number> = {
   creativeConstitution: 2000,
   worldbuilding: 2000,
   storyOutline: 4000,
+  chapterCatalog: 3000,
+  supportingMaterials: 2000,
   currentChapterOutline: 1000,
   chapterSeed: 2000,
   characterStates: 3000,

@@ -14,6 +14,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ updated: [chapter: Chapter] }>();
 
+const chapterNumber = ref(props.chapter.chapterNumber);
 const title = ref(props.chapter.title);
 const content = ref(props.chapter.content);
 const saving = ref(false);
@@ -21,6 +22,7 @@ const saving = ref(false);
 watch(
   () => props.chapter,
   (next) => {
+    chapterNumber.value = next.chapterNumber;
     title.value = next.title;
     content.value = next.content;
   },
@@ -30,6 +32,7 @@ async function save(): Promise<void> {
   saving.value = true;
   try {
     const updated = await updateChapter(props.projectId, props.chapter.id, {
+      chapterNumber: chapterNumber.value,
       title: title.value,
       content: content.value,
       expectedVersion: props.chapter.version,
@@ -38,9 +41,12 @@ async function save(): Promise<void> {
     ElMessage.success('已保存（新版本已记录）');
   } catch (err: unknown) {
     // 409 版本冲突：让用户选择是否用本地内容覆盖远端
-    const isConflict =
-      (err as { response?: { status?: number } }).response?.status === 409;
-    if (isConflict) {
+    const response = (err as {
+      response?: { status?: number; data?: { currentVersion?: number } };
+    }).response;
+    const isConflict = response?.status === 409;
+    const currentVersion = response?.data?.currentVersion;
+    if (isConflict && typeof currentVersion === 'number') {
       try {
         await ElMessageBox.confirm(
           '章节已被其他操作修改（例如生成任务刚写入新正文）。点击「覆盖」将以当前编辑内容保存为新版本。',
@@ -59,6 +65,7 @@ async function save(): Promise<void> {
           props.projectId,
           props.chapter.id,
           {
+            chapterNumber: chapterNumber.value,
             title: title.value,
             content: content.value,
             expectedVersion: currentVersion,
@@ -71,6 +78,9 @@ async function save(): Promise<void> {
       }
     }
     // 其他错误 http 拦截器已统一提示
+    if (isConflict && typeof currentVersion !== 'number') {
+      ElMessage.error('章节编号已存在，请使用其他编号');
+    }
   } finally {
     saving.value = false;
   }
@@ -80,6 +90,15 @@ async function save(): Promise<void> {
 <template>
   <div class="chapter-editor">
     <div class="head">
+      <span class="chapter-number-label">章节编号</span>
+      <el-input-number
+        v-model="chapterNumber"
+        :min="1"
+        :precision="0"
+        controls-position="right"
+        class="chapter-number-input"
+        aria-label="章节编号"
+      />
       <span class="chapter-no">第 {{ chapter.chapterNumber }} 章</span>
       <el-input v-model="title" maxlength="200" placeholder="章节标题" class="title-input" />
       <span class="word-count">{{ content.length }} 字符 / 官方字数 {{ chapter.wordCount }}</span>
@@ -110,6 +129,9 @@ async function save(): Promise<void> {
 .chapter-no {
   font-weight: 600;
   white-space: nowrap;
+}
+.chapter-number-input {
+  width: 120px;
 }
 .title-input {
   flex: 1;

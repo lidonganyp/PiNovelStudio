@@ -85,6 +85,7 @@ function onDelete(chapter: Chapter): void {
         + 新章
       </el-button>
     </div>
+    <div class="chapter-list">
     <el-empty
       v-if="chapters.length === 0"
       description="尚无章节"
@@ -122,16 +123,30 @@ function onDelete(chapter: Chapter): void {
         </el-button>
       </div>
     </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.chapter-tree {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
 .tree-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 auto;
   font-weight: 600;
   padding: 4px 4px 10px;
+}
+.chapter-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 .chapter-item {
   border-radius: 8px;

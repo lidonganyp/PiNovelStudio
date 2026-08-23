@@ -94,7 +94,10 @@ function selectChapter(id: number): void {
 /** 单章刷新（生成成功后替换本地行）。 */
 function patchChapter(next: Chapter): void {
   const index = chapters.value.findIndex((c) => c.id === next.id);
-  if (index >= 0) chapters.value[index] = next;
+  if (index >= 0) {
+    chapters.value[index] = next;
+    chapters.value = [...chapters.value].sort((a, b) => a.chapterNumber - b.chapterNumber);
+  }
 }
 
 /** 提交生成：种子完整后调用，jobId 交给任务面板跟踪。 */
@@ -263,7 +266,8 @@ defineExpose({ loadChapters, patchChapter });
   width: 264px;
   flex-shrink: 0;
   border-right: 1px solid var(--el-border-color-lighter);
-  overflow-y: auto;
+  overflow: hidden;
+  min-height: 0;
   padding: 10px 8px;
 }
 .center-pane {

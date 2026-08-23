@@ -106,9 +106,26 @@ export class ChaptersService {
         currentVersion: chapter.version,
       });
     }
+    const nextChapterNumber = dto.chapterNumber ?? chapter.chapterNumber;
+    if (nextChapterNumber !== chapter.chapterNumber) {
+      const duplicate = await this.prisma.novelChapter.findFirst({
+        where: {
+          projectId,
+          chapterNumber: nextChapterNumber,
+          deletedAt: null,
+          id: { not: chapterId },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new ConflictException('该章节序号已存在');
+      }
+    }
     const nextTitle = dto.title ?? chapter.title;
     const nextContent = dto.content ?? chapter.content;
-    const updated = await this.prisma.$transaction(async (tx) => {
+    let updated;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
       const write = await tx.novelChapter.updateMany({
         where: {
           id: chapterId,
@@ -118,6 +135,7 @@ export class ChaptersService {
           version: dto.expectedVersion,
         },
         data: {
+          chapterNumber: nextChapterNumber,
           title: nextTitle,
           content: nextContent,
           wordCount: countWords(nextContent),
@@ -131,7 +149,7 @@ export class ChaptersService {
         });
         throw new ConflictException({
           statusCode: 409,
-          message: '绔犺妭鐗堟湰鍐茬獾',
+          message: '章节版本冲突',
           reason: 'version_conflict',
           currentVersion: current?.version ?? chapter.version,
         });
@@ -154,7 +172,14 @@ export class ChaptersService {
         },
       });
       return saved;
-    });
+      });
+    } catch (error: unknown) {
+      if (typeof error === 'object' && error !== null &&
+        'code' in error && (error as { code?: unknown }).code === 'P2002') {
+        throw new ConflictException('该章节序号已存在');
+      }
+      throw error;
+    }
     return this.toChapterView(updated);
   }
 

@@ -5,6 +5,7 @@ import {
   compileProjectContext,
   findStateHashMismatch,
   hashChapterText,
+  searchChapterCollectionSpans,
   searchChapterSpans,
 } from './context-compiler';
 import { estimateTokens, totalBudget } from './token-budget';
@@ -20,6 +21,52 @@ import {
 } from './fixtures';
 
 describe('ContextCompiler', () => {
+  it('includes a compact catalog for every chapter without injecting full chapter prose', () => {
+    const compiled = compileProjectContext({
+      characters: FIXTURE_CHARACTERS,
+      supportingMaterials: [{ documentType: 'equipment', title: '道具表', content: '铜钥匙：开启北门；黑曜石：封存记忆。' }],
+      chapterCatalog: [
+        { chapterNumber: 1, title: '醒来', status: 'generated', wordCount: 1200, content: `${'第一章正文，包含旧钟和失踪的钥匙。'.repeat(20)}停在北门。`, seed: null },
+        { chapterNumber: 2, title: '旧钟', status: 'generated', wordCount: 1300, content: '第二章正文，沈砚发现钥匙上的血迹。', seed: { intent: '追查钥匙', mustInclude: '', forbiddenFacts: '', characterMotives: '', promises: '查明血迹来源', endingGoal: '留下追踪线索' } },
+        { chapterNumber: 17, title: '回声', status: 'draft', wordCount: 0, content: '', seed: null },
+      ],
+    });
+    const catalog = compiled.manifest.blocks.find((block) => block.name === 'chapterCatalog');
+    expect(catalog?.included).toBe(true);
+    expect(compiled.bookBrief).toContain('第1章｜醒来');
+    expect(compiled.bookBrief).toContain('第17章｜回声');
+    expect(compiled.bookBrief).toContain('铜钥匙：开启北门');
+    expect(compiled.bookBrief).not.toContain('第一章正文，包含旧钟和失踪的钥匙。'.repeat(20));
+  });
+
+  it('keeps character relationships, personality, equipment, secrets, and arc in the context', () => {
+    const compiled = compileProjectContext({
+      characters: [{
+        name: '沈砚', roleType: 'protagonist', identity: '调查者',
+        goals: '查清真相', motivation: '寻找父亲', currentState: '持有铜钥匙',
+        relationships: '与林默互信未稳', personality: '谨慎', abilities: '铜钥匙',
+        secrets: '隐瞒旧案', characterArc: '从逃避到承担', notes: '不可轻信陌生人',
+      }],
+    });
+    expect(compiled.bookBrief).toContain('关系：与林默互信未稳');
+    expect(compiled.bookBrief).toContain('能力/装备：铜钥匙');
+    expect(compiled.bookBrief).toContain('人物弧：从逃避到承担');
+  });
+
+  it('searches bounded evidence across historical chapters', () => {
+    const spans = searchChapterCollectionSpans({
+      chapters: [
+        { chapterNumber: 1, content: '沈砚第一次听见旧钟的回声。' },
+        { chapterNumber: 12, content: `${'无关内容。'.repeat(80)}钥匙上的血迹指向北门。` },
+      ],
+      query: '血迹',
+      purpose: 'query_project',
+    });
+    expect(spans[0].chapterNumber).toBe(12);
+    expect(spans[0].text).toContain('血迹');
+    expect(spans[0].text.length).toBeLessThan(12 * 100);
+  });
+
   it('rejects polluted story outlines and does not copy chapter-seed dumps', () => {
     const compiled = compileProjectContext({
       storyOutline: { id: 1, content: FIXTURE_POLLUTED_OUTLINE, currentVersion: 3 },

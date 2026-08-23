@@ -66,11 +66,11 @@ function autoActionSection(): string {
 - query_project（资料查询）：闲聊、提问、要建议，或没想清楚要写什么。
 - plan_story_outline（全书规划）：用户要全书/卷级大纲、新书规划、角色设定。
 - plan_chapter（章节规划）：用户要某一章的章纲/种子/写作计划。
-- generate_chapter（正文生成）：用户明确要求生成/写某一章正文，且指明了章节号或可从上下文无歧义推断。
+- generate_chapter（正文生成）：用户明确要求生成/写/续写/接着写某一章正文，且指明了章节号或可从上下文无歧义推断。
 
 判断规则：
 1. 必须在 JSON 中输出 "action" 字段，值为上面四个之一。
-2. 选 generate_chapter 要非常克制：只有用户明确表达"生成/写第X章正文"才可选；生成会真实扣费并调用系统统一链路。用户只说"帮我规划下一章"是 plan_chapter，不是 generate_chapter。
+2. 选 generate_chapter 要非常克制：只有用户明确表达"生成/写/续写第X章正文"才可选；生成会真实扣费并调用系统统一链路。用户只说"帮我规划下一章"是 plan_chapter，不是 generate_chapter。
 3. 想生成但缺章节号时，不要选 generate_chapter，改用 query_project 在 reply 里询问用户章节号。
 4. 不确定时选 query_project 并在 reply 里澄清。
 5. 选了 plan_chapter 就必须在同一个 JSON 里输出完整 chapterSeed 对象（chapterNumber、intent、endingGoal 必填），不能只在 reply 里说要规划；缺 chapterSeed 的规划会被系统拒绝。`;
