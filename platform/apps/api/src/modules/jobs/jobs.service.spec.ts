@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FAILURE_CODES, makeFailure } from '../context/failure-envelope';
 import { JobFailureError } from './job-failure';
 import { JobsService } from './jobs.service';
+import { env } from '../../config/env';
 
 function makeService(runtimeResult: unknown) {
   const prisma = {
@@ -214,15 +215,33 @@ describe('JobsService HTTP generation delivery contract', () => {
 
   it('fails before creating a job when the writer rate is not configured', async () => {
     const { service, prisma, rates } = makeService({ status: 'ok', result: {} });
+    const previous = env.NOVEL_RUNTIME_MODE;
+    (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = 'http';
     prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
       chapterNumber: 1,
       version: 1,
       seed: { intent: '推进冲突', endingGoal: '留下悬念' },
     });
     rates.buildRateSnapshot.mockRejectedValue(new Error('writer rate missing'));
+    try {
+      await expect(service.submitChapterGeneration(1, 2, 3)).rejects.toThrow('writer rate missing');
+      expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
+    } finally {
+      (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
+    }
+  });
 
-    await expect(service.submitChapterGeneration(1, 2, 3)).rejects.toThrow('writer rate missing');
-    expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
+  it('does not require a stub-writer rate for the local stub runtime', async () => {
+    const { service, rates } = makeService({ status: 'ok', result: {} });
+    const previous = env.NOVEL_RUNTIME_MODE;
+    (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = 'stub';
+    try {
+      const amount = await (service as never as { estimateMaxCharge(): Promise<bigint> }).estimateMaxCharge();
+      expect(amount).toBe(50n);
+      expect(rates.buildRateSnapshot).not.toHaveBeenCalled();
+    } finally {
+      (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
+    }
   });
 
   it('does not report insufficient balance when creating a hold fails for another reason', async () => {

@@ -182,12 +182,13 @@ describe('project context reader', () => {
 });
 
 describe('material readiness', () => {
-  it('asks for confirmation instead of hard-blocking missing genre, world, constitution, and style', () => {
+  it('auto-fills inferable materials while retaining confirmation for missing genre', () => {
     const snapshot = compileProjectContextSnapshot(baseRecords());
     const readiness = classifyMaterialReadiness(snapshot, 2);
     expect(readiness.status).toBe('confirmation_required');
     expect(readiness.missing).toEqual(expect.arrayContaining(['项目类型', '世界观', '创作宪法', '风格档案']));
-    expect(readiness.proposals.every((row) => row.field === 'chapter_seed' || row.requiresConfirmation || row.field === 'character_states')).toBe(true);
+    expect(readiness.proposals.find((row) => row.field === 'genre')?.requiresConfirmation).toBe(true);
+    expect(readiness.proposals.filter((row) => row.field !== 'genre' && row.value.trim()).every((row) => !row.requiresConfirmation)).toBe(true);
     expect(JSON.stringify(readiness.proposals)).not.toContain('platform-default');
     expect(readiness.proposals.find((row) => row.field === 'genre')?.value).not.toBe('都市');
   });
@@ -202,7 +203,7 @@ describe('material readiness', () => {
     expect(seed?.value).toContain('不要相信沈建国');
     expect(seed?.requiresConfirmation).toBe(false);
     const style = readiness.proposals.find((row) => row.field === 'style_profile');
-    expect(style?.requiresConfirmation).toBe(true);
+    expect(style?.requiresConfirmation).toBe(false);
     expect(style?.value).not.toContain('platform-default');
   });
 

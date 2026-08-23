@@ -99,7 +99,7 @@ async function save(): Promise<void> {
         class="chapter-number-input"
         aria-label="章节编号"
       />
-      <span class="chapter-no">第 {{ chapter.chapterNumber }} 章</span>
+      <span class="chapter-no">第 {{ chapterNumber }} 章</span>
       <el-input v-model="title" maxlength="200" placeholder="章节标题" class="title-input" />
       <span class="word-count">{{ content.length }} 字符 / 官方字数 {{ chapter.wordCount }}</span>
       <el-button type="primary" :loading="saving" @click="save">保存</el-button>

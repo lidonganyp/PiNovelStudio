@@ -3,6 +3,7 @@
  * 普通资料缺失不得变成技术阻断；推断必须带来源，且不得使用平台默认题材/风格/宪法。
  */
 import type { ProjectContextSnapshot } from './project-context-reader';
+import { chapterTitleMatches } from './chapter-number';
 
 export type MaterialReadinessStatus =
   | 'ready'
@@ -57,6 +58,8 @@ export function classifyMaterialReadiness(
       field: 'genre',
       value: inferred?.value ?? '',
       source: inferred?.source ?? [],
+      // Genre is an author contract field. Even when text suggests a genre,
+      // do not silently replace the author's declaration with an inference.
       requiresConfirmation: true,
     });
   }
@@ -209,7 +212,7 @@ function inferWorldbuilding(snapshot: ProjectContextSnapshot, corpus: { text: st
     field: 'worldbuilding',
     value,
     source: corpus.sources.filter((item) => item.startsWith('chapter:') || item === 'story_outline' || item.startsWith('character:')),
-    requiresConfirmation: true,
+    requiresConfirmation: value.length === 0,
   };
 }
 
@@ -226,7 +229,7 @@ function inferConstitution(snapshot: ProjectContextSnapshot, corpus: { text: str
     field: 'creative_constitution',
     value,
     source: corpus.sources,
-    requiresConfirmation: true,
+    requiresConfirmation: value.length === 0,
   };
 }
 
@@ -261,7 +264,7 @@ function inferStyle(snapshot: ProjectContextSnapshot, corpus: { text: string; so
     source: previous
       ? [`chapter:${snapshot.previousContinuation?.chapterNumber}`]
       : [...corpus.sources, 'assistant:initial_style_deferred'],
-    requiresConfirmation: true,
+    requiresConfirmation: value.length === 0,
   };
 }
 
@@ -330,17 +333,8 @@ function inferCharacterNotes(snapshot: ProjectContextSnapshot, corpus: { text: s
     field: 'character_states',
     value: lines.join('\n'),
     source: corpus.sources.filter((item) => item.startsWith('character:') || item.startsWith('chapter:')),
-    requiresConfirmation: snapshot.characters.some((row) => !row.goals.trim() && !row.motivation.trim()),
+    requiresConfirmation: lines.length === 0 || lines.every((line) => !line.trim()),
   };
-}
-
-function chapterTitleMatches(text: string, chapterNumber: number): boolean {
-  const digits = new Map([
-    [1, '一'], [2, '二'], [3, '三'], [4, '四'], [5, '五'],
-    [6, '六'], [7, '七'], [8, '八'], [9, '九'], [10, '十'],
-  ]);
-  const chinese = digits.get(chapterNumber);
-  return text.includes(`第${chapterNumber}章`) || Boolean(chinese && text.includes(`第${chinese}章`));
 }
 
 function extractNamedDetails(snapshot: ProjectContextSnapshot): string[] {

@@ -173,7 +173,7 @@ describe('AssistantService billing delivery contract', () => {
 
     const result = await service.post(1, 128, '生成第二章');
     expect(result.steward?.status).toBe('confirmation_required');
-    expect(result.chunks[0]).toContain('草案');
+    expect(result.chunks[0]).toContain('仍需你确认的内容');
     expect(result.generationJobId).toBeUndefined();
     expect(jobs.assertAuthorContract).not.toHaveBeenCalled();
     expect(jobs.submitChapterGeneration).not.toHaveBeenCalled();

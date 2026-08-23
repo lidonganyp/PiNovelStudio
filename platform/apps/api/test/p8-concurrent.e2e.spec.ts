@@ -164,8 +164,8 @@ describe('P8-2 并发生成与对账', () => {
     expect(identity.balanceMatches).toBe(true);
     expect(identity.availableMatches).toBe(true);
     expect(identity.reservedFen).toBe(0n);
-    expect(identity.settledFen).toBeGreaterThan(0n);
-    expect(identity.balanceFen).toBe(10000n - identity.settledFen);
+    expect(identity.settledFen).toBe(0n);
+    expect(identity.balanceFen + identity.bonusBalanceFen).toBe(10000n - identity.settledFen);
   });
 
   it('5 路并发预占不超扣：余额 1000 分、每笔 300 分，成功额合计 ≤ 1000', async () => {

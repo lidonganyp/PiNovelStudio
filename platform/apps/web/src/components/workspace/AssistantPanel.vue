@@ -11,6 +11,7 @@ import {
   buildStewardRequest,
   deleteMessage,
   listMessages,
+  materialProposalLabel,
   sendMessageStream,
   userFacingFailure,
   type AssistantArtifacts,
@@ -173,7 +174,9 @@ function startRevise(message: ChatMessage): void {
   editingProposal.value = {
     messageId: message.id,
     steward: message.steward,
-    values: Object.fromEntries(message.steward.proposals.map((row) => [row.field, row.value])),
+    values: Object.fromEntries(message.steward.proposals
+      .filter((row) => row.requiresConfirmation)
+      .map((row) => [row.field, row.value])),
   };
 }
 
@@ -321,8 +324,8 @@ onMounted(() => {
             <el-button size="small" @click="sendSteward(message, 'cancel')">取消</el-button>
           </div>
           <div v-if="editingProposal?.messageId === message.id" class="proposal-editor">
-            <div v-for="proposal in editingProposal.steward.proposals" :key="proposal.field" class="proposal-field">
-              <label>{{ proposal.field }}</label>
+            <div v-for="proposal in editingProposal.steward.proposals.filter((row) => row.requiresConfirmation)" :key="proposal.field" class="proposal-field">
+              <label>{{ materialProposalLabel(proposal.field) }}</label>
               <el-input v-model="editingProposal.values[proposal.field]" type="textarea" :autosize="{ minRows: 1, maxRows: 4 }" />
             </div>
             <div class="steward-actions">

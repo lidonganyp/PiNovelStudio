@@ -178,7 +178,7 @@ describe('助手生成管家 e2e', () => {
     };
     expect(body.steward?.status).toBe('confirmation_required');
     expect(body.generationJobId).toBeUndefined();
-    expect(body.assistantMessage.content).toContain('拟定');
+    expect(body.assistantMessage.content).toContain('仍需你确认的内容');
     expect(body.assistantMessage.content).not.toContain('runtime_preflight_failed');
     const jobs = await prisma.novelGenerationJob.findMany({
       where: { projectId, jobType: 'chapter_generation' },

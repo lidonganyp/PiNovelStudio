@@ -55,30 +55,19 @@ describe('generation steward', () => {
         id: 128, userId: 1, title: '铜哨', description: '', genre: '',
         subGenres: [], worldKeyTerms: [], version: 1,
       },
-      documents: [{
-        id: 1, documentType: 'story_outline', content: FIXTURE_STORY_OUTLINE,
-        currentVersion: 1, updatedAt: new Date(),
-      }],
-      characters: [{
-        id: 1, name: '沈砚', roleType: 'protagonist', identity: '重生者',
-        goals: '', motivation: '', currentState: '', relationships: '',
-        secrets: '', characterArc: '', version: 1,
-      }],
-      outlineNodes: [{
-        title: '第二章：不要相信沈建国', summary: '追查禁令', nodeType: 'chapter',
-        narrativeGoal: '推进禁令', version: 1,
-      }],
-      chapters: [{
-        chapterNumber: 1, title: '第一章', content: FIXTURE_CHAPTER_ONE,
-        wordCount: 20, version: 1, seed: null,
-      }],
+      documents: [],
+      characters: [],
+      outlineNodes: [],
+      chapters: [],
     });
     const readiness = classifyMaterialReadiness(snapshot, 2);
     const reply = buildConfirmationReply(readiness);
     expect(readiness.status).toBe('confirmation_required');
-    expect(reply).toContain('拟定');
+    expect(reply).toContain('已读取全书');
     expect(reply).not.toContain('runtime_preflight_failed');
     expect(reply).not.toContain('422');
+    expect(reply).not.toContain('story_outline');
+    expect(reply).not.toContain('chapter:');
   });
 
   it('throws only for true hard blocks such as hash mismatch', async () => {

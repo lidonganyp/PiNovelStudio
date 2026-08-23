@@ -37,6 +37,39 @@ function styleProposalOf(readiness: ReturnType<typeof classifyMaterialReadiness>
   return readiness.proposals.find((row) => row.field === 'style_profile');
 }
 
+it('auto-fills inferable author materials when the outline and prior chapter are authoritative', () => {
+  const snapshot = makeSnapshot({
+    chapters: [{
+      chapterNumber: 16,
+      title: '第16章',
+      excerpt: '李一凡握住魂体功法，天渊的线索再次出现。',
+      tailExcerpt: '天渊的线索再次出现。',
+      wordCount: 1800,
+      version: 1,
+      contentHash: 'hash16',
+      seed: { intent: '追查天渊', mustInclude: '', forbiddenFacts: '', characterMotives: '', promises: '查明墨老下落', endingGoal: '留下新线索', version: 1 },
+    }],
+    previousContinuation: { chapterNumber: 16, tailExcerpt: '天渊的线索再次出现。', sourceChapterHash: 'hash16' },
+  });
+  snapshot.project.genre = '玄幻';
+  snapshot.outline = {
+    id: 1,
+    content: '# 故事大纲\n第17章：魂体功法指向天渊，李一凡必须作出选择。',
+    currentVersion: 1,
+    usable: true,
+  };
+  snapshot.outlineNodes = [{
+    title: '第17章：魂体功法指向天渊',
+    summary: '李一凡发现新的线索',
+    nodeType: 'chapter',
+    narrativeGoal: '推进天渊暗线',
+    version: 1,
+  }];
+  const readiness = classifyMaterialReadiness(snapshot, 17);
+  expect(readiness.status).toBe('auto_fill');
+  expect(readiness.proposals.filter((row) => row.value.trim()).every((row) => !row.requiresConfirmation)).toBe(true);
+});
+
 describe('classifyMaterialReadiness style_profile contract', () => {
   it('initial style proposal carries consumable editorial guidance without previous chapters', () => {
     // 第 1 章生成：无前章正文，previousContinuation 缺失。

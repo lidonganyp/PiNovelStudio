@@ -317,17 +317,18 @@ async function saveConfirmedAuthorMaterialsAtomic(input: Parameters<typeof saveC
 }
 
 export function buildConfirmationReply(readiness: MaterialReadiness): string {
-  const filled = readiness.proposals.filter((row) => row.value.trim());
-  const empty = readiness.proposals.filter((row) => !row.value.trim());
+  const confirmable = readiness.proposals.filter((row) => row.requiresConfirmation);
+  const filled = confirmable.filter((row) => row.value.trim());
+  const empty = confirmable.filter((row) => !row.value.trim());
   const lines = [
-    `我已读取当前项目的大纲、角色和已有章节，不会把整章正文塞进生成上下文。`,
-    readiness.missing.length > 0 ? `当前还缺少：${readiness.missing.join('、')}。` : '',
-    filled.length > 0 ? '我可以根据现有内容拟定以下草案，关键项需你确认后才会写入作者正史：' : '',
-    ...filled.map((row) => `- ${labelOf(row.field)}：${preview(row.value)}（来源：${row.source.join('、') || '项目资料'}）`),
+    `已读取全书大纲、章节状态、角色状态和历史叙事资料。`,
+    `可自动补齐的辅助资料会直接用于本次生成，不要求你重复确认。`,
+    filled.length > 0 ? `仍需你确认的内容：${filled.map((row) => labelOf(row.field)).join('、')}。` : '',
+    ...filled.map((row) => `- ${labelOf(row.field)}：${preview(row.value)}`),
     empty.length > 0
-      ? `以下内容还无法从现有资料可靠推断，请直接告诉我，或确认由我继续按草案推进：${empty.map((row) => labelOf(row.field)).join('、')}。`
+      ? `以下内容无法从现有资料可靠确定，请补充：${empty.map((row) => labelOf(row.field)).join('、')}。`
       : '',
-    '你可以选择：采用并继续生成、修改方案、仅保存草案、或取消。',
+    '确认后将直接提交第' + readiness.chapterNumber + '章正式生成；也可以只修改上面列出的内容。',
   ].filter(Boolean);
   return lines.join('\n');
 }

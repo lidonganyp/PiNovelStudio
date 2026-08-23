@@ -53,6 +53,7 @@ import {
   completePlannerChat,
   type PlannerChatMessage,
 } from './planner-client';
+import { chapterNumberFromTitle } from '../context/chapter-number';
 
 export class PostAssistantMessageDto {
   @IsString()
@@ -680,7 +681,12 @@ export class AssistantService {
           endingGoal: currentChapter.seed.endingGoal,
         }
       : undefined;
-    const chapterNode = outlineNodes.find((row) => row.title.includes(`第${targetChapter}章`));
+    const chapterNodes = outlineNodes.filter((row) => row.nodeType === 'chapter');
+    const targetChapterIndex = [...chapters]
+      .sort((left, right) => left.chapterNumber - right.chapterNumber)
+      .findIndex((row) => row.chapterNumber === targetChapter);
+    const chapterNode = chapterNodes.find((row) => chapterNumberFromTitle(row.title) === targetChapter)
+      ?? (targetChapterIndex >= 0 ? chapterNodes[targetChapterIndex] : undefined);
     const outline = byType.get('story_outline');
     const outlineText = outline?.content?.trim() ?? '';
     const compiled = compileProjectContext({
@@ -692,8 +698,8 @@ export class AssistantService {
         wordCount: row.wordCount,
         content: row.content,
         seed: row.seed,
-        outlineSummary: outlineNodes
-          .filter((node) => node.title.includes(`第${row.chapterNumber}章`))
+        outlineSummary: chapterNodes
+          .filter((node) => chapterNumberFromTitle(node.title) === row.chapterNumber)
           .map((node) => [node.title, node.summary, node.narrativeGoal, node.conflict, node.turningPoint, node.endingHook]
             .filter(Boolean).join('；'))
           .join('\n'),

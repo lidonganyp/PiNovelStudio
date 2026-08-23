@@ -67,6 +67,10 @@ function isUniqueConstraintViolation(error: unknown): boolean {
     'code' in error && (error as { code?: unknown }).code === 'P2002';
 }
 
+// Stub runtime is a local/test transport and must not require a production
+// model rate or create a billable model-call record.
+const STUB_RUNTIME_HOLD_FEN = 50n;
+
 // Reserve against a full multi-stage chapter run, not a single small model
 // call. Actual billing still settles token usage call-by-call; this ceiling
 // only prevents an otherwise valid run from exhausting its hold too early.
@@ -447,6 +451,7 @@ export class JobsService implements OnModuleInit {
   }
 
   private async estimateMaxCharge(): Promise<bigint> {
+    if (env.NOVEL_RUNTIME_MODE === 'stub') return STUB_RUNTIME_HOLD_FEN;
     const [snapshots, settings] = await Promise.all([
       Promise.all(
         this.requiredBillingModels().map((model) => this.rates.buildRateSnapshot(model)),
@@ -526,14 +531,6 @@ export class JobsService implements OnModuleInit {
       await this.updateProgressIfExists({
         jobId: input.jobId,
         stage: 'generating_text',
-      });
-      await this.billing.settleCall({
-        jobId: input.jobId,
-        callId: `stub-${input.jobId}`,
-        internalStage: 'agentic_raw',
-        model: env.STUB_WRITER_MODEL,
-        tokensIn: 100_000,
-        tokensOut: 50_000,
       });
       const text = `【stub】第${input.chapterNumber}章\n${input.intent}`;
       await this.persistGeneratedChapter(input, text, undefined, true);

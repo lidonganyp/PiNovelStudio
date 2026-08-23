@@ -47,6 +47,20 @@ export interface MaterialProposal {
   requiresConfirmation: boolean;
 }
 
+export function materialProposalLabel(field: string): string {
+  const labels: Record<string, string> = {
+    genre: '作品类型',
+    worldbuilding: '世界观',
+    creative_constitution: '创作约束',
+    style_profile: '写作风格',
+    chapter_seed: '本章写作目标',
+    character_states: '角色当前状态',
+    canon_state: '已确认事实',
+    promise_ledger: '未结伏笔与承诺',
+  };
+  return labels[field] ?? '补充内容';
+}
+
 export interface StewardView {
   status: 'ready' | 'auto_fill' | 'confirmation_required' | 'hard_blocked';
   reply: string;

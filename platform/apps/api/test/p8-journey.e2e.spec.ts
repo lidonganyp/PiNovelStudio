@@ -137,7 +137,7 @@ describe('P8-1 用户旅程 e2e', () => {
       url: '/api/auth/me',
       headers: { authorization: `Bearer ${userToken}` },
     });
-    expect(me.json().balance).toBe('10000');
+    expect(me.json().totalBalance).toBe('10000');
 
     const project = await app.inject({
       method: 'POST',
@@ -201,8 +201,8 @@ describe('P8-1 用户旅程 e2e', () => {
     const identity = await computeLedgerIdentity(prisma, userId);
     expect(identity.balanceMatches).toBe(true);
     expect(identity.availableMatches).toBe(true);
-    expect(identity.settledFen).toBeGreaterThan(0n);
-    expect(identity.balanceFen).toBe(10000n - identity.settledFen);
+    expect(identity.settledFen).toBe(0n);
+    expect(identity.balanceFen + identity.bonusBalanceFen).toBe(10000n - identity.settledFen);
     expect(identity.reservedFen).toBe(0n);
   });
 });
