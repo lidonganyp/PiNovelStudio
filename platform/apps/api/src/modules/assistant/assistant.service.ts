@@ -10,9 +10,11 @@ import {
 } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   Min,
@@ -35,7 +37,18 @@ import { compileProjectContext } from '../context/context-compiler';
 import { envelopeFromUnknown, FailureHttpException, FAILURE_CODES, makeFailure } from '../context/failure-envelope';
 import { ASSISTANT_ACTIONS, type AssistantAction } from '../context/types';
 import { isUsableStoryOutline } from '../jobs/book-context';
-import { shouldPreflightAuthorContract } from './assistant-markers';
+import {
+  inferGenerateChapterNumber,
+  shouldPreflightAuthorContract,
+} from './assistant-markers';
+import {
+  confirmGenerationSteward,
+  parseStewardAction,
+  prepareGenerationSteward,
+  reviseGenerationSteward,
+  submitReadyGenerationSteward,
+  type StewardResult,
+} from '../context/generation-steward';
 import {
   completePlannerChat,
   type PlannerChatMessage,
@@ -60,6 +73,28 @@ export class PostAssistantMessageDto {
   @IsOptional()
   @IsBoolean()
   confirmGeneration?: boolean;
+
+  @IsOptional()
+  @IsIn(['apply_and_generate', 'save_draft', 'cancel', 'revise'])
+  stewardAction?: 'apply_and_generate' | 'save_draft' | 'cancel' | 'revise';
+
+  @IsOptional()
+  @IsString()
+  proposalId?: string;
+
+  @IsOptional()
+  @IsString()
+  sourceVersion?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  confirmedFields?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  proposalEdits?: Array<{ field: string; value: string }>;
 }
 
 function isMissingEffectiveRateError(error: unknown): boolean {
@@ -162,12 +197,14 @@ export class AssistantService {
     action?: AssistantAction;
     /** 实际执行的章节号（显式请求或模型判断）。 */
     chapterNumber?: number;
+    steward?: StewardResult;
   }> {
     const request = parseAssistantRequest(
       typeof contentOrDto === 'string' ? { content: contentOrDto } : contentOrDto,
     );
     const content = request.content;
-    const isGenerationRequest = shouldPreflightAuthorContract(request.action, content);
+    const isGenerationRequest = shouldPreflightAuthorContract(request.action, content)
+      || Boolean(request.stewardAction);
     if (
       env.PLANNER_MODE === 'disabled' &&
       !isGenerationRequest
@@ -176,10 +213,7 @@ export class AssistantService {
     }
     await requireOwnedProject(this.prisma, userId, projectId);
     if (isGenerationRequest) {
-      await this.jobs.assertAuthorContract(userId, projectId);
-      if (env.PLANNER_MODE === 'disabled') {
-        throw new ServiceUnavailableException('助手规划能力尚未在此环境启用');
-      }
+      return this.runGenerationSteward(userId, projectId, request, onDelta);
     }
     const jobId = randomUUID();
     const maxCharge = await this.estimateAssistantMaxCharge();
@@ -269,6 +303,7 @@ export class AssistantService {
       publicEntry?: 'novel_generate_chapter';
       records: Array<{ type: 'story_outline' | 'chapter_seed' | 'query_answer'; saved: boolean; id?: number }>;
     } | undefined;
+    let steward: StewardResult | undefined;
     try {
       if (env.PLANNER_MODE === 'http') {
         const endpoint = await this.resolvePlannerEndpoint();
@@ -317,21 +352,78 @@ export class AssistantService {
         }
         const confirmGeneration =
           request.action === undefined ? true : request.confirmGeneration;
-        const applied = await applyAssistantArtifacts({
-          prisma: this.prisma,
-          jobs: this.jobs,
-          userId,
-          projectId,
-          userContent: content,
-          action,
-          chapterNumber,
-          confirmGeneration,
-          envelope,
-        });
-        reply = applied.content;
-        metadata = applied.metadata;
-        generationJobId = applied.generationJobId;
-        artifacts = applied.artifacts;
+        if (action === 'generate_chapter' && chapterNumber !== undefined) {
+          const seedApplied = await applyAssistantArtifacts({
+            prisma: this.prisma,
+            jobs: this.jobs,
+            userId,
+            projectId,
+            userContent: content,
+            action: 'plan_chapter',
+            chapterNumber,
+            confirmGeneration: false,
+            envelope,
+          });
+          let next = await prepareGenerationSteward({
+            prisma: this.prisma,
+            userId,
+            projectId,
+            chapterNumber,
+          });
+          if (next.status === 'ready') {
+            next = {
+              ...next,
+              generationJobId: await submitReadyGenerationSteward({
+                prisma: this.prisma,
+                jobs: this.jobs,
+                userId,
+                projectId,
+                chapterNumber,
+              }),
+              publicEntry: 'novel_generate_chapter',
+            };
+          } else if (next.status === 'auto_fill' && next.proposalId) {
+            next = await confirmGenerationSteward({
+              prisma: this.prisma,
+              jobs: this.jobs,
+              userId,
+              projectId,
+              action: 'apply_and_generate',
+              proposalId: next.proposalId,
+              sourceVersion: next.sourceVersion,
+            });
+          }
+          onDelta?.(next.reply);
+          reply = next.reply;
+          metadata = { ...seedApplied.metadata, steward: next };
+          generationJobId = next.generationJobId;
+          artifacts = next.generationJobId
+            ? {
+                ...seedApplied.artifacts,
+                generationJobId: next.generationJobId,
+                publicEntry: 'novel_generate_chapter',
+                focusTab: 'chapter',
+                chaptersTouched: [...new Set([...seedApplied.artifacts.chaptersTouched, chapterNumber])],
+              }
+            : seedApplied.artifacts;
+          steward = next;
+        } else {
+          const applied = await applyAssistantArtifacts({
+            prisma: this.prisma,
+            jobs: this.jobs,
+            userId,
+            projectId,
+            userContent: content,
+            action,
+            chapterNumber,
+            confirmGeneration,
+            envelope,
+          });
+          reply = applied.content;
+          metadata = applied.metadata;
+          generationJobId = applied.generationJobId;
+          artifacts = applied.artifacts;
+        }
         resolvedAction = action;
         resolvedChapterNumber = chapterNumber;
         tokensIn = planned.tokensIn;
@@ -427,6 +519,7 @@ export class AssistantService {
       artifacts,
       action: resolvedAction,
       chapterNumber: resolvedChapterNumber,
+      steward,
     };
   }
 
@@ -652,12 +745,146 @@ export class AssistantService {
     }
   }
 
+  private async runGenerationSteward(
+    userId: number,
+    projectId: number,
+    request: ReturnType<typeof parseAssistantRequest>,
+    onDelta?: (delta: string) => void,
+  ): Promise<{
+    userMessage: Record<string, unknown>;
+    assistantMessage: Record<string, unknown>;
+    chunks: string[];
+    generationJobId?: string;
+    action?: AssistantAction;
+    chapterNumber?: number;
+    steward?: StewardResult;
+    artifacts?: {
+      outlineSaved: boolean;
+      charactersSaved: number;
+      chaptersTouched: number[];
+      generationJobId?: string;
+      focusTab?: 'outline' | 'characters' | 'chapter' | 'seed';
+      publicEntry?: 'novel_generate_chapter';
+      records: Array<{ type: 'story_outline' | 'chapter_seed' | 'query_answer'; saved: boolean; id?: number }>;
+    };
+  }> {
+    const stewardAction = parseStewardAction(request.stewardAction);
+    let steward: StewardResult;
+    if (stewardAction && request.proposalId && request.sourceVersion) {
+      steward = stewardAction === 'revise'
+        ? await reviseGenerationSteward({
+            prisma: this.prisma,
+            userId,
+            projectId,
+            proposalId: request.proposalId,
+            sourceVersion: request.sourceVersion,
+            edits: request.proposalEdits ?? [],
+          })
+        : await confirmGenerationSteward({
+            prisma: this.prisma,
+            jobs: this.jobs,
+            userId,
+            projectId,
+            action: stewardAction,
+            proposalId: request.proposalId,
+            sourceVersion: request.sourceVersion,
+            confirmedFields: request.confirmedFields,
+          });
+    } else {
+      const chapterNumber = request.chapterNumber
+        ?? inferGenerateChapterNumber(request.content, '')
+        ?? undefined;
+      if (!chapterNumber) {
+        throw new FailureHttpException(makeFailure({
+          stage: 'assistant.action',
+          gate: 'request_schema',
+          code: FAILURE_CODES.missingChapterNumber,
+          severity: 'preflight',
+          reason: '请说明章节号，例如「生成第3章正文」',
+          recoverable: false,
+        }));
+      }
+      steward = await prepareGenerationSteward({
+        prisma: this.prisma,
+        userId,
+        projectId,
+        chapterNumber,
+      });
+      if (steward.status === 'ready') {
+        steward.generationJobId = await submitReadyGenerationSteward({
+          prisma: this.prisma,
+          jobs: this.jobs,
+          userId,
+          projectId,
+          chapterNumber,
+        });
+        steward.publicEntry = 'novel_generate_chapter';
+      } else if (steward.status === 'auto_fill' && steward.proposalId) {
+        steward = await confirmGenerationSteward({
+          prisma: this.prisma,
+          jobs: this.jobs,
+          userId,
+          projectId,
+          action: 'apply_and_generate',
+          proposalId: steward.proposalId,
+          sourceVersion: steward.sourceVersion,
+        });
+      }
+    }
+    onDelta?.(steward.reply);
+    const userMessage = await this.prisma.novelAssistantMessage.create({
+      data: {
+        projectId,
+        userId,
+        jobId: '',
+        role: 'user',
+        content: request.content,
+      },
+    });
+    const assistantMessage = await this.prisma.novelAssistantMessage.create({
+      data: {
+        projectId,
+        userId,
+        jobId: steward.generationJobId ?? '',
+        role: 'assistant',
+        content: steward.reply,
+        contentMetadata: {
+          steward,
+          artifacts: steward.generationJobId
+            ? { publicEntry: 'novel_generate_chapter', chaptersTouched: [steward.chapterNumber] }
+            : undefined,
+        },
+      },
+    });
+    return {
+      userMessage: this.toView(userMessage),
+      assistantMessage: this.toView(assistantMessage),
+      chunks: [steward.reply],
+      generationJobId: steward.generationJobId,
+      action: 'generate_chapter',
+      chapterNumber: steward.chapterNumber,
+      steward,
+      artifacts: steward.generationJobId
+        ? {
+            outlineSaved: false,
+            charactersSaved: 0,
+            chaptersTouched: [steward.chapterNumber],
+            generationJobId: steward.generationJobId,
+            focusTab: 'chapter',
+            publicEntry: 'novel_generate_chapter',
+            records: [],
+          }
+        : undefined,
+    };
+  }
+
   private toView(row: {
     id: number;
     role: string;
     content: string;
     jobId: string;
     createdAt: Date;
+    contentMetadata?: unknown;
   }): Record<string, unknown> {
     return {
       id: row.id,
@@ -666,6 +893,7 @@ export class AssistantService {
       jobId: row.jobId,
       createdAt: row.createdAt.toISOString(),
       settledHint: fenToString(0n),
+      metadata: row.contentMetadata ?? undefined,
     };
   }
 }

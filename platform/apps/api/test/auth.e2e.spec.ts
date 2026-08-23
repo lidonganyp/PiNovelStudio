@@ -153,6 +153,70 @@ describe('认证链路 e2e', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('登录用户可修改密码，旧密码立即失效', async () => {
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email, password },
+    });
+    const token = loginRes.json().accessToken as string;
+    const changed = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { currentPassword: password, newPassword: 'Password456' },
+    });
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json()).toEqual({ ok: true });
+    expect(changed.json()).not.toHaveProperty('passwordHash');
+
+    const oldLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email, password },
+    });
+    expect(oldLogin.statusCode).toBe(401);
+
+    const newLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email, password: 'Password456' },
+    });
+    expect(newLogin.statusCode).toBe(201);
+  });
+
+  it('当前密码错误时修改密码返回 400 且保持登录态', async () => {
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email, password: 'Password456' },
+    });
+    expect(loginRes.statusCode).toBe(201);
+    const token = loginRes.json().accessToken as string;
+    const failed = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { currentPassword: password, newPassword: 'Password789' },
+    });
+    expect(failed.statusCode).toBe(400);
+    const me = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.statusCode).toBe(200);
+  });
+
+  it('无 token 修改密码返回 401', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      payload: { currentPassword: password, newPassword: 'Password456' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
   it('注册请求缺字段时返回 400（ValidationPipe 生效）', async () => {
     const res = await app.inject({
       method: 'POST',

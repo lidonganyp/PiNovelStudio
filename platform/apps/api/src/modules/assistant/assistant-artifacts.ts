@@ -37,6 +37,88 @@ export interface AssistantArtifactResult {
   generationJobId?: string;
 }
 
+export interface ConfirmedMaterialProposal {
+  field: string;
+  value: string;
+  source: string[];
+  requiresConfirmation: boolean;
+}
+
+/** 用户确认后写入作者资料与 ChapterSeed；绝不写入最终章节正文。 */
+export async function saveConfirmedAuthorMaterials(input: {
+  prisma: PrismaService;
+  userId: number;
+  projectId: number;
+  chapterNumber: number;
+  confirmed: Set<string>;
+  proposals: ConfirmedMaterialProposal[];
+}): Promise<{ chapterId?: number }> {
+  for (const item of input.proposals) {
+    if (!item.value.trim()) continue;
+    if (item.requiresConfirmation && !input.confirmed.has(item.field)) continue;
+    if (!item.requiresConfirmation && !input.confirmed.has(item.field) && item.field !== 'chapter_seed') {
+      continue;
+    }
+    if (item.field === 'genre') {
+      await input.prisma.novelProject.update({
+        where: { id: input.projectId },
+        data: { genre: item.value, version: { increment: 1 }, lastActiveAt: new Date() },
+      });
+      continue;
+    }
+    if (item.field === 'worldbuilding' || item.field === 'creative_constitution' || item.field === 'style_profile') {
+      await upsertTypedDocument(
+        input.prisma,
+        input.userId,
+        input.projectId,
+        item.field,
+        titleOf(item.field),
+        item.value,
+        '用户确认后写入',
+      );
+      continue;
+    }
+    if (item.field === 'character_states') {
+      await applyCharacterNotes(input.prisma, input.userId, input.projectId, item.value);
+      continue;
+    }
+    if (item.field === 'canon_state' || item.field === 'promise_ledger') {
+      await upsertNarrativeList(
+        input.prisma,
+        input.userId,
+        input.projectId,
+        item.field,
+        item.value,
+      );
+    }
+  }
+  const seedProposal = input.proposals.find((row) => row.field === 'chapter_seed');
+  const canWriteSeed = Boolean(
+    seedProposal?.value.trim()
+    && (input.confirmed.has('chapter_seed') || seedProposal?.requiresConfirmation === false),
+  );
+  if (!canWriteSeed) {
+    const existing = await input.prisma.novelChapter.findFirst({
+      where: {
+        projectId: input.projectId,
+        userId: input.userId,
+        chapterNumber: input.chapterNumber,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    return { chapterId: existing?.id };
+  }
+  const chapter = await upsertChapterSeedFromProposal(
+    input.prisma,
+    input.userId,
+    input.projectId,
+    input.chapterNumber,
+    seedProposal?.value ?? '',
+  );
+  return { chapterId: chapter.id };
+}
+
 export async function applyAssistantArtifacts(input: {
   prisma: PrismaService;
   jobs: JobsService;
@@ -455,6 +537,171 @@ async function ensureChapterWithSeed(
     });
   }
   return { id: chapter.id };
+}
+
+async function upsertTypedDocument(
+  prisma: PrismaService,
+  userId: number,
+  projectId: number,
+  documentType: string,
+  title: string,
+  content: string,
+  changeSummary: string,
+): Promise<void> {
+  const existing = await prisma.novelDocument.findFirst({
+    where: { projectId, userId, documentType, deletedAt: null },
+  });
+  if (existing?.content.trim()) {
+    return;
+  }
+  if (!existing) {
+    const created = await prisma.novelDocument.create({
+      data: { projectId, userId, documentType, title, content, currentVersion: 1 },
+    });
+    await prisma.novelDocumentVersion.create({
+      data: {
+        documentId: created.id,
+        createdBy: userId,
+        versionNumber: 1,
+        content,
+        changeSummary,
+      },
+    });
+    return;
+  }
+  const nextVersion = existing.currentVersion + 1;
+  await prisma.novelDocument.update({
+    where: { id: existing.id },
+    data: { content, currentVersion: nextVersion },
+  });
+  await prisma.novelDocumentVersion.create({
+    data: {
+      documentId: existing.id,
+      createdBy: userId,
+      versionNumber: nextVersion,
+      content,
+      changeSummary,
+    },
+  });
+}
+
+async function upsertNarrativeList(
+  prisma: PrismaService,
+  userId: number,
+  projectId: number,
+  field: 'canon_state' | 'promise_ledger',
+  raw: string,
+): Promise<void> {
+  const existing = await prisma.novelDocument.findFirst({
+    where: { projectId, userId, documentType: 'narrative_state', deletedAt: null },
+  });
+  let store: Record<string, unknown> = {};
+  if (existing?.content.trim()) {
+    try {
+      const parsed = JSON.parse(existing.content) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        store = parsed as Record<string, unknown>;
+      }
+    } catch {
+      store = {};
+    }
+  }
+  const values = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (field === 'canon_state') {
+    store.canon = values.map((fact) => ({ fact }));
+  } else {
+    store.promise = values.map((description) => ({ description, status: 'open' }));
+  }
+  const content = JSON.stringify(store);
+  if (!existing) {
+    const created = await prisma.novelDocument.create({
+      data: { projectId, userId, documentType: 'narrative_state', title: 'Narrative State', content, currentVersion: 1 },
+    });
+    await prisma.novelDocumentVersion.create({
+      data: { documentId: created.id, createdBy: userId, versionNumber: 1, content, changeSummary: 'Confirmed narrative state' },
+    });
+    return;
+  }
+  const nextVersion = existing.currentVersion + 1;
+  await prisma.novelDocument.update({
+    where: { id: existing.id },
+    data: { content, currentVersion: nextVersion },
+  });
+  await prisma.novelDocumentVersion.create({
+    data: { documentId: existing.id, createdBy: userId, versionNumber: nextVersion, content, changeSummary: 'Confirmed narrative state' },
+  });
+}
+
+async function applyCharacterNotes(
+  prisma: PrismaService,
+  userId: number,
+  projectId: number,
+  raw: string,
+): Promise<void> {
+  for (const line of raw.split('\n')) {
+    const [name, goals, motivation, currentState] = line.split('|');
+    if (!name?.trim()) continue;
+    const existing = await prisma.novelCharacter.findFirst({
+      where: { projectId, userId, name: name.trim(), deletedAt: null },
+    });
+    if (!existing) continue;
+    await prisma.novelCharacter.update({
+      where: { id: existing.id },
+      data: {
+        goals: goals?.trim() || existing.goals,
+        motivation: motivation?.trim() || existing.motivation,
+        currentState: currentState?.trim() || existing.currentState,
+        version: { increment: 1 },
+      },
+    });
+  }
+}
+
+async function upsertChapterSeedFromProposal(
+  prisma: PrismaService,
+  userId: number,
+  projectId: number,
+  chapterNumber: number,
+  raw: string,
+): Promise<{ id: number }> {
+  let parsed: ParsedChapterSeed = {
+    chapterNumber,
+    intent: '',
+    mustInclude: '',
+    forbiddenFacts: '',
+    characterMotives: '',
+    promises: '',
+    endingGoal: '',
+  };
+  try {
+    const json = JSON.parse(raw) as Partial<ParsedChapterSeed>;
+    parsed = {
+      chapterNumber,
+      intent: json.intent ?? '',
+      mustInclude: json.mustInclude ?? '',
+      forbiddenFacts: json.forbiddenFacts ?? '',
+      characterMotives: json.characterMotives ?? '',
+      promises: json.promises ?? '',
+      endingGoal: json.endingGoal ?? '',
+    };
+  } catch {
+    parsed = {
+      ...parsed,
+      intent: raw,
+      endingGoal: '留下可续写的章末压力',
+    };
+  }
+  return ensureChapterWithSeed(prisma, userId, projectId, chapterNumber, parsed);
+}
+
+function titleOf(field: string): string {
+  if (field === 'worldbuilding') return '世界观';
+  if (field === 'creative_constitution') return '创作宪法';
+  if (field === 'style_profile') return '风格档案';
+  return field;
 }
 
 function uniqueCharacters(characters: ParsedCharacter[]): ParsedCharacter[] {

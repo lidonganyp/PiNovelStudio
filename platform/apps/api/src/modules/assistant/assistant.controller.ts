@@ -93,6 +93,9 @@ export class AssistantController {
       if (result.artifacts) {
         writeEvent({ type: 'artifact', artifacts: result.artifacts });
       }
+      if (result.steward && (result.steward.status !== 'ready' || result.steward.proposalStatus === 'pending')) {
+        writeEvent({ type: 'steward', steward: result.steward });
+      }
       if (result.generationJobId) {
         writeEvent({
           type: 'job_submitted',
@@ -108,6 +111,7 @@ export class AssistantController {
         action: result.action,
         generationJobId: result.generationJobId,
         artifacts: result.artifacts,
+        steward: result.steward,
       });
       reply.raw.end();
       return reply;

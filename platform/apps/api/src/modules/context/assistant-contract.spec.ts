@@ -56,6 +56,36 @@ describe('assistant action contract', () => {
     expect(request.chapterNumber).toBe(2);
   });
 
+  it('parses steward confirmation protocol fields', () => {
+    const request = parseAssistantRequest({
+      content: '采用并继续生成',
+      stewardAction: 'apply_and_generate',
+      proposalId: 'prop-1',
+      sourceVersion: 'abc123',
+      confirmedFields: ['genre', 'worldbuilding'],
+    });
+    expect(request.stewardAction).toBe('apply_and_generate');
+    expect(request.proposalId).toBe('prop-1');
+    expect(request.sourceVersion).toBe('abc123');
+    expect(request.confirmedFields).toEqual(['genre', 'worldbuilding']);
+  });
+
+  it('requires a proposal identity for every steward action', () => {
+    expect(() => parseAssistantRequest({
+      content: '修改方案',
+      stewardAction: 'revise',
+    })).toThrowError(FailureHttpException);
+  });
+
+  it('rejects unknown steward actions instead of treating them as a new generation request', () => {
+    expect(() => parseAssistantRequest({
+      content: '继续',
+      stewardAction: 'submit_anyway',
+      proposalId: 'prop-1',
+      sourceVersion: 'v1',
+    })).toThrowError(FailureHttpException);
+  });
+
   it('blocks story_outline artifacts on plan_chapter', () => {
     try {
       assertArtifactAllowed('plan_chapter', 'story_outline');

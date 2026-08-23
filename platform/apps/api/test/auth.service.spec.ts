@@ -10,6 +10,7 @@ import { AuthService } from '../src/modules/auth/auth.service';
 import type { PrismaService } from '../src/prisma/prisma.service';
 import type { UserRow } from '../src/modules/auth/auth.types';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -40,14 +41,18 @@ async function makeUserRow(
 describe('AuthService', () => {
   let service: AuthService;
   let prisma: {
-    user: { findUnique: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
+    user: {
+      findUnique: ReturnType<typeof vi.fn>;
+      create: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
     setting: { findUnique: ReturnType<typeof vi.fn> };
   };
   let jwtService: JwtService;
 
   beforeEach(() => {
     prisma = {
-      user: { findUnique: vi.fn(), create: vi.fn() },
+      user: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
       setting: { findUnique: vi.fn().mockResolvedValue(null) },
     };
     jwtService = new JwtService({ secret: 'x'.repeat(64) });
@@ -168,5 +173,56 @@ describe('AuthService', () => {
     expect(user.id).toBe(1);
     expect(user.balance).toBe('1250');
     expect(user).not.toHaveProperty('passwordHash');
+  });
+
+  it('changePassword：当前密码错误时抛出 BadRequestException', async () => {
+    prisma.user.findUnique.mockResolvedValue(await makeUserRow());
+    await expect(
+      service.changePassword(1, {
+        currentPassword: 'WrongPass123',
+        newPassword: 'NewPass1234',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('changePassword：新密码与当前密码相同时拒绝', async () => {
+    prisma.user.findUnique.mockResolvedValue(await makeUserRow());
+    await expect(
+      service.changePassword(1, {
+        currentPassword: TEST_PASSWORD,
+        newPassword: TEST_PASSWORD,
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('changePassword：用户不存在时抛出 NotFoundException', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(
+      service.changePassword(999, {
+        currentPassword: TEST_PASSWORD,
+        newPassword: 'NewPass1234',
+      }),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('changePassword：成功后写入新哈希且不回传 passwordHash', async () => {
+    const row = await makeUserRow();
+    prisma.user.findUnique.mockResolvedValue(row);
+    prisma.user.update.mockResolvedValue(row);
+    const result = await service.changePassword(1, {
+      currentPassword: TEST_PASSWORD,
+      newPassword: 'NewPass1234',
+    });
+    expect(result).toEqual({ ok: true });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { passwordHash: expect.any(String) },
+    });
+    const storedHash = prisma.user.update.mock.calls[0]?.[0]?.data?.passwordHash as string;
+    expect(storedHash).not.toBe(row.passwordHash);
+    expect(await argon2.verify(storedHash, 'NewPass1234')).toBe(true);
+    expect(result).not.toHaveProperty('passwordHash');
   });
 });

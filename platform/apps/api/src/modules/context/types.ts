@@ -31,6 +31,11 @@ export interface AssistantRequest {
   action?: AssistantAction;
   chapterNumber?: number;
   confirmGeneration?: boolean;
+  stewardAction?: 'apply_and_generate' | 'save_draft' | 'cancel' | 'revise';
+  proposalId?: string;
+  sourceVersion?: string;
+  confirmedFields?: string[];
+  proposalEdits?: Array<{ field: string; value: string }>;
 }
 
 export interface AssistantArtifactRecord {
@@ -65,6 +70,7 @@ export type AssistantSseType =
   | 'delta'
   | 'artifact'
   | 'job_submitted'
+  | 'steward'
   | 'failure'
   | 'done';
 

@@ -31,6 +31,41 @@ function makePrisma() {
   };
 }
 
+describe('saveConfirmedAuthorMaterials', () => {
+  it('saves confirmed documents and seed with version audit, never chapter prose', async () => {
+    const { saveConfirmedAuthorMaterials } = await import('./assistant-artifacts');
+    const prisma = makePrisma();
+    prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
+      id: 44,
+      seed: { id: 7, intent: '', endingGoal: '', mustInclude: '', forbiddenFacts: '', characterMotives: '', promises: '' },
+      content: '已有正文不得覆盖',
+      title: '第二章',
+    });
+    const result = await saveConfirmedAuthorMaterials({
+      prisma: prisma as never,
+      userId: 1,
+      projectId: 128,
+      chapterNumber: 2,
+      confirmed: new Set(['genre', 'worldbuilding', 'chapter_seed']),
+      proposals: [
+        { field: 'genre', value: '都市重生', source: ['story_outline'], requiresConfirmation: true },
+        { field: 'worldbuilding', value: '# 世界观\n- 铜哨', source: ['chapter:1'], requiresConfirmation: true },
+        { field: 'chapter_seed', value: JSON.stringify({ intent: '追查禁令', endingGoal: '留下压力' }), source: [], requiresConfirmation: false },
+      ],
+    });
+    expect(result.chapterId).toBe(44);
+    expect(prisma.novelProject.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ genre: '都市重生' }),
+    }));
+    expect(prisma.novelDocument.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ documentType: 'worldbuilding' }),
+    }));
+    expect(prisma.novelDocumentVersion.create).toHaveBeenCalled();
+    expect(prisma.novelChapter.update).not.toHaveBeenCalled();
+    expect(prisma.novelChapter.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('applyAssistantArtifacts', () => {
   it('plan_story_outline saves the book outline and never submits generation', async () => {
     const prisma = makePrisma();

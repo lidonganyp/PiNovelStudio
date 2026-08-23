@@ -42,4 +42,11 @@ export const authApi = {
   me(): Promise<PublicUser> {
     return http.get('/auth/me').then((res) => res.data);
   },
+  /** 修改当前用户密码。 */
+  changePassword(payload: {
+    currentPassword: string;
+    newPassword: string;
+  }): Promise<{ ok: true }> {
+    return http.post('/auth/password', payload).then((res) => res.data);
+  },
 };

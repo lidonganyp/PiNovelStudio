@@ -3,6 +3,7 @@
  * 当前用户查询、JWT 签发与用户视图转换。
  */
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -19,6 +20,7 @@ import type {
   PublicUser,
   UserRow,
 } from './auth.types';
+import type { ChangePasswordDto } from './dto/change-password.dto';
 import type { LoginDto } from './dto/login.dto';
 import type { RegisterDto } from './dto/register.dto';
 import { isRegistrationClosed } from './registration-gate';
@@ -84,6 +86,32 @@ export class AuthService {
       throw new UnauthorizedException('邮箱或密码错误');
     }
     return this.issueAuthResult(user);
+  }
+
+  /** 修改当前用户密码：校验旧密码后写入新哈希，不回传敏感字段。 */
+  async changePassword(
+    userId: number,
+    dto: ChangePasswordDto,
+  ): Promise<{ ok: true }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+    const currentValid = await argon2.verify(user.passwordHash, dto.currentPassword);
+    if (!currentValid) {
+      throw new BadRequestException('当前密码错误');
+    }
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException('新密码不能与当前密码相同');
+    }
+    const passwordHash = await argon2.hash(dto.newPassword);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+    return { ok: true };
   }
 
   /** 查询当前登录用户：不存在（已删除）抛 401 促使前端重新登录。 */

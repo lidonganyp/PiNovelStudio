@@ -16,6 +16,7 @@ export interface AssistantMessage {
   role: 'user' | 'assistant' | string;
   content: string;
   createdAt: string;
+  metadata?: { steward?: StewardView };
 }
 
 export interface AssistantArtifacts {
@@ -39,12 +40,59 @@ export interface FailureEnvelope {
   fixInstructions?: string[];
 }
 
+export interface MaterialProposal {
+  field: string;
+  value: string;
+  source: string[];
+  requiresConfirmation: boolean;
+}
+
+export interface StewardView {
+  status: 'ready' | 'auto_fill' | 'confirmation_required' | 'hard_blocked';
+  reply: string;
+  chapterNumber: number;
+  proposalId?: string;
+  sourceVersion: string;
+  proposals: MaterialProposal[];
+  missing: string[];
+  generationJobId?: string;
+  publicEntry?: 'novel_generate_chapter';
+  proposalStatus?: 'pending' | 'applied' | 'cancelled' | 'draft_saved';
+  confirmedAt?: string;
+  confirmedFields?: string[];
+}
+
 export interface AssistantRequest {
   content: string;
   /** 缺省 = auto 模式：动作由助手智能体根据消息内容判断。 */
   action?: AssistantAction;
   chapterNumber?: number;
   confirmGeneration?: boolean;
+  stewardAction?: 'apply_and_generate' | 'save_draft' | 'cancel' | 'revise';
+  proposalId?: string;
+  sourceVersion?: string;
+  confirmedFields?: string[];
+  proposalEdits?: Array<{ field: string; value: string }>;
+}
+
+export function buildStewardRequest(
+  steward: StewardView,
+  action: 'apply_and_generate' | 'save_draft' | 'cancel',
+): AssistantRequest {
+  const labels = {
+    apply_and_generate: '采用并继续生成',
+    save_draft: '仅保存草案',
+    cancel: '取消',
+  } as const;
+  return {
+    content: labels[action],
+    stewardAction: action,
+    proposalId: steward.proposalId,
+    sourceVersion: steward.sourceVersion,
+    confirmedFields: steward.proposals
+      .filter((row) => row.value.trim())
+      .map((row) => row.field),
+  };
 }
 
 export type AssistantStreamEvent =
@@ -56,6 +104,7 @@ export type AssistantStreamEvent =
       chapterNumber?: number;
       publicEntry: 'novel_generate_chapter';
     }
+  | { type: 'steward'; steward: StewardView }
   | { type: 'failure'; failure: FailureEnvelope }
   | {
       type: 'done';
@@ -64,6 +113,7 @@ export type AssistantStreamEvent =
       action?: AssistantAction;
       generationJobId?: string;
       artifacts?: AssistantArtifacts;
+      steward?: StewardView;
     };
 
 export function listMessages(projectId: number): Promise<AssistantMessage[]> {
@@ -181,6 +231,10 @@ export async function sendMessageStream(
           }
           if (event.type === 'artifact') {
             onEvent({ type: 'artifact', artifacts: event.artifacts as AssistantArtifacts });
+            continue;
+          }
+          if (event.type === 'steward' && event.steward && typeof event.steward === 'object') {
+            onEvent({ type: 'steward', steward: event.steward as StewardView });
             continue;
           }
           if (event.type === 'job_submitted' && typeof event.jobId === 'string') {

@@ -8,13 +8,16 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { InfoFilled } from '@element-plus/icons-vue';
 import {
   clearMessages,
+  buildStewardRequest,
   deleteMessage,
   listMessages,
   sendMessageStream,
   userFacingFailure,
   type AssistantArtifacts,
   type AssistantMessage,
+  type AssistantRequest,
   type FailureEnvelope,
+  type StewardView,
 } from '../../api/assistant';
 
 const props = defineProps<{ projectId: number }>();
@@ -24,6 +27,7 @@ interface ChatMessage {
   role: string;
   content: string;
   streaming?: boolean;
+  steward?: StewardView;
 }
 
 const messages = ref<ChatMessage[]>([]);
@@ -33,7 +37,8 @@ const listEl = ref<HTMLElement | null>(null);
 const historyError = ref('');
 const panelError = ref<FailureEnvelope | null>(null);
 const jobSubmitted = ref<{ jobId: string; chapterNumber?: number } | null>(null);
-const lastPayload = ref<{ content: string } | null>(null);
+const lastPayload = ref<AssistantRequest | null>(null);
+const editingProposal = ref<{ messageId: number | string; steward: StewardView; values: Record<string, string> } | null>(null);
 const trackJob = inject<(jobId: string) => void>('trackJob');
 const reloadMaterials = inject<
   (opts?: { tab?: string; chapterNumber?: number }) => Promise<void>
@@ -53,6 +58,7 @@ async function load(): Promise<void> {
       id: m.id,
       role: m.role,
       content: m.content,
+      steward: m.metadata?.steward,
     }));
     scrollBottom();
   } catch {
@@ -60,16 +66,17 @@ async function load(): Promise<void> {
   }
 }
 
-async function send(retry: boolean | Event = false): Promise<void> {
+async function send(retry: boolean | Event = false, requestOverride?: AssistantRequest): Promise<void> {
   // 模板 @click/@keydown 直接绑定 send 时，首个参数是事件对象；只有显式传 true 才是重试。
   const isRetry = retry === true;
-  const content = isRetry ? lastPayload.value?.content.trim() ?? '' : input.value.trim();
+  const request = requestOverride ?? (isRetry ? lastPayload.value : undefined);
+  const content = request?.content.trim() ?? input.value.trim();
   if (!content || sending.value) return;
   sending.value = true;
   panelError.value = null;
   jobSubmitted.value = null;
-  lastPayload.value = { content };
   if (!isRetry) {
+    lastPayload.value = { content };
     input.value = '';
     messages.value.push({
       id: `local-${Date.now()}`,
@@ -91,15 +98,21 @@ async function send(retry: boolean | Event = false): Promise<void> {
   try {
     await sendMessageStream(
       props.projectId,
-      { content },
+      request ?? { content },
       (event) => {
         const target = messages.value.find((m) => m.id === assistantId);
         if (event.type === 'delta' && target) {
           target.content += event.delta;
           scrollBottom();
+        } else if (event.type === 'steward' && target) {
+          target.steward = event.steward;
         } else if (event.type === 'failure') {
           if (target) target.streaming = false;
-          panelError.value = event.failure;
+          if (event.failure.gate === 'author_contract') {
+            if (target) target.content = event.failure.reason;
+          } else {
+            panelError.value = event.failure;
+          }
         } else if (event.type === 'job_submitted') {
           jobSubmitted.value = { jobId: event.jobId, chapterNumber: event.chapterNumber };
           trackJob?.(event.jobId);
@@ -107,6 +120,7 @@ async function send(retry: boolean | Event = false): Promise<void> {
           target.content = event.message.content;
           target.streaming = false;
           target.id = event.message.id;
+          if (event.steward) target.steward = event.steward;
           if (event.generationJobId) trackJob?.(event.generationJobId);
           void applyArtifacts(event.artifacts, event.generationJobId);
           scrollBottom();
@@ -131,6 +145,55 @@ async function send(retry: boolean | Event = false): Promise<void> {
   } finally {
     sending.value = false;
   }
+}
+
+function pendingSteward(message: ChatMessage): boolean {
+  const steward = message.steward;
+  if (!steward?.proposalId || steward.generationJobId) return false;
+  if (steward.proposalStatus === 'cancelled' || steward.proposalStatus === 'applied') return false;
+  return steward.status === 'confirmation_required'
+    || steward.status === 'auto_fill'
+    || steward.proposalStatus === 'pending'
+    || steward.proposalStatus === 'draft_saved';
+}
+
+async function sendSteward(
+  message: ChatMessage,
+  action: 'apply_and_generate' | 'save_draft' | 'cancel',
+): Promise<void> {
+  const steward = message.steward;
+  if (!steward?.proposalId || sending.value) return;
+  const request = buildStewardRequest(steward, action);
+  lastPayload.value = request;
+  await send(true, request);
+}
+
+function startRevise(message: ChatMessage): void {
+  if (!message.steward) return;
+  editingProposal.value = {
+    messageId: message.id,
+    steward: message.steward,
+    values: Object.fromEntries(message.steward.proposals.map((row) => [row.field, row.value])),
+  };
+}
+
+function cancelRevise(): void {
+  editingProposal.value = null;
+}
+
+async function submitRevision(): Promise<void> {
+  const editing = editingProposal.value;
+  if (!editing || sending.value) return;
+  const request: AssistantRequest = {
+    content: 'revise proposal',
+    stewardAction: 'revise',
+    proposalId: editing.steward.proposalId,
+    sourceVersion: editing.steward.sourceVersion,
+    proposalEdits: Object.entries(editing.values).map(([field, value]) => ({ field, value })),
+  };
+  lastPayload.value = request;
+  editingProposal.value = null;
+  await send(true, request);
 }
 
 async function applyArtifacts(
@@ -246,6 +309,27 @@ onMounted(() => {
         <div class="bubble">
           <span v-if="message.streaming && !message.content" class="thinking">正在思考…</span>
           <span class="content">{{ message.content }}</span><span v-if="message.streaming" class="cursor">▋</span>
+          <div
+            v-if="!message.streaming && pendingSteward(message)"
+            class="steward-actions"
+          >
+            <el-button size="small" type="primary" @click="sendSteward(message, 'apply_and_generate')">
+              采用并继续生成
+            </el-button>
+            <el-button size="small" @click="startRevise(message)">修改方案</el-button>
+            <el-button size="small" @click="sendSteward(message, 'save_draft')">仅保存草案</el-button>
+            <el-button size="small" @click="sendSteward(message, 'cancel')">取消</el-button>
+          </div>
+          <div v-if="editingProposal?.messageId === message.id" class="proposal-editor">
+            <div v-for="proposal in editingProposal.steward.proposals" :key="proposal.field" class="proposal-field">
+              <label>{{ proposal.field }}</label>
+              <el-input v-model="editingProposal.values[proposal.field]" type="textarea" :autosize="{ minRows: 1, maxRows: 4 }" />
+            </div>
+            <div class="steward-actions">
+              <el-button size="small" type="primary" @click="submitRevision">保存修改</el-button>
+              <el-button size="small" @click="cancelRevise">取消修改</el-button>
+            </div>
+          </div>
           <div v-if="!message.streaming && message.content" class="ops">
             <el-button size="small" link @click="copyMessage(message)">复制</el-button>
             <el-button
@@ -356,6 +440,27 @@ onMounted(() => {
   gap: 4px;
   margin-top: 4px;
   justify-content: flex-end;
+}
+.steward-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.proposal-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color);
+}
+.proposal-field {
+  display: grid;
+  gap: 4px;
+}
+.proposal-field label {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 .message.user .ops :deep(.el-button) {
   color: rgba(255, 255, 255, 0.86);

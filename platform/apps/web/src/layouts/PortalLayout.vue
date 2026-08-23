@@ -3,9 +3,11 @@
  * 用户门户布局：顶导航（品牌 / 导航项 / 余额 / 用户菜单），内容区承载子路由。
  * 工作台路由下主区去 padding 并转为 flex 列容器，让三栏撑满高度。
  */
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 import { ArrowDown } from '@element-plus/icons-vue';
+import { authApi } from '../api/auth';
 import { fenToYuan } from '../api/billing';
 import { useAuthStore } from '../stores/auth';
 
@@ -23,14 +25,62 @@ const navItems: Array<{ name: string; label: string }> = [
 /** 工作台页需要无 padding 的满高布局。 */
 const isWorkspace = computed(() => route.name === 'workspace');
 
+const passwordDialog = ref(false);
+const passwordSaving = ref(false);
+const passwordForm = reactive({
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+});
+
+function resetPasswordForm(): void {
+  passwordForm.currentPassword = '';
+  passwordForm.newPassword = '';
+  passwordForm.confirmPassword = '';
+}
+
 function onUserCommand(command: string): void {
   if (command === 'admin') {
     void router.push({ name: 'admin-home' });
     return;
   }
+  if (command === 'password') {
+    resetPasswordForm();
+    passwordDialog.value = true;
+    return;
+  }
   if (command === 'logout') {
     auth.logout();
     void router.push({ name: 'login' });
+  }
+}
+
+async function onChangePassword(): Promise<void> {
+  if (passwordForm.newPassword.length < 8) {
+    ElMessage.warning('新密码至少 8 位');
+    return;
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致');
+    return;
+  }
+  if (passwordForm.currentPassword === passwordForm.newPassword) {
+    ElMessage.warning('新密码不能与当前密码相同');
+    return;
+  }
+  passwordSaving.value = true;
+  try {
+    await authApi.changePassword({
+      currentPassword: passwordForm.currentPassword,
+      newPassword: passwordForm.newPassword,
+    });
+    ElMessage.success('密码已更新');
+    passwordDialog.value = false;
+    resetPasswordForm();
+  } catch {
+    // 错误提示由 http 拦截器统一弹出
+  } finally {
+    passwordSaving.value = false;
   }
 }
 
@@ -77,7 +127,10 @@ onMounted(() => {
             <el-dropdown-item v-if="auth.role === 'admin'" command="admin">
               管理后台
             </el-dropdown-item>
-            <el-dropdown-item command="logout" :divided="auth.role === 'admin'">
+            <el-dropdown-item command="password">
+              修改密码
+            </el-dropdown-item>
+            <el-dropdown-item command="logout" divided>
               退出登录
             </el-dropdown-item>
           </el-dropdown-menu>
@@ -87,6 +140,48 @@ onMounted(() => {
     <el-main class="portal-main" :class="{ 'workspace-main': isWorkspace }">
       <router-view />
     </el-main>
+    <el-dialog
+      v-model="passwordDialog"
+      title="修改密码"
+      width="420px"
+      destroy-on-close
+      @closed="resetPasswordForm"
+    >
+      <el-form label-position="top" @submit.prevent="onChangePassword">
+        <el-form-item label="当前密码" required>
+          <el-input
+            v-model="passwordForm.currentPassword"
+            type="password"
+            show-password
+            autocomplete="current-password"
+          />
+        </el-form-item>
+        <el-form-item label="新密码" required>
+          <el-input
+            v-model="passwordForm.newPassword"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="至少 8 位"
+          />
+        </el-form-item>
+        <el-form-item label="确认新密码" required>
+          <el-input
+            v-model="passwordForm.confirmPassword"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            @keyup.enter="onChangePassword"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialog = false">取消</el-button>
+        <el-button type="primary" :loading="passwordSaving" @click="onChangePassword">
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 

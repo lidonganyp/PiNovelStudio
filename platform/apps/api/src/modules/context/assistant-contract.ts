@@ -15,6 +15,8 @@ import {
   makeFailure,
 } from './failure-envelope';
 
+const STEWARD_ACTIONS = ['apply_and_generate', 'save_draft', 'cancel', 'revise'] as const;
+
 export function isAssistantAction(value: unknown): value is AssistantAction {
   return typeof value === 'string' && (ASSISTANT_ACTIONS as readonly string[]).includes(value);
 }
@@ -24,6 +26,11 @@ export function parseAssistantRequest(input: {
   action?: unknown;
   chapterNumber?: unknown;
   confirmGeneration?: unknown;
+  stewardAction?: unknown;
+  proposalId?: unknown;
+  sourceVersion?: unknown;
+  confirmedFields?: unknown;
+  proposalEdits?: unknown;
 }): AssistantRequest {
   const content = typeof input.content === 'string' ? input.content.trim() : '';
   if (!content) {
@@ -75,11 +82,54 @@ export function parseAssistantRequest(input: {
       userActionRequired: ['勾选确认生成'],
     }));
   }
+  const stewardAction = typeof input.stewardAction === 'string' ? input.stewardAction : undefined;
+  const proposalId = typeof input.proposalId === 'string' ? input.proposalId : undefined;
+  const sourceVersion = typeof input.sourceVersion === 'string' ? input.sourceVersion : undefined;
+  if (input.stewardAction !== undefined
+    && (stewardAction === undefined || !(STEWARD_ACTIONS as readonly string[]).includes(stewardAction))) {
+    throw new FailureHttpException(makeFailure({
+      stage: 'assistant.action',
+      gate: 'request_schema',
+      code: FAILURE_CODES.illegalAction,
+      severity: 'preflight',
+      reason: '补齐方案动作无效，请重新打开当前方案后操作',
+      recoverable: false,
+      userActionRequired: ['重新获取补齐方案'],
+    }));
+  }
+  if (stewardAction !== undefined && (!proposalId?.trim() || !sourceVersion?.trim())) {
+    throw new FailureHttpException(makeFailure({
+      stage: 'assistant.action',
+      gate: 'request_schema',
+      code: FAILURE_CODES.illegalAction,
+      severity: 'preflight',
+      reason: '补齐方案动作必须绑定方案 ID 和资料版本',
+      recoverable: false,
+      userActionRequired: ['重新获取补齐方案后再操作'],
+    }));
+  }
+  const confirmedFields = Array.isArray(input.confirmedFields)
+    ? input.confirmedFields.filter((item): item is string => typeof item === 'string')
+    : undefined;
+  const proposalEdits = Array.isArray(input.proposalEdits)
+    ? input.proposalEdits.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const row = item as { field?: unknown; value?: unknown };
+        return typeof row.field === 'string' && typeof row.value === 'string'
+          ? [{ field: row.field, value: row.value }]
+          : [];
+      })
+    : undefined;
   return {
     content,
-    action: input.action,
+    action: input.action as AssistantRequest['action'],
     chapterNumber,
     confirmGeneration,
+    stewardAction: stewardAction as AssistantRequest['stewardAction'],
+    proposalId,
+    sourceVersion,
+    confirmedFields,
+    proposalEdits,
   };
 }
 
