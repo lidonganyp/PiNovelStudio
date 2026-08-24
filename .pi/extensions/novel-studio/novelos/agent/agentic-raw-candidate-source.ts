@@ -21,6 +21,11 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Candidate, CompiledContext } from "../../v2/core/types.js";
 import { hashText, buildCandidateId } from "../../v2/core/candidate-revision-store.js";
+import {
+  mergeChapterContinuation,
+  hasContinuationPrefixMismatch,
+  repairAdjacentDuplicateParagraphs,
+} from "../../v2/core/chapter-continuation.js";
 import type { ChapterIntent } from "../../v2/core/chapter-intent-builder.js";
 import type { ModelGenerateFn } from "../../v2/adapters/legacy-model-route-adapter.js";
 import { buildChapterContract, renderContract, renderLayeredContract } from "../../v2/core/model-prompt-adapter.js";
@@ -99,6 +104,9 @@ export interface AgenticRawSourceInput {
   chapterId: string;
   chapterNumber: number;
   projectRoot: string;
+  /** Existing chapter prefix for append/continuation generation. */
+  continuationMode?: "replace" | "append";
+  currentChapterDraft?: string;
   intent: ChapterIntent;
   context: CompiledContext;
   characterNames: string[];
@@ -251,6 +259,7 @@ export interface AgenticRawSourceResult {
     | "budget_exhausted"
     | "empty_draft"
     | "must_verify_coverage_failed"
+    | "continuation_prefix_mismatch"
     | "unknown";
   /** 收集的证据 sourceRefs */
   sourceRefs: string[];
@@ -390,6 +399,8 @@ export function createAgenticRawCandidateSource(
         chapterId,
         chapterNumber,
         projectRoot,
+        continuationMode,
+        currentChapterDraft,
         intent,
         context,
         characterNames,
@@ -803,6 +814,8 @@ export function createAgenticRawCandidateSource(
           confirmedCoverage,
           evidenceRecords,
           evalPrefix,
+          continuationMode,
+          currentChapterDraft,
           // Phase 2C：传入预创建的 plan（allowedTools 已在 runtime 创建前过滤，
           // loop 不再内部 createEvidencePlan，直接消费此 plan 的 mustVerify + stopConditions）
           evidencePlan,
@@ -911,15 +924,49 @@ export function createAgenticRawCandidateSource(
       // RRB-2.1：candidate.id 必须含运行身份 + 内容 hash，不得用每章固定 ID
       // 表示多轮不同正文。复用 buildCandidateId 与 candidate-workspace 内
       // manifest 口径一致（runId=sessionId，derivationType=agentic_generation）。
+      if (
+        continuationMode === "append" &&
+        currentChapterDraft?.trim() &&
+        hasContinuationPrefixMismatch(currentChapterDraft, loopResult.text)
+      ) {
+        return {
+          ...makeFallbackResult(
+            sessionId,
+            trajectory.getDetailOutputPath(),
+            budget,
+            loopResult.lineage.stopReason,
+            "模型改写了作者续写前缀，已拒绝静默拼接并要求重试。",
+            "continuation_prefix_mismatch",
+            {
+              firstAction: loopResult.lineage.firstAction,
+              actualRetrievalCalls: loopResult.lineage.actualRetrievalCalls,
+              mustVerifyCount: loopResult.lineage.evidencePlan.mustVerify.length,
+              mustVerifyCoveredCount: loopResult.lineage.coverageGate?.confirmedItems.length ?? 0,
+              coverageResult: loopResult.lineage.coverageGate,
+              modelCallsByKind: loopResult.lineage.modelCallsByKind,
+              sourceRefs: loopResult.lineage.sourceRefs,
+              toolCalls: loopResult.lineage.toolCalls,
+            },
+          ),
+          workPackageSummary,
+        };
+      }
+      const mergedText = continuationMode === "append"
+        ? mergeChapterContinuation(currentChapterDraft ?? "", loopResult.text)
+        : loopResult.text;
+      const finalText = repairAdjacentDuplicateParagraphs(
+        mergedText,
+        continuationMode === "append" ? currentChapterDraft ?? "" : "",
+      );
       const candidateId = buildCandidateId({
         runId: sessionId,
         derivationType: "agentic_generation",
-        textHash: hashText(loopResult.text),
+        textHash: hashText(finalText),
         sequence: 0,
       });
       const candidate: Candidate = {
         id: candidateId,
-        text: loopResult.text,
+        text: finalText,
         kind: AGENTIC_RAW_KIND,
         model: candidateModel,
         route: AGENTIC_RAW_ROUTE,
@@ -1069,6 +1116,7 @@ function makeFallbackResult(
     | "budget_exhausted"
     | "empty_draft"
     | "must_verify_coverage_failed"
+    | "continuation_prefix_mismatch"
     | "unknown",
   observed?: {
     firstAction?: "draft" | "tool_call" | "not_run";

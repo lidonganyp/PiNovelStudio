@@ -108,6 +108,87 @@ describe('project context reader', () => {
     expect(snapshot.hashMismatch?.actual).not.toBe(snapshot.hashMismatch?.expected);
   });
 
+  it('checks the chapter immediately before the requested target, not the last chapter in the book', () => {
+    const snapshot = compileProjectContextSnapshot(baseRecords({
+      documents: [{
+        id: 84,
+        documentType: 'narrative_state',
+        content: makeStaleNarrativeState(),
+        currentVersion: 1,
+        updatedAt: new Date(),
+      }],
+      chapters: [
+        {
+          chapterNumber: 1, title: '第一章', content: FIXTURE_CHAPTER_ONE,
+          wordCount: 20, version: 1, seed: null,
+        },
+        {
+          chapterNumber: 3, title: '第三章', content: '后续章节内容',
+          wordCount: 8, version: 1, seed: null,
+        },
+      ],
+    }), 3);
+    expect(snapshot.hashMismatch).toBeUndefined();
+    expect(snapshot.previousContinuation).toBeUndefined();
+  });
+
+  it('uses chapter 16 as the continuation source when preparing chapter 17', () => {
+    const snapshot = compileProjectContextSnapshot(baseRecords({
+      chapters: [
+        { chapterNumber: 16, title: '第十六章', content: '第十六章结尾', wordCount: 8, version: 1, seed: null },
+        { chapterNumber: 18, title: '第十八章', content: '第十八章结尾', wordCount: 8, version: 1, seed: null },
+      ],
+    }), 17);
+    expect(snapshot.previousContinuation?.chapterNumber).toBe(16);
+    expect(snapshot.previousContinuation?.tailExcerpt).toContain('第十六章结尾');
+  });
+
+  it('ignores a chapter 17 state entry while preparing chapter 17', () => {
+    const snapshot = compileProjectContextSnapshot(baseRecords({
+      documents: [{
+        id: 84,
+        documentType: 'narrative_state',
+        content: JSON.stringify({
+          character: [{
+            sourceChapter: 'ch17',
+            sourceRef: 'ch17#finalText:59c654f78fe6:0-20',
+            characterId: '主角',
+            field: 'participation',
+            value: 'present',
+          }],
+        }),
+        currentVersion: 1,
+        updatedAt: new Date(),
+      }],
+      chapters: [
+        { chapterNumber: 16, title: '第十六章', content: '第十六章结尾', wordCount: 8, version: 1, seed: null },
+        { chapterNumber: 17, title: '第十七章', content: '第十七章已有片段', wordCount: 8, version: 1, seed: null },
+      ],
+    }), 17);
+    expect(snapshot.hashMismatch).toBeUndefined();
+    expect(snapshot.previousContinuation?.chapterNumber).toBe(16);
+  });
+
+  it('recognizes legacy numeric and nested state references while preparing chapter 2', () => {
+    const snapshot = compileProjectContextSnapshot(baseRecords({
+      documents: [{
+        id: 84,
+        documentType: 'narrative_state',
+        content: JSON.stringify({
+          canon: [{
+            sourceChapter: 1,
+            sourceRef: ['ch1#finalText:deadbeefcafe:0-20'],
+            memory: { sourceChapter: 1, sourceRef: ['ch1#finalText:deadbeefcafe:0-20'] },
+          }],
+        }),
+        currentVersion: 1,
+        updatedAt: new Date(),
+      }],
+    }), 2);
+    expect(snapshot.hashMismatch?.expected).toBe('deadbeefcafe');
+    expect(snapshot.hashMismatch?.chapterNumber).toBe(1);
+  });
+
   it('scopes every reader query to the current user and project', async () => {
     const prisma = {
       novelProject: { findFirst: vi.fn().mockResolvedValue(null) },

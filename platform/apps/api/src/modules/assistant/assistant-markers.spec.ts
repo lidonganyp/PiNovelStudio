@@ -89,6 +89,12 @@ describe('unmarked outline and generate inference', () => {
     expect(inferGenerateChapterNumber('随便聊聊设定', '好的。')).toBeNull();
   });
 
+  it('recognizes completion and expansion wording as a chapter generation request', () => {
+    const request = '根据小说大纲，完善第十七章，补满2500字';
+    expect(inferGenerateChapterNumber(request, '')).toBe(17);
+    expect(shouldPreflightAuthorContract(undefined, request)).toBe(true);
+  });
+
   it('preflights author contract for explicit or locally recognized generate requests', () => {
     expect(shouldPreflightAuthorContract('generate_chapter', '随便聊聊')).toBe(true);
     expect(shouldPreflightAuthorContract(undefined, '生成第二章')).toBe(true);

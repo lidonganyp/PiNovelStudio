@@ -244,6 +244,16 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
     parts.push(`【前文】\n${input.evalPrefix}`);
   }
 
+  // Append mode treats the current draft as an author-authored prefix.
+  if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
+    parts.push(
+      "【已有本章正文（作者前缀）】\n"
+      + input.currentChapterDraft.trimEnd()
+      + "\n\n保留以上正文原样，从正文末尾继续写作。输出完整本章正文时必须包含该前缀；不得从头重写、删改或替换已有段落。",
+    );
+    consumedFields.push("currentChapterDraft");
+  }
+
   // Diagnostic and experiment modules are compiled for trace/evaluation only.
   // They must not prescribe how the raw chapter is written.
   promiseContext.consumedByRawPrompt = false;

@@ -58,6 +58,7 @@ test("系统 prompt 明确只改表达，不改事件、动作和因果", () => 
   assert.match(STYLE_SYSTEM_PROMPT, /不改因果/);
   assert.match(STYLE_SYSTEM_PROMPT, /交出≠看/);
   assert.match(STYLE_SYSTEM_PROMPT, /看不见≠看得见/);
+  assert.match(STYLE_SYSTEM_PROMPT, /不得重复|只出现一次/);
 });
 
 test("首次优化的 user prompt 在初稿之前写入表达硬边界", () => {
@@ -75,6 +76,7 @@ test("首次优化的 user prompt 在初稿之前写入表达硬边界", () => {
   assert.match(userPrompt, /交出≠看/);
   assert.match(userPrompt, /拿起≠放下/);
   assert.match(userPrompt, /离开≠走进/);
+  assert.match(userPrompt, /不得重复|只出现一次/);
 });
 
 test("表达硬边界不得被审计成机械控制型 prompt", () => {

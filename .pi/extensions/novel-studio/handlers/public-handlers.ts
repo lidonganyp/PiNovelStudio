@@ -61,6 +61,8 @@ export async function handleGenerateChapter(input: {
   workspaceId: string;
   chapterId: string;
   chapterNumber: number;
+  continuationMode?: "replace" | "append";
+  currentChapterDraft?: string;
   outline?: string;
   previousChapterSummary?: string;
   styleProfile?: string;
@@ -195,6 +197,8 @@ export async function handleGenerateChapter(input: {
       chapterId,
       chapterNumber,
       projectRoot: _unifiedProjectRoot,
+      continuationMode: input.continuationMode,
+      currentChapterDraft: input.currentChapterDraft,
       writerModel,
       // EXPERIMENTAL-FIELDS-REJECT-1：实验字段已在入口 guard 拒绝，此处不再透传。
       // 旧 raw/judge 分支与 modelTestRoute / fullPipelinePreview / mock 不得进入生产提交。

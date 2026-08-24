@@ -12,6 +12,9 @@ export interface RuntimeInvokeResult {
   /** Runtime-side authoritative metering summary for the completed invocation. */
   metering?: {
     modelCallCount?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalSettledAmountFen?: number;
   };
 }
 

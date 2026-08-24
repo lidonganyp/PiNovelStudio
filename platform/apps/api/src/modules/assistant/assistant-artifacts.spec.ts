@@ -179,7 +179,9 @@ describe('applyAssistantArtifacts', () => {
       },
     });
     expect(prisma.novelDocument.create).not.toHaveBeenCalled();
-    expect(jobs.submitChapterGeneration).toHaveBeenCalledWith(1, 128, 4);
+    expect(jobs.submitChapterGeneration).toHaveBeenCalledWith(1, 128, 4, {
+      continuationMode: undefined,
+    });
     expect(result.generationJobId).toBe('gen-4');
     expect(result.artifacts.publicEntry).toBe('novel_generate_chapter');
   });

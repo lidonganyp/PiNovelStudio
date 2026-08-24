@@ -103,7 +103,8 @@ export interface PreflightWorkspaceOptions {
 // 校验逻辑（chapterNumber > 1 时）：
 //  1. state store 文件存在 → 它是权威连续性证据：
 //     - workspaceId 必须匹配
-//     - 必须有 sourceChapter=ch{N-1} 的 entry，或 lastCommittedChapter=ch{N-1}
+//     - 正常推进必须有 sourceChapter=ch{N-1} 的 entry，或 lastCommittedChapter=ch{N-1}
+//     - 重生成当前章时允许 lastCommittedChapter=ch{N}，但必须有 ch{N-1} continuity 快照
 //       （前章已提交但所有 seed 派生的权威状态条目均被 reanchor 拒绝 → 合法，
 //        由 lastCommittedChapter + 章节文件存在性证明连续性，不阻断）
 //     - 若存在 entry，至少一个 entry 的 sourceRef 必须锚定 finalText（ch{N-1}#finalText:{hash}），
@@ -149,6 +150,65 @@ function readContinuityHash(workspacePath: string, previousChapter: number): str
   }
 }
 
+type JsonRecord = Record<string, unknown>;
+
+/** 兼容历史 state store 的数字章节号、裸数字字符串和 chN。 */
+function normalizeSourceChapter(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return `ch${value}`;
+  }
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  const match = text.match(/^ch\s*(\d+)$/i) ?? text.match(/^(\d+)$/);
+  return match ? `ch${Number.parseInt(match[1], 10)}` : undefined;
+}
+
+function sourceReferences(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(sourceReferences);
+  if (!value || typeof value !== "object") return [];
+  const record = value as JsonRecord;
+  return ["locator", "ref", "sourceRef", "sourceRefs"]
+    .flatMap((key) => sourceReferences(record[key]));
+}
+
+function sourceNodes(value: unknown): JsonRecord[] {
+  if (Array.isArray(value)) return value.flatMap(sourceNodes);
+  if (!value || typeof value !== "object") return [];
+  const record = value as JsonRecord;
+  const nodes = ("sourceChapter" in record || "sourceRef" in record || "sourceRefs" in record)
+    ? [record]
+    : [];
+  return [...nodes, ...Object.values(record).flatMap(sourceNodes)];
+}
+
+function nodeReferences(node: JsonRecord): string[] {
+  return [...sourceReferences(node.sourceRef), ...sourceReferences(node.sourceRefs)];
+}
+
+function entrySourceChapter(entry: unknown): string | undefined {
+  const nodes = sourceNodes(entry);
+  for (const node of nodes) {
+    const chapter = normalizeSourceChapter(node.sourceChapter);
+    if (chapter) return chapter;
+    const ref = nodeReferences(node).find((item) => /^(?:ch)?\d+#finalText:/i.test(item.trim()));
+    const match = ref?.trim().match(/^(?:ch)?(\d+)#finalText:/i);
+    if (match) return `ch${Number.parseInt(match[1], 10)}`;
+  }
+  return undefined;
+}
+
+function entryFinalTextReferences(entry: unknown, chapterId: string): string[] {
+  return sourceNodes(entry)
+    .filter((node) => normalizeSourceChapter(node.sourceChapter) === chapterId || entrySourceChapter(node) === chapterId)
+    .flatMap(nodeReferences)
+    .filter((sourceRef) => sourceRef.includes("#finalText:"));
+}
+
+function normalizedChapterText(text: string): string {
+  return text.replace(/^\uFEFF/, "").trim();
+}
+
 function validateStateStoreContinuity(
   workspacePath: string,
   workspaceId: string,
@@ -191,16 +251,25 @@ function validateStateStoreContinuity(
   ];
 
   // 找前章 committed entry
-  const prevEntries = allEntries.filter(
-    (e) => e && typeof e === "object" && e.sourceChapter === previousChapterId,
-  );
+  const prevEntries = allEntries.filter((entry) => entrySourceChapter(entry) === previousChapterId);
   if (prevEntries.length === 0) {
+    // Re-generating an existing chapter is different from advancing to the
+    // next chapter: the durable state may already be committed at ch{N},
+    // while the input still carries the explicit continuity snapshot for
+    // ch{N-1}. Require that snapshot so a current-chapter rerun cannot use
+    // an arbitrary state store as proof of continuity.
+    if (
+      normalizeSourceChapter(parsed.lastCommittedChapter) === `ch${chapterNumber}`
+      && readContinuityHash(workspacePath, previousChapter)
+    ) {
+      return { valid: true, source: "state-store-current-chapter-rerun" };
+    }
     // 无 ch{N-1} authoritative entry。区分两种合法/非法情况：
     //  - lastCommittedChapter === ch{N-1}：前章已提交但未晋级任何权威状态条目
     //    （干净 workspace 首章、或所有 seed 派生的状态均被 reanchor 拒绝时常见）。
     //    连续性由 lastCommittedChapter + 章节文件存在性证明 → 不阻断。
     //  - lastCommittedChapter 落后于 ch{N-1}（或缺失）：真正陈旧 → 阻断。
-    if (parsed.lastCommittedChapter !== previousChapterId) {
+    if (normalizeSourceChapter(parsed.lastCommittedChapter) !== previousChapterId) {
       return {
         valid: false,
         reason: `state-store-stale: no entries with sourceChapter=${previousChapterId} (lastCommittedChapter=${parsed.lastCommittedChapter ?? "unknown"})`,
@@ -220,9 +289,9 @@ function validateStateStoreContinuity(
   }
 
   // 验证至少一个 entry 的 sourceRef 锚定 finalText（非 candidate:*）
-  const finalTextAnchored = prevEntries.find(
-    (e) => typeof e.sourceRef === "string" && e.sourceRef.includes("#finalText:"),
-  );
+  const finalTextAnchored = prevEntries
+    .map((entry) => ({ entry, refs: entryFinalTextReferences(entry, previousChapterId) }))
+    .find((item) => item.refs.length > 0);
   if (!finalTextAnchored) {
     return {
       valid: false,
@@ -231,11 +300,12 @@ function validateStateStoreContinuity(
   }
 
   // 提取 hash 并与实际章节文件比对
-  const hashMatch = String(finalTextAnchored.sourceRef).match(/#finalText:([0-9a-fA-F]{12})/);
+  const sourceRef = finalTextAnchored.refs[0];
+  const hashMatch = sourceRef.match(/#finalText:([0-9a-fA-F]{12})/);
   if (!hashMatch) {
     return {
       valid: false,
-      reason: `state-store-sourceRef-malformed: ${finalTextAnchored.sourceRef}`,
+      reason: `state-store-sourceRef-malformed: ${sourceRef}`,
     };
   }
   const stateHash = hashMatch[1].toLowerCase();
@@ -251,7 +321,7 @@ function validateStateStoreContinuity(
 
   const actualHash = prevChapterPath
     ? createHash("sha256")
-        .update(readFileSync(prevChapterPath, "utf-8"), "utf8")
+        .update(normalizedChapterText(readFileSync(prevChapterPath, "utf-8")), "utf8")
         .digest("hex")
         .slice(0, 12)
     : (continuityHash as string);

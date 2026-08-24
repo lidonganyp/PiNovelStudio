@@ -91,6 +91,44 @@ describe('generation steward', () => {
     })).rejects.toMatchObject({ envelope: { code: 'state_store_hash_mismatch' } });
   });
 
+  it('repairs a stale source reference before classifying generation materials', async () => {
+    const narrative = {
+      id: 84,
+      documentType: 'narrative_state',
+      content: makeStaleNarrativeState(),
+      currentVersion: 1,
+      updatedAt: new Date(),
+    };
+    const prisma = makePrisma();
+    prisma.novelProject.findFirst.mockResolvedValue({
+      id: 128, userId: 1, title: '铜哨', description: '', genre: '',
+      subGenres: [], worldKeyTerms: [], version: 1, deletedAt: null,
+    });
+    prisma.novelDocument.findMany
+      .mockImplementation(async () => [narrative]);
+    prisma.novelDocument.update.mockImplementation(async ({ data }: { data: { content: string; currentVersion: number } }) => {
+      Object.assign(narrative, data);
+      return narrative;
+    });
+    prisma.novelCharacter.findMany.mockResolvedValue([]);
+    prisma.novelOutlineNode.findMany.mockResolvedValue([]);
+    prisma.novelChapter.findMany.mockResolvedValue([{
+      chapterNumber: 1, title: '第一章', content: FIXTURE_CHAPTER_ONE,
+      wordCount: 20, version: 1, seed: null,
+    }]);
+
+    await expect(prepareGenerationSteward({
+      prisma: prisma as never, userId: 1, projectId: 128, chapterNumber: 2,
+    })).resolves.toMatchObject({ status: 'confirmation_required' });
+    expect(prisma.novelDocument.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 84 },
+      data: expect.objectContaining({ currentVersion: 2 }),
+    }));
+    expect(prisma.novelDocumentVersion.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ documentId: 84, versionNumber: 2 }),
+    }));
+  });
+
   it('saves a proposal without creating a generation job', async () => {
     const prisma = makePrisma();
     prisma.novelProject.findFirst.mockResolvedValue({
@@ -165,7 +203,7 @@ describe('generation steward', () => {
         findFirst: vi.fn().mockImplementation(async ({ where }: { where: { chapterNumber?: number } }) => (
           chapters.find((row) => row.chapterNumber === where.chapterNumber) ?? null
         )),
-        create: vi.fn().mockImplementation(async ({ data }: { data: Record<string, any> }) => {
+        create: vi.fn().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
           const created = {
             id: 44,
             chapterNumber: data.chapterNumber,
@@ -195,6 +233,7 @@ describe('generation steward', () => {
 
     const prepared = await prepareGenerationSteward({
       prisma: prisma as never, userId: 1, projectId: 128, chapterNumber: 1,
+      continuationMode: 'append',
     });
     expect(prepared.status).toBe('confirmation_required');
     expect(prepared.proposalId).toBeTruthy();
@@ -207,9 +246,13 @@ describe('generation steward', () => {
     });
 
     expect(confirmed.status).toBe('ready');
+    expect(confirmed.continuationMode).toBe('append');
     expect(confirmed.generationJobId).toBe('job-first-chapter');
     expect(chapters[0]?.seed && String((chapters[0]?.seed as Record<string, unknown>).intent)).not.toBe('');
     expect(jobs.submitChapterGeneration).toHaveBeenCalledTimes(1);
+    expect(jobs.submitChapterGeneration).toHaveBeenCalledWith(1, 128, 44, {
+      continuationMode: 'append',
+    });
   });
 
   it('applies a confirmed proposal once and reuses the existing job id', async () => {

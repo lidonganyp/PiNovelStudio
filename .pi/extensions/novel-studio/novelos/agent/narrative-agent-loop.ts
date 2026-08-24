@@ -454,6 +454,15 @@ export class NarrativeAgentLoop {
     if (input.evalPrefix && input.evalPrefix.trim().length > 0) {
       promptParts.push("【前文】", input.evalPrefix, "");
     }
+    if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
+      promptParts.push(
+        "【已有本章正文（作者前缀）】",
+        input.currentChapterDraft.trimEnd(),
+        "",
+        "以上正文必须原样保留。请从其末尾继续写作；如输出完整本章正文，必须包含该前缀，不得从头重写。",
+        "",
+      );
+    }
     promptParts.push(
       input.chapterIntent,
       "",

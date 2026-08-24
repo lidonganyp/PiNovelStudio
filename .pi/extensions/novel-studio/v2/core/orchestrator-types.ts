@@ -120,6 +120,10 @@ export interface UnifiedOrchestratorInput {
   workspaceId: string;
   chapterId: string;
   chapterNumber: number;
+  /** Append mode preserves the current chapter draft and writes from its end. */
+  continuationMode?: "replace" | "append";
+  /** Author-authored current chapter text, present for append mode only. */
+  currentChapterDraft?: string;
   /** 正式生产流程：NovelOS Agentic 初稿 → 作者风格整章优化 → 用户评价。 */
   productionFlow?: "agentic_style";
   /**

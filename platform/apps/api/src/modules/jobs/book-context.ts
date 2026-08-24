@@ -150,6 +150,7 @@ function compactCanon(rows: Array<Record<string, unknown>>): Array<Record<string
     .map((row) => ({
       ...row,
       fact: clip(String(row.fact), MAX_FACT_CHARS),
+      ...normalizedSourceChapterField(row),
     }));
 }
 
@@ -161,7 +162,7 @@ function compactCharacters(rows: Array<Record<string, unknown>>): Array<Record<s
     if (field === 'participation' && (value === 'present' || value === '')) return false;
     if (!value) return false;
     return Boolean(row.characterId);
-  });
+  }).map((row) => ({ ...row, ...normalizedSourceChapterField(row) }));
 }
 
 function compactPromises(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -170,7 +171,24 @@ function compactPromises(rows: Array<Record<string, unknown>>): Array<Record<str
     const status = String(row.status ?? 'open');
     if (!description) return false;
     return status === 'open' || status === 'advancing' || status === 'delayed';
-  });
+  }).map((row) => ({ ...row, ...normalizedSourceChapterField(row) }));
+}
+
+function normalizedSourceChapterField(row: Record<string, unknown>): Record<string, unknown> {
+  const sourceChapter = normalizeSourceChapter(row.sourceChapter);
+  return sourceChapter ? { sourceChapter } : {};
+}
+
+function normalizeSourceChapter(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return `ch${value}`;
+  }
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  const direct = text.match(/^ch\s*(\d+)$/i) ?? text.match(/^(\d+)$/);
+  if (direct) return `ch${Number.parseInt(direct[1], 10)}`;
+  const titled = text.match(/^第\s*(\d+)\s*章$/);
+  return titled ? `ch${Number.parseInt(titled[1], 10)}` : undefined;
 }
 
 function clip(text: string, max: number): string {

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { countWords, requireOwnedProject } from '../../common/ownership';
+import { hashChapterText, reanchorNarrativeStateToChapter } from '../context/context-compiler';
 import type {
   CreateChapterDto,
   RestoreVersionDto,
@@ -171,6 +172,45 @@ export class ChaptersService {
           createdBy: userId,
         },
       });
+      const documentDelegate = (tx as unknown as {
+        novelDocument?: {
+          findFirst?: (args: unknown) => Promise<{ id: number; content: string; currentVersion: number } | null>;
+          update?: (args: unknown) => Promise<unknown>;
+        };
+        novelDocumentVersion?: { create?: (args: unknown) => Promise<unknown> };
+      }).novelDocument;
+      const documentVersionDelegate = (tx as unknown as {
+        novelDocumentVersion?: { create?: (args: unknown) => Promise<unknown> };
+      }).novelDocumentVersion;
+      if (documentDelegate?.findFirst && documentDelegate.update && documentVersionDelegate?.create) {
+        const narrative = await documentDelegate.findFirst({
+          where: { projectId, userId, documentType: 'narrative_state', deletedAt: null },
+        });
+        if (narrative) {
+          const repaired = reanchorNarrativeStateToChapter(
+            narrative.content,
+            nextChapterNumber,
+            hashChapterText(nextContent.replace(/^\uFEFF/, '').trim()),
+            chapter.chapterNumber,
+          );
+          if (repaired.updatedEntries > 0) {
+            const nextVersion = narrative.currentVersion + 1;
+            await documentDelegate.update({
+              where: { id: narrative.id },
+              data: { content: repaired.content, currentVersion: nextVersion },
+            });
+            await documentVersionDelegate.create({
+              data: {
+                documentId: narrative.id,
+                createdBy: userId,
+                versionNumber: nextVersion,
+                content: repaired.content,
+                changeSummary: `同步第${nextChapterNumber}章正文哈希引用`,
+              },
+            });
+          }
+        }
+      }
       return saved;
       });
     } catch (error: unknown) {

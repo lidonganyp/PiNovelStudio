@@ -230,7 +230,8 @@ export function createInvokeRouter(
         // 把 workspaceDocuments 数组转为 WorkspaceDocument[] 类型
         const docs = workspaceDocuments.map((d) => d as {
           type: "creative_constitution" | "worldbuilding" | "character_profile" |
-                "story_outline" | "style_profile" | "chapter_seed" | "explicit_outline" | "narrative_state";
+                "story_outline" | "story_outline_full" | "style_profile" | "chapter_seed" |
+                "explicit_outline" | "narrative_state";
           content: string;
         });
 
@@ -294,15 +295,31 @@ export function createInvokeRouter(
         abortController.signal,
       );
       assertInvokeNotAborted(abortController.signal);
-
       let resultForCaller = result;
+
+      const contextMetrics = input.contextManifest && typeof input.contextManifest === "object"
+        ? {
+            ...(input.contextManifest as Record<string, unknown>),
+            actualInputTokens: metering.inputTokens,
+            actualOutputTokens: metering.outputTokens,
+            settledCostFen: metering.totalSettledAmountFen,
+          }
+        : undefined;
+      if (contextMetrics && result && typeof result === "object") {
+        resultForCaller = { ...(result as Record<string, unknown>), contextManifest: contextMetrics };
+      }
+
+      if (materializedJobId && input.contextManifest && typeof input.contextManifest === "object") {
+        deps.workspaceManager.updateContextManifest?.(materializedJobId, contextMetrics);
+      }
+
       if (toolName === "novel_generate_chapter" && materializedJobId && result && typeof result === "object") {
         const tempProjectRoot = inputWithMeta._projectRoot;
         const workspaceId = inputWithMeta.workspaceId;
         if (typeof tempProjectRoot === "string" && typeof workspaceId === "string") {
           try {
             const runtimeState = readNarrativeStateSnapshot(tempProjectRoot, workspaceId);
-            resultForCaller = { ...(result as Record<string, unknown>), runtimeState };
+            resultForCaller = { ...(resultForCaller as Record<string, unknown>), runtimeState };
           } catch (error: unknown) {
             if (jobCtx.jobId) {
               try {
@@ -386,6 +403,8 @@ export function createInvokeRouter(
         // 计费摘要——platform-api 据此更新任务进度与最终结算金额（分）
         metering: {
           modelCallCount: metering.modelCallCount,
+          inputTokens: metering.inputTokens,
+          outputTokens: metering.outputTokens,
           settledCount: metering.settledCount,
           alreadySettledCount: metering.alreadySettledCount,
           budgetExhaustedCount: metering.budgetExhaustedCount,

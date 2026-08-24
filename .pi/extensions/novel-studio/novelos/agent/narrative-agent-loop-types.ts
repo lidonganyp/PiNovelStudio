@@ -67,6 +67,9 @@ export interface AgentLoopInput {
    * 而非从 scratch 生成不同故事。生产模式（非 eval）不传，行为不变。
    */
   evalPrefix?: string;
+  /** Existing chapter prefix that must be preserved in append mode. */
+  continuationMode?: "replace" | "append";
+  currentChapterDraft?: string;
   /**
    * Phase 2C：调用方预创建的 EvidencePlan。
    *

@@ -25,6 +25,7 @@ export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编�
 - 只调整措辞、句式、节奏、感官、语气和对白口吻。
 - 同义改写可以：走进≈走了进去，推开≈推门进去。
 - 初稿中的每一句话在优化稿中都必须有对应内容。
+- 每个事件、句子或段落在优化稿中只出现一次；严禁为了证明“已保留”而复制同一段落、动作或资源清单。
 
 【不改事件、动作、因果】
 - 不改事件：谁对谁做了什么、对象、结果、地点转换，不得换成另一件事。
@@ -38,6 +39,7 @@ export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编�
 - 初稿中的每一句话都是故事内容的组成部分——包括动作、对白、设定说明、内心独白、临别赠言、旁白议论等。
 - 严禁以"精简讲述""优化节奏""避免冗余"为由删除对白、设定说明或内心独白。
 - 风格优化只调整措辞、句式和节奏；初稿中的每一句话在优化稿中都必须有对应内容（可以改写措辞，但不得删除或用其他事件替换）。
+- 同一事件只能在原有叙事位置保留一份；不得把已有前缀、资源清单或动作段落再次粘贴到后文。
 - canary 证据：模型曾系统性删除"通常需要三人以上的战术小队配合才能猎杀""活着回来""是时候去把那1250积分拿回来了"等设定说明/对白/独白——这些是故事骨架的组成部分，删除即阻断。
 
 【输出格式硬约束】
@@ -53,6 +55,9 @@ const DEFAULT_TIMEOUT_MS = 600000;
 export interface AuthorStyleOptimizationInput {
   sourceCandidate: Candidate;
   chapterNumber: number;
+  /** Append mode keeps the author-authored prefix and writes only at its end. */
+  continuationMode?: "replace" | "append";
+  currentChapterDraft?: string;
   intent: ChapterIntent;
   context: CompiledContext;
   constitution: ConstitutionSnapshot | null;
@@ -102,6 +107,12 @@ export interface AuthorStyleOptimizationInput {
       editorialSentence: string;
       reason: string;
     }>;
+    stateChangeLosses?: Array<{
+      subject: string;
+      afterState: string;
+      rawSentence: string;
+      reason: string;
+    }>;
   };
 }
 
@@ -127,6 +138,7 @@ export interface AuthorStyleOptimizationResult {
     | "empty_result"
     | "model_timeout"
     | "model_error"
+    | "continuation_prefix_mismatch"
     | null;
   styleProfileLoaded: boolean;
   styleGuidanceConsumed: boolean;
@@ -337,12 +349,18 @@ export function buildAuthorStyleUserPrompt(
   guidance: ParsedStyleGuidance,
 ): string {
   const parts: string[] = [];
+  if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
+    parts.push(
+      "CONTINUATION MODE: The existing author draft is authoritative. Preserve its prefix exactly once; do not rewrite or repeat it. Continue only from the end of that prefix. If returning a complete chapter, include the original prefix once and append only the new prose."
+    );
+  }
   parts.push(
     "【表达优化硬边界】\n" +
     "只改表达，不改事件、动作和因果。\n" +
     "- 措辞、句式、节奏、感官、语气可以改。\n" +
     "- 主体、动作、对象、结果、事件顺序、因果关系必须与初稿一致。\n" +
-    "- 禁止把初稿动作换成另一类动作（交出≠看，拿起≠放下，离开≠走进，看不见≠看得见）。",
+    "- 禁止把初稿动作换成另一类动作（交出≠看，拿起≠放下，离开≠走进，看不见≠看得见）。\n" +
+    "- 每个事件、句子或段落只出现一次；不得复制已有前缀、资源清单或动作段落。",
   );
   // Drift retry：事件保持约束必须在初稿之前。
   if (input.driftFeedback?.replacedEvents?.length) {
@@ -358,6 +376,19 @@ export function buildAuthorStyleUserPrompt(
       `上一轮风格优化把以下关键事件改写了，本轮必须保留初稿中的原始事件：\n${eventList}\n` +
       `只允许调整措辞、句式、节奏和感官描写；主体、动作、对象、结果和事件顺序必须与初稿完全一致。` +
       `例如：初稿中"他看不见"，优化稿也必须是"看不见"，不能改成"看得见"；初稿中"看向万永福"，优化稿也必须有"看向万永福"这个动作。`,
+    );
+  }
+  if (input.driftFeedback?.stateChangeLosses?.length) {
+    const stateList = input.driftFeedback.stateChangeLosses
+      .slice(0, 8)
+      .map(
+        (item, index) =>
+          `${index + 1}. 主体"${item.subject}"的状态变化「${item.afterState}」来自初稿句「${item.rawSentence}」。上一轮漏掉了该变化（${item.reason}），本轮必须保留同一状态语义；允许使用同义措辞，但不得删除、反转或改成未发生。`,
+      )
+      .join("\n");
+    parts.push(
+      `【状态变化保持硬约束（重试）】\n${stateList}\n` +
+      "状态变化是故事事实，不是可删的表达细节；请在相同主体和对象上保留结果。",
     );
   }
   parts.push(`请优化第 ${input.chapterNumber} 章完整正文。`);

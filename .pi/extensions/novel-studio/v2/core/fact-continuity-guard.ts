@@ -733,6 +733,7 @@ function checkDuplicates(text: string, minLen = 24): { diagnostics: Diagnostic[]
 
   const diagnostics: Diagnostic[] = [];
   const exemptions: QuoteExemption[] = [];
+  const reportedRegions: number[] = [];
 
   for (const dup of dups) {
     if (diagnostics.length >= 5) break; // 限制 diagnostic 数量，与原实现一致
@@ -740,6 +741,10 @@ function checkDuplicates(text: string, minLen = 24): { diagnostics: Diagnostic[]
     if (exempted && exemption) {
       exemptions.push(exemption);
     } else {
+      if (reportedRegions.some((start) => Math.abs(start - dup.start) < minLen)) {
+        continue;
+      }
+      reportedRegions.push(dup.start);
       diagnostics.push(
         makeDiagnostic(
           "duplicate_scan",

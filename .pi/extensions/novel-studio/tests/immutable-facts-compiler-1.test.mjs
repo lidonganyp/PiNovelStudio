@@ -307,6 +307,87 @@ test("IMMUTABLE-FACTS-COMPILER-1 · 生产 FactGuard 从 workspace canonical out
   assert.deepEqual(unauthorized, []);
 });
 
+test("IMMUTABLE-FACTS-COMPILER-1 · 生产 FactGuard 从 outline-full.md 加载被裁剪掉的授权", () => {
+  // 平台物化时 series/outline.md 受 token 预算裁剪，尾部术语会丢失；
+  // series/outline-full.md 保留全文，专供授权判定。
+  const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-factguard-outline-full-"));
+  const workspaceId = "outline-full-workspace";
+  const workspacePath = join(projectRoot, "workspaces", workspaceId);
+  mkdirSync(join(workspacePath, "series"), { recursive: true });
+  writeFileSync(join(workspacePath, "series", "outline.md"), "第一卷：登顶之路。", "utf8");
+  writeFileSync(
+    join(workspacePath, "series", "outline-full.md"),
+    "第一卷：登顶之路。魂玉是压制毒素、封印伤势的临时手段。",
+    "utf8",
+  );
+  const result = checkCandidateFactGuard(
+    "李一凡取出魂玉，暂时封印了伤势。",
+    {
+      projectRoot,
+      workspaceId,
+      chapterNumber: 17,
+      characterNames: ["李一凡"],
+      ontologyLevels: [],
+      constitution: null,
+      intent: { inviolableFacts: [], selectedPromisesToAdvance: [] },
+      contextSafety: undefined,
+      context: {
+        facts: [],
+        characterStates: [],
+        openLoops: [],
+        worldRules: [],
+        styleReferences: [],
+        sourceMap: [],
+        constitution: null,
+        longTermState: null,
+        bridgeContext: null,
+      },
+    },
+  );
+  const unauthorized = result.report.allDiagnostics.filter(
+    (diagnostic) => diagnostic.source === "unauthorized_high_impact_setting",
+  );
+  assert.deepEqual(unauthorized, []);
+});
+
+test("IMMUTABLE-FACTS-COMPILER-1 · outline-full.md 不授权其中不存在的高影响术语", () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-factguard-outline-full-neg-"));
+  const workspaceId = "outline-full-negative-workspace";
+  const workspacePath = join(projectRoot, "workspaces", workspaceId);
+  mkdirSync(join(workspacePath, "series"), { recursive: true });
+  writeFileSync(join(workspacePath, "series", "outline-full.md"), "第一卷：登顶之路。", "utf8");
+  const result = checkCandidateFactGuard(
+    "李一凡取出一柄神器，神光万丈。",
+    {
+      projectRoot,
+      workspaceId,
+      chapterNumber: 17,
+      characterNames: ["李一凡"],
+      ontologyLevels: [],
+      constitution: null,
+      intent: { inviolableFacts: [], selectedPromisesToAdvance: [] },
+      contextSafety: undefined,
+      context: {
+        facts: [],
+        characterStates: [],
+        openLoops: [],
+        worldRules: [],
+        styleReferences: [],
+        sourceMap: [],
+        constitution: null,
+        longTermState: null,
+        bridgeContext: null,
+      },
+    },
+  );
+  assert.ok(
+    result.report.allDiagnostics.some(
+      (diagnostic) => diagnostic.source === "unauthorized_high_impact_setting",
+    ),
+    "全文大纲中不存在的神器仍应被检测",
+  );
+});
+
 test("IMMUTABLE-FACTS-COMPILER-1 · 已授权的'组织计划'不被误报", () => {
   const compiled = compileImmutableFacts(buildMinimalInput());
   // openLoops 中已授权"组织计划" → 正文提到组织不应被检测
@@ -412,6 +493,80 @@ test("回归：社会地位\"踏入凝气一层的底层弟子\"不误报为境�
   );
 });
 
+test("回归：抽象名词\"可瞬发的境界\"不误报为境界跃迁", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "达到可瞬发的境界后，术式才能稳定施展。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  assert.deepEqual(
+    diagnostics.filter((d) => d.category === "upgrade_result"),
+    [],
+    `抽象名词\"可瞬发的境界\"不应被截断为未授权境界：${JSON.stringify(diagnostics)}`,
+  );
+});
+
+test("回归：词内助词后的\"境\"和\"层\"不误报为境界跃迁", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "达到心如止水的境，前所未有的层只是抽象描述。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  assert.deepEqual(
+    diagnostics.filter((d) => d.category === "upgrade_result"),
+    [],
+    `词内助词后的抽象描述不应被识别为境界名：${JSON.stringify(diagnostics)}`,
+  );
+});
+
+test("回归：指代量词后的抽象名词\"境界\"和\"层次\"不误报为境界跃迁", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const text = "达到某种境界需要长期积累，达到这个层次还要继续沉淀。";
+  const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+  assert.deepEqual(
+    diagnostics.filter((d) => d.category === "upgrade_result"),
+    [],
+    `指代量词后的抽象名词不应被识别为未授权跃迁：${JSON.stringify(diagnostics)}`,
+  );
+});
+
+test("回归：\"深处的二级\"不误报为境界跃迁", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const diagnostics = checkUnauthorizedHighImpactSettings(
+    "他突破到遗迹深处的二级石室里，留着前人刻下的字迹。",
+    compiled,
+  );
+  assert.deepEqual(
+    diagnostics.filter((d) => d.category === "upgrade_result"),
+    [],
+    `地点描述中的\"深处的二级\"不应被识别为未授权境界：${JSON.stringify(diagnostics)}`,
+  );
+});
+
+test("回归：\"内拿到二级\"不误报为境界跃迁", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  const diagnostics = checkUnauthorizedHighImpactSettings(
+    "他突破到储物柜内拿到二级通行牌，随后转身离开。",
+    compiled,
+  );
+  assert.deepEqual(
+    diagnostics.filter((d) => d.category === "upgrade_result"),
+    [],
+    `动作描述中的\"内拿到二级\"不应被识别为未授权境界：${JSON.stringify(diagnostics)}`,
+  );
+});
+
+test("回归：直接升级到\"二级\"仍被检测", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  for (const text of [
+    "他突破到二级，气息骤然暴涨。",
+    "他提升到了二级，气息骤然暴涨。",
+    "他突破到第三级，气息骤然暴涨。",
+  ]) {
+    const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+    assert.ok(
+      diagnostics.some((d) => d.category === "upgrade_result"),
+      `直接升级到未授权数字等级仍应被检测：${JSON.stringify(diagnostics)}`,
+    );
+  }
+});
+
 test("回归：排除非境界词汇后，真实未授权境界仍被检测", () => {
   // 排除"第三层/关键时期"等误报，不得削弱对真实未授权境界（如"化神境"）的检测。
   const compiled = compileImmutableFacts(buildMinimalInput());
@@ -422,4 +577,31 @@ test("回归：排除非境界词汇后，真实未授权境界仍被检测", ()
     upgrades.some((d) => d.term.endsWith("化神境")),
     `真实未授权境界"化神境"仍应被检测：${JSON.stringify(upgrades)}`,
   );
+});
+
+test("回归：\"到达化神境\"和\"突破化神境\"仍被检测", () => {
+  const compiled = compileImmutableFacts(buildMinimalInput());
+  for (const text of ["到达化神境。", "突破化神境。"]) {
+    const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+    assert.ok(
+      diagnostics.some((d) => d.category === "upgrade_result"),
+      `真实未授权境界\"${text}\"必须继续被检测：${JSON.stringify(diagnostics)}`,
+    );
+  }
+});
+
+test("回归：真实跃迁写成\"境界\"时仍被检测", () => {
+  // 金丹境在基础 fixture 中属于已注册本体；此处移除它，专门验证未授权跃迁。
+  const compiled = compileImmutableFacts(buildMinimalInput({ ontologyLevels: ["筑基境", "元婴境"] }));
+  for (const text of [
+    "他突破到化神境界。",
+    "他突破到化神境界，气息暴涨。",
+    "他的修为踏入金丹境界。",
+  ]) {
+    const diagnostics = checkUnauthorizedHighImpactSettings(text, compiled);
+    assert.ok(
+      diagnostics.some((d) => d.category === "upgrade_result"),
+      `真实未授权跃迁\"${text}\"必须继续被检测：${JSON.stringify(diagnostics)}`,
+    );
+  }
 });

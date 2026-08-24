@@ -192,6 +192,7 @@ async function submitRevision(): Promise<void> {
     stewardAction: 'revise',
     proposalId: editing.steward.proposalId,
     sourceVersion: editing.steward.sourceVersion,
+    continuationMode: editing.steward.continuationMode,
     proposalEdits: Object.entries(editing.values).map(([field, value]) => ({ field, value })),
   };
   lastPayload.value = request;

@@ -32,7 +32,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, readdirSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import type * as pino from "pino";
 
@@ -44,6 +44,8 @@ export interface WorkspaceDocument {
     | "worldbuilding"
     | "character_profile"
     | "story_outline"
+    /** 大纲全文副本，仅供 FactGuard 术语授权；不进提示词，避免裁剪导致误判未授权新设定 */
+    | "story_outline_full"
     | "style_profile"
     | "chapter_seed"
     | "explicit_outline"
@@ -282,6 +284,23 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
       }
     },
 
+    /** Persist post-call usage alongside the input context manifest. */
+    updateContextManifest(jobId: string, manifest: unknown): void {
+      assertSafeName(jobId, "jobId");
+      const manifestPath = join(absRoot, jobId, "workspaces");
+      if (!existsSync(manifestPath)) return;
+      const workspaceEntries = readdirSync(manifestPath, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+      for (const workspaceId of workspaceEntries) {
+        const traceDir = join(manifestPath, workspaceId, "traces");
+        if (existsSync(traceDir)) {
+          atomicWriteJson(join(traceDir, "context-manifest.json"), manifest);
+          return;
+        }
+      }
+    },
+
     /**
      * 派生安全的 workspaceId（从 userId + projectId 生成确定性 ID）。
      * 同一 (userId, projectId) 总是映射到同一 workspaceId，便于连续章节承接。
@@ -306,6 +325,7 @@ export type WorkspaceManager = ReturnType<typeof createWorkspaceManager>;
  *   - worldbuilding         → WORLDBUILDING-CANON.md
  *   - character_profile     → characters/{name}.md（拆分；或 characters/index.md 兜底）
  *   - story_outline         → series/outline.md
+ *   - story_outline_full    → series/outline-full.md（仅 FactGuard 授权读取）
  *   - style_profile         → styles/profile.json
  *   - chapter_seed          → series/chapter-seed.json
  *   - narrative_state       → narrative-state-store.json
@@ -325,6 +345,9 @@ function writeDocumentByType(workspacePath: string, doc: WorkspaceDocument, chap
       break;
     case "story_outline":
       atomicWriteText(join(workspacePath, "series", "outline.md"), doc.content);
+      break;
+    case "story_outline_full":
+      atomicWriteText(join(workspacePath, "series", "outline-full.md"), doc.content);
       break;
     case "style_profile":
       // style_profile 可能是 JSON 或 Markdown；尝试 JSON 解析失败则原样写入 styles/profile.md

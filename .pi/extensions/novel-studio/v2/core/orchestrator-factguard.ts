@@ -355,7 +355,9 @@ function loadCanonicalHighImpactSources(
   if (!input.projectRoot || !input.workspaceId) return [];
   const workspacePath = join(input.projectRoot, "workspaces", input.workspaceId);
   const sources: Array<{ text: string; sourceRef: string }> = [];
-  for (const relativePath of ["series/outline.md", "WORLDBUILDING-CANON.md"]) {
+  // series/outline-full.md 是大纲的未裁剪副本，仅供术语授权。提示词副本受 token 预算
+  // 保头弃尾裁剪，大纲尾部已有术语会从 series/outline.md 消失并被误判为未授权新设定。
+  for (const relativePath of ["series/outline.md", "series/outline-full.md", "WORLDBUILDING-CANON.md"]) {
     const path = join(workspacePath, relativePath);
     if (existsSync(path)) {
       sources.push({ text: readFileSync(path, "utf8"), sourceRef: relativePath });

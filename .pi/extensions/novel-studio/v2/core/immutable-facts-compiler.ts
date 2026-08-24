@@ -191,11 +191,22 @@ const NON_REALM_SUFFIX_PHRASES: readonly string[] = [
   "外层",
 ];
 
-/** 以结构助词开头的匹配几乎不可能是境界名，例如「的底层弟子」。 */
-const REALM_PARTICLE_PREFIX = /^(?:的|地|得)/;
+/**
+ * 后缀后继续组成抽象名词时，不应把后缀前的片段截成境界名。
+ * 例如「特殊境界」不能被截成「特殊境」，「功法层次」不能被截成「功法层」。
+ */
+const REALM_ABSTRACT_CONTINUATIONS = new Set(["界", "次", "段", "域", "面"]);
+const REALM_ABSTRACT_PRECEDING_MARKERS = new Set(["的", "地", "得", "种", "样", "等", "般", "个"]);
+
+const REALM_PARTICLES = ["的", "地", "得"] as const;
 
 /** 功法层数（第X层/第X重），如"第三层"，非修为境界，排除。 */
 const NUMBERED_LAYER_PATTERN = /第[一二三四五六七八九十百千万\d]+(?:层|重)$/;
+
+/** 数字等级候选（如"二级"）需要更严格的左侧语义边界。 */
+const NUMERIC_LEVEL_SUFFIX_PATTERN = /[一二三四五六七八九十百千万\d]+(?:级|阶|层|重|期)$/;
+const DIRECT_UPGRADE_PREFIX_PATTERN = /(?:突破|破|晋升|进阶|升|跃升|提升|修炼|达到|到达|踏入|迈入|成为|到)(?:至|到|入)?了?$/;
+const NON_REALM_ACTION_PREFIX_PATTERN = /(?:拿到|拿得|得到|找到|取到|收到|买到|换到|抽到|捡到|获得|收获|带回|存放|装着)了?$/;
 
 /**
  * 判断 upgrade_result 扫描到的后缀词是否为非境界词汇（应排除）。
@@ -203,10 +214,44 @@ const NUMBERED_LAYER_PATTERN = /第[一二三四五六七八九十百千万\d]+(
  * 注意：REALM_SUFFIX_PATTERN 会连同升级语境前缀一起捕获（如"到了第三层"、
  * "破到化神境"），因此必须基于词尾判断，而非整词。
  */
-function isNonRealmSuffixPhrase(term: string): boolean {
+function isNonRealmSuffixPhrase(term: string, followingChar = ""): boolean {
+  // 右侧边界：只有后缀前是助词/指代量词时，境/层等后面继续组成的词
+  // 才是抽象名词（如「这种境界」「这个层次」）。实体名+境界（如「化神境界」）
+  // 仍需按真实境界跃迁处理。
+  const precedingSuffixChar = term[term.length - 2] ?? "";
+  if (
+    REALM_ABSTRACT_CONTINUATIONS.has(followingChar)
+    && REALM_ABSTRACT_PRECEDING_MARKERS.has(precedingSuffixChar)
+  ) return true;
+  // 全局正则跳过上一段后，可能从「境界」的「界」继续开始下一次匹配。
+  if (REALM_ABSTRACT_CONTINUATIONS.has(term[0] ?? "")) return true;
+
   if (NUMBERED_LAYER_PATTERN.test(term)) return true;
-  if (REALM_PARTICLE_PREFIX.test(term)) return true;
-  return NON_REALM_SUFFIX_PHRASES.some((p) => term.endsWith(p));
+
+  // REALM_SUFFIX_PATTERN 为了兼容“突破到化神境”会连同左侧文字一起捕获。
+  // 数字等级（如“二级”）在自然叙事中也常出现在房间、物品或取物动作中；
+  // 只有直接连接升级动词时才按境界候选处理，避免“深处的二级”“内拿到二级”误报。
+  const numericLevelMatch = term.match(NUMERIC_LEVEL_SUFFIX_PATTERN);
+  if (numericLevelMatch?.index !== undefined) {
+    const prefix = term.slice(0, numericLevelMatch.index);
+    // “突破到第三级”这类序数表达会把“第”留在候选左侧，判断语义前去掉它。
+    const prefixWithoutOrdinal = prefix.replace(/第$/, "");
+    if (NON_REALM_ACTION_PREFIX_PATTERN.test(prefixWithoutOrdinal)) return true;
+    if (prefix.includes("的") || prefix.includes("地") || prefix.includes("得")) return true;
+    if (
+      prefix.length > 0
+      && !DIRECT_UPGRADE_PREFIX_PATTERN.test(prefix)
+      && !DIRECT_UPGRADE_PREFIX_PATTERN.test(prefixWithoutOrdinal)
+    ) return true;
+  }
+
+  // 结构助词可能位于捕获词内部（如「可瞬发的境」），取最后一个助词后
+  // 的候选部分再判断；只剩后缀本身时，它不可能是具体境界名。
+  const lastParticleIndex = Math.max(...REALM_PARTICLES.map((particle) => term.lastIndexOf(particle)));
+  const candidate = lastParticleIndex >= 0 ? term.slice(lastParticleIndex + 1) : term;
+  if (lastParticleIndex >= 0 && candidate.length < 2) return true;
+
+  return NON_REALM_SUFFIX_PHRASES.some((p) => candidate.endsWith(p));
 }
 
 // ============================================================================
@@ -519,7 +564,7 @@ export function checkUnauthorizedHighImpactSettings(
   while ((match = REALM_SUFFIX_PATTERN.exec(text)) !== null) {
     const term = match[0];
     // 排除非境界词汇（功法层数"第三层"、时间状语"关键时期"等）
-    if (isNonRealmSuffixPhrase(term)) continue;
+    if (isNonRealmSuffixPhrase(term, text[match.index + term.length] ?? "")) continue;
     const isAuthorized = isTermAuthorized(term, "upgrade_result", authorizedTerms);
     if (!isAuthorized && hasUpgradeResultContext(text, match.index, match.index + term.length)) {
       diagnostics.push({

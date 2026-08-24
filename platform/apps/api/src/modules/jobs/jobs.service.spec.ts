@@ -1,5 +1,6 @@
 /** 章节 HTTP 调度的交付契约回归测试。 */
 import { describe, expect, it, vi } from 'vitest';
+import { NotFoundException } from '@nestjs/common';
 import { FAILURE_CODES, makeFailure } from '../context/failure-envelope';
 import { JobFailureError } from './job-failure';
 import { JobsService } from './jobs.service';
@@ -231,6 +232,26 @@ describe('JobsService HTTP generation delivery contract', () => {
     }
   });
 
+  it('maps a missing HTTP model rate to service unavailable instead of HTTP 404', async () => {
+    const { service, prisma, rates } = makeService({ status: 'ok', result: {} });
+    const previous = env.NOVEL_RUNTIME_MODE;
+    (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = 'http';
+    prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
+      chapterNumber: 1,
+      version: 1,
+      seed: { intent: '推进冲突', endingGoal: '留下悬念' },
+    });
+    rates.buildRateSnapshot.mockRejectedValue(new NotFoundException('未找到模型 v2_rawstage2_gemini31 的生效费率'));
+    try {
+      await expect(service.submitChapterGeneration(1, 2, 3)).rejects.toMatchObject({
+        status: 503,
+      });
+      expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
+    } finally {
+      (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
+    }
+  });
+
   it('does not require a stub-writer rate for the local stub runtime', async () => {
     const { service, rates } = makeService({ status: 'ok', result: {} });
     const previous = env.NOVEL_RUNTIME_MODE;
@@ -241,6 +262,22 @@ describe('JobsService HTTP generation delivery contract', () => {
       expect(rates.buildRateSnapshot).not.toHaveBeenCalled();
     } finally {
       (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
+    }
+  });
+
+  it('uses the formal production route when HTTP runtime has no explicit billing list', async () => {
+    const { service } = makeService({ status: 'ok', result: {} });
+    const previous = env.NOVEL_RUNTIME_MODE;
+    const previousRoutes = env.NOVEL_BILLING_REQUIRED_MODELS;
+    (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = 'http';
+    (env as { NOVEL_BILLING_REQUIRED_MODELS: string }).NOVEL_BILLING_REQUIRED_MODELS = '';
+    try {
+      const models = (service as never as { requiredBillingModels(): string[] }).requiredBillingModels();
+      expect(models).toEqual(['v2_rawstage2_gemini31', 'v2_amplified_gemini31']);
+      expect(models).not.toContain('stub-writer');
+    } finally {
+      (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
+      (env as { NOVEL_BILLING_REQUIRED_MODELS: string }).NOVEL_BILLING_REQUIRED_MODELS = previousRoutes;
     }
   });
 
@@ -280,6 +317,49 @@ describe('JobsService HTTP generation delivery contract', () => {
         '鍙氦浠樻鏂�',
       ),
     ).rejects.toThrow('chapter changed while generation was running');
+  });
+
+  it('preserves the author-authored chapter prefix when delivering an append result', async () => {
+    const { service, prisma } = makeService({
+      status: 'ok',
+      result: { status: 'ok', text: '从门外传来脚步声。' },
+    });
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const saved = {
+      version: 2,
+      title: '第十七章',
+      content: '已有正文停在这里。\n\n从门外传来脚步声。',
+      wordCount: 18,
+    };
+    prisma.$transaction = vi.fn(async (callback: (value: unknown) => Promise<unknown>) => callback({
+      novelChapter: {
+        updateMany,
+        findUniqueOrThrow: vi.fn().mockResolvedValue(saved),
+      },
+      novelChapterVersion: { create: vi.fn().mockResolvedValue({}) },
+      novelChapterSeed: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      novelProject: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    }));
+
+    await (service as never as {
+      persistGeneratedChapter(value: {
+        userId: number; projectId: number; chapterId: number; jobId: string;
+        chapterVersion: number; seedVersion: number; continuationMode: 'append'; continuationDraft: string;
+      }, text: string): Promise<void>;
+    }).persistGeneratedChapter({
+      userId: 1,
+      projectId: 2,
+      chapterId: 3,
+      jobId: 'job-append',
+      chapterVersion: 1,
+      seedVersion: 1,
+      continuationMode: 'append',
+      continuationDraft: '已有正文停在这里。',
+    }, '从门外传来脚步声。');
+
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ content: '已有正文停在这里。\n\n从门外传来脚步声。' }),
+    }));
   });
 
   it('refuses to consume a seed edited after generation started', async () => {
@@ -543,6 +623,33 @@ describe('JobsService HTTP generation delivery contract', () => {
     expect(JSON.parse(narrative ?? '')).toMatchObject({ chapters: [] });
   });
 
+  it('passes the current chapter draft to the runtime in append mode', async () => {
+    const { service, prisma, runtime, billing } = makeService({
+      status: 'ok',
+      result: { status: 'blocked', reason: 'test stop' },
+    });
+
+    await (service as never as { runHttpGeneration(value: typeof input & {
+      continuationMode: 'append'; continuationDraft: string; runtimeWorkspaceInput: Record<string, unknown>;
+    }): Promise<void> }).runHttpGeneration({
+      ...input,
+      continuationMode: 'append',
+      continuationDraft: '作者已经完成的第十七章前半段。',
+      runtimeWorkspaceInput: { workspaceDocuments: [], projectConfig: {} },
+    });
+
+    expect(runtime.invoke).toHaveBeenCalledWith(
+      expect.any(String),
+      'novel_generate_chapter',
+      expect.objectContaining({
+        continuationMode: 'append',
+        currentChapterDraft: '作者已经完成的第十七章前半段。',
+      }),
+    );
+    expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
+    expect(prisma.novelGenerationJob.update).toHaveBeenCalled();
+  });
+
   it('does not invent default style, constitution, worldbuilding, or genre', async () => {
     const { service, prisma, runtime, billing } = makeService({
       status: 'ok',
@@ -730,6 +837,47 @@ describe('JobsService HTTP generation delivery contract', () => {
     expect(narrative.canon.map((row) => row.id)).toEqual(['canon:whistle']);
     expect(narrative.pattern).toEqual([]);
     expect(JSON.stringify(runtimeInput)).not.toContain('很长的前文。苏晴离开了。沈砚握紧铜哨：不要相信沈建国。');
+  });
+
+  it('ships the full story outline for FactGuard authorization alongside the clipped prompt copy', async () => {
+    const { service, prisma, runtime } = makeService({
+      status: 'ok',
+      result: { status: 'blocked', reason: 'preflight' },
+    });
+    const tailTerm = '魂玉可以封印伤势。';
+    prisma.novelDocument.findMany = vi.fn().mockResolvedValue([
+      {
+        documentType: 'story_outline',
+        title: '故事大纲',
+        content: `# 故事大纲\n${'很长的前文。'.repeat(8000)}${tailTerm}`,
+        updatedAt: new Date(),
+        id: 1,
+      },
+      { documentType: 'style_profile', title: '风格', content: '{"voice":"冷峻"}', updatedAt: new Date(), id: 5 },
+      { documentType: 'narrative_state', title: '状态', content: '{"chapters":[]}', updatedAt: new Date(), id: 2 },
+      { documentType: 'creative_constitution', title: '宪法', content: '# 创作宪法\n不违背已确认身份', updatedAt: new Date(), id: 3 },
+      { documentType: 'worldbuilding', title: '世界观', content: '# 世界观\n铜哨是旧案证物', updatedAt: new Date(), id: 4 },
+    ]);
+    prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
+      content: '第一章正文。沈砚握紧铜哨。',
+      chapterNumber: 1,
+    });
+
+    await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration({
+      ...input,
+      chapterNumber: 2,
+    });
+
+    const runtimeInput = runtime.invoke.mock.calls[0][2] as {
+      workspaceDocuments: Array<{ type: string; content: string }>;
+    };
+    const clipped = runtimeInput.workspaceDocuments.find((doc) => doc.type === 'story_outline')?.content ?? '';
+    const full = runtimeInput.workspaceDocuments.find((doc) => doc.type === 'story_outline_full')?.content ?? '';
+
+    // 提示词副本仍受 token 预算裁剪。
+    expect(clipped).not.toContain('封印');
+    // 授权副本必须带上大纲尾部的高影响术语，否则 FactGuard 硬阻断整章。
+    expect(full).toContain('封印');
   });
 
   it('blocks generation when narrative state hash does not match previous chapter text', async () => {

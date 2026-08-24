@@ -8,6 +8,7 @@ import {
   type ArtifactType,
   type AssistantAction,
   type AssistantRequest,
+  type ContinuationMode,
 } from './types';
 import {
   FAILURE_CODES,
@@ -26,6 +27,7 @@ export function parseAssistantRequest(input: {
   action?: unknown;
   chapterNumber?: unknown;
   confirmGeneration?: unknown;
+  continuationMode?: unknown;
   stewardAction?: unknown;
   proposalId?: unknown;
   sourceVersion?: unknown;
@@ -57,6 +59,20 @@ export function parseAssistantRequest(input: {
   }
   const chapterNumber = parseOptionalChapterNumber(input.chapterNumber);
   const confirmGeneration = input.confirmGeneration === true;
+  const continuationMode = input.continuationMode === 'append' || input.continuationMode === 'replace'
+    ? input.continuationMode as ContinuationMode
+    : undefined;
+  if (input.continuationMode !== undefined && continuationMode === undefined) {
+    throw new FailureHttpException(makeFailure({
+      stage: 'assistant.action',
+      gate: 'request_schema',
+      code: FAILURE_CODES.illegalAction,
+      severity: 'preflight',
+      reason: '续写模式无效',
+      recoverable: false,
+      userActionRequired: ['continuationMode 只能是 append 或 replace'],
+    }));
+  }
   if (
     (input.action === 'plan_chapter' || input.action === 'generate_chapter') &&
     chapterNumber === undefined
@@ -125,6 +141,7 @@ export function parseAssistantRequest(input: {
     action: input.action as AssistantRequest['action'],
     chapterNumber,
     confirmGeneration,
+    continuationMode,
     stewardAction: stewardAction as AssistantRequest['stewardAction'],
     proposalId,
     sourceVersion,

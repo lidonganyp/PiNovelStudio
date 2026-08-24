@@ -197,7 +197,7 @@ export function inferGenerateChapterNumber(
   const marked = extractGenerateChapterNumber(reply);
   if (marked !== null) return marked;
   const match = userContent.match(
-    /(?:生成|写|来|续写|接着写|继续写)\s*(?:一)?\s*第?\s*(\d+|[一二三四五六七八九十]+)\s*章/,
+    /(?:生成|写|来|续写|接着写|继续写|完善|补满|补写|补齐|扩写|完成)\s*(?:一)?\s*第?\s*(\d+|[一二三四五六七八九十]+)\s*章/,
   );
   if (!match) return null;
   return parseChineseChapterNumber(match[1]);

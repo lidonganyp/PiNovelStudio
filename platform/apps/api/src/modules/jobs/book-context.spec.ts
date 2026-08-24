@@ -42,6 +42,17 @@ describe('book context', () => {
     expect(compact.promise[0]?.description).toBe('不要相信沈建国');
   });
 
+  it('normalizes legacy numeric narrative source chapters for downstream context', () => {
+    const { json, compact } = compactNarrativeStateJson(JSON.stringify({
+      canon: [{ fact: '铜哨存在', sourceChapter: 1 }],
+      character: [{ characterId: '沈砚', field: 'currentState', value: '持有铜哨', sourceChapter: 1 }],
+      promise: [{ description: '查明旧案', status: 'open', sourceChapter: 1 }],
+    }));
+    expect(compact.canon[0]?.sourceChapter).toBe('ch1');
+    expect(compact.promise[0]?.sourceChapter).toBe('ch1');
+    expect(JSON.parse(json).canon[0].sourceChapter).toBe('ch1');
+  });
+
   it('keeps only the last sentences of previous text for continuity cache', () => {
     const excerpt = excerptLastSentences(
       '很长的前文。苏晴离开了。沈砚握紧铜哨：不要相信沈建国。',

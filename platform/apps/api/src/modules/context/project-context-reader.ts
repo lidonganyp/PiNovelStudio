@@ -165,7 +165,7 @@ export interface ProjectContextSnapshot {
   hashMismatch?: { expected: string; actual: string; chapterNumber: number };
 }
 
-export function compileProjectContextSnapshot(records: ProjectContextRecords): ProjectContextSnapshot {
+export function compileProjectContextSnapshot(records: ProjectContextRecords, targetChapterNumber?: number): ProjectContextSnapshot {
   if (!records.project || records.project.deletedAt || records.project.userId !== records.userId) {
     throw new NotFoundException('项目不存在');
   }
@@ -202,15 +202,18 @@ export function compileProjectContextSnapshot(records: ProjectContextRecords): P
           : undefined,
       };
     });
-  const lastChapter = chapters.at(-1);
-  const previous = lastChapter && lastChapter.tailExcerpt
+  const previousChapterNumber = targetChapterNumber !== undefined
+    ? (targetChapterNumber > 1 ? targetChapterNumber - 1 : undefined)
+    : chapters.at(-1)?.chapterNumber;
+  const previousChapter = chapters.find((chapter) => chapter.chapterNumber === previousChapterNumber);
+  const previous = previousChapter && previousChapter.tailExcerpt
     ? {
-        chapterNumber: lastChapter.chapterNumber,
-        tailExcerpt: lastChapter.tailExcerpt,
-        sourceChapterHash: lastChapter.contentHash,
+        chapterNumber: previousChapter.chapterNumber,
+        tailExcerpt: previousChapter.tailExcerpt,
+        sourceChapterHash: previousChapter.contentHash,
       }
     : undefined;
-  const previousFull = records.chapters.find((row) => row.chapterNumber === previous?.chapterNumber);
+  const previousFull = records.chapters.find((row) => row.chapterNumber === previousChapter?.chapterNumber);
   const mismatch = previousFull
     ? findStateHashMismatch(narrative?.content, {
         chapterNumber: previousFull.chapterNumber,
@@ -291,6 +294,7 @@ export async function loadOwnedProjectContext(
   prisma: PrismaService,
   userId: number,
   projectId: number,
+  targetChapterNumber?: number,
 ): Promise<ProjectContextSnapshot> {
   const [project, documents, characters, outlineNodes, chapters, chapterVersions, feedback, assistantHistory, generationJobs] = await Promise.all([
     prisma.novelProject.findFirst({
@@ -376,7 +380,7 @@ export async function loadOwnedProjectContext(
       failureMessage: row.failureMessage,
       completedAt: row.completedAt,
     })),
-  });
+  }, targetChapterNumber);
 }
 
 type OptionalFindManyDelegate = {

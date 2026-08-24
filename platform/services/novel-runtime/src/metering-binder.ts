@@ -71,6 +71,9 @@ export interface PiNovelInvokeResult {
 export interface MeteringResult {
   /** 本次 invoke 触发的模型调用数 */
   modelCallCount: number;
+  /** Sum of provider-reported usage for this invocation. */
+  inputTokens: number;
+  outputTokens: number;
   /** 成功 settle 的数量（含幂等命中） */
   settledCount: number;
   /** 幂等命中（alreadySettled）的数量 */
@@ -95,6 +98,8 @@ export interface MeteringResult {
 function emptyMeteringResult(): MeteringResult {
   return {
     modelCallCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
     settledCount: 0,
     alreadySettledCount: 0,
     budgetExhaustedCount: 0,
@@ -160,6 +165,10 @@ export function createMeteringBinder(deps: MeteringBinderDeps): MeteringBinderIn
       const piResult = result as PiNovelInvokeResult | undefined;
       const modelCalls = piResult?.stageResults?.modelCalls ?? [];
       metering.modelCallCount = modelCalls.length;
+      metering.inputTokens = modelCalls.reduce((sum, call) =>
+        sum + (call.tokenUsage && typeof call.tokenUsage === "object" ? call.tokenUsage.in : 0), 0);
+      metering.outputTokens = modelCalls.reduce((sum, call) =>
+        sum + (call.tokenUsage && typeof call.tokenUsage === "object" ? call.tokenUsage.out : 0), 0);
 
       if (modelCalls.length === 0) {
         const looksDeliverableChapter =
@@ -295,6 +304,8 @@ export function createMeteringBinder(deps: MeteringBinderDeps): MeteringBinderIn
           jobId: jobCtx.jobId,
           tool: tool.name,
           modelCallCount: metering.modelCallCount,
+          inputTokens: metering.inputTokens,
+          outputTokens: metering.outputTokens,
           settledCount: metering.settledCount,
           alreadySettledCount: metering.alreadySettledCount,
           budgetExhaustedCount: metering.budgetExhaustedCount,

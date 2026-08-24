@@ -9,10 +9,11 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { countWords, requireOwnedProject } from '../../common/ownership';
-import { env } from '../../config/env';
+import { env, PRODUCTION_BILLING_MODEL_ROUTES } from '../../config/env';
 import { BillingService } from '../billing/billing.service';
 import { InsufficientBalanceException } from '../billing/billing.errors';
 import { computeChargeFen, fenToString } from '../billing/money';
@@ -36,7 +37,7 @@ import {
   assertNoFullPreviousChapter,
   compileProjectContext,
 } from '../context/context-compiler';
-import { ContextCompileError, FailureHttpException } from '../context/failure-envelope';
+import { ContextCompileError, FailureHttpException, FAILURE_CODES, makeFailure } from '../context/failure-envelope';
 import {
   jobFailureFromUnknown,
   readStoredFailure,
@@ -52,9 +53,55 @@ import {
   buildExplicitOutlineMarkdown,
   resolveProjectGenre,
 } from './runtime-workspace-defaults';
+import {
+  mergeChapterContinuation,
+  type ContinuationMode,
+} from './chapter-continuation';
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+/** Render bounded historical chapter evidence for the runtime writer. */
+function renderChapterCatalog(chapters: Array<{
+  chapterNumber: number;
+  title?: string | null;
+  status?: string | null;
+  wordCount?: number | null;
+  content: string;
+  seed?: { intent?: string; promises?: string; endingGoal?: string } | null;
+}>, targetChapterNumber?: number): string {
+  const ordered = chapters
+    .slice()
+    .sort((left, right) => left.chapterNumber - right.chapterNumber);
+  const index = ordered
+    .map((chapter) => `第${chapter.chapterNumber}章：${chapter.title?.trim() || '未命名'}`)
+    .join('；');
+  const boundedIndex = index.length <= 12000 ? index : `${index.slice(0, 11980)}…`;
+  const rows = ordered
+    .slice()
+    .sort((left, right) => {
+      if (targetChapterNumber === undefined) return left.chapterNumber - right.chapterNumber;
+      const leftDistance = Math.abs(left.chapterNumber - (targetChapterNumber - 1));
+      const rightDistance = Math.abs(right.chapterNumber - (targetChapterNumber - 1));
+      return leftDistance - rightDistance || left.chapterNumber - right.chapterNumber;
+    })
+    .map((chapter) => {
+      const tail = chapter.content.replace(/^\uFEFF/u, '').trim().slice(-360);
+      const seed = [chapter.seed?.intent, chapter.seed?.promises, chapter.seed?.endingGoal]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join('；');
+      return [
+        `第${chapter.chapterNumber}章｜${chapter.title?.trim() || '未命名'}｜状态：${chapter.status || 'unknown'}｜字数：${chapter.wordCount ?? 0}`,
+        seed ? `本章种子：${seed}` : '',
+        tail ? `正文结尾摘要：${tail}` : '正文为空',
+      ].filter(Boolean).join('\n');
+    })
+    .join('\n\n');
+  // Hundreds of chapters are normal. Keep the catalog useful without turning
+  // the runtime request into a second copy of the novel.
+  const body = rows.length <= 24000 ? rows : `${rows.slice(0, 23980)}\n…`;
+  return `完整章节索引：${boundedIndex}\n\n${body}`;
 }
 
 
@@ -222,6 +269,7 @@ export class JobsService implements OnModuleInit {
     userId: number,
     projectId: number,
     chapterId: number,
+    options: { continuationMode?: ContinuationMode } = {},
   ): Promise<unknown> {
     await requireOwnedProject(this.prisma, userId, projectId);
     const chapter = await this.prisma.novelChapter.findFirst({
@@ -258,6 +306,7 @@ export class JobsService implements OnModuleInit {
           projectId,
           chapterId,
           chapterNumber: chapter.chapterNumber,
+          continuationMode: options.continuationMode,
         });
         assertRuntimeWorkspacePayloadFits({
           chapterNumber: chapter.chapterNumber,
@@ -276,7 +325,17 @@ export class JobsService implements OnModuleInit {
       }
     }
 
-    const maxCharge = await this.estimateMaxCharge();
+    let maxCharge: bigint;
+    try {
+      maxCharge = await this.estimateMaxCharge();
+    } catch (error: unknown) {
+      if (error instanceof NotFoundException && error.message.includes('生效费率')) {
+        throw new ServiceUnavailableException(
+          '生成模型未配置：请在管理后台为生成模型启用 Provider 与生效费率',
+        );
+      }
+      throw error;
+    }
     const jobId = randomUUID();
 
     try {
@@ -329,6 +388,8 @@ export class JobsService implements OnModuleInit {
         chapterVersion: chapter.version,
         seedVersion: seed.version,
         intent: seed.intent,
+        continuationMode: options.continuationMode,
+        continuationDraft: chapter.content,
       });
     } else {
       void this.runHttpGeneration({
@@ -341,6 +402,8 @@ export class JobsService implements OnModuleInit {
         chapterVersion: chapter.version,
         seedVersion: seed.version,
         runtimeWorkspaceInput,
+        continuationMode: options.continuationMode,
+        continuationDraft: chapter.content,
       });
     }
 
@@ -503,7 +566,10 @@ export class JobsService implements OnModuleInit {
     const configured = env.NOVEL_BILLING_REQUIRED_MODELS.split(',')
       .map((model) => model.trim())
       .filter(Boolean);
-    return configured.length > 0 ? [...new Set(configured)] : [env.STUB_WRITER_MODEL];
+    if (configured.length > 0) return [...new Set(configured)];
+    return env.NOVEL_RUNTIME_MODE === 'stub'
+      ? [env.STUB_WRITER_MODEL]
+      : [...PRODUCTION_BILLING_MODEL_ROUTES];
   }
 
   private async assertBillingModelsReady(): Promise<void> {
@@ -521,6 +587,8 @@ export class JobsService implements OnModuleInit {
     chapterVersion: number;
     seedVersion: number;
     intent: string;
+    continuationMode?: ContinuationMode;
+    continuationDraft: string;
   }): Promise<void> {
     try {
       await this.billing.updateJobProgress({
@@ -556,6 +624,8 @@ export class JobsService implements OnModuleInit {
     chapterVersion: number;
     seedVersion: number;
     runtimeWorkspaceInput?: Record<string, unknown>;
+    continuationMode?: ContinuationMode;
+    continuationDraft: string;
   }): Promise<void> {
     try {
       const token = await signTaskToken({
@@ -564,14 +634,19 @@ export class JobsService implements OnModuleInit {
         jobId: input.jobId,
         maxCharge: input.maxCharge,
       });
+      const runtimeWorkspaceInput = input.runtimeWorkspaceInput ?? await this.buildRuntimeWorkspaceInput(input);
       const invoked = await this.runtime.invoke(token, 'novel_generate_chapter', {
         chapterNumber: input.chapterNumber,
         chapterId: String(input.chapterId),
         workspaceId: `p${input.projectId}`,
-        ...(input.runtimeWorkspaceInput ?? (await this.buildRuntimeWorkspaceInput(input))),
+        ...runtimeWorkspaceInput,
+        continuationMode: input.continuationMode,
+        currentChapterDraft: input.continuationMode === 'append' ? input.continuationDraft : undefined,
       });
       const result = invoked.result;
       const modelCallCount = invoked.metering?.modelCallCount;
+      const runtimeInputTokens = invoked.metering?.inputTokens;
+      const runtimeOutputTokens = invoked.metering?.outputTokens;
       if (
         invoked.status !== 'ok' ||
         typeof modelCallCount !== 'number' ||
@@ -586,6 +661,25 @@ export class JobsService implements OnModuleInit {
         throw runtimeInvokeFailure(invoked.result, modelCallCount);
       }
       const text = (result as { text: string }).text;
+      const manifest = ((result as { contextManifest?: unknown }).contextManifest
+        ?? runtimeWorkspaceInput.contextManifest) as {
+        actualInputTokens?: number;
+        actualOutputTokens?: number;
+        settledCostFen?: number;
+      } | undefined;
+      if (manifest) {
+        if (typeof runtimeInputTokens === 'number') manifest.actualInputTokens = runtimeInputTokens;
+        if (typeof runtimeOutputTokens === 'number') manifest.actualOutputTokens = runtimeOutputTokens;
+        if (typeof invoked.metering?.totalSettledAmountFen === 'number') {
+          manifest.settledCostFen = invoked.metering.totalSettledAmountFen;
+        }
+        await this.billing.updateJobProgress({
+          jobId: input.jobId,
+          status: 'running',
+          stage: 'context_observed',
+          detail: { contextManifest: manifest },
+        });
+      }
       await this.persistGeneratedChapter(
         {
           userId: input.userId,
@@ -594,6 +688,8 @@ export class JobsService implements OnModuleInit {
           jobId: input.jobId,
           chapterVersion: input.chapterVersion,
           seedVersion: input.seedVersion,
+          continuationMode: input.continuationMode,
+          continuationDraft: input.continuationDraft,
         },
         text,
         (result as { runtimeState?: unknown }).runtimeState,
@@ -676,8 +772,9 @@ export class JobsService implements OnModuleInit {
     projectId: number;
     chapterId: number;
     chapterNumber: number;
+    continuationMode?: ContinuationMode;
   }): Promise<Record<string, unknown>> {
-    const [project, characters, documents, previousChapter] = await Promise.all([
+    const [project, characters, documents, previousChapter, currentChapter] = await Promise.all([
       this.prisma.novelProject.findFirst({
         where: { id: input.projectId, userId: input.userId, deletedAt: null },
         select: { genre: true, subGenres: true, worldKeyTerms: true },
@@ -701,7 +798,59 @@ export class JobsService implements OnModuleInit {
             select: { content: true, chapterNumber: true },
           })
         : Promise.resolve(null),
+      this.prisma.novelChapter.findFirst({
+        where: {
+          id: input.chapterId,
+          projectId: input.projectId,
+          userId: input.userId,
+          deletedAt: null,
+        },
+        select: { content: true, version: true, chapterNumber: true },
+      }),
     ]);
+
+    // The runtime must receive a bounded catalog of every accepted chapter.
+    // Keep this optional for lightweight unit-test doubles; Prisma always has
+    // findMany in the live API.
+    const chapterDelegate = this.prisma.novelChapter as unknown as {
+      findMany?: (args: unknown) => Promise<unknown>;
+    };
+    const chapterCatalog = typeof chapterDelegate.findMany === 'function'
+      ? await chapterDelegate.findMany({
+          where: {
+            projectId: input.projectId,
+            userId: input.userId,
+            deletedAt: null,
+          },
+          include: { seed: true },
+          orderBy: { chapterNumber: 'asc' },
+        }) as Array<{
+          chapterNumber: number;
+          title?: string | null;
+          status?: string | null;
+          wordCount?: number | null;
+          content: string;
+          seed?: {
+            intent?: string;
+            promises?: string;
+            endingGoal?: string;
+          } | null;
+        }>
+      : [];
+
+    if (input.chapterNumber > 1 && !previousChapter) {
+      throw new ContextCompileError(makeFailure({
+        stage: 'runtime.preflight',
+        gate: 'previous_chapter_boundary',
+        code: FAILURE_CODES.runtimePreflightFailed,
+        severity: 'preflight',
+        reason: `无法生成第${input.chapterNumber}章：严格前章第${input.chapterNumber - 1}章不存在，已阻止使用其他章节或旧骨架替代`,
+        evidence: { requestedPreviousChapter: input.chapterNumber - 1 },
+        recoverable: false,
+        userActionRequired: [`先保存或恢复第${input.chapterNumber - 1}章正文后再试`],
+        fixInstructions: ['检查章节编号是否连续', `确认第${input.chapterNumber - 1}章未被删除或软删除`],
+      }));
+    }
 
     if (!project || characters.length === 0) {
       throw new Error('runtime workspace context is incomplete');
@@ -749,9 +898,23 @@ export class JobsService implements OnModuleInit {
       characters,
       narrativeState: byType.get('narrative_state'),
       previousChapter: previousChapter ?? undefined,
+      chapterCatalog: chapterCatalog.map((row) => ({
+        chapterNumber: row.chapterNumber,
+        title: row.title,
+        status: row.status,
+        wordCount: row.wordCount,
+        content: row.content,
+        seed: row.seed,
+      })),
       styleProfile: byType.get('style_profile'),
       worldbuilding: byType.get('worldbuilding'),
       constitution: byType.get('creative_constitution'),
+      contextProfile: env.PINOVEL_CONTEXT_PROFILE,
+      historicalQueries: [
+        seed.intent,
+        seed.promises,
+        seed.characterMotives,
+      ].filter((value): value is string => Boolean(value?.trim())),
     });
 
     assertAuthorContractForGeneration(listAuthorContractGaps({
@@ -789,7 +952,38 @@ export class JobsService implements OnModuleInit {
       workspaceDocuments.push({ type: 'worldbuilding', content: worldbuilding });
     }
     if (compiled.usableStoryOutline) {
-      workspaceDocuments.push({ type: 'story_outline', content: compiled.usableStoryOutline });
+      const catalog = renderChapterCatalog(chapterCatalog, input.chapterNumber);
+      workspaceDocuments.push({
+        type: 'story_outline',
+        content: catalog
+          ? `${compiled.usableStoryOutline}\n\n## 全书阶段规划与历史章节目录\n${catalog}`
+          : compiled.usableStoryOutline,
+      });
+      // The runtime's own ContextCompiler reads the materialized outline. Add
+      // the selected long-context layers there so the API-side manifest and
+      // the actual generation prompt describe the same evidence.
+      const runtimeContextLayers = [
+        compiled.recentChapterContent
+          ? `## 最近章节正文（仅用于承接）\n${compiled.recentChapterContent}`
+          : '',
+        compiled.historicalEvidenceText
+          ? `## 历史检索片段（按本章目标排序）\n${compiled.historicalEvidenceText}`
+          : '',
+      ].filter(Boolean).join('\n\n');
+      if (runtimeContextLayers) {
+        const outlineDocument = workspaceDocuments.find((document) => document.type === 'story_outline');
+        if (outlineDocument) outlineDocument.content = `${outlineDocument.content}\n\n${runtimeContextLayers}`;
+        const explicitDocument = workspaceDocuments.find((document) => document.type === 'explicit_outline');
+        if (explicitDocument) explicitDocument.content = `${explicitDocument.content}\n\n${runtimeContextLayers}`;
+      }
+      // FactGuard 的术语授权只能依据它能读到的材料判定，裁剪后的提示词副本会让大纲
+      // 尾部已有术语被误判为未授权新设定。这里额外物化一份全文，专供授权使用。
+      if (compiled.fullStoryOutline && compiled.fullStoryOutline !== compiled.usableStoryOutline) {
+        workspaceDocuments.push({
+          type: 'story_outline_full',
+          content: compiled.fullStoryOutline,
+        });
+      }
     }
     if (compiled.compactNarrativeJson) {
       workspaceDocuments.push({ type: 'narrative_state', content: compiled.compactNarrativeJson });
@@ -812,6 +1006,10 @@ export class JobsService implements OnModuleInit {
       workspaceDocuments,
       previousChapterContinuation: compiled.previousChapterContinuation,
       previousChapterNumber: previousChapter?.chapterNumber,
+      continuationMode: input.continuationMode ?? 'replace',
+      currentChapterDraft: input.continuationMode === 'append'
+        ? currentChapter?.content ?? ''
+        : undefined,
       contextManifest: compiled.manifest,
     };
     assertNoFullPreviousChapter(runtimeInput, previousChapter?.content);
@@ -826,11 +1024,16 @@ export class JobsService implements OnModuleInit {
       jobId: string;
       chapterVersion: number;
       seedVersion: number;
+      continuationMode?: ContinuationMode;
+      continuationDraft?: string;
     },
     text: string,
     runtimeState?: unknown,
     finalizeJob = false,
   ): Promise<void> {
+    const finalText = input.continuationMode === 'append'
+      ? mergeChapterContinuation(input.continuationDraft ?? '', text)
+      : text;
     await this.prisma.$transaction(async (tx) => {
       const write = await tx.novelChapter.updateMany({
         where: {
@@ -841,8 +1044,8 @@ export class JobsService implements OnModuleInit {
           version: input.chapterVersion,
         },
         data: {
-          content: text,
-          wordCount: countWords(text),
+          content: finalText,
+          wordCount: countWords(finalText),
           status: 'generated',
           version: { increment: 1 },
           generationJobId: input.jobId,

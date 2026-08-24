@@ -15,6 +15,8 @@ import { saveConfirmedAuthorMaterials } from '../assistant/assistant-artifacts';
 import {
   loadOwnedProjectContext,
 } from './project-context-reader';
+import { reanchorNarrativeStateToChapter } from './context-compiler';
+import type { ContinuationMode } from './types';
 
 export const STEWARD_ACTIONS = ['apply_and_generate', 'save_draft', 'cancel', 'revise'] as const;
 export type StewardAction = (typeof STEWARD_ACTIONS)[number];
@@ -35,6 +37,8 @@ export interface StewardResult {
   proposalStatus?: ProposalStatus;
   confirmedAt?: string;
   confirmedFields?: string[];
+  /** Preserve append/replace across every proposal round-trip. */
+  continuationMode?: ContinuationMode;
 }
 
 export interface ProposalEdit {
@@ -51,6 +55,7 @@ interface StoredProposal {
   proposals: MaterialProposal[];
   missing: string[];
   createdAt: string;
+  continuationMode?: ContinuationMode;
   confirmedAt?: string;
   confirmedFields?: string[];
   generationJobId?: string;
@@ -63,8 +68,39 @@ export async function prepareGenerationSteward(input: {
   userId: number;
   projectId: number;
   chapterNumber: number;
+  continuationMode?: ContinuationMode;
 }): Promise<StewardResult> {
-  const snapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId);
+  let snapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, input.chapterNumber);
+  if (snapshot.hashMismatch) {
+    const narrative = snapshot.documents.find((row) => row.documentType === 'narrative_state');
+    const hash = snapshot.previousContinuation?.chapterNumber === snapshot.hashMismatch.chapterNumber
+      ? snapshot.previousContinuation.sourceChapterHash
+      : '';
+    if (narrative && hash) {
+      const repaired = reanchorNarrativeStateToChapter(
+        narrative.content,
+        snapshot.hashMismatch.chapterNumber,
+        hash,
+      );
+      if (repaired.updatedEntries > 0) {
+        const nextVersion = narrative.currentVersion + 1;
+        await input.prisma.novelDocument.update({
+          where: { id: narrative.id },
+          data: { content: repaired.content, currentVersion: nextVersion },
+        });
+        await input.prisma.novelDocumentVersion.create({
+          data: {
+            documentId: narrative.id,
+            createdBy: input.userId,
+            versionNumber: nextVersion,
+            content: repaired.content,
+            changeSummary: `同步第${snapshot.hashMismatch.chapterNumber}章正文哈希引用`,
+          },
+        });
+        snapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, input.chapterNumber);
+      }
+    }
+  }
   const readiness = classifyMaterialReadiness(snapshot, input.chapterNumber);
   if (readiness.status === 'hard_blocked') {
     throw new FailureHttpException(makeFailure({
@@ -85,9 +121,16 @@ export async function prepareGenerationSteward(input: {
       sourceVersion: snapshot.sourceVersion,
       proposals: [],
       missing: [],
+      continuationMode: input.continuationMode,
     };
   }
-  const stored = await saveProposal(input.prisma, input.userId, input.projectId, readiness);
+  const stored = await saveProposal(
+    input.prisma,
+    input.userId,
+    input.projectId,
+    readiness,
+    input.continuationMode,
+  );
   return {
     status: readiness.status,
     reply: buildConfirmationReply(readiness),
@@ -97,6 +140,7 @@ export async function prepareGenerationSteward(input: {
     proposals: readiness.proposals,
     missing: readiness.missing,
     proposalStatus: 'pending',
+    continuationMode: input.continuationMode,
   };
 }
 
@@ -109,8 +153,10 @@ export async function confirmGenerationSteward(input: {
   proposalId: string;
   sourceVersion: string;
   confirmedFields?: string[];
+  continuationMode?: ContinuationMode;
 }): Promise<StewardResult> {
   const proposal = await loadProposal(input.prisma, input.userId, input.projectId, input.proposalId);
+  const continuationMode = input.continuationMode ?? proposal.continuationMode;
   if (input.action === 'cancel') {
     await updateProposal(input.prisma, input.userId, input.projectId, {
       ...proposal,
@@ -125,6 +171,7 @@ export async function confirmGenerationSteward(input: {
       proposals: proposal.proposals,
       missing: proposal.missing,
       proposalStatus: 'cancelled',
+      continuationMode,
     };
   }
   if (input.action === 'save_draft') {
@@ -141,6 +188,7 @@ export async function confirmGenerationSteward(input: {
       proposals: proposal.proposals,
       missing: proposal.missing,
       proposalStatus: 'draft_saved',
+      continuationMode,
     };
   }
   if (proposal.status === 'applied' && proposal.generationJobId) {
@@ -157,9 +205,10 @@ export async function confirmGenerationSteward(input: {
       proposalStatus: 'applied',
       confirmedAt: proposal.confirmedAt,
       confirmedFields: proposal.confirmedFields,
+      continuationMode,
     };
   }
-  const snapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId);
+  const snapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, proposal.chapterNumber);
   const versionMatches = snapshot.sourceVersion === input.sourceVersion
     && snapshot.sourceVersion === proposal.sourceVersion;
   const confirmed = new Set(
@@ -177,7 +226,7 @@ export async function confirmGenerationSteward(input: {
       confirmed,
       proposals: proposal.proposals,
     });
-    after = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId);
+    after = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, proposal.chapterNumber);
   }
   const readiness = classifyMaterialReadiness(after, proposal.chapterNumber);
   if (!versionMatches && readiness.status !== 'ready' && readiness.status !== 'auto_fill') {
@@ -206,7 +255,7 @@ export async function confirmGenerationSteward(input: {
       ...readiness,
       chapterNumber: proposal.chapterNumber,
       sourceVersion: after.sourceVersion,
-    });
+    }, continuationMode);
     return {
       status: 'confirmation_required',
       reply: buildConfirmationReply(readiness),
@@ -216,6 +265,7 @@ export async function confirmGenerationSteward(input: {
       proposals: readiness.proposals,
       missing: readiness.missing,
       proposalStatus: 'pending',
+      continuationMode,
     };
   }
   let chapterId = saved.chapterId;
@@ -252,11 +302,17 @@ export async function confirmGenerationSteward(input: {
       proposals: readiness.proposals,
       missing: readiness.missing.length > 0 ? readiness.missing : ['章节种子'],
       proposalStatus: 'pending',
+      continuationMode,
     };
   }
   let generationJobId: string | undefined;
   try {
-    const job = await input.jobs.submitChapterGeneration(input.userId, input.projectId, chapterId) as { jobId?: unknown };
+    const job = await input.jobs.submitChapterGeneration(
+      input.userId,
+      input.projectId,
+      chapterId,
+      { continuationMode },
+    ) as { jobId?: unknown };
     generationJobId = typeof job.jobId === 'string' ? job.jobId : undefined;
   } catch (error: unknown) {
     const jobDelegate = (input.prisma as unknown as {
@@ -284,6 +340,7 @@ export async function confirmGenerationSteward(input: {
   const confirmedAt = new Date().toISOString();
   await updateProposal(input.prisma, input.userId, input.projectId, {
     ...proposal,
+    continuationMode,
     status: 'applied',
     confirmedAt,
     confirmedFields: [...confirmed],
@@ -302,6 +359,7 @@ export async function confirmGenerationSteward(input: {
     proposalStatus: 'applied',
     confirmedAt,
     confirmedFields: [...confirmed],
+    continuationMode,
   };
 }
 
@@ -339,6 +397,7 @@ export async function submitReadyGenerationSteward(input: {
   userId: number;
   projectId: number;
   chapterNumber: number;
+  continuationMode?: ContinuationMode;
 }): Promise<string | undefined> {
   let chapter = await input.prisma.novelChapter.findFirst({
     where: { projectId: input.projectId, userId: input.userId, chapterNumber: input.chapterNumber, deletedAt: null },
@@ -360,6 +419,7 @@ export async function submitReadyGenerationSteward(input: {
     input.userId,
     input.projectId,
     chapter.id,
+    { continuationMode: input.continuationMode },
   ) as { jobId?: unknown };
   return typeof job.jobId === 'string' ? job.jobId : undefined;
 }
@@ -403,6 +463,7 @@ export async function reviseGenerationSteward(input: {
       proposalStatus: 'applied',
       confirmedAt: proposal.confirmedAt,
       confirmedFields: proposal.confirmedFields,
+      continuationMode: proposal.continuationMode,
     };
   }
   const editsByField = new Map(input.edits.map((edit) => [edit.field, edit.value.trim()]));
@@ -451,6 +512,7 @@ export async function reviseGenerationSteward(input: {
     proposals,
     missing,
     proposalStatus: 'pending',
+    continuationMode: proposal.continuationMode,
   };
 }
 
@@ -459,6 +521,7 @@ async function saveProposal(
   userId: number,
   projectId: number,
   readiness: MaterialReadiness,
+  continuationMode?: ContinuationMode,
 ): Promise<StoredProposal> {
   const stored: StoredProposal = {
     id: randomUUID(),
@@ -469,6 +532,7 @@ async function saveProposal(
     proposals: readiness.proposals,
     missing: readiness.missing,
     createdAt: new Date().toISOString(),
+    ...(continuationMode ? { continuationMode } : {}),
   };
   const existing = await prisma.novelDocument.findFirst({
     where: { projectId, userId, documentType: PROPOSAL_TYPE, deletedAt: null },

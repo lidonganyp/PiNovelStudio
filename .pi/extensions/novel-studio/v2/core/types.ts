@@ -525,6 +525,10 @@ export interface V2Input {
   workspaceId: string;
   chapterId: string;
   chapterNumber: number;
+  /** Append mode preserves the current chapter draft and writes from its end. */
+  continuationMode?: "replace" | "append";
+  /** Author-authored current chapter text, present for append mode only. */
+  currentChapterDraft?: string;
   projectRoot: string;
   /** 批量/重试延续的统一预算账本 */
   _priorBudgetLedger?: import("./budget-types.js").BudgetLedger;

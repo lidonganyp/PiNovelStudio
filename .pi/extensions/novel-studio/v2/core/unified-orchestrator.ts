@@ -41,6 +41,7 @@ import {
   createEditorialCandidateGenerator,
 } from "./editorial-candidate-generator.js";
 import { createAuthorStyleOptimizer } from "./author-style-optimizer.js";
+import type { AuthorStyleOptimizationResult } from "./author-style-optimizer.js";
 import {
   selectAuthorStyleStrategies,
   mergeStrategyParams,
@@ -221,7 +222,12 @@ import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-
 // Step 1d 修复：导入 AGENTIC_RAW_KIND 共享常量，SOFT 预算过滤器用此 kind
 // 排除 agentic 调用（与路由名 AGENTIC_RAW_ROUTE="novelos_agentic" 区分，二者不可混用）。
 import { AGENTIC_RAW_KIND } from "../../novelos/agent/agentic-raw-candidate-source.js";
-import { checkCandidateTextHashBinding } from "./candidate-revision-store.js";
+import { checkCandidateTextHashBinding, hashText } from "./candidate-revision-store.js";
+import {
+  mergeChapterContinuation,
+  hasContinuationPrefixMismatch,
+  repairAdjacentDuplicateParagraphs,
+} from "./chapter-continuation.js";
 import type { ContextSafetyResult } from "./context-safety.js";
 import { buildProtectedContextOverflowFailure } from "./context-package-production.js";
 import { createMethodologyDiagnosticStateLoader } from "./methodology-diagnostic-state.js";
@@ -367,6 +373,43 @@ import {
 
 
 
+
+function preserveContinuationStyleResult(
+  result: AuthorStyleOptimizationResult,
+  input: UnifiedOrchestratorInput,
+): AuthorStyleOptimizationResult {
+  if (!result.candidate) {
+    return result;
+  }
+  if (
+    input.continuationMode === "append" &&
+    input.currentChapterDraft?.trim() &&
+    hasContinuationPrefixMismatch(input.currentChapterDraft, result.candidate.text)
+  ) {
+    return {
+      ...result,
+      candidate: null,
+      failureKind: "continuation_prefix_mismatch",
+      failureReason: "风格优化结果改写了作者续写前缀，已拒绝静默合并并请求定向重试。",
+    };
+  }
+  const mergedText = input.continuationMode === "append" && input.currentChapterDraft?.trim()
+    ? mergeChapterContinuation(input.currentChapterDraft, result.candidate.text)
+    : result.candidate.text;
+  const text = repairAdjacentDuplicateParagraphs(
+    mergedText,
+    input.continuationMode === "append" ? input.currentChapterDraft ?? "" : "",
+  );
+  if (text === result.candidate.text) return result;
+  return {
+    ...result,
+    candidate: {
+      ...result.candidate,
+      id: `${result.candidate.id}:continuation:${hashText(text).slice(0, 16)}`,
+      text,
+    },
+  };
+}
 
 // ============================================================================
 // UnifiedOrchestrator 主类
@@ -1331,6 +1374,8 @@ export class UnifiedOrchestrator {
             chapterId,
             chapterNumber,
             projectRoot,
+            continuationMode: input.continuationMode,
+            currentChapterDraft: input.currentChapterDraft,
             evidenceSnapshot: input.evidenceSnapshot,
             contextPackage: input.contextPackage,
             intent,
@@ -1524,15 +1569,19 @@ export class UnifiedOrchestrator {
         // 回退到 failureReason 字符串匹配，保持与 catch 分支相同的超时模式识别。
         const failureKind = agenticResult.failureKind
           ?? classifyTimeoutFromReason(agenticResult.failureReason ?? agenticResult.stopReason);
-        if (failureKind === "model_timeout") {
+        if (failureKind === "model_timeout" || failureKind === "continuation_prefix_mismatch") {
           return this.hardBlock(
             input,
             "novelos_agentic_generation",
-            `NovelOS Agentic 模型超时/连接异常（candidate=null）：${agenticResult.failureReason ?? agenticResult.stopReason}`,
+            failureKind === "continuation_prefix_mismatch"
+              ? `NovelOS Agentic 改写了作者续写前缀（candidate=null）：${agenticResult.failureReason ?? agenticResult.stopReason}`
+              : `NovelOS Agentic 模型超时/连接异常（candidate=null）：${agenticResult.failureReason ?? agenticResult.stopReason}`,
             stageResults,
             undefined,
             {
-              gate: "model_timeout",
+              gate: failureKind === "continuation_prefix_mismatch"
+                ? "continuation_prefix_mismatch"
+                : "model_timeout",
               severityOverride: "recoverable",
               recoverable: true,
               retryPlan: { strategy: "chapter_level_retry", maxAttempts: 1 },
@@ -1789,6 +1838,8 @@ export class UnifiedOrchestrator {
       const styleOptimizationInput = {
         sourceCandidate: agenticCandidate,
         chapterNumber,
+        continuationMode: input.continuationMode,
+        currentChapterDraft: input.currentChapterDraft,
         intent,
         context,
         constitution,
@@ -1801,6 +1852,7 @@ export class UnifiedOrchestrator {
       let styleResult = await timeAsync("stage3_authorStyleOptimization", () =>
         createAuthorStyleOptimizer().optimize(styleOptimizationInput),
       );
+      styleResult = preserveContinuationStyleResult(styleResult, input);
       stageResults.authorStyleOptimization = {
         styleProfileLoaded: styleResult.styleProfileLoaded,
         styleGuidanceConsumed: styleResult.styleGuidanceConsumed,
@@ -1880,7 +1932,11 @@ export class UnifiedOrchestrator {
         );
       }
       const transientStyleFailure = !styleResult.candidate
-        && (styleResult.failureKind === "empty_result" || styleResult.failureKind === "model_timeout");
+        && (
+          styleResult.failureKind === "empty_result" ||
+          styleResult.failureKind === "model_timeout" ||
+          styleResult.failureKind === "continuation_prefix_mismatch"
+        );
       if (transientStyleFailure) {
         const firstFailureKind = styleResult.failureKind;
         const firstFailureReason = styleResult.failureReason ?? "未产出候选";
@@ -1899,6 +1955,7 @@ export class UnifiedOrchestrator {
           candidateId: retryResult.candidate?.id ?? null,
         };
         styleResult = retryResult;
+        styleResult = preserveContinuationStyleResult(styleResult, input);
       }
       let styledCandidate = styleResult.candidate;
       if (!styledCandidate) {
@@ -2088,10 +2145,12 @@ export class UnifiedOrchestrator {
       };
 
       if (!preservation.preserved && preservation.unverifiable) {
-        const retryStyleResult = await timeAsync("stage4a_authorStyleRetryUnverifiable", () =>
+        let retryStyleResult = await timeAsync("stage4a_authorStyleRetryUnverifiable", () =>
           createAuthorStyleOptimizer().optimize({
             sourceCandidate: agenticCandidate,
             chapterNumber,
+            continuationMode: input.continuationMode,
+            currentChapterDraft: input.currentChapterDraft,
             intent,
             context,
             constitution,
@@ -2102,6 +2161,7 @@ export class UnifiedOrchestrator {
             reducedGuidanceRatio: 0.5,
           }),
         );
+        retryStyleResult = preserveContinuationStyleResult(retryStyleResult, input);
         stageResults.authorStyleOptimizationUnverifiableRetry = {
           styleProfileLoaded: retryStyleResult.styleProfileLoaded,
           styleGuidanceConsumed: retryStyleResult.styleGuidanceConsumed,
@@ -2221,10 +2281,12 @@ export class UnifiedOrchestrator {
         // 让重试 prompt 明确告知模型哪些事件被改写了（而非仅缩减 style guidance）。
         // canary 证据：100% 阻断率源于 amplified 模型改写事件内容（如"看不见"→"清晰看到"），
         // 单纯缩减 guidance 不足以纠正；需要具体事件保持约束。
-        const driftRetryStyleResult = await timeAsync("stage4a_authorStyleRetryDrift", () =>
+        let driftRetryStyleResult = await timeAsync("stage4a_authorStyleRetryDrift", () =>
           createAuthorStyleOptimizer().optimize({
             sourceCandidate: agenticCandidate,
             chapterNumber,
+            continuationMode: input.continuationMode,
+            currentChapterDraft: input.currentChapterDraft,
             intent,
             context,
             constitution,
@@ -2240,9 +2302,16 @@ export class UnifiedOrchestrator {
                 editorialSentence: e.editorialSentence,
                 reason: e.reason,
               })),
+              stateChangeLosses: (preservation.stateChangeLosses ?? []).map((e) => ({
+                subject: e.subject,
+                afterState: e.afterState,
+                rawSentence: e.rawSentence,
+                reason: e.reason,
+              })),
             },
           }),
         );
+        driftRetryStyleResult = preserveContinuationStyleResult(driftRetryStyleResult, input);
         stageResults.authorStyleOptimizationDriftRetry = {
           styleProfileLoaded: driftRetryStyleResult.styleProfileLoaded,
           styleGuidanceConsumed: driftRetryStyleResult.styleGuidanceConsumed,

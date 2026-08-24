@@ -494,7 +494,10 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             const _mtRecoveryAction =
               _mtEnv?.recoveryAction ??
               _mtResult?.stageResults?.recoveryDecision?.recoveryAction;
-            const _mtShouldRetry = _mtEnv?.gate === "model_timeout"
+            const _mtShouldRetry = (
+              _mtEnv?.gate === "model_timeout"
+              || _mtEnv?.gate === "continuation_prefix_mismatch"
+            )
               && _mtEnv?.recoverable === true
               && _mtEnv?.severity === "recoverable"
               && _mtRecoveryAction !== "checkpoint"

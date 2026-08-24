@@ -613,4 +613,80 @@ describe("PREFLIGHT-STATE-STORE-CONTINUITY-1: 前章连续性预检（state stor
     );
     cleanupTestWorkspace();
   });
+
+  it("13. current-chapter-rerun: state store 已提交目标章时，必须有前章 continuity 快照才允许重生成", () => {
+    const chapterNumber = 17;
+    const previousText = "第十六章结尾，主角握紧了黑晶。";
+    setupBaseWorkspace();
+    mkdirSync(join(testWorkspacePath, "chapter-continuity"), { recursive: true });
+    writeFileSync(
+      join(testWorkspacePath, "chapter-continuity", "16.json"),
+      JSON.stringify({
+        chapterNumber: 16,
+        finalTextHash: computeHash12(previousText),
+        lastEventSummary: "主角握紧了黑晶。",
+      }),
+      "utf-8",
+    );
+    writeStateStore({
+      schemaVersion: 1,
+      workspaceId: testWorkspaceId,
+      canon: [],
+      character: [],
+      promise: [],
+      pattern: [],
+      expectation: [],
+      lastCommittedChapter: "ch17",
+      updatedAt: "2026-08-23T16:30:24.000Z",
+    });
+
+    const report = runPreflight(chapterNumber);
+
+    assert.equal(report.passed, true, JSON.stringify(report.blockingItems, null, 2));
+    assert.equal(
+      report.checks.previousSkeleton.detail.source,
+      "state-store-current-chapter-rerun",
+    );
+    cleanupTestWorkspace();
+  });
+
+  it("1c. state-only: 兼容旧版 numeric sourceChapter、sourceRef 数组和 memory 嵌套引用", () => {
+    const chapterNumber = 3;
+    const prevText = "前章正文内容，旧版状态以数字章节号和数组来源保存。";
+    setupBaseWorkspace();
+    writePrevChapterFile(chapterNumber - 1, prevText);
+    const hash = computeHash12(prevText);
+    writeStateStore({
+      schemaVersion: 1,
+      workspaceId: testWorkspaceId,
+      canon: [],
+      character: [{
+        kind: "character",
+        id: "character:林墨:ch2",
+        sourceChapter: 2,
+        sourceRef: [`ch2#finalText:${hash}:0-10`],
+        memory: {
+          sourceChapter: 2,
+          sourceRef: [`ch2#finalText:${hash}:0-10`],
+        },
+        confidence: 0.7,
+        lastUpdated: "2026-07-15T19:57:41.523Z",
+        characterId: "林墨",
+        field: "participation",
+        value: "present",
+        version: 1,
+      }],
+      promise: [],
+      pattern: [],
+      expectation: [],
+      lastCommittedChapter: 2,
+      updatedAt: "2026-07-15T19:57:41.523Z",
+    });
+
+    const report = runPreflight(chapterNumber);
+
+    assert.equal(report.passed, true, "旧版状态引用也应通过连续性预检");
+    assert.equal(report.checks.previousSkeleton.detail.source, "state-store");
+    cleanupTestWorkspace();
+  });
 });

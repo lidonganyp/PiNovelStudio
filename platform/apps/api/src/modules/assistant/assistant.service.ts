@@ -54,6 +54,8 @@ import {
   type PlannerChatMessage,
 } from './planner-client';
 import { chapterNumberFromTitle } from '../context/chapter-number';
+import { inferContinuationMode } from '../jobs/chapter-continuation';
+import type { ContinuationMode } from '../context/types';
 
 export class PostAssistantMessageDto {
   @IsString()
@@ -74,6 +76,10 @@ export class PostAssistantMessageDto {
   @IsOptional()
   @IsBoolean()
   confirmGeneration?: boolean;
+
+  @IsOptional()
+  @IsIn(['replace', 'append'])
+  continuationMode?: ContinuationMode;
 
   @IsOptional()
   @IsIn(['apply_and_generate', 'save_draft', 'cancel', 'revise'])
@@ -205,6 +211,7 @@ export class AssistantService {
       typeof contentOrDto === 'string' ? { content: contentOrDto } : contentOrDto,
     );
     const content = request.content;
+    const continuationMode = request.continuationMode ?? inferContinuationMode(content);
     const isGenerationRequest = shouldPreflightAuthorContract(request.action, content)
       || Boolean(request.stewardAction);
     if (
@@ -215,7 +222,12 @@ export class AssistantService {
     }
     await requireOwnedProject(this.prisma, userId, projectId);
     if (isGenerationRequest) {
-      return this.runGenerationSteward(userId, projectId, request, onDelta);
+      return this.runGenerationSteward(
+        userId,
+        projectId,
+        { ...request, continuationMode },
+        onDelta,
+      );
     }
     const jobId = randomUUID();
     const maxCharge = await this.estimateAssistantMaxCharge();
@@ -368,12 +380,14 @@ export class AssistantService {
             chapterNumber,
             confirmGeneration: false,
             envelope,
+            continuationMode,
           });
           let next = await prepareGenerationSteward({
             prisma: this.prisma,
             userId,
             projectId,
             chapterNumber,
+            continuationMode,
           });
           if (next.status === 'ready') {
             next = {
@@ -384,6 +398,7 @@ export class AssistantService {
                 userId,
                 projectId,
                 chapterNumber,
+                continuationMode,
               }),
               publicEntry: 'novel_generate_chapter',
             };
@@ -396,6 +411,7 @@ export class AssistantService {
               action: 'apply_and_generate',
               proposalId: next.proposalId,
               sourceVersion: next.sourceVersion,
+              continuationMode,
             });
           }
           onDelta?.(next.reply);
@@ -423,6 +439,7 @@ export class AssistantService {
             chapterNumber,
             confirmGeneration,
             envelope,
+            continuationMode,
           });
           reply = applied.content;
           metadata = applied.metadata;
@@ -433,6 +450,10 @@ export class AssistantService {
         resolvedChapterNumber = chapterNumber;
         tokensIn = planned.tokensIn;
         tokensOut = planned.tokensOut;
+        if (contextManifest) {
+          contextManifest.actualInputTokens = planned.tokensIn;
+          contextManifest.actualOutputTokens = planned.tokensOut;
+        }
       } else {
         reply = `这是规划回复：${content.slice(0, 40)}`;
         tokensOut = Math.max(1, reply.length);
@@ -665,10 +686,11 @@ export class AssistantService {
       0,
     );
     const targetChapter = chapterNumber ?? lastChapterNumber + 1;
-    const previousChapter = chapters.find((row) => row.chapterNumber === targetChapter - 1)
-      ?? chapters
-        .filter((row) => row.chapterNumber < targetChapter)
-        .sort((left, right) => right.chapterNumber - left.chapterNumber)[0];
+    // Chapter continuity is ordinal, not "latest available". Falling back to
+    // an older chapter can make chapter 17 start from chapter 6 after a gap.
+    const previousChapter = targetChapter > 1
+      ? chapters.find((row) => row.chapterNumber === targetChapter - 1)
+      : undefined;
     const currentChapter = chapters.find((row) => row.chapterNumber === targetChapter);
     const seed = currentChapter?.seed
       ? {
@@ -751,6 +773,8 @@ export class AssistantService {
         ? { query: currentUserContent.slice(0, 40), purpose: 'query_project' }
         : undefined,
       enforceStateHash: action === 'generate_chapter',
+      contextProfile: env.PINOVEL_CONTEXT_PROFILE,
+      historicalQueries: action === 'query_project' ? [currentUserContent.slice(0, 120)] : [],
     });
     const system: PlannerChatMessage = {
       role: 'system',
@@ -862,6 +886,7 @@ export class AssistantService {
             proposalId: request.proposalId,
             sourceVersion: request.sourceVersion,
             confirmedFields: request.confirmedFields,
+            continuationMode: request.continuationMode,
           });
     } else {
       const chapterNumber = request.chapterNumber
@@ -882,6 +907,7 @@ export class AssistantService {
         userId,
         projectId,
         chapterNumber,
+        continuationMode: request.continuationMode,
       });
       if (steward.status === 'ready') {
         steward.generationJobId = await submitReadyGenerationSteward({
@@ -890,6 +916,7 @@ export class AssistantService {
           userId,
           projectId,
           chapterNumber,
+          continuationMode: request.continuationMode,
         });
         steward.publicEntry = 'novel_generate_chapter';
       } else if (steward.status === 'auto_fill' && steward.proposalId) {
@@ -901,6 +928,7 @@ export class AssistantService {
           action: 'apply_and_generate',
           proposalId: steward.proposalId,
           sourceVersion: steward.sourceVersion,
+          continuationMode: request.continuationMode,
         });
       }
     }

@@ -37,11 +37,14 @@ export function classifyMaterialReadiness(
   chapterNumber: number,
 ): MaterialReadiness {
   if (snapshot.hashMismatch) {
+    const chapterLabel = snapshot.hashMismatch.chapterNumber > 0
+      ? `第${snapshot.hashMismatch.chapterNumber}章`
+      : '前章';
     return {
       status: 'hard_blocked',
       missing: [],
       proposals: [],
-      hardBlockReason: `前章叙事状态与正文哈希不一致（期望 ${snapshot.hashMismatch.expected}，实际 ${snapshot.hashMismatch.actual}）`,
+      hardBlockReason: `${chapterLabel}正文已修改，但叙事状态哈希尚未同步（状态记录 ${snapshot.hashMismatch.expected}，当前正文 ${snapshot.hashMismatch.actual}）`,
       chapterNumber,
       sourceVersion: snapshot.sourceVersion,
     };
@@ -80,7 +83,7 @@ export function classifyMaterialReadiness(
   const seedReady = Boolean(chapter?.seed?.intent.trim() && chapter.seed.endingGoal.trim());
   if (!seedReady) {
     missing.push('章节种子');
-    const seed = inferChapterSeed(snapshot, chapterNumber, corpus);
+    const seed = inferChapterSeed(snapshot, chapterNumber);
     proposals.push({
       field: 'chapter_seed',
       value: seed.value,
@@ -132,6 +135,8 @@ export function classifyMaterialReadiness(
   };
 }
 
+// Reserved for explicit author-confirmed narrative material proposals.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function inferNarrativeProposal(
   snapshot: ProjectContextSnapshot,
   _corpus: { text: string; sources: string[] },
@@ -268,11 +273,7 @@ function inferStyle(snapshot: ProjectContextSnapshot, corpus: { text: string; so
   };
 }
 
-function inferChapterSeed(
-  snapshot: ProjectContextSnapshot,
-  chapterNumber: number,
-  corpus: { text: string; sources: string[] },
-): MaterialProposal {
+function inferChapterSeed(snapshot: ProjectContextSnapshot, chapterNumber: number): MaterialProposal {
   const node = snapshot.outlineNodes.find((row) => chapterTitleMatches(row.title, chapterNumber));
   const outlineLine = snapshot.outline?.content
     .split('\n')

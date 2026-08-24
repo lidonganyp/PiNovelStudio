@@ -27,6 +27,7 @@ import {
   shareSignificantContent,
 } from "./event-comparator-helpers.js";
 import type { ExtractedEvent, ExtractedCausalChain } from "./event-extractor.js";
+import { STATE_CHANGE_SYNONYM_FAMILIES } from "./event-extractor-vocabulary.js";
 
 // ============================================================================
 // 因果顺序检测（复用 editorial-story-preservation-gate.ts 逻辑）
@@ -180,9 +181,27 @@ export function detectStateChangeLosses(
   for (const rawEvent of rawExtractable) {
     if (rawEvent.eventType !== "state_change") continue;
     if (!rawEvent.afterState) continue;
+    // "几乎/差点/险些" only describes an unrealized transition. It must not
+    // become a hard preservation obligation when editorial wording omits it.
+    if (rawEvent.nearMiss || rawEvent.negated) continue;
 
-    // 检查 afterState 动词是否在 editorial 全文中出现
-    const afterStateInEditorial = editorialText.includes(rawEvent.afterState);
+    // 状态变化按“主体 + 状态语义”匹配，而不是要求 afterState 动词逐字出现。
+    // 风格优化允许“出现→浮现”“得到→获得”等自然改写；逐字 includes 会把
+    // 合规改写误判为状态丢失。保留全文精确词回退，兼容旧版抽取无法绑定主体的文本。
+    const matchingEditorialState = editorialExtractable.some((editorialEvent) => {
+      if (editorialEvent.eventType !== "state_change") return false;
+      if (rawEvent.subject && editorialEvent.subject && rawEvent.subject !== editorialEvent.subject) return false;
+      if (!areStateChangesEquivalent(rawEvent.afterState, editorialEvent.afterState)) return false;
+      const rawResult = rawEvent.result && rawEvent.result !== rawEvent.afterState ? rawEvent.result : "";
+      const editorialResult = editorialEvent.result && editorialEvent.result !== editorialEvent.afterState
+        ? editorialEvent.result
+        : "";
+      if (!rawResult || rawResult.length < 2 || !editorialResult) return true;
+      return rawResult === editorialResult
+        || rawResult.includes(editorialResult)
+        || editorialResult.includes(rawResult);
+    });
+    const afterStateInEditorial = matchingEditorialState || editorialText.includes(rawEvent.afterState);
 
     if (!afterStateInEditorial) {
       // afterState 动词完全不在 editorial 中 → 状态变化丢失
@@ -200,6 +219,15 @@ export function detectStateChangeLosses(
   }
 
   return losses;
+}
+
+/** 两个状态动词是否表达同一类状态变化。 */
+export function areStateChangesEquivalent(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return STATE_CHANGE_SYNONYM_FAMILIES.some((family) =>
+    family.includes(left) && family.includes(right),
+  );
 }
 
 // ============================================================================

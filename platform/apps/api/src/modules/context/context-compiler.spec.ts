@@ -5,10 +5,15 @@ import {
   compileProjectContext,
   findStateHashMismatch,
   hashChapterText,
+  reanchorNarrativeStateToChapter,
   searchChapterCollectionSpans,
   searchChapterSpans,
 } from './context-compiler';
-import { estimateTokens, totalBudget } from './token-budget';
+import {
+  estimateTokens,
+  getContextBudgetProfile,
+  totalBudget,
+} from './token-budget';
 import { ContextCompileError, FAILURE_CODES } from './failure-envelope';
 import {
   FIXTURE_CHAPTER_ONE,
@@ -130,6 +135,67 @@ describe('ContextCompiler', () => {
     }
   });
 
+  it('reanchors only final-text references for the edited chapter', () => {
+    const actualHash = hashChapterText(FIXTURE_CHAPTER_ONE);
+    const result = reanchorNarrativeStateToChapter(
+      makeStaleNarrativeState(),
+      1,
+      actualHash,
+    );
+    expect(result.updatedEntries).toBe(2);
+    expect(result.content).toContain(`ch1#finalText:${actualHash}:0-40`);
+    expect(result.content).toContain(`ch1#finalText:${actualHash}:12-40`);
+    expect(findStateHashMismatch(result.content, {
+      chapterNumber: 1,
+      content: FIXTURE_CHAPTER_ONE,
+    })).toBeNull();
+  });
+
+  it('accepts legacy numeric chapters, sourceRef arrays, and nested memory references', () => {
+    const narrative = JSON.stringify({
+      canon: [{
+        sourceChapter: 1,
+        sourceRef: ['ch1#finalText:deadbeefcafe:0-40'],
+        memory: {
+          sourceChapter: 1,
+          sourceRef: ['ch1#finalText:deadbeefcafe:0-40'],
+        },
+      }],
+    });
+    const mismatch = findStateHashMismatch(narrative, {
+      chapterNumber: 1,
+      content: FIXTURE_CHAPTER_ONE,
+    });
+    expect(mismatch?.expected).toBe('deadbeefcafe');
+
+    const actualHash = hashChapterText(FIXTURE_CHAPTER_ONE);
+    const repaired = reanchorNarrativeStateToChapter(narrative, 1, actualHash);
+    expect(repaired.updatedEntries).toBe(1);
+    const parsed = JSON.parse(repaired.content) as {
+      canon: [{ sourceChapter: string; sourceRef: string[]; memory: { sourceChapter: string; sourceRef: string[] } }];
+    };
+    expect(parsed.canon[0].sourceChapter).toBe('ch1');
+    expect(parsed.canon[0].sourceRef[0]).toContain(`ch1#finalText:${actualHash}`);
+    expect(parsed.canon[0].memory.sourceChapter).toBe('ch1');
+    expect(parsed.canon[0].memory.sourceRef[0]).toContain(`ch1#finalText:${actualHash}`);
+    expect(findStateHashMismatch(repaired.content, {
+      chapterNumber: 1,
+      content: FIXTURE_CHAPTER_ONE,
+    })).toBeNull();
+  });
+
+  it('moves references when a chapter number is manually changed', () => {
+    const actualHash = hashChapterText(FIXTURE_CHAPTER_ONE);
+    const result = reanchorNarrativeStateToChapter(
+      makeStaleNarrativeState(),
+      7,
+      actualHash,
+      1,
+    );
+    expect(result.content).toContain(`"sourceChapter": "ch7"`);
+    expect(result.content).toContain(`ch7#finalText:${actualHash}`);
+  });
+
   it('limits evidence spans and never returns the full chapter', () => {
     const long = `${'前文很长。'.repeat(80)}铜哨再现。${'后文也很长。'.repeat(80)}`;
     const spans = searchChapterSpans({
@@ -162,6 +228,7 @@ describe('ContextCompiler', () => {
   it('uses sha256-12 for chapter hashes', () => {
     const expected = createHash('sha256').update(FIXTURE_CHAPTER_ONE, 'utf8').digest('hex').slice(0, 12);
     expect(hashChapterText(FIXTURE_CHAPTER_ONE)).toBe(expected);
+    expect(hashChapterText(`\uFEFF  ${FIXTURE_CHAPTER_ONE}  `)).toBe(expected);
   });
 
   it('keeps bookBrief within the same total token budget as the manifest', () => {
@@ -184,5 +251,78 @@ describe('ContextCompiler', () => {
     expect(compiled.manifest.blocks.find((block) => block.name === 'styleProfile')?.included).toBe(true);
     expect(compiled.manifest.blocks.find((block) => block.name === 'currentChapterOutline')?.included).toBe(true);
     expect(compiled.bookBrief).toContain('## 世界观');
+  });
+
+  it('keeps the full story outline for authorization while clipping the prompt copy', () => {
+    const huge = `${'很长的前文。'.repeat(8000)}魂玉可以封印伤势。`;
+    const compiled = compileProjectContext({
+      storyOutline: { content: `# 故事大纲\n${huge}` },
+      chapterSeed: FIXTURE_CHAPTER_TWO_SEED,
+      characters: FIXTURE_CHARACTERS,
+    });
+    // 提示词副本受 storyOutline 块预算裁剪，尾部高影响术语被丢弃。
+    expect(compiled.usableStoryOutline).toBeDefined();
+    expect(compiled.usableStoryOutline).not.toContain('封印');
+    // 授权副本必须保留全文，否则 FactGuard 会把大纲已有术语误判为未授权新设定。
+    expect(compiled.fullStoryOutline).toContain('封印');
+    expect(estimateTokens(compiled.fullStoryOutline ?? '')).toBeGreaterThan(totalBudget());
+  });
+
+  it('does not emit a full story outline when the outline is unusable', () => {
+    const compiled = compileProjectContext({
+      storyOutline: { id: 1, content: FIXTURE_POLLUTED_OUTLINE, currentVersion: 3 },
+      chapterSeed: FIXTURE_CHAPTER_TWO_SEED,
+      characters: FIXTURE_CHARACTERS,
+    });
+    expect(compiled.fullStoryOutline).toBeUndefined();
+  });
+
+  it('supports 128k/256k/512k context profiles without changing authorization material', () => {
+    expect(getContextBudgetProfile('128k').totalTokenBudget).toBe(128_000);
+    expect(getContextBudgetProfile('256k').totalTokenBudget).toBe(256_000);
+    expect(getContextBudgetProfile('512k').totalTokenBudget).toBe(512_000);
+    expect(totalBudget('128k')).toBe(128_000);
+
+    const longOutline = `${'大纲历史节点。'.repeat(10_000)}魂玉可以封印伤势。`;
+    const compiled = compileProjectContext({
+      contextProfile: '128k',
+      storyOutline: { content: `# 故事大纲\n${longOutline}` },
+      chapterSeed: FIXTURE_CHAPTER_TWO_SEED,
+      characters: FIXTURE_CHARACTERS,
+    });
+    expect(compiled.manifest.totalTokenBudget).toBe(128_000);
+    expect(compiled.manifest.blocks.find((block) => block.name === 'storyOutline')?.tokenBudget)
+      .toBeGreaterThan(4_000);
+    expect(compiled.fullStoryOutline).toContain('封印');
+    expect(compiled.manifest.truncatedBlocks).toEqual(expect.arrayContaining(['storyOutline']));
+  });
+
+  it('assembles recent chapter memory and query-ranked historical evidence with coverage', () => {
+    const chapters = Array.from({ length: 9 }, (_, index) => ({
+      chapterNumber: index + 1,
+      title: `章节${index + 1}`,
+      status: 'generated',
+      wordCount: 120,
+      content: `第${index + 1}章正文。${index === 2 ? '远期线索-铜哨' : '普通推进'}。${'细节。'.repeat(20)}`,
+      seed: null,
+    }));
+    const compiled = compileProjectContext({
+      contextProfile: '128k',
+      chapterSeed: { ...FIXTURE_CHAPTER_TWO_SEED, chapterNumber: 10 },
+      characters: FIXTURE_CHARACTERS,
+      chapterCatalog: chapters,
+      previousChapter: chapters[8],
+      historicalQueries: ['远期线索-铜哨'],
+    });
+    const recent = compiled.manifest.blocks.find((block) => block.name === 'recentChapterContent');
+    expect(recent?.included).toBe(true);
+    expect(compiled.bookBrief).toContain('第7章正文');
+    expect(compiled.bookBrief).not.toContain(chapters[8].content);
+    expect(compiled.selectedEvidenceSpans[0]?.text).toContain('远期线索-铜哨');
+    expect(compiled.manifest.retrievalCoverage).toMatchObject({
+      requestedQueries: 1,
+      matchedQueries: 1,
+      recentChaptersIncluded: expect.any(Number),
+    });
   });
 });

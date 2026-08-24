@@ -288,18 +288,102 @@ import { loadPromptPatternLibrary } from "./prompt-pattern-library.js";
 // 原内联 compileOntologyContract 依赖随 buildStagedStateUpdate 迁出，此处不再需要。
 import { buildStagedStateUpdate } from "./staged-state-builder.js";
 
-function loadOntologyLevels(workspaceId: string, projectRoot: string): string[] {
+const ONTOLOGY_CHAIN_SEPARATOR = /(?:→|->|\/|、|>)/;
+const ONTOLOGY_REALM_SUFFIX = /(?:境界|境|期|阶|级|重|层)$/;
+
+/**
+ * Extract ontology level chains from the explicit "境界体系" outline section.
+ *
+ * This is deliberately narrower than scanning every X境 phrase in the outline:
+ * only ordered chains in that named section can authorize dynamic realm terms.
+ * Returned terms omit their shared realm suffix because the immutable-facts
+ * compiler accepts both the normalized level and its suffixed prose form.
+ */
+export function parseOntologyLevelsFromOutline(text: string): string[] {
+  if (typeof text !== "string" || text.trim().length === 0) return [];
+
+  const lines = text.split(/\r?\n/);
+  const levels: string[] = [];
+  const seen = new Set<string>();
+
+  for (let sectionStart = 0; sectionStart < lines.length; sectionStart += 1) {
+    const candidateLine = lines[sectionStart].trim();
+    const isOntologyHeading = /^#{1,6}\s+.*境界体系/.test(candidateLine);
+    const isOntologyParagraph = /^(?:[>*\-]\s*)?(?:境界体系|境界体系总览)\s*[：:]/.test(candidateLine);
+    if (!isOntologyHeading && !isOntologyParagraph) continue;
+
+    let sectionEnd = lines.length;
+    for (let index = sectionStart + 1; index < lines.length; index += 1) {
+      if (/^#{1,6}\s/.test(lines[index].trim())) {
+        sectionEnd = index;
+        break;
+      }
+    }
+
+    for (const rawLine of lines.slice(sectionStart, sectionEnd)) {
+      const line = rawLine.replace(/[\\*_`]/g, "").trim();
+      const separatorIndex = line.search(/[：:]/);
+      if (separatorIndex <= 0) continue;
+
+      const category = line
+        .slice(0, separatorIndex)
+        .replace(/^#{1,6}\s*/, "")
+        .replace(/^[>*\-]\s*/, "")
+        .replace(/境界$/, "")
+        .trim();
+      const chain = line.slice(separatorIndex + 1).trim();
+      if (category.length === 0 || category.length > 12 || !ONTOLOGY_CHAIN_SEPARATOR.test(chain)) continue;
+
+      const terms = chain
+        .split(ONTOLOGY_CHAIN_SEPARATOR)
+        .map((term) => term
+          .replace(/^[\s\-—:：]+|[\s、，,。；;]+$/g, "")
+          .replace(ONTOLOGY_REALM_SUFFIX, "")
+          .trim())
+        .filter((term) => (
+          term.length > 0
+          && term.length <= 12
+          && /[\u4e00-\u9fff]/.test(term)
+        ));
+
+      if (terms.length < 2) continue;
+      const normalized = `${category}（${Array.from(new Set(terms)).join("/")}）`;
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        levels.push(normalized);
+      }
+    }
+  }
+
+  return levels;
+}
+
+export function loadOntologyLevels(workspaceId: string, projectRoot: string): string[] {
+  let configuredLevels: string[] = [];
   try {
     const configPath = join(projectRoot, "workspaces", workspaceId, "config.json");
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
       worldKeyTerms?: { levels?: unknown };
     };
-    return Array.isArray(config.worldKeyTerms?.levels)
-      ? config.worldKeyTerms.levels.filter((value): value is string => typeof value === "string")
+    configuredLevels = Array.isArray(config.worldKeyTerms?.levels)
+      ? config.worldKeyTerms.levels.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       : [];
   } catch {
-    return [];
+    configuredLevels = [];
   }
+  if (configuredLevels.length > 0) return configuredLevels;
+
+  const workspaceRoot = join(projectRoot, "workspaces", workspaceId);
+  for (const outlineName of ["outline-full.md", "outline.md"]) {
+    try {
+      const outline = readFileSync(join(workspaceRoot, "series", outlineName), "utf-8");
+      const parsedLevels = parseOntologyLevelsFromOutline(outline);
+      if (parsedLevels.length > 0) return parsedLevels;
+    } catch {
+      // Missing or malformed outline copies are non-fatal; try the next source.
+    }
+  }
+  return [];
 }
 
 /**
@@ -336,9 +420,11 @@ function loadTargetWordCount(workspaceId: string, projectRoot: string): { min: n
  * levels（境界/等级）。levels 字段通常是长描述串（如"炼体（锻骨/淬腑/...）"），
  * 取括号内子项切分；其他字段已是短实体名，直接使用。
  *
+ * 平台物化层目前可能写入扁平 string[]，本地 config 则通常写入带分类字段的对象；
+ * 两种形状都必须消费，否则平台项目会退化成 characters_only，导致地点/物品事件账本变薄。
  * 读取失败或字段缺失时返回空数组（不阻断；由 characterNames 兜底）。
  */
-function loadWorldKeyEntities(workspaceId: string, projectRoot: string): string[] {
+export function loadWorldKeyEntities(workspaceId: string, projectRoot: string): string[] {
   try {
     const configPath = join(projectRoot, "workspaces", workspaceId, "config.json");
     const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
@@ -347,8 +433,10 @@ function loadWorldKeyEntities(workspaceId: string, projectRoot: string): string[
     const terms = config.worldKeyTerms;
     if (!terms || typeof terms !== "object") return [];
     const entities: string[] = [];
-    for (const key of Object.keys(terms)) {
-      const value = terms[key];
+    const entries: Array<[string, unknown]> = Array.isArray(terms)
+      ? [["flat", terms]]
+      : Object.entries(terms);
+    for (const [key, value] of entries) {
       if (!Array.isArray(value)) continue;
       for (const item of value) {
         if (typeof item !== "string") continue;
@@ -367,10 +455,45 @@ function loadWorldKeyEntities(workspaceId: string, projectRoot: string): string[
         }
       }
     }
-    return entities;
+    if (entities.length > 0) return [...new Set(entities)];
+
+    // 兼容平台项目尚未填写 worldKeyTerms 的情况：只从明确的世界观实体
+    // 分节提取条目，不扫描普通叙事句，避免把任意名词伪装成授权实体。
+    const workspaceRoot = join(projectRoot, "workspaces", workspaceId);
+    const fallbackEntities: string[] = [];
+    for (const relativePath of ["WORLDBUILDING-CANON.md", "series/outline-full.md", "series/outline.md"]) {
+      try {
+        fallbackEntities.push(...extractExplicitWorldEntities(readFileSync(join(workspaceRoot, relativePath), "utf-8")));
+      } catch {
+        // Optional source; continue to the next materialized document.
+      }
+    }
+    return [...new Set(fallbackEntities)];
   } catch {
     return [];
   }
+}
+
+const EXPLICIT_ENTITY_SECTION = /(?:世界观|世界设定|地点|组织|势力|道具|装备|能力|货币|职业|人物关系|境界体系)/;
+
+/** Extract entity labels from explicit worldbuilding list/table sections only. */
+export function extractExplicitWorldEntities(text: string): string[] {
+  if (!text.trim()) return [];
+  const entities: string[] = [];
+  let inEntitySection = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (/^#{1,6}\s/.test(line)) {
+      inEntitySection = EXPLICIT_ENTITY_SECTION.test(line);
+      continue;
+    }
+    if (!inEntitySection) continue;
+    const match = line.match(/^(?:[-*+]\s*|\|\s*)\**([^：:|]{2,24}?)\**\s*[：:|]/);
+    if (!match) continue;
+    const label = match[1].trim().replace(/[（(][^）)]*[）)]$/, "").trim();
+    if (label.length >= 2 && !/^(说明|描述|规则|备注|来源|名称|类别)$/.test(label)) entities.push(label);
+  }
+  return entities;
 }
 
 /**
@@ -1681,6 +1804,8 @@ export async function runUnifiedPipeline(
       workspaceId,
       chapterId,
       chapterNumber,
+      continuationMode: input.continuationMode,
+      currentChapterDraft: input.currentChapterDraft,
       projectRoot,
       intent: evalIntent,
       context: evalContext,
@@ -2433,6 +2558,8 @@ export async function runUnifiedPipeline(
     workspaceId,
     chapterId,
     chapterNumber,
+    continuationMode: input.continuationMode,
+    currentChapterDraft: input.currentChapterDraft,
     projectRoot,
     executionReleaseId: releaseGateResult.releaseId,
     productionFlow,

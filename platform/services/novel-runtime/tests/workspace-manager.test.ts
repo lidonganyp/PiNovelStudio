@@ -163,6 +163,25 @@ describe("P0-4 workspace-manager.materializeWorkspace", () => {
     wm.cleanupWorkspace("job-so-1");
   });
 
+  test("story_outline_full → series/outline-full.md（FactGuard 授权全文，不覆盖提示词副本）", () => {
+    const wm = makeManager();
+    const result = wm.materializeWorkspace({
+      jobId: "job-sof-1",
+      workspaceId: "u1_p1",
+      projectConfig: { genre: "武侠" },
+      documents: [
+        { type: "story_outline", content: "第一卷：登顶之路" },
+        { type: "story_outline_full", content: "第一卷：登顶之路\n魂玉可以封印伤势。" },
+      ],
+    });
+
+    const full = readText(join(result.workspacePath, "series", "outline-full.md"));
+    assert.ok(full.includes("封印"));
+    const prompt = readText(join(result.workspacePath, "series", "outline.md"));
+    assert.equal(prompt.includes("封印"), false);
+    wm.cleanupWorkspace("job-sof-1");
+  });
+
   test("style_profile JSON → styles/profile.json", () => {
     const wm = makeManager();
     const styleJson = JSON.stringify({ rhythm: "fast", vocabulary: "concise" });

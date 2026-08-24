@@ -39,6 +39,7 @@ import {
   findSubjectObjectSwapPreMatch,
   hasSharedQuotedSpeech,
 } from "./event-comparator-helpers.js";
+import { ANTONYM_PAIRS } from "./event-extractor-vocabulary.js";
 import type {
   ReplacedEventEvidence,
   AdvisorySimilarityEvidence,
@@ -135,7 +136,10 @@ export function matchAndDetectReplacements(
     const subjectRetained =
       rawEvent.subject !== "" && editorialText.includes(rawEvent.subject);
     const rawHasCriticalAction = isCriticalAction(rawEvent.action);
-    if (retainedEntities.length === 0 && !subjectRetained && !rawHasCriticalAction) continue;
+    const rawHasAntonymAction = ANTONYM_PAIRS.some(([left, right]) =>
+      rawEvent.action.includes(left) || rawEvent.action.includes(right),
+    );
+    if (retainedEntities.length === 0 && !subjectRetained && !rawHasCriticalAction && !rawHasAntonymAction) continue;
 
     // P0 第四轮：主客体反转预检测（委托 findSubjectObjectSwapPreMatch）
     // 严格主体匹配会跳过 editorial 中 subject 不同的 event，导致 "叶尘攻击林默"→"林默攻击叶尘"

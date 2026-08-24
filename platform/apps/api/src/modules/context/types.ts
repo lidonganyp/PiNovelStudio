@@ -10,6 +10,8 @@ export const ASSISTANT_ACTIONS = [
 
 export type AssistantAction = (typeof ASSISTANT_ACTIONS)[number];
 
+export type ContinuationMode = 'replace' | 'append';
+
 export const ARTIFACT_TYPES = [
   'story_outline',
   'chapter_seed',
@@ -31,6 +33,7 @@ export interface AssistantRequest {
   action?: AssistantAction;
   chapterNumber?: number;
   confirmGeneration?: boolean;
+  continuationMode?: ContinuationMode;
   stewardAction?: 'apply_and_generate' | 'save_draft' | 'cancel' | 'revise';
   proposalId?: string;
   sourceVersion?: string;
@@ -92,6 +95,7 @@ export interface EvidenceSpan {
   purpose: string;
   text: string;
   tokenCount: number;
+  query?: string;
 }
 
 export type ContextBlockName =
@@ -108,7 +112,19 @@ export type ContextBlockName =
   | 'patternMemory'
   | 'previousChapterContinuation'
   | 'styleProfile'
+  | 'recentChapterContent'
   | 'selectedEvidenceSpans';
+
+export type ContextBudgetProfileName = '16k' | '128k' | '256k' | '512k';
+
+export interface ContextRetrievalCoverage {
+  requestedQueries: number;
+  matchedQueries: number;
+  historicalChaptersConsidered: number;
+  spansReturned: number;
+  recentChaptersRequested: number;
+  recentChaptersIncluded: number;
+}
 
 export interface ContextBlockManifest {
   name: ContextBlockName;
@@ -124,8 +140,15 @@ export interface ContextBlockManifest {
 }
 
 export interface ContextManifest {
+  profile: ContextBudgetProfileName;
   totalTokenBudget: number;
   totalTokensUsed: number;
+  estimatedInputTokens: number;
+  actualInputTokens?: number;
+  actualOutputTokens?: number;
+  settledCostFen?: number;
+  truncatedBlocks: ContextBlockName[];
+  retrievalCoverage: ContextRetrievalCoverage;
   blocks: ContextBlockManifest[];
   previousChapterContinuation?: PreviousChapterContinuation;
   selectedEvidenceSpans: EvidenceSpan[];
@@ -145,6 +168,7 @@ export const DEFAULT_BLOCK_TOKEN_BUDGETS: Record<ContextBlockName, number> = {
   patternMemory: 1000,
   previousChapterContinuation: 800,
   styleProfile: 1500,
+  recentChapterContent: 0,
   selectedEvidenceSpans: 2000,
 };
 

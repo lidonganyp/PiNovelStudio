@@ -74,6 +74,7 @@ export interface StewardView {
   proposalStatus?: 'pending' | 'applied' | 'cancelled' | 'draft_saved';
   confirmedAt?: string;
   confirmedFields?: string[];
+  continuationMode?: 'replace' | 'append';
 }
 
 export interface AssistantRequest {
@@ -82,6 +83,7 @@ export interface AssistantRequest {
   action?: AssistantAction;
   chapterNumber?: number;
   confirmGeneration?: boolean;
+  continuationMode?: 'replace' | 'append';
   stewardAction?: 'apply_and_generate' | 'save_draft' | 'cancel' | 'revise';
   proposalId?: string;
   sourceVersion?: string;
@@ -103,6 +105,7 @@ export function buildStewardRequest(
     stewardAction: action,
     proposalId: steward.proposalId,
     sourceVersion: steward.sourceVersion,
+    continuationMode: steward.continuationMode,
     confirmedFields: steward.proposals
       .filter((row) => row.value.trim())
       .map((row) => row.field),
