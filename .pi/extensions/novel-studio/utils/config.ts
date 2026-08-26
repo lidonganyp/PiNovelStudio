@@ -24,6 +24,8 @@ export interface ModelRoutingConfig {
 export interface AgentRoutingEntry {
   provider: string;
   model: string;
+  /** Gemini transport channel used by the production peer-channel fallback. */
+  channel?: "aimagichub" | "solov";
   note?: string;
   /**
    * MODEL-ROUTING-CLAUDE46-1A: route-level fallback chain.

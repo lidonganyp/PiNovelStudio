@@ -191,12 +191,23 @@ function extractMustVerifyItems(chapterIntent: string, seedContext: string): str
 /**
  * Phase 2D：从结构化 ChapterIntent 提取 mustVerify 项。
  *
- * 替代 M1 的字符串启发式 extractMustVerifyItems。提取来源（按风险优先级）：
- * 1. authorMustInclude（作者章纲明确要求包含的）— 最高优先级
- * 2. inviolableFacts（不可破坏的事实）— P0 风险，coverageGate 会分类
- * 3. factAndCharacterKnowledgeForbiddenZones（角色知识禁区）— P0 风险
- * 4. selectedPromisesToAdvance（本章推进的伏笔）— P1 风险
- * 5. expectedIrreversibleChange（预期不可逆变化）— P1 风险
+ * 替代 M1 的字符串启发式 extractMustVerifyItems。
+ * 语义修正（2026-08-25，coverage gate 死锁修复）：
+ * mustVerify 的语义是"写前必须已有 confirmed 证据的既有事实"，不是"本章要写的内容"。
+ * P0/P1 mustVerify 项在 coverage gate（snapshotBound 生产模式）中要求 confirmedCoverage
+ * 或检索轨迹证据；而本章待写内容在前文中不存在 confirmed 证据，system prompt 又允许
+ * 模型在上下文足够时不调用任何工具，导致这类项永远无法确认，必然 hard block。
+ * （例：章纲锚点"赵明远状态反常"含 P1 标记词"状态"，toolCalls=0 时 unverified 而阻断。）
+ *
+ * 只提取真正的前文约束事实：
+ * 1. inviolableFacts（不可破坏的事实）- P0；createConstraintManifest 会将同字符串映射为
+ *    IMMUTABLE_FACTS 槽 hard_constraint 条目（kind=hard_fact），可被 confirmedCoverage 覆盖
+ * 2. factAndCharacterKnowledgeForbiddenZones（角色知识禁区）- P0；同理（kind=knowledge_boundary）
+ *
+ * 不再提取（属于本章正文产出义务，由 FactGuard / StoryPreservation / Completeness 校验）：
+ * - authorMustInclude（作者章纲锚点，待写内容）
+ * - selectedPromisesToAdvance（本章要推进的伏笔，待写内容）
+ * - expectedIrreversibleChange（本章预期不可逆变化，待写内容）
  *
  * 去重，最多 8 项（与 extractMustVerifyItems 上限一致）。
  */
@@ -211,15 +222,8 @@ export function extractMustVerifyFromIntent(intent: ChapterIntent): string[] {
     }
   };
 
-  for (const item of intent.authorMustInclude ?? []) push(item);
   for (const item of intent.inviolableFacts ?? []) push(item);
   for (const item of intent.factAndCharacterKnowledgeForbiddenZones ?? []) push(item);
-  for (const p of intent.selectedPromisesToAdvance ?? []) {
-    push(`伏笔:${p.description}`);
-  }
-  for (const item of intent.expectedIrreversibleChange ?? []) {
-    push(`不可逆变化:${item}`);
-  }
 
   return items.slice(0, 8);
 }

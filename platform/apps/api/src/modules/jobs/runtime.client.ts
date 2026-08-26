@@ -3,7 +3,7 @@
  */
 import { Injectable } from '@nestjs/common';
 import { env } from '../../config/env';
-import { runtimeInvokeFailure } from './job-failure';
+import { JobFailureError, runtimeInvokeFailure } from './job-failure';
 
 export interface RuntimeInvokeResult {
   status: string;
@@ -21,6 +21,9 @@ export interface RuntimeInvokeResult {
 @Injectable()
 export class RuntimeClient {
   private requestTimeoutMs = env.NOVEL_RUNTIME_REQUEST_TIMEOUT_MS;
+  /** A runtime restart can leave a short connection-refused window. */
+  private maxAttempts = 2;
+  private retryDelayMs = 150;
 
   /** 调用 novel-runtime 生成工具。 */
   async invoke(
@@ -28,14 +31,13 @@ export class RuntimeClient {
     tool: string,
     input: Record<string, unknown>,
   ): Promise<RuntimeInvokeResult> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-    timeout.unref?.();
-    let response: Response;
-    try {
-      response = await fetch(
-        `${env.NOVEL_RUNTIME_BASE_URL.replace(/\/$/, '')}/v1/invoke`,
-        {
+    const url = `${env.NOVEL_RUNTIME_BASE_URL.replace(/\/$/, '')}/v1/invoke`;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+      timeout.unref?.();
+      try {
+        const response = await fetch(url, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -43,24 +45,49 @@ export class RuntimeClient {
           },
           body: JSON.stringify({ tool, input }),
           signal: controller.signal,
-        },
-      );
-    } catch (error: unknown) {
-      if (controller.signal.aborted) {
-        throw new Error(`runtime invoke timed out after ${this.requestTimeoutMs}ms`);
+        });
+        const body = (await response.json()) as RuntimeInvokeResult & {
+          metering?: { modelCallCount?: number };
+        };
+        if (!response.ok) {
+          throw runtimeInvokeFailure(body, body.metering?.modelCallCount);
+        }
+        return body;
+      } catch (error: unknown) {
+        if (controller.signal.aborted) {
+          throw new Error(`runtime invoke timed out after ${this.requestTimeoutMs}ms`);
+        }
+        if (attempt < this.maxAttempts && isRetryableConnectFailure(error)) {
+          await waitFor(this.retryDelayMs);
+          continue;
+        }
+        if (error instanceof JobFailureError) throw error;
+        throw new Error(describeRuntimeFetchFailure(env.NOVEL_RUNTIME_BASE_URL, error));
+      } finally {
+        clearTimeout(timeout);
       }
-      throw new Error(describeRuntimeFetchFailure(env.NOVEL_RUNTIME_BASE_URL, error));
-    } finally {
-      clearTimeout(timeout);
     }
-    const body = (await response.json()) as RuntimeInvokeResult & {
-      metering?: { modelCallCount?: number };
-    };
-    if (!response.ok) {
-      throw runtimeInvokeFailure(body, body.metering?.modelCallCount);
-    }
-    return body;
+    throw new Error('runtime invoke failed without an attempt');
   }
+}
+
+function waitFor(delayMs: number): Promise<void> {
+  if (delayMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    timer.unref?.();
+  });
+}
+
+/** Retrying is safe only when the TCP connection was never established. */
+function isRetryableConnectFailure(error: unknown): boolean {
+  const cause = error instanceof Error && 'cause' in error
+    ? (error as { cause?: unknown }).cause
+    : undefined;
+  const code = cause && typeof cause === 'object' && 'code' in cause
+    ? (cause as { code?: unknown }).code
+    : undefined;
+  return code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EHOSTUNREACH';
 }
 
 export function describeRuntimeFetchFailure(baseUrl: string, error: unknown): string {

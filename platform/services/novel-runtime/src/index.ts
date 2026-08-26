@@ -158,6 +158,7 @@ async function main(): Promise<void> {
   // ── 7. 创建 workspace manager（多租户隔离） ─────────────────────
   const workspaceManager = createWorkspaceManager({
     tempWorkspaceRoot: config.tempWorkspaceRoot,
+    workspaceArchiveRoot: config.workspaceArchiveRoot,
     logger,
   });
   logger.info(

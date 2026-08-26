@@ -28,8 +28,10 @@ export interface MaterialReadiness {
 }
 
 const GENRE_KEYWORDS = [
-  '都市重生', '都市', '玄幻', '仙侠', '武侠', '悬疑', '科幻', '历史',
-  '言情', '重生', '灵异', '游戏', '末世',
+  // Prefer explicit/compound genre labels. Plot-only words such as "重生"
+  // or "都市" are intentionally excluded to avoid false conflicts.
+  '都市重生', '都市异能', '玄幻', '仙侠', '武侠', '悬疑', '科幻', '历史',
+  '言情', '灵异', '游戏', '末世',
 ];
 
 export function classifyMaterialReadiness(
@@ -54,15 +56,29 @@ export function classifyMaterialReadiness(
   const missing: string[] = [];
   const proposals: MaterialProposal[] = [];
 
-  if (!snapshot.project.genre.trim()) {
+  const declaredGenre = snapshot.project.genre.trim();
+  const genreEvidence = [
+    snapshot.outline?.usable ? snapshot.outline.content : '',
+    ...snapshot.outlineNodes.flatMap((node) => [node.title, node.summary, node.narrativeGoal]),
+  ].filter(Boolean).join('\n');
+  const inferredGenre = inferGenre(genreEvidence, 'story_outline');
+  if (!declaredGenre) {
     missing.push('项目类型');
-    const inferred = inferGenre(corpus.text);
     proposals.push({
       field: 'genre',
-      value: inferred?.value ?? '',
-      source: inferred?.source ?? [],
-      // Genre is an author contract field. Even when text suggests a genre,
-      // do not silently replace the author's declaration with an inference.
+      value: inferredGenre?.value ?? '',
+      source: inferredGenre?.source ?? [],
+      // An explicit genre in the author's outline is an authoritative,
+      // reliably inferable value. Only an empty/weak source needs confirmation.
+      requiresConfirmation: !inferredGenre,
+    });
+  } else if (inferredGenre && !genresCompatible(declaredGenre, inferredGenre.value)) {
+    // Never silently replace an existing author declaration when the outline
+    // states a different genre. Surface the conflict for an explicit decision.
+    proposals.push({
+      field: 'genre',
+      value: inferredGenre.value,
+      source: ['project.genre', ...inferredGenre.source],
       requiresConfirmation: true,
     });
   }
@@ -196,13 +212,24 @@ function collectCorpus(snapshot: ProjectContextSnapshot, chapterNumber: number):
   return { text: parts.join('\n'), sources: [...new Set(sources)] };
 }
 
-function inferGenre(text: string): { value: string; source: string[] } | null {
+function inferGenre(text: string, sourceLabel = 'text'): { value: string; source: string[] } | null {
   for (const keyword of GENRE_KEYWORDS) {
     if (text.includes(keyword)) {
-      return { value: keyword, source: [`text:${keyword}`] };
+      return { value: keyword, source: [`${sourceLabel}:${keyword}`] };
     }
   }
   return null;
+}
+
+function genresCompatible(declared: string, inferred: string): boolean {
+  const normalize = (value: string): string => value.replace(/[\s\-_/]+/gu, '').toLowerCase();
+  const declaredNormalized = normalize(declared);
+  const inferredNormalized = normalize(inferred);
+  return Boolean(
+    declaredNormalized
+      && inferredNormalized
+      && (declaredNormalized.includes(inferredNormalized) || inferredNormalized.includes(declaredNormalized)),
+  );
 }
 
 function inferWorldbuilding(snapshot: ProjectContextSnapshot, corpus: { text: string; sources: string[] }): MaterialProposal {

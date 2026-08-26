@@ -46,6 +46,7 @@ export const AGENT_INPUT_FIELD_WHITELISTS: Readonly<
     "inviolableFacts",
     "evidencePlan",
     "targetWordCount",
+    "recoveryDirective",
     "toolMode",
     "evalPrefix",
     "retrievalPromptOverride",
@@ -75,6 +76,7 @@ export const AGENT_INPUT_FIELD_WHITELISTS: Readonly<
     "targetWordCount",
     "reducedGuidanceRatio",
     "driftFeedback",
+    "recoveryFeedback",
     "writerPromptProfile",
   ],
   story_preservation: [

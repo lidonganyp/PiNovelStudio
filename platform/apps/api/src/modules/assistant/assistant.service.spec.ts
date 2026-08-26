@@ -171,9 +171,14 @@ describe('AssistantService billing delivery contract', () => {
         id: 2, role: 'assistant', content: '草案', jobId: '', createdAt: new Date(),
       });
 
-    const result = await service.post(1, 128, '生成第二章');
+    const result = await service.post(1, 128, {
+      content: '根据小说大纲，完善第二章，补满2500字',
+      action: 'generate_chapter',
+      chapterNumber: 2,
+      confirmGeneration: true,
+    });
     expect(result.steward?.status).toBe('confirmation_required');
-    expect(result.chunks[0]).toContain('仍需你确认的内容');
+    expect(result.chunks[0]).toContain('以下内容无法从现有资料可靠确定');
     expect(result.generationJobId).toBeUndefined();
     expect(jobs.assertAuthorContract).not.toHaveBeenCalled();
     expect(jobs.submitChapterGeneration).not.toHaveBeenCalled();
@@ -224,11 +229,20 @@ describe('AssistantService billing delivery contract', () => {
       .mockResolvedValueOnce({ id: 1, role: 'user', content: '生成第二章', jobId: '', createdAt: new Date() })
       .mockResolvedValueOnce({ id: 2, role: 'assistant', content: '已提交', jobId: 'gen-ready', createdAt: new Date() });
 
-    const result = await service.post(1, 128, '生成第二章');
+    const result = await service.post(1, 128, {
+      content: '根据小说大纲，完善第二章，补满2500字',
+      action: 'generate_chapter',
+      chapterNumber: 2,
+      confirmGeneration: true,
+    });
     expect(result.generationJobId).toBe('gen-ready');
     expect(result.steward?.status).toBe('ready');
     expect(result.artifacts?.publicEntry).toBe('novel_generate_chapter');
     expect(jobs.submitChapterGeneration).toHaveBeenCalledTimes(1);
+    expect(jobs.submitChapterGeneration).toHaveBeenCalledWith(1, 128, 44, {
+      continuationMode: 'append',
+      targetWordCount: { min: 2500, max: 2750 },
+    });
     expect(billing.createHold).not.toHaveBeenCalled();
     expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
   });

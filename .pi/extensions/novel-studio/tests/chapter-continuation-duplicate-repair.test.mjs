@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  hasContinuationPrefixMismatch,
   mergeChapterContinuation,
   repairAdjacentDuplicateParagraphs,
 } from "../dist/v2/core/chapter-continuation.js";
@@ -31,6 +32,18 @@ test("continuation repair does not hide a non-adjacent true duplicate", () => {
   const repaired = repairAdjacentDuplicateParagraphs(text, prefix);
 
   assert.equal(repaired, text);
+});
+
+test("continuation prefix comparison ignores provider line-ending normalization", () => {
+  const existing = "第一段已确认。\n第二段已确认。";
+  const generated = "第一段已确认。\r\n第二段已确认。\r\n新增内容。";
+  assert.equal(hasContinuationPrefixMismatch(existing, generated), false);
+});
+
+test("continuation prefix comparison rejects a near-identical rewritten opening", () => {
+  const existing = "雨水顺着旧仓库的铁皮檐滴落下来。李一凡站在门外，没有立刻进去。";
+  const rewritten = `X${existing.slice(1)}\n\n新的续写内容。`;
+  assert.equal(hasContinuationPrefixMismatch(existing, rewritten), true);
 });
 
 test("continuation repair leaves an existing duplicate inside the protected author prefix untouched", () => {
@@ -173,4 +186,35 @@ test("author-style prompt explicitly protects the continuation prefix", () => {
   );
   assert.match(prompt, /CONTINUATION MODE/);
   assert.match(prompt, /exactly once/);
+});
+
+test("author-style append prompt includes the real prefix and can force suffix-only recovery", () => {
+  const prefix = "第十七章\n作者已经确认的正文，必须逐字保留。";
+  const prompt = buildAuthorStyleUserPrompt(
+    {
+      sourceCandidate: {
+        text: `${prefix}\n\n从这里开始的新内容。`,
+        id: "c2",
+      },
+      chapterNumber: 17,
+      continuationMode: "append",
+      currentChapterDraft: prefix,
+      continuationPrefixRecovery: true,
+      intent: {
+        authorEventSummaries: [],
+        authorMustInclude: [],
+        authorStateChanges: [],
+        causalRelations: [],
+        endingTarget: [],
+        relevantCharacters: [],
+        inviolableFacts: [],
+      },
+    },
+    { referenceIds: [], guidance: [] },
+  );
+  assert.match(prompt, /EXACT AUTHOR PREFIX/);
+  assert.match(prompt, new RegExp(prefix));
+  assert.match(prompt, /CONTINUATION PREFIX RECOVERY/);
+  assert.match(prompt, /ONLY the new suffix/);
+  assert.match(prompt, /从这里开始的新内容/);
 });

@@ -253,13 +253,14 @@ test("Phase 2D · extractMustVerifyFromIntent 从 inviolableFacts 提取 mustVer
   assert.ok(items.includes("叶尘封印未解"), "应包含 inviolableFacts 条目");
 });
 
-test("Phase 2D · extractMustVerifyFromIntent 从 authorMustInclude 提取", () => {
+test("Phase 2D · extractMustVerifyFromIntent 不再从 authorMustInclude 提取（2026-08-25 死锁修复）", () => {
   const intent = makeTestIntent({
-    authorMustInclude: ["确认封印解除条件", "追踪者首次出现"],
+    authorMustInclude: ["赵明远状态反常", "追踪者首次出现"],
   });
   const items = extractMustVerifyFromIntent(intent);
-  assert.ok(items.includes("确认封印解除条件"), "应包含 authorMustInclude 条目");
-  assert.ok(items.includes("追踪者首次出现"), "应包含 authorMustInclude 条目");
+  assert.ok(!items.includes("赵明远状态反常"), "章纲锚点是本章待写内容，不应进入 mustVerify");
+  assert.ok(!items.includes("追踪者首次出现"), "章纲锚点是本章待写内容，不应进入 mustVerify");
+  assert.ok(items.includes("林默伤势未愈"), "inviolableFacts 仍应提取");
 });
 
 test("Phase 2D · extractMustVerifyFromIntent 从 factAndCharacterKnowledgeForbiddenZones 提取", () => {
@@ -270,34 +271,37 @@ test("Phase 2D · extractMustVerifyFromIntent 从 factAndCharacterKnowledgeForbi
   assert.ok(items.includes("叶尘不知道林默的真实身份"), "应包含角色知识禁区");
 });
 
-test("Phase 2D · extractMustVerifyFromIntent 从 selectedPromisesToAdvance 提取", () => {
+test("Phase 2D · extractMustVerifyFromIntent 不再从 selectedPromisesToAdvance 提取（待写内容）", () => {
   const intent = makeTestIntent({
     selectedPromisesToAdvance: [
       { promiseId: "p1", description: "林默的承诺" },
     ],
   });
   const items = extractMustVerifyFromIntent(intent);
-  assert.ok(items.some((s) => s.includes("林默的承诺")), "应包含伏笔前缀 + 描述");
+  assert.ok(!items.some((s) => s.includes("林默的承诺")), "待推进伏笔是本章待写内容，不应进入 mustVerify");
 });
 
-test("Phase 2D · extractMustVerifyFromIntent 从 expectedIrreversibleChange 提取", () => {
+test("Phase 2D · extractMustVerifyFromIntent 不再从 expectedIrreversibleChange 提取（待写内容）", () => {
   const intent = makeTestIntent({
     expectedIrreversibleChange: ["林默觉醒传承"],
   });
   const items = extractMustVerifyFromIntent(intent);
-  assert.ok(items.some((s) => s.includes("林默觉醒传承")), "应包含不可逆变化前缀 + 描述");
+  assert.ok(!items.some((s) => s.includes("林默觉醒传承")), "预期不可逆变化是本章待写内容，不应进入 mustVerify");
 });
 
-test("Phase 2D · extractMustVerifyFromIntent 去重 + 最多 8 项", () => {
+test("Phase 2D · extractMustVerifyFromIntent 去重 + 最多 8 项（仅前文约束事实参与截断）", () => {
   const intent = makeTestIntent({
     authorMustInclude: Array.from({ length: 10 }, (_, i) => `项${i}`),
-    inviolableFacts: ["项0", "项1"], // 与 authorMustInclude 重复
+    inviolableFacts: Array.from({ length: 6 }, (_, i) => `事实${i}`),
+    factAndCharacterKnowledgeForbiddenZones: Array.from({ length: 6 }, (_, i) => `禁区${i}`),
   });
   const items = extractMustVerifyFromIntent(intent);
   assert.ok(items.length <= 8, `应限制在 8 项以内，实际: ${items.length}`);
   // 重复项应去重
   const uniqueSet = new Set(items);
   assert.equal(uniqueSet.size, items.length, "不应有重复项");
+  // 待写内容（authorMustInclude）不应混入截断结果
+  assert.ok(!items.some((s) => s.startsWith("项")), "authorMustInclude 待写内容不应进入 mustVerify");
 });
 
 // ── inferAllowedToolsFromIntent ──
@@ -449,7 +453,7 @@ test("Phase 2D · createEvidencePlan 传入 intent 时用结构化提取（非�
   });
   // mustVerify 应来自 intent 结构化字段，不是字符串启发式
   assert.ok(plan.mustVerify.includes("林默伤势未愈"), "应从 intent.inviolableFacts 提取");
-  assert.ok(plan.mustVerify.includes("确认追踪者出现"), "应从 intent.authorMustInclude 提取");
+  assert.ok(!plan.mustVerify.includes("确认追踪者出现"), "authorMustInclude 是待写内容，不应进入 mustVerify（2026-08-25 死锁修复）");
 });
 
 test("Phase 2D · createEvidencePlan 传入 intent 时收窄 allowedTools（缺口一）", () => {

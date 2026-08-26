@@ -121,9 +121,32 @@ export interface ModelGenerateOutput {
   seedSupported?: boolean;
   /** PHASE4-2-1-1 provenance：fallback 是否被关闭（DISABLE_FALLBACK=1 或 package_screening）。 */
   fallbackDisabled?: boolean;
+  /** Explicit, chapter-scoped Gemini channel recovery evidence. */
+  fallbackTrace?: {
+    authorized: true;
+    fromRoute: string;
+    attemptedRoutes: string[];
+    failures: string[];
+  };
 }
 
 export type ModelGenerateFn = (input: ModelGenerateInput) => Promise<ModelGenerateOutput>;
+
+/**
+ * Pre-authorized prose recovery order. Gemini recovery stays inside the same
+ * provider/model family and only changes the configured transport channel.
+ * Claude is an explicit writer choice and never participates in this chain.
+ */
+const WRITER_FALLBACK_ROUTES: Record<string, string[]> = {
+  v2_rawstage2_gemini31: ["v2_rawstage2_gemini31_solov"],
+  v2_rawstage2_gemini31_solov: ["v2_rawstage2_gemini31"],
+  v2_amplified_gemini31: ["v2_amplified_gemini31_solov"],
+  v2_amplified_gemini31_solov: ["v2_amplified_gemini31"],
+};
+
+export function authorizedWriterFallbackRoutes(route: string): string[] {
+  return [...(WRITER_FALLBACK_ROUTES[route] ?? [])];
+}
 
 const MAX_GENERATION_TOKENS = 32768;
 const DEFAULT_JUDGE_MAX_RETRIES = 1;
@@ -751,10 +774,6 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
     const fallbackMod: any = await import("../../api/fallback-manager.js");
     const candidateTimeoutMs = input.timeoutMs ?? getModelRequestTimeoutMs();
     const judgeMaxRetries = resolveJudgeMaxRetries(input.route);
-    const manager = fallbackMod.createAPIFallbackManager({
-      totalTimeoutMs: candidateTimeoutMs,
-      ...(judgeMaxRetries === undefined ? {} : { maxRetries: judgeMaxRetries }),
-    });
     const messages = localizeLlmMessages([
       { role: "system", content: input.systemPrompt },
       { role: "user", content: input.userPrompt },
@@ -766,17 +785,41 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
         ? resolveGenerationMaxTokens()
         : undefined
     );
-    const result = await manager.callWithFallback(
-      input.route,
-      messages,
-      {
-        ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
-        ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
-        ...(input.seed === undefined ? {} : { seed: input.seed }),
-        timeoutMs: candidateTimeoutMs,
-        ...(STREAMING_JUDGE_ROUTES.has(input.route) ? { stream: true } : {}),
-      },
-    );
+    const fallbackDisabledByEnv = process.env.PINOVEL_DISABLE_FALLBACK === "1"
+      || process.env.PINOVEL_BENCHMARK_COST_PROFILE === "package_screening";
+    const attemptedRoutes = fallbackDisabledByEnv
+      ? [input.route]
+      : [input.route, ...authorizedWriterFallbackRoutes(input.route)];
+    const failures: string[] = [];
+    let result: any;
+    let usedRoute = input.route;
+    for (const route of attemptedRoutes) {
+      const manager = fallbackMod.createAPIFallbackManager({
+        totalTimeoutMs: candidateTimeoutMs,
+        ...(judgeMaxRetries === undefined ? {} : { maxRetries: judgeMaxRetries }),
+      });
+      try {
+        result = await manager.callWithFallback(
+          route,
+          messages,
+          {
+            ...(maxTokens === undefined ? {} : { max_tokens: maxTokens }),
+            ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
+            ...(input.seed === undefined ? {} : { seed: input.seed }),
+            timeoutMs: candidateTimeoutMs,
+            ...(STREAMING_JUDGE_ROUTES.has(route) ? { stream: true } : {}),
+          },
+        );
+        usedRoute = route;
+        break;
+      } catch (error: unknown) {
+        failures.push(error instanceof Error ? error.message : String(error));
+        if (route === attemptedRoutes[attemptedRoutes.length - 1]) throw error;
+      }
+    }
+    if (!result) {
+      throw new Error(`No model result for ${input.route}`);
+    }
     const text = extractTextFromFallbackResult(result);
     const finishReason = extractFinishReasonFromFallbackResult(result);
     // P0-2：从 provider 响应抽取真实 token 用量，替代 orchestrator 硬编码 "unknown"
@@ -802,6 +845,16 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
       seedSupported: input.seed !== undefined && supportsSeedOnProvider(result.usedProvider),
       fallbackDisabled,
       requestedRoute: input.route,
+      ...(usedRoute !== input.route
+        ? {
+            fallbackTrace: {
+              authorized: true as const,
+              fromRoute: input.route,
+              attemptedRoutes,
+              failures,
+            },
+          }
+        : {}),
     };
   };
 }

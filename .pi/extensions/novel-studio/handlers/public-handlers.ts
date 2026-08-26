@@ -63,6 +63,8 @@ export async function handleGenerateChapter(input: {
   chapterNumber: number;
   continuationMode?: "replace" | "append";
   currentChapterDraft?: string;
+  /** Final whole-chapter target for this request. */
+  targetWordCount?: { min: number; max: number };
   outline?: string;
   previousChapterSummary?: string;
   styleProfile?: string;
@@ -199,6 +201,7 @@ export async function handleGenerateChapter(input: {
       projectRoot: _unifiedProjectRoot,
       continuationMode: input.continuationMode,
       currentChapterDraft: input.currentChapterDraft,
+      targetWordCount: input.targetWordCount,
       writerModel,
       // EXPERIMENTAL-FIELDS-REJECT-1：实验字段已在入口 guard 拒绝，此处不再透传。
       // 旧 raw/judge 分支与 modelTestRoute / fullPipelinePreview / mock 不得进入生产提交。

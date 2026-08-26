@@ -9,6 +9,7 @@ import {
   type AssistantAction,
   type AssistantRequest,
   type ContinuationMode,
+  type TargetWordRange,
 } from './types';
 import {
   FAILURE_CODES,
@@ -28,6 +29,7 @@ export function parseAssistantRequest(input: {
   chapterNumber?: unknown;
   confirmGeneration?: unknown;
   continuationMode?: unknown;
+  targetWordCount?: unknown;
   stewardAction?: unknown;
   proposalId?: unknown;
   sourceVersion?: unknown;
@@ -73,6 +75,9 @@ export function parseAssistantRequest(input: {
       userActionRequired: ['continuationMode 只能是 append 或 replace'],
     }));
   }
+  const targetWordCount = input.targetWordCount === undefined
+    ? inferTargetWordCount(content)
+    : parseTargetWordRange(input.targetWordCount);
   if (
     (input.action === 'plan_chapter' || input.action === 'generate_chapter') &&
     chapterNumber === undefined
@@ -142,12 +147,62 @@ export function parseAssistantRequest(input: {
     chapterNumber,
     confirmGeneration,
     continuationMode,
+    targetWordCount,
     stewardAction: stewardAction as AssistantRequest['stewardAction'],
     proposalId,
     sourceVersion,
     confirmedFields,
     proposalEdits,
   };
+}
+
+/**
+ * Parse a final whole-chapter target from natural language. A unit is
+ * mandatory so chapter numbers and dates cannot be mistaken for word counts.
+ */
+export function inferTargetWordCount(content: string): TargetWordRange | undefined {
+  const match = content.match(
+    /([1-9][0-9]{2,5})\s*(?:[-~～—至到]\s*([1-9][0-9]{2,5})\s*)?(?:个)?(?:字|字符|汉字)/u,
+  );
+  if (!match) return undefined;
+  const first = Number.parseInt(match[1], 10);
+  const second = match[2] ? Number.parseInt(match[2], 10) : undefined;
+  if (second !== undefined) {
+    return parseTargetWordRange({
+      min: Math.min(first, second),
+      max: Math.max(first, second),
+    });
+  }
+  return parseTargetWordRange({
+    min: first,
+    max: Math.ceil((first * 11) / 10),
+  });
+}
+
+function parseTargetWordRange(value: unknown): TargetWordRange {
+  const row = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as { min?: unknown; max?: unknown }
+    : {};
+  const min = typeof row.min === 'number' ? row.min : Number.NaN;
+  const max = typeof row.max === 'number' ? row.max : Number.NaN;
+  if (
+    !Number.isSafeInteger(min)
+    || !Number.isSafeInteger(max)
+    || min < 100
+    || max > 100_000
+    || min > max
+  ) {
+    throw new FailureHttpException(makeFailure({
+      stage: 'assistant.action',
+      gate: 'request_schema',
+      code: FAILURE_CODES.illegalAction,
+      severity: 'preflight',
+      reason: '目标字数必须是 100 至 100000 之间且最小值不大于最大值的整数范围',
+      recoverable: false,
+      userActionRequired: ['检查本章目标字数'],
+    }));
+  }
+  return { min, max };
 }
 
 export function assertArtifactAllowed(

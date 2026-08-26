@@ -3,6 +3,7 @@ import {
   envelopeFromUnknown,
   FAILURE_CODES,
   makeFailure,
+  sanitizeEvidence,
   sanitizeUserFacingText,
 } from './failure-envelope';
 
@@ -41,5 +42,60 @@ describe('FailureEnvelope', () => {
     });
     expect(envelope.code).toBe(FAILURE_CODES.sseInterrupted);
     expect(envelope.reason).not.toMatch(/ECONNREFUSED|postgres/i);
+  });
+
+  it('strips model names, provider and token value forms from user-facing text', () => {
+    expect(sanitizeUserFacingText('Gemini provider timeout')).toBe(
+      '操作失败，请稍后重试或按提示补全资料',
+    );
+    expect(sanitizeUserFacingText('claude 上游连接失败')).toBe(
+      '操作失败，请稍后重试或按提示补全资料',
+    );
+    expect(sanitizeUserFacingText('GLM 请求被拒')).toBe('操作失败，请稍后重试或按提示补全资料');
+    expect(sanitizeUserFacingText('solov endpoint unavailable')).toBe(
+      '操作失败，请稍后重试或按提示补全资料',
+    );
+    expect(sanitizeUserFacingText('deepseek qwen doubao ernie 均不可用')).toBe(
+      '操作失败，请稍后重试或按提示补全资料',
+    );
+    expect(sanitizeUserFacingText('token=abc123')).toBe('操作失败，请稍后重试或按提示补全资料');
+    expect(sanitizeUserFacingText('Authorization: Bearer sk-abc123def')).toBe(
+      '操作失败，请稍后重试或按提示补全资料',
+    );
+    expect(sanitizeUserFacingText('provider secret missing')).toBe(
+      '操作失败，请稍后重试或按提示补全资料',
+    );
+  });
+
+  it('keeps normal business text, including the word token without a value form', () => {
+    expect(sanitizeUserFacingText('token 预算超限，请缩减上下文')).toBe(
+      'token 预算超限，请缩减上下文',
+    );
+    expect(sanitizeUserFacingText('字'.repeat(500))).toHaveLength(400);
+    expect(sanitizeUserFacingText('   ')).toBe('操作失败，请稍后重试');
+  });
+
+  it('sanitizes evidence containing sensitive internals and passes through normal evidence', () => {
+    expect(sanitizeEvidence({ upstream: 'gemini timeout' })).toEqual({ omitted: 'sensitive' });
+    expect(sanitizeEvidence({ detail: 'Authorization Bearer x' })).toEqual({
+      omitted: 'sensitive',
+    });
+    expect(sanitizeEvidence({ provider: 'glm' })).toEqual({ omitted: 'sensitive' });
+    expect(sanitizeEvidence({ chaptersTouched: [3] })).toEqual({ chaptersTouched: [3] });
+    expect(sanitizeEvidence(undefined)).toBeUndefined();
+  });
+
+  it('makeFailure sanitizes reason and evidence end to end', () => {
+    const envelope = makeFailure({
+      stage: 'assistant.planner',
+      gate: 'planner_schema',
+      code: FAILURE_CODES.plannerFailed,
+      severity: 'recoverable',
+      reason: 'glm provider timeout, token=sk-xyz',
+      evidence: { raw: 'stack at /srv/app.ts' },
+      recoverable: true,
+    });
+    expect(envelope.reason).toBe('操作失败，请稍后重试或按提示补全资料');
+    expect(envelope.evidence).toEqual({ omitted: 'sensitive' });
   });
 });

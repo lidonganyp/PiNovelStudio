@@ -24,7 +24,9 @@ function loadRouting() {
 
 const PRODUCTION_WRITER_ROUTES = new Set([
   "v2_rawstage2_gemini31",
+  "v2_rawstage2_gemini31_solov",
   "v2_amplified_gemini31",
+  "v2_amplified_gemini31_solov",
   "v2_rawstage2",
   "v2_amplified",
   "narrator_primary",

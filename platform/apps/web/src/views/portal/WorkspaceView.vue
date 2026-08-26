@@ -4,7 +4,7 @@
  * 左=章节目录树；中=内容区（章节/种子/角色/文档/版本 tabs）；右=助手对话 + 生成任务面板。
  * 生成流程：SeedEditor 保存种子 → 提交生成 → GenerationPanel 轮询 → 成功后刷新章节。
  */
-import { computed, onMounted, provide, ref } from 'vue';
+import { computed, onMounted, onUnmounted, provide, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
@@ -25,7 +25,7 @@ import CharacterPanel from '../../components/workspace/CharacterPanel.vue';
 import OutlinePanel from '../../components/workspace/OutlinePanel.vue';
 import DocumentPanel from '../../components/workspace/DocumentPanel.vue';
 import VersionPanel from '../../components/workspace/VersionPanel.vue';
-import AssistantPanel from '../../components/workspace/AssistantPanel.vue';
+import AssistantWorkspace from '../../components/workspace/chat/AssistantWorkspace.vue';
 import GenerationPanel from '../../components/workspace/GenerationPanel.vue';
 import FeedbackPanel from '../../components/workspace/FeedbackPanel.vue';
 
@@ -45,6 +45,7 @@ const trackJob = ref<((jobId: string) => void) | null>(null);
 const materialEpoch = ref(0);
 provide('trackJob', (jobId: string) => trackJob.value?.(jobId));
 provide('materialEpoch', materialEpoch);
+provide('activeChapterNumber', computed(() => activeChapter.value?.chapterNumber ?? null));
 provide(
   'reloadMaterials',
   async (opts?: { tab?: string; chapterNumber?: number }): Promise<void> => {
@@ -116,6 +117,47 @@ onMounted(async () => {
   void auth.fetchMe();
   project.value = await getProject(projectId.value);
   await loadChapters();
+});
+
+/** 阶段五：右栏拖拽调宽（移动端由 CSS 隐藏拖拽把手，抽屉模式不受影响）。 */
+const RIGHT_PANE_WIDTH_KEY = 'pi-novel.right-pane-width';
+const DEFAULT_RIGHT_WIDTH = 360;
+const rightWidth = ref(DEFAULT_RIGHT_WIDTH);
+const resizing = ref(false);
+try {
+  const saved = Number(window.localStorage.getItem(RIGHT_PANE_WIDTH_KEY));
+  if (Number.isFinite(saved) && saved >= 320 && saved <= 960) rightWidth.value = saved;
+} catch { /* localStorage 不可用时使用默认宽度 */ }
+
+function startResize(event: MouseEvent): void {
+  resizing.value = true;
+  event.preventDefault();
+}
+
+function onResizeMove(event: MouseEvent): void {
+  if (!resizing.value) return;
+  const max = Math.max(320, Math.min(960, window.innerWidth - 620));
+  rightWidth.value = Math.max(320, Math.min(max, window.innerWidth - event.clientX));
+}
+
+function stopResize(): void {
+  if (!resizing.value) return;
+  resizing.value = false;
+  try { window.localStorage.setItem(RIGHT_PANE_WIDTH_KEY, String(rightWidth.value)); } catch { /* 忽略持久化失败 */ }
+}
+
+function resetRightWidth(): void {
+  rightWidth.value = DEFAULT_RIGHT_WIDTH;
+  try { window.localStorage.setItem(RIGHT_PANE_WIDTH_KEY, String(DEFAULT_RIGHT_WIDTH)); } catch { /* 忽略持久化失败 */ }
+}
+
+onMounted(() => {
+  window.addEventListener('mousemove', onResizeMove);
+  window.addEventListener('mouseup', stopResize);
+});
+onUnmounted(() => {
+  window.removeEventListener('mousemove', onResizeMove);
+  window.removeEventListener('mouseup', stopResize);
 });
 
 defineExpose({ loadChapters, patchChapter });
@@ -200,14 +242,22 @@ defineExpose({ loadChapters, patchChapter });
         </el-tabs>
       </main>
 
-      <aside class="right-pane">
+      <div
+        class="right-resizer"
+        :class="{ active: resizing }"
+        title="拖拽调整助手栏宽度，双击恢复默认"
+        aria-label="拖拽调整助手栏宽度"
+        @mousedown="startResize"
+        @dblclick="resetRightWidth"
+      />
+      <aside class="right-pane" :style="{ width: rightWidth + 'px' }">
         <GenerationPanel
           :project-id="projectId"
           :chapter="activeChapter"
           @register-track="(fn) => (trackJob = fn)"
           @succeeded="loadChapters"
         />
-        <AssistantPanel :project-id="projectId" />
+        <AssistantWorkspace :project-id="projectId" :project-title="project.title" />
       </aside>
     </div>
   </div>
@@ -277,13 +327,27 @@ defineExpose({ loadChapters, patchChapter });
   flex-direction: column;
   padding: 0 16px;
 }
+.right-resizer {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.2s;
+}
+.right-resizer:hover,
+.right-resizer.active {
+  background: var(--el-color-primary-light-7);
+}
 .right-pane {
-  width: 360px;
   flex-shrink: 0;
   border-left: 1px solid var(--el-border-color-lighter);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+@media (max-width: 720px) {
+  .right-resizer { display: none; }
+  .right-pane { width: auto !important; }
 }
 .content-tabs {
   display: flex;

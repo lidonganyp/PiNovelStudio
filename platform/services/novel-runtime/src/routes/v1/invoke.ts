@@ -152,6 +152,9 @@ export function createInvokeRouter(
   router.post("/invoke", async (req: Request, res: Response, next: NextFunction) => {
     // 临时 workspace 物化与清理状态
     let materializedJobId: string | null = null;
+    // 失败归档路径：非空表示临时 workspace 已 rename 到持久归档目录
+    //（traces/ 等失败证据保留），finally 不得再 cleanup。
+    let archivedWorkspacePath: string | undefined;
 
     try {
       const parseResult = INVOKE_BODY_SCHEMA.safeParse(req.body);
@@ -338,10 +341,13 @@ export function createInvokeRouter(
                 );
               }
             }
+            // 失败证据归档：narrative state 损坏属于交付失败，保留 traces
+            archivedWorkspacePath = deps.workspaceManager.archiveWorkspace?.(jobCtx.jobId);
             res.status(422).json({
               code: "NARRATIVE_STATE_INVALID",
               message: error instanceof Error ? error.message : "narrative state snapshot is invalid",
               status: "error",
+              ...(archivedWorkspacePath ? { traceArchivePath: archivedWorkspacePath } : {}),
               jobId: jobCtx.jobId,
               requestId: res.locals.requestId,
             });
@@ -375,11 +381,15 @@ export function createInvokeRouter(
           resultForCaller && typeof resultForCaller === "object" && "status" in resultForCaller
             ? String((resultForCaller as { status?: unknown }).status ?? "error")
             : "error";
+        // 失败证据归档：章节不可交付时保留 traces/（verification 证据、
+        // recoveryAttempts、trajectory 等），供 platform-api 与用户诊断。
+        archivedWorkspacePath = deps.workspaceManager.archiveWorkspace?.(jobCtx.jobId);
         res.status(422).json({
           code: "CHAPTER_NOT_DELIVERABLE",
           message: describeUndeliverableChapter(resultForCaller, metering.modelCallCount),
           status: resultStatus === "blocked" ? "blocked" : "error",
           failureEnvelope: extractFailureEnvelope(resultForCaller),
+          ...(archivedWorkspacePath ? { traceArchivePath: archivedWorkspacePath } : {}),
           jobId: jobCtx.jobId,
           requestId: res.locals.requestId,
         });
@@ -417,6 +427,14 @@ export function createInvokeRouter(
     } catch (err) {
       // 任务收尾：失败（未结算部分退回余额，hold 转 released）
       const failedJobId: string | undefined = res.locals.taskToken?.payload?.jobId;
+      // 失败证据归档：异常路径同样保留 traces/，并把归档路径附加到 err
+      // 上，供下游错误中间件透传给 platform-api。
+      if (failedJobId) {
+        archivedWorkspacePath = deps.workspaceManager.archiveWorkspace?.(failedJobId);
+        if (archivedWorkspacePath && err instanceof Error) {
+          (err as Error & { traceArchivePath?: string }).traceArchivePath = archivedWorkspacePath;
+        }
+      }
       if (failedJobId) {
         try {
           const fin = await deps.billingClient.finalize(failedJobId, "failure");
@@ -436,12 +454,15 @@ export function createInvokeRouter(
       }
       next(err);
     } finally {
-      // 无论如何都清理临时 workspace
+      // 清理临时 workspace
       // 成功：result 已含章节正文，platform-api 据此 SaveChapter；删除 temp 目录
-      // 失败：直接删除 temp 目录，不污染正式存储
+      // 失败：已归档（traces 保留）时跳过删除；归档失败才回退删除
       if (materializedJobId) {
         try {
-          deps.workspaceManager.cleanupWorkspace(materializedJobId);
+          // 已归档（traces 保留在 archiveRoot）时跳过 cleanup；未归档时才删除
+          if (!archivedWorkspacePath) {
+            deps.workspaceManager.cleanupWorkspace(materializedJobId);
+          }
         } catch {
           // cleanup 失败不阻断响应——workspace-manager 内部已记录日志
         }

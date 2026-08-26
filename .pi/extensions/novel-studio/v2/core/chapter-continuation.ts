@@ -3,7 +3,9 @@
 export type ContinuationMode = "replace" | "append";
 
 function normalizeContinuationText(text: string): string {
-  return text.replace(/^\uFEFF/, "").trim();
+  // Providers may normalize line endings differently from the persisted
+  // chapter. Compare semantic text, not CRLF vs LF serialization noise.
+  return text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim();
 }
 
 /**
@@ -18,7 +20,9 @@ export function hasContinuationPrefixMismatch(existing: string, generated: strin
   const result = normalizeContinuationText(generated);
   if (!prefix || !result) return false;
   if (result === prefix || result.startsWith(`${prefix}\n`)) return false;
-  if (result.indexOf(prefix) >= 0 && result.indexOf(prefix) < 80) return false;
+  // A complete prefix may only appear at byte zero. A leading label or an
+  // echoed prefix must be retried instead of being silently sliced/merged.
+  if (result.indexOf(prefix) > 0) return true;
 
   const prefixFirstLine = prefix.split(/\r?\n/, 1)[0] ?? "";
   const resultFirstLine = result.split(/\r?\n/, 1)[0] ?? "";
@@ -27,7 +31,38 @@ export function hasContinuationPrefixMismatch(existing: string, generated: strin
   const limit = Math.min(prefixFirstLine.length, resultFirstLine.length);
   while (common < limit && prefixFirstLine[common] === resultFirstLine[common]) common += 1;
   const required = Math.max(8, Math.floor(prefixFirstLine.length * 0.55));
-  return common >= required;
+  if (common >= required) return true;
+
+  // Common-prefix checks miss a one-character mutation at the opening. Use a
+  // bounded edit-distance comparison only when both lines are chapter-like
+  // in length; unrelated suffix prose should remain valid.
+  const comparableLength = Math.max(prefixFirstLine.length, resultFirstLine.length);
+  if (resultFirstLine.length < Math.floor(prefixFirstLine.length * 0.8)) return false;
+  const distanceLimit = Math.floor(comparableLength * 0.2);
+  const distance = boundedEditDistance(prefixFirstLine, resultFirstLine, distanceLimit);
+  return distance <= distanceLimit;
+}
+
+function boundedEditDistance(left: string, right: string, limit: number): number {
+  if (Math.abs(left.length - right.length) > limit) return limit + 1;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    let rowMinimum = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      const value = Math.min(
+        (previous[rightIndex] ?? limit + 1) + 1,
+        (current[rightIndex - 1] ?? limit + 1) + 1,
+        (previous[rightIndex - 1] ?? limit + 1) + substitutionCost,
+      );
+      current[rightIndex] = value;
+      rowMinimum = Math.min(rowMinimum, value);
+    }
+    if (rowMinimum > limit) return limit + 1;
+    previous = current;
+  }
+  return previous[right.length] ?? limit + 1;
 }
 
 /**

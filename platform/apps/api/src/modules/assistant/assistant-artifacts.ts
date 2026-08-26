@@ -8,8 +8,7 @@ import type { JobsService } from '../jobs/jobs.service';
 import { assertArtifactAllowed } from '../context/assistant-contract';
 import { FAILURE_CODES, FailureHttpException, makeFailure } from '../context/failure-envelope';
 import { isUsableStoryOutline } from '../jobs/book-context';
-import type { AssistantAction } from '../context/types';
-import type { ContinuationMode } from '../context/types';
+import type { AssistantAction, ContinuationMode, TargetWordRange } from '../context/types';
 import {
   looksLikeOutline,
   parseOutlineChapters,
@@ -131,6 +130,7 @@ export async function applyAssistantArtifacts(input: {
   chapterNumber?: number;
   confirmGeneration?: boolean;
   continuationMode?: ContinuationMode;
+  targetWordCount?: TargetWordRange;
   envelope: PlannerEnvelope;
 }): Promise<AssistantArtifactResult> {
   let content = input.envelope.reply;
@@ -272,7 +272,10 @@ export async function applyAssistantArtifacts(input: {
         input.userId,
         input.projectId,
         chapter.id,
-        { continuationMode: input.continuationMode },
+        {
+          continuationMode: input.continuationMode,
+          targetWordCount: input.targetWordCount,
+        },
       )) as { jobId?: unknown };
       if (typeof job.jobId === 'string' && job.jobId) {
         metadata.is_chapter = 'pending';

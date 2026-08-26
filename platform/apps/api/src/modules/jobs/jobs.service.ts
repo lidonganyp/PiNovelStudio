@@ -57,6 +57,7 @@ import {
   mergeChapterContinuation,
   type ContinuationMode,
 } from './chapter-continuation';
+import type { TargetWordRange } from '../context/types';
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -269,7 +270,10 @@ export class JobsService implements OnModuleInit {
     userId: number,
     projectId: number,
     chapterId: number,
-    options: { continuationMode?: ContinuationMode } = {},
+    options: {
+      continuationMode?: ContinuationMode;
+      targetWordCount?: TargetWordRange;
+    } = {},
   ): Promise<unknown> {
     await requireOwnedProject(this.prisma, userId, projectId);
     const chapter = await this.prisma.novelChapter.findFirst({
@@ -295,6 +299,12 @@ export class JobsService implements OnModuleInit {
       throw new ConflictException('已有进行中的生成任务');
     }
 
+    // 续写模式解析：显式指定 > 聊天推断结果 > 按章节状态默认。
+    // 已有正文的章节默认 append（扩写），避免无信号的生成请求把既有正文
+    // 当成全新章节重写（生成模型看不到已有正文，产出与既有内容冲突）。
+    const continuationMode: ContinuationMode = options.continuationMode
+      ?? (chapter.content?.trim() ? 'append' : 'replace');
+
     // Build and bound the material snapshot before a job or billing hold exists.
     // The runtime has an HTTP body ceiling, so letting an oversized project
     // proceed would create a predictably failed, needlessly reserved job.
@@ -306,7 +316,8 @@ export class JobsService implements OnModuleInit {
           projectId,
           chapterId,
           chapterNumber: chapter.chapterNumber,
-          continuationMode: options.continuationMode,
+          continuationMode,
+          targetWordCount: options.targetWordCount,
         });
         assertRuntimeWorkspacePayloadFits({
           chapterNumber: chapter.chapterNumber,
@@ -388,8 +399,9 @@ export class JobsService implements OnModuleInit {
         chapterVersion: chapter.version,
         seedVersion: seed.version,
         intent: seed.intent,
-        continuationMode: options.continuationMode,
+        continuationMode,
         continuationDraft: chapter.content,
+        targetWordCount: options.targetWordCount,
       });
     } else {
       void this.runHttpGeneration({
@@ -402,8 +414,9 @@ export class JobsService implements OnModuleInit {
         chapterVersion: chapter.version,
         seedVersion: seed.version,
         runtimeWorkspaceInput,
-        continuationMode: options.continuationMode,
+        continuationMode,
         continuationDraft: chapter.content,
+        targetWordCount: options.targetWordCount,
       });
     }
 
@@ -589,6 +602,7 @@ export class JobsService implements OnModuleInit {
     intent: string;
     continuationMode?: ContinuationMode;
     continuationDraft: string;
+    targetWordCount?: TargetWordRange;
   }): Promise<void> {
     try {
       await this.billing.updateJobProgress({
@@ -626,6 +640,7 @@ export class JobsService implements OnModuleInit {
     runtimeWorkspaceInput?: Record<string, unknown>;
     continuationMode?: ContinuationMode;
     continuationDraft: string;
+    targetWordCount?: TargetWordRange;
   }): Promise<void> {
     try {
       const token = await signTaskToken({
@@ -640,8 +655,17 @@ export class JobsService implements OnModuleInit {
         chapterId: String(input.chapterId),
         workspaceId: `p${input.projectId}`,
         ...runtimeWorkspaceInput,
-        continuationMode: input.continuationMode,
-        currentChapterDraft: input.continuationMode === 'append' ? input.continuationDraft : undefined,
+        // 已解析的续写模式（submitChapterGeneration 保证非空）；仅在缺失时
+        // 保留 buildRuntimeWorkspaceInput 内嵌的值，避免 undefined 覆盖。
+        ...(input.continuationMode
+          ? {
+              continuationMode: input.continuationMode,
+              currentChapterDraft: input.continuationMode === 'append'
+                ? input.continuationDraft
+                : undefined,
+            }
+          : {}),
+        ...(input.targetWordCount ? { targetWordCount: input.targetWordCount } : {}),
       });
       const result = invoked.result;
       const modelCallCount = invoked.metering?.modelCallCount;
@@ -773,6 +797,7 @@ export class JobsService implements OnModuleInit {
     chapterId: number;
     chapterNumber: number;
     continuationMode?: ContinuationMode;
+    targetWordCount?: TargetWordRange;
   }): Promise<Record<string, unknown>> {
     const [project, characters, documents, previousChapter, currentChapter] = await Promise.all([
       this.prisma.novelProject.findFirst({
@@ -992,6 +1017,11 @@ export class JobsService implements OnModuleInit {
       workspaceDocuments.push({ type: 'style_profile', content: styleProfile });
     }
 
+    // 兜底口径与 submitChapterGeneration 一致：未显式指定时，已有正文的章节
+    // 默认 append（扩写）而不是把既有正文当成全新章节重写。
+    const hasExistingDraft = Boolean(currentChapter?.content?.trim());
+    const continuationMode: ContinuationMode = input.continuationMode
+      ?? (hasExistingDraft ? 'append' : 'replace');
     const runtimeInput = {
       projectConfig: {
         genre: resolveProjectGenre(project.genre),
@@ -1006,10 +1036,11 @@ export class JobsService implements OnModuleInit {
       workspaceDocuments,
       previousChapterContinuation: compiled.previousChapterContinuation,
       previousChapterNumber: previousChapter?.chapterNumber,
-      continuationMode: input.continuationMode ?? 'replace',
-      currentChapterDraft: input.continuationMode === 'append'
+      continuationMode,
+      currentChapterDraft: continuationMode === 'append'
         ? currentChapter?.content ?? ''
         : undefined,
+      ...(input.targetWordCount ? { targetWordCount: input.targetWordCount } : {}),
       contextManifest: compiled.manifest,
     };
     assertNoFullPreviousChapter(runtimeInput, previousChapter?.content);

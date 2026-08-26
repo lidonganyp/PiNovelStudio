@@ -33,6 +33,7 @@ import type {
   V2Output,
 } from "./types.js";
 import { createContextCompiler } from "./context-compiler.js";
+import { resolveTargetWordRange } from "./generation-recovery.js";
 import { buildNarrativeEvidenceSnapshot } from "./narrative-evidence-snapshot.js";
 import { createChapterIntentBuilder } from "./chapter-intent-builder.js";
 import type { ChapterIntent, ChapterIntentInput } from "./chapter-intent-builder.js";
@@ -472,6 +473,18 @@ export function loadWorldKeyEntities(workspaceId: string, projectRoot: string): 
   } catch {
     return [];
   }
+}
+
+/** Resolve the current request before falling back to the workspace default. */
+export function resolveTargetWordCount(
+  requested: { min: number; max: number } | undefined,
+  workspaceId: string,
+  projectRoot: string,
+): { min: number; max: number } | undefined {
+  return resolveTargetWordRange(
+    requested,
+    loadTargetWordCount(workspaceId, projectRoot),
+  );
 }
 
 const EXPLICIT_ENTITY_SECTION = /(?:世界观|世界设定|地点|组织|势力|道具|装备|能力|货币|职业|人物关系|境界体系)/;
@@ -1806,6 +1819,7 @@ export async function runUnifiedPipeline(
       chapterNumber,
       continuationMode: input.continuationMode,
       currentChapterDraft: input.currentChapterDraft,
+      targetWordCount: input.targetWordCount,
       projectRoot,
       intent: evalIntent,
       context: evalContext,
@@ -2389,7 +2403,11 @@ export async function runUnifiedPipeline(
   // 使 raw 用 "叶尘" 与 editorial 用 "小尘"（别名）时 subject 比对仍命中，避免同义改写误阻断。
   const aliasToCanonical = buildAliasToCanonical(seed.characters ?? []);
   // Phase 2B：加载字数软目标，转发给 Agentic GenerationPacket。
-  const targetWordCount = loadTargetWordCount(workspaceId, projectRoot);
+  const targetWordCount = resolveTargetWordCount(
+    input.targetWordCount,
+    workspaceId,
+    projectRoot,
+  );
   const acceptedChapterReferences = selectAcceptedChapterReferences({
     workspaceId,
     projectRoot,

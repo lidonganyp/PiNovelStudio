@@ -311,6 +311,24 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           workspaceId: { type: "string", description: "小说 workspace ID" },
           chapterId: { type: "string", description: "章节 ID（如 12）" },
           chapterNumber: { type: "number", description: "章节编号（用于条件阶段触发判断）" },
+          continuationMode: {
+            type: "string",
+            enum: ["replace", "append"],
+            description: "已有正文处理方式；append 必须原样保留当前正文并从末尾续写。",
+          },
+          currentChapterDraft: {
+            type: "string",
+            description: "append 模式下的当前章节正文，由受信平台运行时提供。",
+          },
+          targetWordCount: {
+            type: "object",
+            properties: {
+              min: { type: "number", minimum: 100 },
+              max: { type: "number", minimum: 100 },
+            },
+            required: ["min", "max"],
+            description: "本次任务的最终整章目标字数范围；优先于 workspace 默认值。",
+          },
           outline: { type: "string", description: "章节大纲（可选，workspace 中有则自动加载）" },
           previousChapterSummary: { type: "string", description: "前章摘要（可选）" },
           styleProfile: { type: "string", description: "风格配置（默认从 workspace 加载）" },
@@ -389,6 +407,9 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         workspaceId: string;
         chapterId: string;
         chapterNumber: number;
+        continuationMode?: "replace" | "append";
+        currentChapterDraft?: string;
+        targetWordCount?: { min: number; max: number };
         outline?: string;
         previousChapterSummary?: string;
         styleProfile?: string;

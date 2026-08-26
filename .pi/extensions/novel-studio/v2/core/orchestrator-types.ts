@@ -95,6 +95,13 @@ export interface ModelCallEntry {
   expectedModel?: string;
   actualProvider?: string;
   actualModel?: string;
+  /** Explicitly authorized writer-model recovery evidence. */
+  fallbackTrace?: {
+    authorized: true;
+    fromRoute: string;
+    attemptedRoutes: string[];
+    failures: string[];
+  };
   failurePhase?: "model.generate" | "model.judge";
   errorClass?: string;
   /** MODEL-PROMPT-ADAPTER-1：模型专用提示词 profile，供按模型版本隔离评测。 */

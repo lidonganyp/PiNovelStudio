@@ -16,7 +16,7 @@ export interface AssistantMessage {
   role: 'user' | 'assistant' | string;
   content: string;
   createdAt: string;
-  metadata?: { steward?: StewardView };
+  metadata?: { steward?: StewardView; artifacts?: AssistantArtifacts };
 }
 
 export interface AssistantArtifacts {
@@ -47,6 +47,11 @@ export interface MaterialProposal {
   requiresConfirmation: boolean;
 }
 
+export interface TargetWordRange {
+  min: number;
+  max: number;
+}
+
 export function materialProposalLabel(field: string): string {
   const labels: Record<string, string> = {
     genre: '作品类型',
@@ -75,6 +80,7 @@ export interface StewardView {
   confirmedAt?: string;
   confirmedFields?: string[];
   continuationMode?: 'replace' | 'append';
+  targetWordCount?: TargetWordRange;
 }
 
 export interface AssistantRequest {
@@ -84,11 +90,88 @@ export interface AssistantRequest {
   chapterNumber?: number;
   confirmGeneration?: boolean;
   continuationMode?: 'replace' | 'append';
+  /** 本次章节正文的软目标；运行时可在保证内容完整的前提下合理浮动。 */
+  targetWordCount?: TargetWordRange;
   stewardAction?: 'apply_and_generate' | 'save_draft' | 'cancel' | 'revise';
   proposalId?: string;
   sourceVersion?: string;
   confirmedFields?: string[];
   proposalEdits?: Array<{ field: string; value: string }>;
+}
+
+const CHAPTER_NUMBER_SOURCE = '[0-9一二两三四五六七八九十百千零〇]+';
+const CHAPTER_WRITE_ACTION_SOURCE = '生成|续写|继续写|接着写|完善|补写|补满|扩写|重写|改写|重新写|推倒重写|写完|完成';
+const CHAPTER_COMMAND_RE = new RegExp(
+  `(?:${CHAPTER_WRITE_ACTION_SOURCE})[^\\n]{0,24}第\\s*(${CHAPTER_NUMBER_SOURCE})\\s*章|第\\s*(${CHAPTER_NUMBER_SOURCE})\\s*章[^\\n]{0,24}(?:${CHAPTER_WRITE_ACTION_SOURCE})`,
+  'u',
+);
+const FAILURE_QUERY_RE = /(?:失败|报错|错误|为什么|原因|怎么回事|状态|进度|是否成功)/u;
+const APPEND_INTENT_RE = /(?:接着|续写|继续写|接着写|补写|补满|补到|完善|扩写|保留已有|不要重写|不要覆盖)/u;
+const REPLACE_INTENT_RE = /(?:推倒重写|重新生成|重新写|从头写|覆盖重写|全部重写|重写|改写)/u;
+
+/**
+ * Convert an unambiguous natural-language chapter command into the explicit
+ * assistant protocol. Ambiguous project questions remain untouched.
+ */
+export function prepareAssistantRequest(input: AssistantRequest): AssistantRequest {
+  if (input.stewardAction || input.action) return input;
+  const content = input.content.trim();
+  const match = content.match(CHAPTER_COMMAND_RE);
+  if (!match || FAILURE_QUERY_RE.test(content)) return input;
+  const chapterNumber = parseChapterNumber(match[1] ?? match[2] ?? '');
+  if (!chapterNumber) return input;
+  const target = parseTargetWordCount(content);
+  const inferredContinuation = APPEND_INTENT_RE.test(content)
+    ? 'append'
+    : REPLACE_INTENT_RE.test(content)
+      ? 'replace'
+      : undefined;
+  return {
+    ...input,
+    action: 'generate_chapter',
+    chapterNumber,
+    confirmGeneration: true,
+    ...(input.continuationMode || inferredContinuation
+      ? { continuationMode: input.continuationMode ?? inferredContinuation }
+      : {}),
+    ...(input.targetWordCount || target
+      ? { targetWordCount: input.targetWordCount ?? target }
+      : {}),
+  };
+}
+
+function parseTargetWordCount(content: string): { min: number; max: number } | undefined {
+  const match = content.match(/([1-9][0-9]{2,5})\s*(?:个)?字/u);
+  if (!match) return undefined;
+  const min = Number.parseInt(match[1], 10);
+  if (!Number.isSafeInteger(min)) return undefined;
+  return { min, max: Math.ceil((min * 11) / 10) };
+}
+
+function parseChapterNumber(raw: string): number | undefined {
+  if (/^[0-9]+$/.test(raw)) {
+    const value = Number.parseInt(raw, 10);
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  }
+  const digits: Record<string, number> = {
+    零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
+    五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+  };
+  const units: Record<string, number> = { 十: 10, 百: 100, 千: 1000 };
+  let total = 0;
+  let current = 0;
+  for (const char of raw) {
+    if (char in digits) {
+      current = digits[char];
+      continue;
+    }
+    const unit = units[char];
+    if (!unit) return undefined;
+    total += (current || 1) * unit;
+    current = 0;
+  }
+  const value = total + current;
+  return value > 0 ? value : undefined;
 }
 
 export function buildStewardRequest(
@@ -106,6 +189,7 @@ export function buildStewardRequest(
     proposalId: steward.proposalId,
     sourceVersion: steward.sourceVersion,
     continuationMode: steward.continuationMode,
+    targetWordCount: steward.targetWordCount,
     confirmedFields: steward.proposals
       .filter((row) => row.value.trim())
       .map((row) => row.field),
@@ -132,8 +216,14 @@ export type AssistantStreamEvent =
       artifacts?: AssistantArtifacts;
       steward?: StewardView;
       contextManifest?: {
+        profile?: string;
         totalTokenBudget: number;
         totalTokensUsed: number;
+        estimatedInputTokens?: number;
+        actualInputTokens?: number;
+        actualOutputTokens?: number;
+        truncatedBlocks?: string[];
+        retrievalCoverage?: Record<string, unknown>;
         blocks: Array<{ name: string; included: boolean; tokensUsed: number; omittedReason?: string }>;
       };
     };
@@ -162,9 +252,13 @@ export function deleteMessage(
     .then((r) => r.data);
 }
 
+/** 内部信息泄漏特征：provider/模型名/密钥/堆栈形态一律替换为通用文案。 */
+const SENSITIVE_RE =
+  /stack|api[_-]?key|authorization|postgres|mongodb|econnrefused|aimagichub|openai|anthropic|solov|gemini|claude|\bglm\b|deepseek|qwen|doubao|ernie|provider|secret|token\s*[=:]|bearer\s+[a-z0-9.-]+|sk-[a-z0-9]+|at\s+\S+\s+\(/i;
+
 export function userFacingFailure(failure: FailureEnvelope | string): string {
   const text = typeof failure === 'string' ? failure : failure.reason;
-  if (/stack|api[_-]?key|postgres|aimagichub|openai|anthropic|bearer\s+/i.test(text)) {
+  if (SENSITIVE_RE.test(text)) {
     return '操作失败，请稍后重试或按提示补全资料';
   }
   return text;
@@ -178,6 +272,7 @@ export async function sendMessageStream(
   projectId: number,
   request: AssistantRequest,
   onEvent: (event: AssistantStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const token = tokenStorage.get();
   const response = await fetch(
@@ -190,6 +285,7 @@ export async function sendMessageStream(
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(request),
+      signal,
     },
   );
   if (!response.ok || !response.body) {

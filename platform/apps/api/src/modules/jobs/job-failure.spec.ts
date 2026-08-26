@@ -48,6 +48,25 @@ describe('job failure envelope', () => {
     expect(error.envelope.reason).toContain('seed_readiness');
   });
 
+  it('preserves the explicit environment fingerprint failure code from runtime', () => {
+    const error = runtimeInvokeFailure(
+      {
+        status: 'blocked',
+        failureEnvelope: {
+          code: 'environment_fingerprint_mismatch',
+          stage: 'g6_release_gate',
+          gate: 'runtime',
+          reason: 'environment fingerprint mismatch: recorded=old, current=new',
+        },
+      },
+      0,
+    );
+    expect(error.envelope.code).toBe('environment_fingerprint_mismatch');
+    expect(error.envelope.stage).toBe('g6_release_gate');
+    expect(error.envelope.gate).toBe('runtime');
+    expect(error.envelope.recoverable).toBe(false);
+  });
+
   it('maps invalid runtime state persist errors to commit failure', () => {
     const envelope = jobFailureFromUnknown(new Error('runtime state is invalid: expected a JSON object'));
     expect(envelope.code).toBe('narrative_state_commit_failed');

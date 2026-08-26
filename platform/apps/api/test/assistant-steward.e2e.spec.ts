@@ -178,7 +178,7 @@ describe('助手生成管家 e2e', () => {
     };
     expect(body.steward?.status).toBe('confirmation_required');
     expect(body.generationJobId).toBeUndefined();
-    expect(body.assistantMessage.content).toContain('仍需你确认的内容');
+    expect(body.assistantMessage.content).toContain('以下内容无法从现有资料可靠确定');
     expect(body.assistantMessage.content).not.toContain('runtime_preflight_failed');
     const jobs = await prisma.novelGenerationJob.findMany({
       where: { projectId, jobType: 'chapter_generation' },
@@ -211,7 +211,28 @@ describe('助手生成管家 e2e', () => {
       headers: { authorization: `Bearer ${tokenA}` },
       payload: { content: '生成第二章' },
     });
-    const steward = prepared.json().steward as {
+    const initialSteward = prepared.json().steward as {
+      proposalId: string;
+      sourceVersion: string;
+      proposals: Array<{ field: string; value: string }>;
+    };
+    // The outline does not state a genre. Supply that one unresolved field
+    // through the steward's revision flow before applying the auto-filled
+    // materials; inferred fields remain confirmation-free.
+    const revised = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/assistant/messages`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: {
+        content: '补充项目类型为悬疑',
+        stewardAction: 'revise',
+        proposalId: initialSteward.proposalId,
+        sourceVersion: initialSteward.sourceVersion,
+        proposalEdits: [{ field: 'genre', value: '悬疑' }],
+      },
+    });
+    expect(revised.statusCode).toBe(201);
+    const steward = revised.json().steward as {
       proposalId: string;
       sourceVersion: string;
       proposals: Array<{ field: string; value: string }>;

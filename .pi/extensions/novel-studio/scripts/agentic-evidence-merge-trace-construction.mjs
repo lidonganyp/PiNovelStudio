@@ -8,9 +8,12 @@
  *      F1-historical-fact fixture 有 retrievalQueries，stub 必然发 search_narrative_evidence 指令。
  *      归档 trajectory.jsonl + AgenticRawSourceResult 摘要为可审计制品。
  * 2. coverage 不足阻断 trace（mustVerify 未被 contextCoveredFacts 覆盖）
- *    — 用 runUnifiedPipeline + V2_FORCE_STUB=1（受控），
+ *    - 用 runUnifiedPipeline + V2_FORCE_STUB=1（受控），
  *      ch1-outline-explicit.md 用 `## 事件 1` 格式 + `必须包含` 注入不在 immutableFacts 中的事实，
- *      使 mustVerify 包含此事实但 contextCoveredFacts 不含它 → coverage 门阻断。
+ *      使 mustVerify 包含此事实但 contextCoveredFacts 不含它 -> coverage 门阻断。
+ *      注意：此构造依赖旧的 mustVerify 语义（authorMustInclude 进入 mustVerify），
+ *      该语义已于 2026-08-25 作为 coverage gate 死锁缺陷修复（待写内容不再进入 mustVerify）；
+ *      修复后本用例预期 coveragePassed=true（章纲待写事实不再触发阻断），可作为死锁修复的行为验证。
  * 3. envelope 级 recoverable failure trace（gate=model_timeout, severity=recoverable）
  *    — 用 runUnifiedPipeline + 真实模型 + PINOVEL_MODEL_REQUEST_TIMEOUT_MS=100，
  *      100ms 太短，真实模型无法响应 → 生成 recoverable envelope。
@@ -363,8 +366,10 @@ async function constructCoverageTrace() {
 
   // 关键：用正确的 `## 事件 1` 格式（不是 `## 章节功能`），
   // 并在 `必须包含` 中注入不在 immutableFacts 中的事实。
-  // 这会让 mustVerify 包含此事实（来自 authorMustInclude），
-  // 但 contextCoveredFacts 不包含它（来自 immutableFacts）→ coverage 门阻断。
+  // 旧语义（2026-08-25 前）：这会让 mustVerify 包含此事实（来自 authorMustInclude），
+  // 但 contextCoveredFacts 不包含它（来自 immutableFacts）-> coverage 门阻断。
+  // 新语义（死锁修复后）：authorMustInclude（待写内容）不再进入 mustVerify，
+  // 本构造预期 coveragePassed=true（验证死锁已修复）。
   writeFileSync(
     join(WS_ROOT, "series", "ch1-outline-explicit.md"),
     [

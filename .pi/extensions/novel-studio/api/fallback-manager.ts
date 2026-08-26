@@ -85,6 +85,52 @@ export interface GPTFallbackResult {
 
 type RouteConfig = string | AgentRoutingEntry | undefined;
 
+type GeminiChannel = "aimagichub" | "solov";
+
+function routeEntryOf(routing: RouteConfig): AgentRoutingEntry | undefined {
+  return typeof routing === "object" && routing !== null ? routing : undefined;
+}
+
+/**
+ * Resolve credentials for a route without allowing the Solov peer route to
+ * silently reuse the Aimagichub endpoint. The unsuffixed Aimagichub route
+ * keeps the historical generic env names for backwards compatibility.
+ */
+function resolveRouteTransport(
+  providerKey: string,
+  provider: ProviderConfig,
+  routing: RouteConfig,
+  gatewayConfigured: boolean,
+): { apiKey: string | null; baseUrl: string | null } {
+  if (gatewayConfigured) {
+    return {
+      apiKey: getApiKey(providerKey),
+      baseUrl: process.env.SUB2API_INTERNAL_LLM_BASE_URL ?? null,
+    };
+  }
+
+  const routeEntry = routeEntryOf(routing);
+  const channel = routeEntry?.channel as GeminiChannel | undefined;
+  if (providerKey === "gemini31" && channel) {
+    const prefix = `GEMINI_${channel.toUpperCase()}`;
+    const channelApiKey = process.env[`${prefix}_API_KEY`] || null;
+    const channelBaseUrl = process.env[`${prefix}_BASE_URL`] || null;
+    if (channel === "solov") {
+      return { apiKey: channelApiKey, baseUrl: channelBaseUrl };
+    }
+    return {
+      apiKey: channelApiKey || (routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey)),
+      baseUrl: channelBaseUrl || (routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || null : null) || provider.base_url,
+    };
+  }
+
+  return {
+    apiKey: routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey),
+    baseUrl: (routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || null : null)
+      || getBaseUrl(providerKey, provider.base_url),
+  };
+}
+
 type ChatCallOptions = {
   temperature?: number;
   max_tokens?: number;
@@ -480,13 +526,11 @@ export class APIFallbackManager {
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const routeEntry = typeof routing === "object" ? routing : undefined;
       // The internal Sub2API gateway is the only production egress. Route-level
       // provider credentials must not bypass the gateway when it is configured.
       const gatewayConfigured = Boolean(process.env.SUB2API_INTERNAL_LLM_BASE_URL);
-      const apiKey = gatewayConfigured
-        ? getApiKey(providerKey)
-        : (routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey));
+      const transport = resolveRouteTransport(providerKey, provider, routing, gatewayConfigured);
+      const apiKey = transport.apiKey;
       if (!apiKey) continue;
 
       if (isProviderUnhealthy(providerKey) || isChapterTimeoutUnhealthy(providerKey)) {
@@ -506,9 +550,10 @@ export class APIFallbackManager {
       }
 
       const modelToUse = this.resolveProviderModel(providerKey, provider, routing);
-      const baseUrl = normalizeProviderBaseUrl(providerKey, gatewayConfigured
-        ? process.env.SUB2API_INTERNAL_LLM_BASE_URL!
-        : (routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url)));
+      const baseUrl = transport.baseUrl
+        ? normalizeProviderBaseUrl(providerKey, transport.baseUrl)
+        : null;
+      if (!baseUrl) continue;
       // Sub2API exposes one OpenAI-compatible chat-completions endpoint. Do not
       // let Claude/Gemini provider metadata select a direct Anthropic/Google path.
       const protocol = gatewayConfigured ? "openai" : (provider.protocol || this.inferProtocol(providerKey));
@@ -696,8 +741,13 @@ export class APIFallbackManager {
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const routeEntry = typeof routing === "object" ? routing : undefined;
-      const apiKey = routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey);
+      const transport = resolveRouteTransport(
+        providerKey,
+        provider,
+        routing,
+        Boolean(process.env.SUB2API_INTERNAL_LLM_BASE_URL),
+      );
+      const apiKey = transport.apiKey;
       if (!apiKey) continue;
 
       if (isProviderUnhealthy(providerKey) || isChapterTimeoutUnhealthy(providerKey)) {
@@ -717,7 +767,10 @@ export class APIFallbackManager {
       }
 
       const modelToUse = this.resolveProviderModel(providerKey, provider, routing);
-      const baseUrl = normalizeProviderBaseUrl(providerKey, routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url));
+      const baseUrl = transport.baseUrl
+        ? normalizeProviderBaseUrl(providerKey, transport.baseUrl)
+        : null;
+      if (!baseUrl) continue;
       const protocol = provider.protocol || this.inferProtocol(providerKey);
       const resolvedTemperature = options?.temperature ?? provider.temperature?.[agentName];
       const resolvedMaxTokens = options?.max_tokens ?? provider.max_tokens?.[agentName];
@@ -888,8 +941,13 @@ export class APIFallbackManager {
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const routeEntry = typeof routing === "object" ? routing : undefined;
-      const apiKey = routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey);
+      const transport = resolveRouteTransport(
+        providerKey,
+        provider,
+        routing,
+        Boolean(process.env.SUB2API_INTERNAL_LLM_BASE_URL),
+      );
+      const apiKey = transport.apiKey;
       if (!apiKey) continue;
 
       if (isProviderUnhealthy(providerKey) || isChapterTimeoutUnhealthy(providerKey)) {
@@ -909,7 +967,10 @@ export class APIFallbackManager {
       }
 
       const modelToUse = this.resolveProviderModel(providerKey, provider, routing);
-      const baseUrl = normalizeProviderBaseUrl(providerKey, routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || provider.base_url : this.resolveProviderBaseUrl(providerKey, provider.base_url));
+      const baseUrl = transport.baseUrl
+        ? normalizeProviderBaseUrl(providerKey, transport.baseUrl)
+        : null;
+      if (!baseUrl) continue;
       const protocol = provider.protocol || this.inferProtocol(providerKey);
       const resolvedTemperature = options?.temperature ?? provider.temperature?.[agentName];
       const resolvedMaxTokens = options?.max_tokens ?? provider.max_tokens?.[agentName];

@@ -12,6 +12,12 @@ export type AssistantAction = (typeof ASSISTANT_ACTIONS)[number];
 
 export type ContinuationMode = 'replace' | 'append';
 
+/** Final whole-chapter length requested for this generation task. */
+export interface TargetWordRange {
+  min: number;
+  max: number;
+}
+
 export const ARTIFACT_TYPES = [
   'story_outline',
   'chapter_seed',
@@ -34,6 +40,7 @@ export interface AssistantRequest {
   chapterNumber?: number;
   confirmGeneration?: boolean;
   continuationMode?: ContinuationMode;
+  targetWordCount?: TargetWordRange;
   stewardAction?: 'apply_and_generate' | 'save_draft' | 'cancel' | 'revise';
   proposalId?: string;
   sourceVersion?: string;
@@ -67,6 +74,8 @@ export interface FailureEnvelope {
   retryPlan?: string;
   userActionRequired?: string[];
   fixInstructions?: string[];
+  /** 失败时 runtime 归档的临时 workspace 路径（含 traces/ 证据），仅供诊断 */
+  traceArchivePath?: string;
 }
 
 export type AssistantSseType =

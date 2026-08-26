@@ -182,6 +182,44 @@ describe("ChineseNarrativeNaturalnessScanner", () => {
     assert.ok(result.modifierStackFindings[0].suggestion.includes("的"), "suggestion should mention 的");
   });
 
+  it("P57 用户 AI 腔组合表达：命中七类组合模式并返回带 span 的软诊断", () => {
+    const samples = [
+      "眉宇间沉得像压着一层化不开的铅块",
+      "眼底的轻慢少了两分",
+      "整个过程平静而顺利",
+      "水面下的回旋比表面看起来重得多",
+      "泛出一串串急促的气泡",
+      "他的心跳沉稳得近乎诡异",
+      "那不是战队配合能打出的伤害，那是绝对维度的瞬杀。",
+      "苍老虚弱的气息比先前凝实了一分",
+    ];
+    const text = samples.join("。\n");
+    const result = scanner.scan(text);
+    const compound = result.findings.filter((f) => f.type === "compound_ai_expression");
+    assert.ok(compound.length >= 7, `expected compound findings for user samples: ${JSON.stringify(result.findings)}`);
+    for (const finding of compound) {
+      assert.ok(finding.index >= 0, "compound finding must have a source index");
+      assert.ok(finding.index < text.length, "compound finding index must be inside source text");
+      const excerpt = finding.text.replace(/^…/, "");
+      assert.ok(excerpt.includes(text.slice(finding.index, finding.index + 4)),
+        `finding span must point to source text: ${JSON.stringify(finding)}`);
+      assert.ok(finding.suggestion.length > 0, "compound finding must have a revision suggestion");
+    }
+  });
+
+  it("P57 用户 AI 腔组合表达：单独常规计量/技能名不误报", () => {
+    const text = [
+      "伤口深了一厘米，医生记在病历上。",
+      "距离缩短了两米，他抬手示意停下。",
+      "医疗记录显示心跳每分钟六十次。",
+      "她说平静而顺利只是表面，真正的麻烦还在后面。",
+      "技能名是绝对维度的瞬杀，队友按约定接上控制。",
+    ].join("\n");
+    const result = scanner.scan(text);
+    assert.strictEqual(result.findings.filter((f) => f.type === "compound_ai_expression").length, 0,
+      `ordinary quantified facts and explicit names should not be compound findings: ${JSON.stringify(result.findings)}`);
+  });
+
   it("buildChineseNaturalnessHints：按优先级构造修订 hints", () => {
     const text = [
       "当推开门的时候，然而，他感到恐惧攫住了他。",

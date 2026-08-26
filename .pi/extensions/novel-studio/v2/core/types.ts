@@ -529,6 +529,8 @@ export interface V2Input {
   continuationMode?: "replace" | "append";
   /** Author-authored current chapter text, present for append mode only. */
   currentChapterDraft?: string;
+  /** Final whole-chapter target for this request; overrides workspace config. */
+  targetWordCount?: { min: number; max: number };
   projectRoot: string;
   /** 批量/重试延续的统一预算账本 */
   _priorBudgetLedger?: import("./budget-types.js").BudgetLedger;

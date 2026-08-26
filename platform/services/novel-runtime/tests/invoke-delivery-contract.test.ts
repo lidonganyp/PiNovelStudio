@@ -25,11 +25,14 @@ async function invokeChapter(
   result: unknown,
   modelCallCount = 0,
   tempProjectRoot = "/tmp/job-1",
+  requestInput: Record<string, unknown> = {},
 ): Promise<{
   response: Response;
   finalizedOutcomes: string[];
+  forwardedInputs: Record<string, unknown>[];
 }> {
   const finalizedOutcomes: string[] = [];
+  const forwardedInputs: Record<string, unknown>[] = [];
   const billingClient: BillingClient = {
     settle: async () => ({
       jobId: "job-1",
@@ -80,19 +83,22 @@ async function invokeChapter(
   app.use("/v1", createInvokeRouter(loadedTools, {
     billingClient,
     meteringBinder: {
-      invokeWithMetering: async () => ({
-        result,
-        metering: {
-          modelCallCount,
-          settledCount: 0,
-          alreadySettledCount: 0,
-          budgetExhaustedCount: 0,
-          totalSettledAmountFen: 0,
-          remainingBudgetFen: 100,
-          settleErrors: [],
-          budgetExhausted: false,
-        },
-      }),
+      invokeWithMetering: async (_tool, input) => {
+        forwardedInputs.push(input);
+        return {
+          result,
+          metering: {
+            modelCallCount,
+            settledCount: 0,
+            alreadySettledCount: 0,
+            budgetExhaustedCount: 0,
+            totalSettledAmountFen: 0,
+            remainingBudgetFen: 100,
+            settleErrors: [],
+            budgetExhausted: false,
+          },
+        };
+      },
     },
     workspaceManager: workspaceManager as never,
     config: makeConfigForTest(),
@@ -108,10 +114,10 @@ async function invokeChapter(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       tool: "novel_generate_chapter",
-      input: { chapterNumber: 1, workspaceId: "p1" },
+      input: { chapterNumber: 1, workspaceId: "p1", ...requestInput },
     }),
   });
-  return { response, finalizedOutcomes };
+  return { response, finalizedOutcomes, forwardedInputs };
 }
 
 describe("invoke delivery contract", () => {
@@ -190,6 +196,18 @@ describe("invoke delivery contract", () => {
 
     assert.equal(response.status, 200);
     assert.deepEqual(finalizedOutcomes, []);
+  });
+
+  test("preserves the request-scoped target word count after workspace materialization", async () => {
+    const { response, forwardedInputs } = await invokeChapter(
+      { status: "ok", text: "可交付正文" },
+      1,
+      "/tmp/job-1",
+      { targetWordCount: { min: 2500, max: 2500 } },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(forwardedInputs[0]?.targetWordCount, { min: 2500, max: 2500 });
   });
 
   test("an ok status without chapter text is still non-deliverable", async () => {

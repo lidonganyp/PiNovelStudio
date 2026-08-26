@@ -3,7 +3,7 @@
  * P5-3 生成任务面板：阶段步骤条 + 消耗实时（预占/已结算）+
  * 逐调用明细 + 失败呈现与重试。轮询由 useJobPolling 驱动。
  */
-import { computed, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
 import { JOB_STAGES, isTerminalStatus } from '../../api/jobs';
@@ -23,11 +23,13 @@ const emit = defineEmits<{
 }>();
 
 const { job, calls, loading, error, track, reset } = useJobPolling();
+const recovering = ref(false);
 
 // 把 track 交给父容器（WorkspaceView provide('trackJob') 转发）
 emit('register-track', (jobId: string) => track(jobId));
 
 const visible = computed(() => job.value !== null);
+const recoveryLabel = computed(() => props.chapter?.content.trim() ? '继续生成' : '重新生成');
 
 const statusMeta = computed((): { text: string; type: 'primary' | 'success' | 'danger' | 'warning' | 'info' } => {
   switch (String(job.value?.status)) {
@@ -71,14 +73,16 @@ const tokensTotal = computed(() =>
 
 /** 对同一章节重新提交生成（失败重试）。 */
 async function retry(): Promise<void> {
-  if (!props.chapter) return;
-  reset();
+  if (!props.chapter || recovering.value) return;
+  recovering.value = true;
   try {
     const next = await submitGeneration(props.projectId, props.chapter.id);
     track(next.jobId);
-    ElMessage.success('已重新提交生成');
+    ElMessage.success(`${recoveryLabel.value}任务已提交`);
   } catch {
-    /* http 拦截器已提示 */
+    // 保留原失败详情，让用户可以修复网络/资料后再次继续。
+  } finally {
+    recovering.value = false;
   }
 }
 
@@ -159,9 +163,10 @@ watch(
         size="small"
         type="danger"
         plain
+        :loading="recovering"
         @click="retry"
       >
-        重试
+        {{ recoveryLabel }}
       </el-button>
     </el-alert>
     <el-alert

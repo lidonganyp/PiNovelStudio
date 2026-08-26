@@ -69,7 +69,7 @@
         "v2_rawstage2_gemini31",
         "v2_amplified_gemini31"
       ],
-      "role": "Default production raw/editorial writer selected by explicit natural-person review. It never participates in automatic fallback or automatic dual writing. Cross-model comparison counts remain diagnostic for choosing a global default; chapter-specific anonymous pairwise verdicts may select a valid decisive editorial or raw winner. Claude remains an explicit alternative, not a silent fallback."
+      "role": "Default production raw/editorial writer selected by explicit natural-person review. Aimagichub and Solov are mutually authorized transport channels for the same Gemini writer identity; channel recovery never changes the provider/model family. Cross-model comparison counts remain diagnostic for choosing a global default; chapter-specific anonymous pairwise verdicts may select a valid decisive editorial or raw winner. Claude remains an explicit alternative, not a silent fallback."
     },
     "gpt": {
       "model": "gpt-5.5",
@@ -253,9 +253,9 @@
         ]
       }
     },
-    "narrator_reason": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1 + GEMINI37-FLASH-PRODUCTION-SWITCH-1: 正式章节必须走全流程。Gemini 3.7 Flash 通过 v2_rawstage2_gemini31 服务 NovelOS Agentic，通过 v2_amplified_gemini31 执行作者风格整章优化；fallback=[]，任一阶段失败 hard block，不静默交付 one-shot raw。Claude Opus 4.6 仅为显式 writerModel=claude 备选。",
+    "narrator_reason": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1 + GEMINI37-FLASH-PRODUCTION-SWITCH-1: 正式章节必须走全流程。Gemini 3.7 Flash 通过 v2_rawstage2_gemini31 服务 NovelOS Agentic，通过 v2_amplified_gemini31 执行作者风格整章优化；Aimagichub 与 Solov 是同一 Gemini 身份的互备渠道，渠道恢复不切换 Claude 或其他正文模型。两个渠道均不可用时才 hard block，不静默交付 one-shot raw。Claude Opus 4.6 仅为显式 writerModel=claude 备选。",
     "narrator_backup": null,
-    "narrator_backup_reason": "Gemini 3.7 Flash 是默认正文主写，但没有自动备援；raw 失败由 v2_rawstage2_gemini31.fallback=[] hard block。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
+    "narrator_backup_reason": "Gemini 3.7 Flash 是默认正文主写。Aimagichub 与 Solov 是同一 Gemini provider/model 身份下的互备渠道；任一渠道失败时只尝试另一 Gemini 渠道。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
     "narrator_candidate": null,
     "narrator_testing": "doubao-seed-2-1-pro-260628",
     "chinese_naturalizer": "doubao-seed-2-1-pro-260628",
@@ -681,7 +681,7 @@
     "stage2_narrator": {
       "provider": "gemini31",
       "model": "gemini-3.7-flash",
-      "note": "GEMINI37-FLASH-PRODUCTION-SWITCH-1: Stage 2 production default is Gemini 3.7 Flash via the isolated Gemini raw/editorial routes and gemini_writer_v2. fallback=[] hard blocks failures; Claude remains explicit-only and is never a silent prose fallback."
+      "note": "GEMINI37-FLASH-PRODUCTION-SWITCH-1: Stage 2 production default is Gemini 3.7 Flash via the isolated Gemini raw/editorial routes and gemini_writer_v2. Aimagichub and Solov are mutually authorized transport channels; only the peer Gemini channel is attempted after a transport failure. Claude remains explicit-only and is never a silent prose fallback."
     },
     "stage3_skeleton": {
       "provider": "gpt",
@@ -1002,20 +1002,42 @@
     "v2_rawstage2_gemini31": {
       "provider": "gemini31",
       "model": "gemini-3.7-flash",
+      "channel": "aimagichub",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
       "fallback": [],
-      "note": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: Production NovelOS Agentic generation route. It does not create a deliverable one-shot raw fallback; failure hard-blocks."
+      "note": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: Production NovelOS Agentic generation route on the Aimagichub Gemini channel. On transport failure, the route adapter may retry only the peer Solov Gemini channel; it never falls back to Claude or another prose provider."
+    },
+    "v2_rawstage2_gemini31_solov": {
+      "provider": "gemini31",
+      "model": "gemini-3.7-flash",
+      "channel": "solov",
+      "base_url_env": "GEMINI_SOLOV_BASE_URL",
+      "api_key_env": "GEMINI_SOLOV_API_KEY",
+      "model_env": "GEMINI_SOLOV_MODEL",
+      "fallback": [],
+      "note": "Gemini peer transport for production NovelOS Agentic recovery. Same provider/model family as v2_rawstage2_gemini31; no Claude/GPT/Doubao fallback."
     },
     "v2_amplified_gemini31": {
       "provider": "gemini31",
       "model": "gemini-3.7-flash",
+      "channel": "aimagichub",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
       "fallback": [],
       "note": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1: Required full-chapter author-style optimization after NovelOS Agentic. The optimized text is fact/story/completeness checked and then delivered for user evaluation; no GPT judge is called."
+    },
+    "v2_amplified_gemini31_solov": {
+      "provider": "gemini31",
+      "model": "gemini-3.7-flash",
+      "channel": "solov",
+      "base_url_env": "GEMINI_SOLOV_BASE_URL",
+      "api_key_env": "GEMINI_SOLOV_API_KEY",
+      "model_env": "GEMINI_SOLOV_MODEL",
+      "fallback": [],
+      "note": "Gemini peer transport for author-style optimization recovery. Same provider/model family as v2_amplified_gemini31; no Claude/GPT/Doubao fallback."
     },
     "v2_reader_experience_judge_gemini31": {
       "provider": "gemini31",

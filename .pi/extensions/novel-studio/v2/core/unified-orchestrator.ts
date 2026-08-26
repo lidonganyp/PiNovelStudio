@@ -36,6 +36,7 @@ import type { ChapterIntent } from "./chapter-intent-builder.js";
 import type { ModelGenerateFn, ModelGenerateInput } from "../adapters/legacy-model-route-adapter.js";
 import { createEditorialOpportunityJudge } from "./editorial-opportunity-judge.js";
 import { createLanguageRiskLibrary } from "./language-risk-library.js";
+import { buildChineseAiLanguageGuidance } from "../../craft/chinese-ai-language-guidance.js";
 import type { EditorialHypothesis } from "./editorial-hypothesis.js";
 import {
   createEditorialCandidateGenerator,
@@ -218,7 +219,10 @@ import type {
 } from "../learning/strategy-outcome-recorder.js";
 // Step 5：NovelOS agentic_raw 候选源接口（type-only，无运行时依赖）
 // 编排器通过此接口调用 NovelOS agentic 生成，不直接依赖 NovelOS 内部模块。
-import type { AgenticRawCandidateSource } from "../../novelos/agent/agentic-raw-candidate-source.js";
+import type {
+  AgenticRawCandidateSource,
+  AgenticRawSourceResult,
+} from "../../novelos/agent/agentic-raw-candidate-source.js";
 // Step 1d 修复：导入 AGENTIC_RAW_KIND 共享常量，SOFT 预算过滤器用此 kind
 // 排除 agentic 调用（与路由名 AGENTIC_RAW_ROUTE="novelos_agentic" 区分，二者不可混用）。
 import { AGENTIC_RAW_KIND } from "../../novelos/agent/agentic-raw-candidate-source.js";
@@ -228,6 +232,11 @@ import {
   hasContinuationPrefixMismatch,
   repairAdjacentDuplicateParagraphs,
 } from "./chapter-continuation.js";
+import {
+  assessTargetLength,
+  repairDuplicateFindings,
+  type DuplicateFindingLike,
+} from "./generation-recovery.js";
 import type { ContextSafetyResult } from "./context-safety.js";
 import { buildProtectedContextOverflowFailure } from "./context-package-production.js";
 import { createMethodologyDiagnosticStateLoader } from "./methodology-diagnostic-state.js";
@@ -411,6 +420,24 @@ function preserveContinuationStyleResult(
   };
 }
 
+/**
+ * A style model can still return a rewritten prefix after the bounded retry.
+ * In append mode the Agentic candidate already contains the protected author
+ * text and has passed its own generation gates, so retaining it as a marked
+ * no-op editorial candidate is safer than duplicating or corrupting prose.
+ * Story preservation, fact recheck, completeness, and final save gates still
+ * run normally on this candidate.
+ */
+function createContinuationStyleNoopCandidate(sourceCandidate: Candidate): Candidate {
+  return {
+    ...sourceCandidate,
+    id: `${sourceCandidate.id}:author-style-noop:${hashText(sourceCandidate.text).slice(0, 16)}`,
+    kind: "editorial_amplified",
+    sourceCandidateId: sourceCandidate.id,
+    editorialStrategy: "style_native",
+  };
+}
+
 // ============================================================================
 // UnifiedOrchestrator 主类
 // ============================================================================
@@ -563,12 +590,38 @@ export class UnifiedOrchestrator {
     (stageResults as Record<string, unknown>)._agentCollabState = collabState;
     const finishWithCollab = <T extends UnifiedOrchestratorOutput>(out: T): T => {
       attachCollaborationToStageResults(stageResults, collabState);
-      stageResults.agentLineageIndex = buildAgentLineageIndex({
+      const lineageIndex = buildAgentLineageIndex({
         stageResults,
         orchestratorRunId: collabState.orchestratorRunId,
         workspaceId: collabState.workspaceId,
         chapterId: collabState.chapterId,
       });
+      const deliveredCandidateId =
+        typeof (out as { selectedCandidateId?: unknown }).selectedCandidateId === "string"
+          ? String((out as { selectedCandidateId: string }).selectedCandidateId)
+          : typeof stageResults.selectedCandidateId === "string"
+            ? stageResults.selectedCandidateId
+          : null;
+      if (out.status === "ok" && deliveredCandidateId) {
+        const deliveredEntries = lineageIndex.byCandidate[deliveredCandidateId] ?? [];
+        if (deliveredEntries.length === 0) {
+          return this.hardBlock(
+            input,
+            "agent_lineage",
+            `最终候选缺少可查询血缘：${deliveredCandidateId}`,
+            stageResults,
+            undefined,
+            {
+              gate: "agent_lineage",
+              severityOverride: "hard",
+              recoverable: false,
+              evidence: [`candidate=${deliveredCandidateId}`],
+              candidateDisposition: "blocked_evidence_only",
+            },
+          ) as T;
+        }
+      }
+      stageResults.agentLineageIndex = lineageIndex;
       // WP-03..07：成功/阻断出口统一挂载治理报告（可从 quality-trace 验收）
       // 状态只从 stageResults 读取，避免与下方 recoveryBudget 初始化顺序耦合。
       const govState =
@@ -1015,6 +1068,7 @@ export class UnifiedOrchestrator {
             expectedModel: expectedLock.model,
             actualProvider: output.provider,
             actualModel: output.model,
+            ...(output.fallbackTrace ? { fallbackTrace: output.fallbackTrace } : {}),
             ...(genInput.promptProfile ? { promptProfile: genInput.promptProfile as ModelCallEntry["promptProfile"] } : {}),
             // WP-05：可观测字段
             runId: input.runRouting?.orchestratorRunId,
@@ -1366,7 +1420,18 @@ export class UnifiedOrchestrator {
         );
       }
 
-      let agenticResult;
+      const chineseAiLanguageGuidance = buildChineseAiLanguageGuidance(projectRoot);
+      stageResults.chineseAiLanguageGuidance = {
+        source: chineseAiLanguageGuidance.source,
+        datasetId: chineseAiLanguageGuidance.datasetId,
+        recordCount: chineseAiLanguageGuidance.recordCount,
+        recordIds: chineseAiLanguageGuidance.recordIds,
+        blockHash: chineseAiLanguageGuidance.blockHash,
+        appliedTo: ["novelos_agentic", "author_style_optimization"],
+        softDiagnosticOnly: true,
+      };
+
+      let agenticResult: AgenticRawSourceResult;
       try {
         agenticResult = await timeAsync("stage1_novelosAgentic", () =>
           input.agenticCandidateSource!.generate({
@@ -1376,6 +1441,7 @@ export class UnifiedOrchestrator {
             projectRoot,
             continuationMode: input.continuationMode,
             currentChapterDraft: input.currentChapterDraft,
+            chineseAiLanguageGuidance,
             evidenceSnapshot: input.evidenceSnapshot,
             contextPackage: input.contextPackage,
             intent,
@@ -1414,89 +1480,42 @@ export class UnifiedOrchestrator {
         );
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        stageResults.novelos = { shadowEnabled: false, required: true, error: message };
-        // P1 修复（Phase 1 整改）：Agentic 生成超时/连接异常归类为 recoverable，
-        // 触发工具层 chapter_level_retry 一次；其他异常 hard block。
-        // P1-3：改用 classifyTimeoutFromReason 统一超时识别口径，
-        // 与 candidate=null 分支（source 内部捕获）保持一致。
-        const isModelTimeout = classifyTimeoutFromReason(message) === "model_timeout";
-        return this.hardBlock(
-          input,
-          "novelos_agentic_generation",
-          `NovelOS Agentic 生成异常：${message}`,
-          stageResults,
-          undefined,
-          isModelTimeout
-            ? {
-                gate: "model_timeout",
-                severityOverride: "recoverable",
-                recoverable: true,
-                retryPlan: { strategy: "chapter_level_retry", maxAttempts: 1 },
-                candidateDisposition: "blocked_evidence_only",
-                prohibitedActions: [
-                  "accept_or_deliver_blocked_candidate",
-                  "save_blocked_candidate_as_chapter",
-                ],
-              }
-            : undefined,
-        );
-      }
-
-      // MA-1：Agentic 工作包 + Draft 结果契约（fail-closed）
-      try {
-        const agenticPkg = buildRoleWorkPackage(collabState, "novelos_agentic", {
-          stage: "stage1_novelosAgentic",
-          sessionId: agenticResult.sessionId || `agentic-${chapterId}`,
-          objective: "NovelOS Agentic 初稿生成（不直接交付）",
-        });
-        // MA-3.2：代理结果侧最小输入白名单（编排器侧 fail-closed）
-        requireWorkPackageInput(agenticPkg, {
-          workspaceId,
-          chapterId,
-          chapterNumber,
-          chapterIntent: intent,
-          seedContext: context,
-          context,
-          knownCharacterNames: characterNames,
-          inviolableFacts: intent.inviolableFacts,
-          targetWordCount: input.targetWordCount,
-          toolMode: input.toolMode,
-          evalPrefix: input.evalPrefix,
-          retrievalPromptOverride: input.retrievalPromptOverride,
-        });
-        recordWorkPackage(collabState, agenticPkg);
-        if (agenticResult.workPackageSummary) {
-          stageResults.agenticWorkPackage = agenticResult.workPackageSummary;
-        }
-        const draftContract = adaptDraftFromAgenticSource(agenticResult, {
-          workPackage: agenticPkg,
-          candidateId: agenticResult.candidate?.id,
-        });
-        recordAgentResult(collabState, draftContract, "fact_guard", agenticPkg.packageId);
-      } catch (collabErr: unknown) {
-        const failure = classifyCollaborationContractError(
-          "novelos_agentic_contract",
-          "novelos_agentic",
-          collabErr,
-        );
-        stageResults.agentCollaborationError = failure;
-        return this.hardBlock(
-          input,
-          failure.stage,
-          formatCollaborationFailureReason(failure),
-          stageResults,
-          agenticResult.candidate
-            ? {
-                rawText: agenticResult.candidate.text,
-                rawFinishReason: agenticResult.candidate.finishReason ?? null,
-                rawMaxTokens: agenticResult.candidate.maxTokens ?? null,
-                rawModel: agenticResult.candidate.model,
-                modelVersion: detectModelVersion(agenticResult.candidate.model),
-                candidateId: agenticResult.candidate.id,
-              }
-            : undefined,
-          collaborationFailureGuidance(failure),
-        );
+        const failureKind = classifyTimeoutFromReason(message) === "model_timeout"
+          ? "model_timeout"
+          : "model_error";
+        stageResults.novelosInitialFailure = { message, failureKind };
+        // 首轮直接抛错与 source 返回 candidate=null 走同一条有界恢复路径。
+        // 这里构造的是失败证据，不是可交付候选；所有成功恢复稿仍需重新通过
+        // verifier、hash、完整性、字数、FactGuard 和后续风格/终检。
+        agenticResult = {
+          candidate: null,
+          sessionId: `agentic-initial-failure-${chapterId}`,
+          trajectoryPath: "",
+          budgetSnapshot: {
+            turns: 0,
+            toolCalls: 0,
+            latencyMs: 0,
+            tokensIn: 0,
+            tokensOut: 0,
+            modelCalls: 0,
+            exhausted: false,
+          },
+          stopReason: "not_run",
+          failureReason: message,
+          failureKind,
+          sourceRefs: [],
+          toolCalls: 0,
+          decisionMode: "agentic_inline",
+          firstAction: "not_run",
+          actualRetrievalCalls: 0,
+          mustVerifyCount: 0,
+          mustVerifyCoveredCount: 0,
+          modelCallsByKind: { draft: 0, patch: 0, newCandidate: 0, authorStyle: 0 },
+          verifierCleared: false,
+          repairRounds: 0,
+          hardFindingCount: 0,
+          unresolvedFindings: [],
+        };
       }
 
       const consumptionEvents = input.capabilityConsumptionLedger?.events() ?? agenticResult.capabilityConsumption ?? [];
@@ -1552,52 +1571,376 @@ export class UnifiedOrchestrator {
         coverageResult: agenticResult.coverageResult ?? null,
         modelCallsByKind: agenticResult.modelCallsByKind,
       };
-      const agenticCandidate = agenticResult.candidate;
-      if (!agenticCandidate) {
-        // P1-3 修复（NOVELOS-CONSTRAINT-RELAXATION-1 验收修复）：
-        // 真实 Agentic source 会捕获底层异常并返回 candidate=null + failureKind。
-        // 原先此分支一律 hardBlock，导致 model_timeout 无法触发工具层
-        // chapter_level_retry（重试条件 gate==="model_timeout" && severity==="recoverable"）。
-        //
-        // 现在根据 failureKind 区分：
-        // - "model_timeout" → recoverable + gate=model_timeout + chapter_level_retry
-        //   （与 generate() 抛异常的 catch 分支保持一致）
-        // - "model_error" / "runtime_init" / "budget_exhausted" / "empty_draft" / "unknown"
-        //   → 保持 hardBlock（系统责任但不属于可自动恢复的超时）
-        //
-        // 向后兼容：若 source 未设置 failureKind（旧 mock 或第三方实现），
-        // 回退到 failureReason 字符串匹配，保持与 catch 分支相同的超时模式识别。
-        const failureKind = agenticResult.failureKind
-          ?? classifyTimeoutFromReason(agenticResult.failureReason ?? agenticResult.stopReason);
-        if (failureKind === "model_timeout" || failureKind === "continuation_prefix_mismatch") {
-          return this.hardBlock(
-            input,
-            "novelos_agentic_generation",
-            failureKind === "continuation_prefix_mismatch"
-              ? `NovelOS Agentic 改写了作者续写前缀（candidate=null）：${agenticResult.failureReason ?? agenticResult.stopReason}`
-              : `NovelOS Agentic 模型超时/连接异常（candidate=null）：${agenticResult.failureReason ?? agenticResult.stopReason}`,
-            stageResults,
-            undefined,
+      type AgenticSourceInput = Parameters<AgenticRawCandidateSource["generate"]>[0];
+      type AgenticSourceResult = Awaited<ReturnType<AgenticRawCandidateSource["generate"]>>;
+      const recoveryAttempts: Array<{
+        attempt: number;
+        reason: "empty_result" | "verifier_findings" | "target_length" | "completeness" | "fact_guard";
+        sourceCandidateId: string | null;
+        resultCandidateId: string | null;
+        outcome: "candidate" | "no_candidate" | "error" | "budget_exhausted";
+        evidence: string[];
+      }> = [];
+      const generationRecoveryTrace = {
+        maxAttempts: (stageResults.recoveryBudget as RecoveryBudget).maxTotalAttempts,
+        attempts: recoveryAttempts,
+        exhausted: false,
+        succeeded: false,
+      };
+      stageResults.generationRecovery = generationRecoveryTrace;
+
+      const recoveryModelGenerate: ModelGenerateFn = async (modelInput) =>
+        wrappedModelGenerate!({
+          ...modelInput,
+          kind: /recovery/i.test(modelInput.kind ?? "")
+            ? modelInput.kind
+            : `${modelInput.kind ?? "agentic"}_recovery`,
+        });
+      const runAgenticRecovery = async (
+        reason: (typeof recoveryAttempts)[number]["reason"],
+        sourceCandidateId: string | null,
+        evidence: string[],
+        overrides: Partial<AgenticSourceInput>,
+      ): Promise<AgenticSourceResult | null> => {
+        const currentBudget = (stageResults.recoveryBudget as RecoveryBudget | undefined)
+          ?? recoveryBudget;
+        const reserved = reserveBudget(currentBudget, {
+          totalAttempts: 1,
+          recoveryModelCalls: 1,
+          modelCalls: 1,
+        });
+        const attempt = recoveryAttempts.length + 1;
+        if (!reserved.ok) {
+          generationRecoveryTrace.exhausted = true;
+          recoveryAttempts.push({
+            attempt,
+            reason,
+            sourceCandidateId,
+            resultCandidateId: null,
+            outcome: "budget_exhausted",
+            evidence: [...evidence],
+          });
+          return null;
+        }
+        stageResults.recoveryBudget = reserved.budget;
+        const governance = getGovernanceState(stageResults);
+        if (governance) {
+          setGovernanceState(stageResults, {
+            ...governance,
+            layeredBudget: {
+              ...governance.layeredBudget,
+              legacyRecovery: reserved.budget,
+            },
+          });
+        }
+        try {
+          const result = await timeAsync(
+            `stage1_novelosAgenticRecovery_${attempt}_${reason}`,
+            () => input.agenticCandidateSource!.generate({
+              workspaceId,
+              chapterId,
+              chapterNumber,
+              projectRoot,
+              continuationMode: input.continuationMode,
+              currentChapterDraft: input.currentChapterDraft,
+              chineseAiLanguageGuidance,
+              evidenceSnapshot: input.evidenceSnapshot,
+              contextPackage: input.contextPackage,
+              intent,
+              context,
+              characterNames,
+              route: RAW_ROUTE,
+              timeoutMs: input.timeoutMs,
+              evalPrefix: input.evalPrefix,
+              targetWordCount: input.targetWordCount,
+              fullPipelinePreview: input.fullPipelinePreview,
+              fewshotSelection: input.fewshotSelection,
+              writerPromptProfile: input.rawPromptProfile,
+              retrievalPromptOverride: input.retrievalPromptOverride,
+              toolMode: input.toolMode,
+              auditSink: input.auditSink,
+              capabilityActivation: input.capabilityActivation,
+              capabilityPackageSet: input.capabilityPackageSet,
+              capabilityCatalog: input.capabilityCatalog,
+              capabilityConsumptionLedger: input.capabilityConsumptionLedger,
+              orchestratorRunId: collabState.orchestratorRunId,
+              taskId: collabState.taskId,
+              contextHash: collabState.contextHash,
+              promptBundleHash: collabState.promptBundleHash,
+              constraintManifestHash: collabState.constraintManifestHash,
+              ...overrides,
+              modelGenerate: recoveryModelGenerate,
+            }),
+          );
+          recoveryAttempts.push({
+            attempt,
+            reason,
+            sourceCandidateId,
+            resultCandidateId: result.candidate?.id ?? null,
+            outcome: result.candidate ? "candidate" : "no_candidate",
+            evidence: [...evidence],
+          });
+          return result;
+        } catch (error: unknown) {
+          recoveryAttempts.push({
+            attempt,
+            reason,
+            sourceCandidateId,
+            resultCandidateId: null,
+            outcome: "error",
+            evidence: [
+              ...evidence,
+              error instanceof Error ? error.message : String(error),
+            ],
+          });
+          return null;
+        }
+      };
+
+      let pendingAgenticCandidate = agenticResult.candidate;
+      let latestAgenticCompleteness = pendingAgenticCandidate
+        ? scanFinalTextCompleteness(pendingAgenticCandidate.text, {
+            finishReason: pendingAgenticCandidate.finishReason,
+            chapterNumber,
+          })
+        : null;
+      let latestAgenticFactGuard = pendingAgenticCandidate
+        ? checkCandidateFactGuard(pendingAgenticCandidate.text, input)
+        : null;
+
+      const ensureAgenticCandidateReady = async (): Promise<void> => {
+        while (true) {
+        if (!pendingAgenticCandidate) {
+          const failureKind = agenticResult.failureKind
+            ?? classifyTimeoutFromReason(agenticResult.failureReason ?? agenticResult.stopReason);
+          if (!["model_timeout", "model_error", "empty_draft", "continuation_prefix_mismatch"].includes(failureKind)) {
+            break;
+          }
+          const recovered = await runAgenticRecovery(
+            "empty_result",
+            null,
+            [agenticResult.failureReason ?? String(agenticResult.stopReason)],
+            {},
+          );
+          if (!recovered) break;
+          agenticResult = recovered;
+          pendingAgenticCandidate = recovered.candidate;
+          continue;
+        }
+
+        if (agenticResult.verifierCleared !== true) {
+          const findings = (agenticResult.unresolvedFindings ?? []).map((finding) => ({
+            code: finding.id,
+            message: `${finding.description}; ${finding.conflictFact}`,
+            evidenceRef: finding.sourceRef,
+          }));
+          const recovered = await runAgenticRecovery(
+            "verifier_findings",
+            pendingAgenticCandidate.id,
+            findings.map((finding) => `${finding.code}: ${finding.message}`),
             {
-              gate: failureKind === "continuation_prefix_mismatch"
-                ? "continuation_prefix_mismatch"
-                : "model_timeout",
-              severityOverride: "recoverable",
-              recoverable: true,
-              retryPlan: { strategy: "chapter_level_retry", maxAttempts: 1 },
-              candidateDisposition: "blocked_evidence_only",
-              prohibitedActions: [
-                "accept_or_deliver_blocked_candidate",
-                "save_blocked_candidate_as_chapter",
-              ],
+              recoveryDirective: {
+                kind: "verifier",
+                previousCandidateText: pendingAgenticCandidate.text,
+                findings,
+              },
             },
           );
+          if (!recovered) break;
+          agenticResult = recovered;
+          pendingAgenticCandidate = recovered.candidate;
+          continue;
         }
+
+        const integrity = checkCandidateTextHashBinding(pendingAgenticCandidate);
+        if (!integrity.ok) break;
+
+        latestAgenticCompleteness = scanFinalTextCompleteness(pendingAgenticCandidate.text, {
+          finishReason: pendingAgenticCandidate.finishReason,
+          chapterNumber,
+        });
+        const lengthAssessment = input.targetWordCount
+          ? assessTargetLength(pendingAgenticCandidate.text, input.targetWordCount)
+          : null;
+        stageResults.agenticTargetLength = lengthAssessment;
+        if (!latestAgenticCompleteness.passed || lengthAssessment?.needsContinuation) {
+          const reason = lengthAssessment?.needsContinuation ? "target_length" : "completeness";
+          const evidence = lengthAssessment?.needsContinuation
+            ? [`remaining=${lengthAssessment.remaining}`, `minimum=${lengthAssessment.minimum}`]
+            : latestAgenticCompleteness.findings.map((finding) => finding.reason);
+          const recovered = await runAgenticRecovery(
+            reason,
+            pendingAgenticCandidate.id,
+            evidence,
+            {
+              continuationMode: "append",
+              currentChapterDraft: pendingAgenticCandidate.text,
+              targetWordCount: input.targetWordCount,
+            },
+          );
+          if (!recovered) break;
+          agenticResult = recovered;
+          pendingAgenticCandidate = recovered.candidate;
+          continue;
+        }
+
+        latestAgenticFactGuard = checkCandidateFactGuard(pendingAgenticCandidate.text, input);
+        if (!latestAgenticFactGuard.ok) {
+          const findings = latestAgenticFactGuard.report.hardBlocks.map((finding) => ({
+            code: finding.id,
+            message: finding.evidence,
+            evidenceRef: finding.source,
+          }));
+          const recovered = await runAgenticRecovery(
+            "fact_guard",
+            pendingAgenticCandidate.id,
+            latestAgenticFactGuard.errors,
+            {
+              recoveryDirective: {
+                kind: "fact_guard",
+                previousCandidateText: pendingAgenticCandidate.text,
+                findings,
+              },
+            },
+          );
+          if (!recovered) break;
+          agenticResult = recovered;
+          pendingAgenticCandidate = recovered.candidate;
+          continue;
+        }
+          generationRecoveryTrace.succeeded = recoveryAttempts.length > 0;
+          break;
+        }
+      };
+      await ensureAgenticCandidateReady();
+
+      const finalConsumptionEvents = input.capabilityConsumptionLedger?.events()
+        ?? agenticResult.capabilityConsumption
+        ?? [];
+      const finalDeliveredHash = agenticResult.modelInputHash
+        ?? finalConsumptionEvents.find((event) => event.event === "delivered_to_model")?.modelInputHash
+        ?? null;
+      if (stageResults.capabilityPackages) {
+        const capabilityTrace = stageResults.capabilityPackages as {
+          consumption?: unknown;
+          modelInputHash?: string | null;
+        };
+        capabilityTrace.consumption = [...finalConsumptionEvents];
+        capabilityTrace.modelInputHash = finalDeliveredHash;
+      }
+
+      if (finalConsumptionEvents.some((event) =>
+        event.event === "delivered_to_model" && event.reason === "activation_tool_result"
+      )) {
+        return this.hardBlock(
+          input,
+          "capability_package",
+          "candidate-only capability payload entered Agentic draft model input",
+          stageResults,
+        );
+      }
+      stageResults.novelos = {
+        shadowEnabled: false,
+        required: true,
+        sessionId: agenticResult.sessionId,
+        trajectoryPath: agenticResult.trajectoryPath,
+        candidateId: agenticResult.candidate?.id ?? null,
+        candidateLength: agenticResult.candidate?.text.length ?? 0,
+        stopReason: agenticResult.stopReason,
+        failureReason: agenticResult.failureReason ?? null,
+        failureKind: agenticResult.failureKind ?? null,
+        budgetSnapshot: agenticResult.budgetSnapshot,
+        sourceRefs: agenticResult.sourceRefs,
+        toolCalls: agenticResult.toolCalls,
+        verifierCleared: agenticResult.verifierCleared,
+        repairRounds: agenticResult.repairRounds,
+        hardFindingCount: agenticResult.hardFindingCount ?? null,
+        unresolvedFindings: agenticResult.unresolvedFindings ?? [],
+        decisionMode: agenticResult.decisionMode,
+        firstAction: agenticResult.firstAction,
+        actualRetrievalCalls: agenticResult.actualRetrievalCalls,
+        mustVerifyCount: agenticResult.mustVerifyCount,
+        mustVerifyCoveredCount: agenticResult.mustVerifyCoveredCount,
+        coverageResult: agenticResult.coverageResult ?? null,
+        modelCallsByKind: agenticResult.modelCallsByKind,
+        recovered: recoveryAttempts.length > 0,
+      };
+
+      if (!pendingAgenticCandidate) {
+        const failureKind = agenticResult.failureKind
+          ?? classifyTimeoutFromReason(agenticResult.failureReason ?? agenticResult.stopReason);
+        const timeoutRecovery = failureKind === "model_timeout";
         return this.hardBlock(
           input,
           "novelos_agentic_generation",
-          `NovelOS Agentic 未产出有效正文（${failureKind}）：${agenticResult.failureReason ?? agenticResult.stopReason}`,
+          `NovelOS Agentic 内部恢复后仍未产出有效正文（${failureKind}）：${agenticResult.failureReason ?? agenticResult.stopReason}`,
           stageResults,
+          undefined,
+          {
+            gate: timeoutRecovery ? "model_timeout" : "agentic_generation",
+            severityOverride: timeoutRecovery ? "recoverable" : "hard",
+            recoverable: timeoutRecovery,
+            retryPlan: timeoutRecovery
+              ? { strategy: "chapter_level_retry", maxAttempts: 1 }
+              : { strategy: "terminal_block_no_retry", maxAttempts: 0 },
+          },
+        );
+      }
+      let agenticCandidate: Candidate = pendingAgenticCandidate;
+      // MA-1：只为恢复循环最终选定的 Agentic 结果登记工作包和 Draft 契约，
+      // 防止 lineage 仍指向首轮失败稿或已被替换的候选。
+      try {
+        const agenticPkg = buildRoleWorkPackage(collabState, "novelos_agentic", {
+          stage: recoveryAttempts.length > 0
+            ? "stage1_novelosAgenticRecovered"
+            : "stage1_novelosAgentic",
+          sessionId: agenticResult.sessionId || `agentic-${chapterId}`,
+          objective: "NovelOS Agentic 初稿生成（不直接交付）",
+        });
+        requireWorkPackageInput(agenticPkg, {
+          workspaceId,
+          chapterId,
+          chapterNumber,
+          chapterIntent: intent,
+          seedContext: context,
+          context,
+          knownCharacterNames: characterNames,
+          inviolableFacts: intent.inviolableFacts,
+          targetWordCount: input.targetWordCount,
+          toolMode: input.toolMode,
+          evalPrefix: input.evalPrefix,
+          retrievalPromptOverride: input.retrievalPromptOverride,
+        });
+        recordWorkPackage(collabState, agenticPkg);
+        if (agenticResult.workPackageSummary) {
+          stageResults.agenticWorkPackage = agenticResult.workPackageSummary;
+        }
+        const draftContract = adaptDraftFromAgenticSource(agenticResult, {
+          workPackage: agenticPkg,
+          candidateId: agenticCandidate.id,
+        });
+        recordAgentResult(collabState, draftContract, "fact_guard", agenticPkg.packageId);
+      } catch (collabErr: unknown) {
+        const failure = classifyCollaborationContractError(
+          "novelos_agentic_contract",
+          "novelos_agentic",
+          collabErr,
+        );
+        stageResults.agentCollaborationError = failure;
+        return this.hardBlock(
+          input,
+          failure.stage,
+          formatCollaborationFailureReason(failure),
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: agenticCandidate.id,
+          },
+          collaborationFailureGuidance(failure),
         );
       }
       if (agenticResult.verifierCleared !== true) {
@@ -1613,11 +1956,6 @@ export class UnifiedOrchestrator {
           stateCommitExecuted: false,
           chapterSaveExecuted: false,
         };
-        // P0-4 修复（NOVELOS-CONSTRAINT-RELAXATION-1）：按 finding 的 certainty /
-        // coverageStatus 把阻断归因到三类，避免一刀切要求用户改章纲。
-        // - heuristic finding 误入 hard、coverageStatus=uncertain → 系统责任
-        // - deterministic/corroborated 真实遗漏 → 系统责任（重试 / patch）
-        // - 事实/人物边界冲突（作者输入自相矛盾）→ 用户责任
         const blockGuidance = classifyAgenticVerificationBlock(
           agenticResult.unresolvedFindings ?? [],
           chapterNumber,
@@ -1625,7 +1963,7 @@ export class UnifiedOrchestrator {
         return this.hardBlock(
           input,
           "novelos_agentic_verification",
-          `NovelOS Agentic 在 ${repairRounds} 轮修复后仍有 ${hardFindingCount} 个硬失败；候选仅作为阻断证据，不可交付或保存`,
+          `NovelOS Agentic 在 ${repairRounds} 轮修复（内部恢复）后仍有 ${hardFindingCount} 个硬失败`,
           stageResults,
           {
             rawText: agenticCandidate.text,
@@ -1640,9 +1978,6 @@ export class UnifiedOrchestrator {
           blockGuidance,
         );
       }
-      // RRB-5.1：候选正文与 candidateId 的 hash 绑定校验（fail-closed）。
-      // candidateId 必须内嵌 hashText(text) 前缀（与 buildCandidateId 口径一致），
-      // 否则候选 lineage/hash 不完整，不得进入后续转换或提交。
       const hashBinding = checkCandidateTextHashBinding(agenticCandidate);
       if (!hashBinding.ok) {
         stageResults.candidateIntegrity = {
@@ -1653,7 +1988,7 @@ export class UnifiedOrchestrator {
         return this.hardBlock(
           input,
           "novelos_agentic_integrity",
-          `NovelOS Agentic 候选正文与 candidateId 的 hash 绑定失败（${hashBinding.reason}）；候选仅作为阻断证据，不可交付或保存`,
+          `NovelOS Agentic 候选正文与 candidateId 的 hash 绑定失败（${hashBinding.reason}）`,
           stageResults,
           {
             rawText: agenticCandidate.text,
@@ -1669,16 +2004,24 @@ export class UnifiedOrchestrator {
       }
       candidates.push(agenticCandidate);
 
-      const agenticCompleteness = scanFinalTextCompleteness(agenticCandidate.text, {
-        finishReason: agenticCandidate.finishReason,
-        chapterNumber,
-      });
+      const agenticCompleteness = latestAgenticCompleteness
+        ?? scanFinalTextCompleteness(agenticCandidate.text, {
+          finishReason: agenticCandidate.finishReason,
+          chapterNumber,
+        });
+      const agenticTargetLength = input.targetWordCount
+        ? assessTargetLength(agenticCandidate.text, input.targetWordCount)
+        : null;
       stageResults.agenticCompleteness = agenticCompleteness;
-      if (!agenticCompleteness.passed) {
+      stageResults.agenticTargetLength = agenticTargetLength;
+      if (!agenticCompleteness.passed || agenticTargetLength?.needsContinuation) {
+        const reason = agenticTargetLength?.needsContinuation
+          ? `初稿仍少 ${agenticTargetLength.remaining} 字，未达到 ${agenticTargetLength.minimum} 字交付下限`
+          : agenticCompleteness.findings[0]?.reason ?? "NovelOS Agentic 初稿疑似截断";
         return this.hardBlock(
           input,
           "agentic_completeness",
-          agenticCompleteness.findings[0]?.reason ?? "NovelOS Agentic 初稿疑似截断",
+          reason,
           stageResults,
           {
             rawText: agenticCandidate.text,
@@ -1694,7 +2037,7 @@ export class UnifiedOrchestrator {
       }
 
       const agenticFactGuard = timeSync("stage2_agenticFactGuard", () =>
-        checkCandidateFactGuard(agenticCandidate.text, input),
+        latestAgenticFactGuard ?? checkCandidateFactGuard(agenticCandidate.text, input),
       );
       stageResults.agenticFactGuard = agenticFactGuard;
       // MA-1：FactGuard 结果契约
@@ -1749,7 +2092,7 @@ export class UnifiedOrchestrator {
         return this.hardBlock(
           input,
           "agentic_fact_guard",
-          `NovelOS Agentic 初稿事实硬伤：${agenticFactGuard.errors.join("; ")}`,
+          `NovelOS Agentic 初稿在内部恢复后仍有事实硬伤：${agenticFactGuard.errors.join("; ")}`,
           stageResults,
           {
             rawText: agenticCandidate.text,
@@ -1847,7 +2190,7 @@ export class UnifiedOrchestrator {
         modelGenerate: wrappedModelGenerate!,
         timeoutMs: input.timeoutMs,
         strategyParams: authorStyleStrategyParams,
-        targetWordCount: input.targetWordCount,
+            targetWordCount: input.targetWordCount,
       };
       let styleResult = await timeAsync("stage3_authorStyleOptimization", () =>
         createAuthorStyleOptimizer().optimize(styleOptimizationInput),
@@ -1940,8 +2283,11 @@ export class UnifiedOrchestrator {
       if (transientStyleFailure) {
         const firstFailureKind = styleResult.failureKind;
         const firstFailureReason = styleResult.failureReason ?? "未产出候选";
+        const retryInput = styleResult.failureKind === "continuation_prefix_mismatch"
+          ? { ...styleOptimizationInput, continuationPrefixRecovery: true }
+          : styleOptimizationInput;
         const retryResult = await timeAsync("stage3_authorStyleOptimizationRetry", () =>
-          createAuthorStyleOptimizer().optimize(styleOptimizationInput),
+          createAuthorStyleOptimizer().optimize(retryInput),
         );
         stageResults.authorStyleOptimizationRetry = {
           attempted: true,
@@ -1957,8 +2303,31 @@ export class UnifiedOrchestrator {
         styleResult = retryResult;
         styleResult = preserveContinuationStyleResult(styleResult, input);
       }
-      let styledCandidate = styleResult.candidate;
-      if (!styledCandidate) {
+      let initialStyledCandidate = styleResult.candidate;
+      if (
+        !initialStyledCandidate
+        && input.continuationMode === "append"
+        && styleResult.failureKind === "continuation_prefix_mismatch"
+      ) {
+        // The retry still violated the byte-preserved prefix contract. Keep a
+        // safe no-op candidate and let the ordinary hard fact/story gates make
+        // the final decision; do not manufacture a duplicated chapter.
+        initialStyledCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
+        styleResult = {
+          ...styleResult,
+          candidate: initialStyledCandidate,
+          failureKind: null,
+          failureReason: null,
+        };
+        stageResults.authorStyleOptimizationNoopRecovery = {
+          reason: "continuation_prefix_mismatch",
+          candidateId: initialStyledCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+          retryAttempted: transientStyleFailure,
+          disposition: "preserve_agentic_candidate_for_normal_gates",
+        };
+      }
+      if (!initialStyledCandidate) {
         // P0-1 修复（Phase 1 整改）：风格优化未产出候选 → 不再回退 raw 初稿。
         // 按失败归因分类处理：
         // - empty_result/model_timeout 已在本阶段复用同一 Agentic 候选重试一次；耗尽后 hard block。
@@ -1998,6 +2367,7 @@ export class UnifiedOrchestrator {
           },
         );
       }
+      let styledCandidate: Candidate = initialStyledCandidate;
       // MA：若首次未记（transient 失败后重试成功），此处补记 author_style ok
       if (
         transientStyleFailure &&
@@ -2151,6 +2521,7 @@ export class UnifiedOrchestrator {
             chapterNumber,
             continuationMode: input.continuationMode,
             currentChapterDraft: input.currentChapterDraft,
+            chineseAiLanguageGuidanceBlock: chineseAiLanguageGuidance.block,
             intent,
             context,
             constitution,
@@ -2286,14 +2657,15 @@ export class UnifiedOrchestrator {
             sourceCandidate: agenticCandidate,
             chapterNumber,
             continuationMode: input.continuationMode,
-            currentChapterDraft: input.currentChapterDraft,
+              currentChapterDraft: input.currentChapterDraft,
+              chineseAiLanguageGuidanceBlock: chineseAiLanguageGuidance.block,
             intent,
             context,
             constitution,
             writerPromptProfile: input.rawPromptProfile,
             modelGenerate: wrappedModelGenerate!,
             timeoutMs: input.timeoutMs,
-            targetWordCount: input.targetWordCount,
+        targetWordCount: input.targetWordCount,
             reducedGuidanceRatio: 0.5,
             driftFeedback: {
               replacedEvents: (preservation.replacedEvents ?? []).map((e) => ({
@@ -2420,10 +2792,565 @@ export class UnifiedOrchestrator {
         chapterNumber,
       );
 
-      const finalFactRecheck = timeSync("stage5_finalFactRecheck", () =>
-        checkCandidateFactGuard(styledCandidate.text, input, agenticCandidate.text),
+      let finalFactRecheck = timeSync("stage5_finalFactRecheck", () =>
+        checkCandidateFactGuard(styledCandidate!.text, input, agenticCandidate.text),
       );
+      const duplicateHardBlocks = finalFactRecheck.report.hardBlocks.filter(
+        (finding) => finding.source === "duplicate_scan",
+      );
+      if (
+        !finalFactRecheck.ok
+        && duplicateHardBlocks.length > 0
+        && duplicateHardBlocks.length === finalFactRecheck.report.hardBlocks.length
+      ) {
+        const repaired = repairDuplicateFindings(
+          styledCandidate.text,
+          duplicateHardBlocks as DuplicateFindingLike[],
+          input.continuationMode === "append" ? input.currentChapterDraft ?? "" : "",
+        );
+        if (repaired.changed) {
+          const patchedCandidate: Candidate = {
+            ...styledCandidate,
+            id: `${styledCandidate.id}:dedupe:${hashText(repaired.text).slice(0, 16)}`,
+            text: repaired.text,
+            sourceCandidateId: styledCandidate.sourceCandidateId ?? agenticCandidate.id,
+          };
+          const duplicatePreservation = timeSync("stage4_storyPreservationAfterDedupe", () =>
+            checkEditorialStoryPreservation({
+              rawText: agenticCandidate.text,
+              editorialText: patchedCandidate.text,
+              knownEntities,
+              entityCoverage,
+              aliasToCanonical: input.aliasToCanonical,
+            }),
+          );
+          const duplicateFactRecheck = timeSync("stage5_finalFactRecheckAfterDedupe", () =>
+            checkCandidateFactGuard(patchedCandidate.text, input, agenticCandidate.text),
+          );
+          const duplicateCompleteness = scanFinalTextCompleteness(patchedCandidate.text, {
+            finishReason: patchedCandidate.finishReason,
+            chapterNumber,
+          });
+          const duplicateLength = input.targetWordCount
+            ? assessTargetLength(patchedCandidate.text, input.targetWordCount)
+            : null;
+          const accepted = duplicatePreservation.preserved
+            && duplicateFactRecheck.ok
+            && duplicateCompleteness.passed
+            && !duplicateLength?.needsContinuation;
+          stageResults.finalDuplicateRepair = {
+            changed: true,
+            accepted,
+            removed: repaired.removed,
+            storyPreservation: duplicatePreservation,
+            factRecheck: duplicateFactRecheck,
+            completeness: duplicateCompleteness,
+            targetLength: duplicateLength,
+          };
+          if (accepted) {
+            const staleCandidateIndex = candidates.findIndex((candidate) => candidate.id === styledCandidate!.id);
+            if (staleCandidateIndex >= 0) candidates.splice(staleCandidateIndex, 1);
+            styledCandidate = patchedCandidate;
+            candidates.push(styledCandidate);
+            stageResults.storyPreservation = duplicatePreservation;
+            finalFactRecheck = duplicateFactRecheck;
+            stageResults.authorStyleHumanReviewPackage = buildAuthorStyleHumanReviewPackage(
+              agenticCandidate,
+              styledCandidate,
+              chapterNumber,
+            );
+          }
+        } else {
+          stageResults.finalDuplicateRepair = {
+            changed: false,
+            accepted: false,
+            reason: "no_exact_duplicate_segment",
+          };
+        }
+      }
+
+      type FinalRecoveryReason = "target_length" | "fact_guard" | "completeness";
+      const finalRecoveryAttempts: Array<{
+        attempt: number;
+        reason: FinalRecoveryReason;
+        sourceCandidateId: string;
+        resultCandidateId: string | null;
+        outcome: "accepted" | "rejected" | "no_candidate" | "budget_exhausted";
+        evidence: string[];
+      }> = [];
+      const finalGenerationRecovery = {
+        maxAttempts: (stageResults.recoveryBudget as RecoveryBudget).maxTotalAttempts,
+        attempts: finalRecoveryAttempts,
+        exhausted: false,
+        succeeded: false,
+      };
+      stageResults.finalGenerationRecovery = finalGenerationRecovery;
+
+      let finalCompleteness = scanFinalTextCompleteness(styledCandidate.text, {
+        finishReason: styledCandidate.finishReason,
+        chapterNumber,
+      });
+      let finalTargetLength = input.targetWordCount
+        ? assessTargetLength(styledCandidate.text, input.targetWordCount)
+        : null;
+
+      const reserveFinalStyleRecovery = (): boolean => {
+        const currentBudget = (stageResults.recoveryBudget as RecoveryBudget | undefined)
+          ?? recoveryBudget;
+        const reserved = reserveBudget(currentBudget, {
+          totalAttempts: 1,
+          recoveryModelCalls: 1,
+          modelCalls: 1,
+        });
+        if (!reserved.ok) {
+          finalGenerationRecovery.exhausted = true;
+          return false;
+        }
+        stageResults.recoveryBudget = reserved.budget;
+        const governance = getGovernanceState(stageResults);
+        if (governance) {
+          setGovernanceState(stageResults, {
+            ...governance,
+            layeredBudget: {
+              ...governance.layeredBudget,
+              legacyRecovery: reserved.budget,
+            },
+          });
+        }
+        return true;
+      };
+
+      const recordRecoveredStyleContracts = (
+        recoveredStyleResult: AuthorStyleOptimizationResult,
+        recoveredCandidate: Candidate,
+        recoveredPreservation: StoryPreservationGateReport,
+        reason: FinalRecoveryReason,
+      ): void => {
+        const stylePkg = buildRoleWorkPackage(collabState, "author_style", {
+          stage: `stage3_authorStyleFinalRecovery_${reason}`,
+          sessionId: `style-final-recovery-${reason}-${recoveredCandidate.id}`,
+          objective: "作者风格整章优化（最终门禁恢复）",
+          parentCandidateId: agenticCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+        });
+        requireWorkPackageInput(stylePkg, {
+          workspaceId,
+          chapterId,
+          chapterNumber,
+          sourceCandidate: agenticCandidate,
+          intent,
+          context,
+          constitution,
+          strategyParams: authorStyleStrategyParams,
+          targetWordCount: input.targetWordCount,
+          writerPromptProfile: input.rawPromptProfile,
+        });
+        recordWorkPackage(collabState, stylePkg);
+        const styleContract = adaptEditorialResult(recoveredStyleResult, {
+          workPackage: stylePkg,
+          sourceCandidateId: agenticCandidate.id,
+          candidateId: recoveredCandidate.id,
+        });
+        recordAgentResult(collabState, styleContract, "story_preservation", stylePkg.packageId);
+
+        const spPkg = buildRoleWorkPackage(collabState, "story_preservation", {
+          stage: `stage4_storyPreservationFinalRecovery_${reason}`,
+          sessionId: `sp-final-recovery-${reason}-${recoveredCandidate.id}`,
+          objective: "故事保持核验（最终门禁恢复）",
+          parentCandidateId: agenticCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+        });
+        requireWorkPackageInput(spPkg, {
+          workspaceId,
+          chapterId,
+          rawText: agenticCandidate.text,
+          editorialText: recoveredCandidate.text,
+          knownEntities,
+          entityCoverage,
+          aliasToCanonical: input.aliasToCanonical,
+          sourceCandidateId: agenticCandidate.id,
+          optimizedCandidateId: recoveredCandidate.id,
+        });
+        recordWorkPackage(collabState, spPkg);
+        const spContract = adaptStoryPreservationResult(recoveredPreservation, {
+          workPackage: spPkg,
+          sourceCandidateId: agenticCandidate.id,
+          optimizedCandidateId: recoveredCandidate.id,
+        });
+        recordAgentResult(collabState, spContract, "final_fact_recheck", spPkg.packageId);
+      };
+
+      const regenerateStyledCandidate = async (
+        reason: FinalRecoveryReason,
+        evidence: string[],
+        recoveryFeedback?: {
+          kind: "fact_guard" | "completeness";
+          previousEditorialText: string;
+          findings: Array<{ code: string; message: string; evidenceRef?: string }>;
+        },
+      ): Promise<boolean> => {
+        const attempt = finalRecoveryAttempts.length + 1;
+        if (!reserveFinalStyleRecovery()) {
+          finalRecoveryAttempts.push({
+            attempt,
+            reason,
+            sourceCandidateId: styledCandidate.id,
+            resultCandidateId: null,
+            outcome: "budget_exhausted",
+            evidence: [...evidence],
+          });
+          return false;
+        }
+
+        let recoveredStyleResult = await timeAsync(
+          `stage3_authorStyleFinalRecovery_${attempt}_${reason}`,
+          () => createAuthorStyleOptimizer().optimize({
+            ...styleOptimizationInput,
+            sourceCandidate: agenticCandidate,
+            ...(recoveryFeedback ? { recoveryFeedback } : {}),
+          }),
+        );
+        recoveredStyleResult = preserveContinuationStyleResult(recoveredStyleResult, input);
+        const recoveredCandidate = recoveredStyleResult.candidate;
+        if (!recoveredCandidate) {
+          finalRecoveryAttempts.push({
+            attempt,
+            reason,
+            sourceCandidateId: styledCandidate.id,
+            resultCandidateId: null,
+            outcome: "no_candidate",
+            evidence: [
+              ...evidence,
+              recoveredStyleResult.failureReason ?? "作者风格恢复未产出候选",
+            ],
+          });
+          return false;
+        }
+
+        const recoveredPreservation = timeSync(
+          `stage4_storyPreservationFinalRecovery_${attempt}_${reason}`,
+          () => checkEditorialStoryPreservation({
+            rawText: agenticCandidate.text,
+            editorialText: recoveredCandidate.text,
+            knownEntities,
+            entityCoverage,
+            aliasToCanonical: input.aliasToCanonical,
+          }),
+        );
+        const recoveredFactRecheck = timeSync(
+          `stage5_finalFactRecheckRecovery_${attempt}_${reason}`,
+          () => checkCandidateFactGuard(recoveredCandidate.text, input, agenticCandidate.text),
+        );
+        const recoveredCompleteness = scanFinalTextCompleteness(recoveredCandidate.text, {
+          finishReason: recoveredCandidate.finishReason,
+          chapterNumber,
+        });
+        const recoveredLength = input.targetWordCount
+          ? assessTargetLength(recoveredCandidate.text, input.targetWordCount)
+          : null;
+        const accepted = recoveredPreservation.preserved
+          && recoveredFactRecheck.ok
+          && recoveredCompleteness.passed
+          && !recoveredLength?.needsContinuation;
+        finalRecoveryAttempts.push({
+          attempt,
+          reason,
+          sourceCandidateId: styledCandidate.id,
+          resultCandidateId: recoveredCandidate.id,
+          outcome: accepted ? "accepted" : "rejected",
+          evidence: [
+            ...evidence,
+            ...(recoveredPreservation.preserved ? [] : [recoveredPreservation.reason]),
+            ...recoveredFactRecheck.errors,
+            ...recoveredCompleteness.findings.map((finding) => finding.reason),
+            ...(recoveredLength?.needsContinuation
+              ? [`仍少 ${recoveredLength.remaining} 字`]
+              : []),
+          ],
+        });
+        if (!accepted) return false;
+
+        const staleCandidateIndex = candidates.findIndex(
+          (candidate) => candidate.id === styledCandidate.id,
+        );
+        if (staleCandidateIndex >= 0) candidates.splice(staleCandidateIndex, 1);
+        styledCandidate = recoveredCandidate;
+        candidates.push(styledCandidate);
+        stageResults.storyPreservation = recoveredPreservation;
+        finalFactRecheck = recoveredFactRecheck;
+        finalCompleteness = recoveredCompleteness;
+        finalTargetLength = recoveredLength;
+        stageResults.authorStyleOptimizationFinalRecovery = {
+          reason,
+          styleProfileLoaded: recoveredStyleResult.styleProfileLoaded,
+          styleGuidanceConsumed: recoveredStyleResult.styleGuidanceConsumed,
+          styleReferenceIds: recoveredStyleResult.styleReferenceIds,
+          guidanceCount: recoveredStyleResult.guidanceCount,
+          candidateId: recoveredCandidate.id,
+        };
+        stageResults.authorStyleHumanReviewPackage = buildAuthorStyleHumanReviewPackage(
+          agenticCandidate,
+          styledCandidate,
+          chapterNumber,
+        );
+        recordRecoveredStyleContracts(
+          recoveredStyleResult,
+          recoveredCandidate,
+          recoveredPreservation,
+          reason,
+        );
+        return true;
+      };
+
+      while (true) {
+        if (finalTargetLength?.needsContinuation) {
+          const shortStyledCandidateId = styledCandidate.id;
+          const previousAgenticCandidate = agenticCandidate;
+          const rawLength = assessTargetLength(agenticCandidate.text, input.targetWordCount!);
+          const expansionBuffer = Math.max(
+            50,
+            Math.ceil(input.targetWordCount!.min * 0.05),
+          );
+          const expandedMinimum = rawLength.contentCharacters
+            + finalTargetLength.remaining
+            + expansionBuffer;
+          const expandedTarget = {
+            min: expandedMinimum,
+            max: Math.max(
+              expandedMinimum + expansionBuffer,
+              input.targetWordCount!.max + finalTargetLength.remaining,
+            ),
+          };
+          const recoveredAgenticResult = await runAgenticRecovery(
+            "target_length",
+            agenticCandidate.id,
+            [
+              `优化稿仍少 ${finalTargetLength.remaining} 字`,
+              `最终最低字数=${finalTargetLength.minimum}`,
+            ],
+            {
+              continuationMode: "append",
+              currentChapterDraft: agenticCandidate.text,
+              targetWordCount: expandedTarget,
+            },
+          );
+          if (!recoveredAgenticResult) {
+            finalRecoveryAttempts.push({
+              attempt: finalRecoveryAttempts.length + 1,
+              reason: "target_length",
+              sourceCandidateId: shortStyledCandidateId,
+              resultCandidateId: null,
+              outcome: "budget_exhausted",
+              evidence: [`优化稿仍少 ${finalTargetLength.remaining} 字`],
+            });
+            finalGenerationRecovery.exhausted = true;
+            break;
+          }
+          agenticResult = recoveredAgenticResult;
+          pendingAgenticCandidate = recoveredAgenticResult.candidate;
+          latestAgenticCompleteness = null;
+          latestAgenticFactGuard = null;
+          await ensureAgenticCandidateReady();
+          const expandedAgenticCandidate = pendingAgenticCandidate;
+          if (
+            !expandedAgenticCandidate
+            || agenticResult.verifierCleared !== true
+            || !checkCandidateTextHashBinding(expandedAgenticCandidate).ok
+          ) {
+            finalRecoveryAttempts.push({
+              attempt: finalRecoveryAttempts.length + 1,
+              reason: "target_length",
+              sourceCandidateId: shortStyledCandidateId,
+              resultCandidateId: expandedAgenticCandidate?.id ?? null,
+              outcome: "rejected",
+              evidence: ["扩充后的 Agentic 候选未通过 verifier 或 hash 绑定"],
+            });
+            break;
+          }
+          agenticCandidate = expandedAgenticCandidate;
+          const expandedCompleteness = scanFinalTextCompleteness(expandedAgenticCandidate.text, {
+            finishReason: expandedAgenticCandidate.finishReason,
+            chapterNumber,
+          });
+          const expandedFactGuard = checkCandidateFactGuard(expandedAgenticCandidate.text, input);
+          if (!expandedCompleteness.passed || !expandedFactGuard.ok) {
+            finalRecoveryAttempts.push({
+              attempt: finalRecoveryAttempts.length + 1,
+              reason: "target_length",
+              sourceCandidateId: shortStyledCandidateId,
+              resultCandidateId: expandedAgenticCandidate.id,
+              outcome: "rejected",
+              evidence: [
+                ...expandedCompleteness.findings.map((finding) => finding.reason),
+                ...expandedFactGuard.errors,
+              ],
+            });
+            break;
+          }
+          if (!candidates.some((candidate) => candidate.id === expandedAgenticCandidate.id)) {
+            candidates.push(expandedAgenticCandidate);
+          }
+          stageResults.agenticCompleteness = expandedCompleteness;
+          stageResults.agenticFactGuard = expandedFactGuard;
+          stageResults.novelos = {
+            ...(stageResults.novelos as Record<string, unknown>),
+            sessionId: agenticResult.sessionId,
+            trajectoryPath: agenticResult.trajectoryPath,
+            candidateId: expandedAgenticCandidate.id,
+            candidateLength: expandedAgenticCandidate.text.length,
+            verifierCleared: agenticResult.verifierCleared,
+            recovered: true,
+            recoveredFromCandidateId: previousAgenticCandidate.id,
+          };
+
+          try {
+            const recoveredAgenticPkg = buildRoleWorkPackage(collabState, "novelos_agentic", {
+              stage: "stage1_novelosAgenticFinalLengthRecovery",
+              sessionId: agenticResult.sessionId,
+              objective: "NovelOS Agentic 初稿扩充（不直接交付）",
+              parentCandidateId: previousAgenticCandidate.id,
+              sourceCandidateId: previousAgenticCandidate.id,
+            });
+            requireWorkPackageInput(recoveredAgenticPkg, {
+              workspaceId,
+              chapterId,
+              chapterNumber,
+              chapterIntent: intent,
+              seedContext: context,
+              context,
+              knownCharacterNames: characterNames,
+              inviolableFacts: intent.inviolableFacts,
+              targetWordCount: expandedTarget,
+              toolMode: input.toolMode,
+              evalPrefix: input.evalPrefix,
+              retrievalPromptOverride: input.retrievalPromptOverride,
+            });
+            recordWorkPackage(collabState, recoveredAgenticPkg);
+            const recoveredDraftContract = adaptDraftFromAgenticSource(agenticResult, {
+              workPackage: recoveredAgenticPkg,
+              candidateId: expandedAgenticCandidate.id,
+            });
+            recordAgentResult(
+              collabState,
+              recoveredDraftContract,
+              "fact_guard",
+              recoveredAgenticPkg.packageId,
+            );
+
+            const recoveredFactPkg = buildRoleWorkPackage(collabState, "fact_guard", {
+              stage: "stage2_agenticFactGuardFinalLengthRecovery",
+              sessionId: `fact-guard-final-length-${expandedAgenticCandidate.id}`,
+              objective: "扩充后 Agentic 初稿事实核验",
+              parentCandidateId: expandedAgenticCandidate.id,
+              sourceCandidateId: expandedAgenticCandidate.id,
+            });
+            requireWorkPackageInput(recoveredFactPkg, {
+              workspaceId,
+              chapterId,
+              candidateId: expandedAgenticCandidate.id,
+              text: expandedAgenticCandidate.text,
+              context,
+              knownCharacterNames: characterNames,
+              constraintManifest: input.contextSafety?.manifest,
+            });
+            recordWorkPackage(collabState, recoveredFactPkg);
+            const recoveredFactContract = adaptFactGuardResult(expandedFactGuard, {
+              workPackage: recoveredFactPkg,
+              candidateId: expandedAgenticCandidate.id,
+              role: "fact_guard",
+            });
+            recordAgentResult(
+              collabState,
+              recoveredFactContract,
+              "author_style",
+              recoveredFactPkg.packageId,
+            );
+          } catch (collabErr: unknown) {
+            const failure = classifyCollaborationContractError(
+              "final_length_recovery_contract",
+              "novelos_agentic",
+              collabErr,
+            );
+            stageResults.agentCollaborationError = failure;
+            return this.hardBlock(
+              input,
+              failure.stage,
+              formatCollaborationFailureReason(failure),
+              stageResults,
+              {
+                rawText: expandedAgenticCandidate.text,
+                rawFinishReason: expandedAgenticCandidate.finishReason ?? null,
+                rawMaxTokens: expandedAgenticCandidate.maxTokens ?? null,
+                rawModel: expandedAgenticCandidate.model,
+                modelVersion: detectModelVersion(expandedAgenticCandidate.model),
+                candidateId: expandedAgenticCandidate.id,
+              },
+              collaborationFailureGuidance(failure),
+            );
+          }
+
+          const recovered = await regenerateStyledCandidate(
+            "target_length",
+            [`优化稿仍少 ${finalTargetLength.remaining} 字`],
+          );
+          if (!recovered && finalGenerationRecovery.exhausted) break;
+          continue;
+        }
+
+        if (!finalFactRecheck.ok) {
+          const recovered = await regenerateStyledCandidate(
+            "fact_guard",
+            finalFactRecheck.errors,
+            {
+              kind: "fact_guard",
+              previousEditorialText: styledCandidate.text,
+              findings: finalFactRecheck.report.hardBlocks.map((finding) => ({
+                code: finding.id,
+                message: finding.evidence,
+                evidenceRef: finding.source,
+              })),
+            },
+          );
+          if (!recovered && finalGenerationRecovery.exhausted) break;
+          if (!recovered && finalRecoveryAttempts.length >= finalGenerationRecovery.maxAttempts) {
+            finalGenerationRecovery.exhausted = true;
+            break;
+          }
+          continue;
+        }
+
+        if (!finalCompleteness.passed) {
+          const recovered = await regenerateStyledCandidate(
+            "completeness",
+            finalCompleteness.findings.map((finding) => finding.reason),
+            {
+              kind: "completeness",
+              previousEditorialText: styledCandidate.text,
+              findings: finalCompleteness.findings.map((finding) => ({
+                code: finding.code ?? "incomplete_output",
+                message: finding.reason,
+                evidenceRef: finding.span
+                  ? `span:${finding.span.start}-${finding.span.end}`
+                  : undefined,
+              })),
+            },
+          );
+          if (!recovered && finalGenerationRecovery.exhausted) break;
+          if (!recovered && finalRecoveryAttempts.length >= finalGenerationRecovery.maxAttempts) {
+            finalGenerationRecovery.exhausted = true;
+            break;
+          }
+          continue;
+        }
+        break;
+      }
+
+      finalGenerationRecovery.succeeded = finalRecoveryAttempts.length > 0
+        && finalFactRecheck.ok
+        && finalCompleteness.passed
+        && !finalTargetLength?.needsContinuation;
       stageResults.finalFactRecheck = finalFactRecheck;
+      stageResults.finalTargetLength = finalTargetLength;
       // MA-1：FinalFactRecheck 结果契约
       try {
         const rePkg = buildRoleWorkPackage(collabState, "final_fact_recheck", {
@@ -2517,10 +3444,32 @@ export class UnifiedOrchestrator {
         );
       }
 
-      const finalCompleteness = scanFinalTextCompleteness(styledCandidate.text, {
-        finishReason: styledCandidate.finishReason,
-        chapterNumber,
-      });
+      if (finalTargetLength?.needsContinuation) {
+        return this.hardBlock(
+          input,
+          "final_target_length",
+          `作者风格优化稿在内部恢复后仍少 ${finalTargetLength.remaining} 字，未达到 ${finalTargetLength.minimum} 字交付下限`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: styledCandidate.id,
+            selectedSource: "editorial",
+            finalText: styledCandidate.text,
+          },
+          {
+            gate: "target_length",
+            severityOverride: "recoverable",
+            recoverable: true,
+            candidateDisposition: "blocked_evidence_only",
+            retryPlan: { strategy: "revise_inputs_and_retry_same_chapter", maxAttempts: 1 },
+          },
+        );
+      }
+
       stageResults.finalTextCompleteness = {
         ...finalCompleteness,
         selectedSource: "editorial",
@@ -4732,7 +5681,30 @@ export class UnifiedOrchestrator {
       guidance?.severityOverride === "recoverable" ||
       guidance?.recoverable === true ||
       guidance?.gate === "model_timeout";
-    if (isRecoverableHint) {
+    // Internal bounded recovery already reserved the model/attempt budget. A
+    // later hardBlock is only the terminal report for that same run; charging
+    // it again would consume a second attempt without making another call.
+    const hasInternalRecoveryAttempt = [
+      stageResults.generationRecovery,
+      stageResults.finalGenerationRecovery,
+    ].some((trace) => {
+      if (!trace || typeof trace !== "object") return false;
+      const attempts = (trace as { attempts?: unknown }).attempts;
+      return Array.isArray(attempts) && attempts.length > 0;
+    });
+    const internalRecoveryHadNoCall = [
+      stageResults.generationRecovery,
+      stageResults.finalGenerationRecovery,
+    ].some((trace) => {
+      if (!trace || typeof trace !== "object") return false;
+      const attempts = (trace as {
+        attempts?: Array<{ outcome?: string }>;
+      }).attempts;
+      return Array.isArray(attempts)
+        && attempts.length === 1
+        && attempts[0]?.outcome === "budget_exhausted";
+    });
+    if (isRecoverableHint && !hasInternalRecoveryAttempt) {
       const reserved = reserveBudget(recoveryBudget, {
         stageAttempts: 1,
         totalAttempts: 1,
@@ -4749,6 +5721,12 @@ export class UnifiedOrchestrator {
         recoveryBudget = reserved.budget;
         stageResults.recoveryBudget = recoveryBudget;
       }
+    } else if (isRecoverableHint && internalRecoveryHadNoCall) {
+      budgetForceCheckpoint = true;
+      stageResults.recoveryBudgetExhausted ??= {
+        reason: "internal_recovery_budget_exhausted",
+        snapshot: snapshotBudget(recoveryBudget),
+      };
     }
 
     const policyHit = matchRecoveryPolicy({
@@ -4764,6 +5742,9 @@ export class UnifiedOrchestrator {
 
     const guidanceMaxAttempts =
       guidance?.retryPlan?.maxAttempts ?? policyHit?.maxAttempts ?? 1;
+    const canRetrySameChapterAfterCheckpoint =
+      guidance?.recoverable === true
+      && guidance.retryPlan?.strategy === "revise_inputs_and_retry_same_chapter";
     // attempt 已达/超过 maxAttempts：禁止再 retry，强制 checkpoint（跨外层重试闭环）
     const attemptExhausted =
       isRecoverableHint && attempt >= guidanceMaxAttempts && !budgetForceCheckpoint;
@@ -4817,7 +5798,9 @@ export class UnifiedOrchestrator {
           : (guidance?.severityOverride ??
             (stage === "raw_generation" ? "fatal" : "hard")),
       recoverable:
-        budgetForceCheckpoint || attemptExhausted ? false : guidance?.recoverable,
+        budgetForceCheckpoint || attemptExhausted
+          ? canRetrySameChapterAfterCheckpoint
+          : guidance?.recoverable,
       attempt,
       maxAttempts: guidanceMaxAttempts,
       budget: recoveryBudget,
@@ -4836,9 +5819,11 @@ export class UnifiedOrchestrator {
               ? "retry_gate"
               : guidance.retryPlan.strategy === "chapter_level_retry"
                 ? "retry_stage"
-                : guidance.retryPlan.strategy === "revise_inputs_and_retry_same_chapter"
+              : guidance.retryPlan.strategy === "revise_inputs_and_retry_same_chapter"
                   ? "user_fix"
-                  : undefined
+                  : guidance.retryPlan.strategy === "terminal_block_no_retry"
+                    ? "stop"
+                    : undefined
             : policyHit?.action,
       recoveryHints: {
         schemaOrParseError: guidance?.gate === "schema" || guidance?.gate === "parse",
@@ -4858,8 +5843,9 @@ export class UnifiedOrchestrator {
       built.retryPlan = {
         strategy:
           strategy === "retry_gate" ||
-          strategy === "chapter_level_retry" ||
-          strategy === "revise_inputs_and_retry_same_chapter"
+            strategy === "chapter_level_retry" ||
+          strategy === "revise_inputs_and_retry_same_chapter" ||
+          strategy === "terminal_block_no_retry"
             ? strategy
             : "chapter_level_retry",
         maxAttempts: guidance.retryPlan.maxAttempts,
@@ -4870,8 +5856,9 @@ export class UnifiedOrchestrator {
         built.severity = "recoverable";
       }
     } else if (budgetForceCheckpoint || attemptExhausted) {
-      // 耗尽后：不可自动恢复，清除 retryPlan，供工具层停止外层重试
-      built.recoverable = false;
+      // 耗尽后停止自动重试并清除 retryPlan。作者输入修订/同章重新执行仍是
+      // 可恢复操作，不能把“本轮预算耗尽”误写成该章节永久不可恢复。
+      built.recoverable = canRetrySameChapterAfterCheckpoint;
       built.retryPlan = undefined;
       if (built.failureClass === "recoverable") {
         // 保留 failureClass 语义为 recoverable 的历史原因，但 action=checkpoint

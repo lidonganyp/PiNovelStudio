@@ -60,6 +60,14 @@ import {
 import type { ContextFact, Diagnostic } from "./types.js";
 import { consumeToolResult } from "./trust/tool-result-consumer.js";
 import { emitTrustAuditEvent } from "./trust/trust-audit.js";
+// Keep deterministic chapter recovery helpers in the production dependency
+// closure so API callers and tests consume the same implementation.
+export {
+  assessTargetLength,
+  countContentCharacters,
+  repairDuplicateFindings,
+  selectRecoverableDraft,
+} from "./generation-recovery.js";
 
 // ==========================================================================
 // FactGuard（候选事实校验，raw 与 editorial 共用）

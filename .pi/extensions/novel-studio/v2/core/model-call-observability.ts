@@ -30,6 +30,12 @@ export interface ObservableModelCall {
   failed?: boolean;
   cost?: number;
   ts?: number;
+  fallbackTrace?: {
+    authorized: true;
+    fromRoute: string;
+    attemptedRoutes: string[];
+    failures: string[];
+  };
 }
 
 export interface LatencyStats {
@@ -174,6 +180,7 @@ export function buildRoutingStabilityReport(input: {
   let unauthorizedCrossModelCount = 0;
   for (const call of input.calls) {
     if (call.provider !== input.expectedProvider || call.model !== input.expectedModel) {
+      if (call.fallbackTrace?.authorized) continue;
       // judge 路由允许异源，不计入生产写漂移
       if (call.route.includes("judge")) continue;
       const reason =
@@ -251,6 +258,7 @@ export function projectModelCallEntry(
     requestedRoute?: string;
     expectedProvider?: string;
     expectedModel?: string;
+    fallbackTrace?: ObservableModelCall["fallbackTrace"];
     finishReason?: string;
     maxTokens?: number;
     ts?: number;
@@ -298,6 +306,7 @@ export function projectModelCallEntry(
     failed: entry.failed,
     cost: estimateCallCost({ provider, inputTokens: tokens.in, outputTokens: tokens.out }),
     ts: entry.ts,
+    fallbackTrace: entry.fallbackTrace,
   };
 }
 

@@ -234,9 +234,11 @@ describe('generation steward', () => {
     const prepared = await prepareGenerationSteward({
       prisma: prisma as never, userId: 1, projectId: 128, chapterNumber: 1,
       continuationMode: 'append',
+      targetWordCount: { min: 2500, max: 2750 },
     });
     expect(prepared.status).toBe('confirmation_required');
     expect(prepared.proposalId).toBeTruthy();
+    expect(prepared.targetWordCount).toEqual({ min: 2500, max: 2750 });
     const confirmedFields = prepared.proposals.filter((row) => row.value.trim()).map((row) => row.field);
 
     const confirmed = await confirmGenerationSteward({
@@ -247,11 +249,13 @@ describe('generation steward', () => {
 
     expect(confirmed.status).toBe('ready');
     expect(confirmed.continuationMode).toBe('append');
+    expect(confirmed.targetWordCount).toEqual({ min: 2500, max: 2750 });
     expect(confirmed.generationJobId).toBe('job-first-chapter');
     expect(chapters[0]?.seed && String((chapters[0]?.seed as Record<string, unknown>).intent)).not.toBe('');
     expect(jobs.submitChapterGeneration).toHaveBeenCalledTimes(1);
     expect(jobs.submitChapterGeneration).toHaveBeenCalledWith(1, 128, 44, {
       continuationMode: 'append',
+      targetWordCount: { min: 2500, max: 2750 },
     });
   });
 

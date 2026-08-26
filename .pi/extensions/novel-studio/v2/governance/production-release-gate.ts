@@ -154,9 +154,14 @@ export interface BehaviorIdentityTrace {
 
 export interface ReleaseGateFailureEnvelope {
   stage: "g6_release_gate";
+  /** Stable machine-readable reason for the operator-facing failure code. */
+  code?: "environment_fingerprint_mismatch";
+  gate?: "environment_fingerprint";
   severity: "preflight";
   reason: string;
   recoverable: false;
+  userActionRequired?: string[];
+  fixInstructions?: string[];
   degradedTo: "hard_block";
 }
 
@@ -605,6 +610,8 @@ export function evaluateProductionReleaseGate(
       devMode: false,
       failureEnvelope: {
         stage: "g6_release_gate",
+        code: "environment_fingerprint_mismatch",
+        gate: "environment_fingerprint",
         severity: "preflight",
         reason:
           explainFingerprintMismatch(
@@ -615,6 +622,8 @@ export function evaluateProductionReleaseGate(
           ) +
           "（需在同一干净提交与同一环境下重新 capture，不得只比较短哈希）",
         recoverable: false,
+        userActionRequired: ["在同一干净提交与同一运行环境重新 capture、审批并部署 release"],
+        fixInstructions: ["清理生产工作树并确认 codeCommit 与部署提交一致后重新 capture/verify"],
         degradedTo: "hard_block",
       },
     };

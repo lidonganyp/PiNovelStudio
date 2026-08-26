@@ -33,7 +33,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, readdirSync } from "node:fs";
-import { join, resolve, isAbsolute } from "node:path";
+import { join, resolve, isAbsolute, dirname } from "node:path";
 import type * as pino from "pino";
 
 /** Workspace 文档输入（来自 platform-api 项目文档库） */
@@ -118,6 +118,11 @@ export interface MaterializedWorkspace {
 export interface WorkspaceManagerDeps {
   /** 临时 workspace 根目录（来自 config.tempWorkspaceRoot） */
   tempWorkspaceRoot: string;
+  /**
+   * 失败归档根目录（来自 config.workspaceArchiveRoot；空串时 derive 为
+   * tempWorkspaceRoot 同级的 `novel-runtime-archive`）。
+   */
+  workspaceArchiveRoot?: string;
   logger?: pino.Logger;
 }
 
@@ -167,6 +172,11 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
   const absRoot = isAbsolute(tempWorkspaceRoot)
     ? tempWorkspaceRoot
     : resolve(process.cwd(), tempWorkspaceRoot);
+  const absArchiveRoot = deps.workspaceArchiveRoot && deps.workspaceArchiveRoot.trim() !== ""
+    ? (isAbsolute(deps.workspaceArchiveRoot)
+        ? deps.workspaceArchiveRoot
+        : resolve(process.cwd(), deps.workspaceArchiveRoot))
+    : join(dirname(absRoot), "novel-runtime-archive");
 
   return {
     /**
@@ -258,6 +268,38 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
           }`,
           "MATERIALIZE_FAILED",
         );
+      }
+    },
+
+    /**
+     * 归档临时 workspace（生成失败时调用）：把 {tempWorkspaceRoot}/{jobId}/
+     * rename 到 {archiveRoot}/{jobId}/，保留 traces/ 等失败证据。
+     * 成功返回归档路径；失败（如 rename 不支持跨盘）返回 undefined，
+     * 调用方应回退到 cleanupWorkspace。
+     */
+    archiveWorkspace(jobId: string): string | undefined {
+      assertSafeName(jobId, "jobId");
+      const tempProjectRoot = join(absRoot, jobId);
+      if (!existsSync(tempProjectRoot)) {
+        logger?.debug({ jobId }, "temp workspace already gone; nothing to archive");
+        return undefined;
+      }
+      const archivePath = join(absArchiveRoot, jobId);
+      try {
+        mkdirSync(absArchiveRoot, { recursive: true });
+        // 同 jobId 重复失败时覆盖旧归档
+        if (existsSync(archivePath)) {
+          rmSync(archivePath, { recursive: true, force: true });
+        }
+        renameSync(tempProjectRoot, archivePath);
+        logger?.info({ jobId, archivePath }, "failed workspace archived (traces preserved)");
+        return archivePath;
+      } catch (err) {
+        logger?.warn(
+          { jobId, archivePath, err: err instanceof Error ? err.message : String(err) },
+          "workspace archive failed; caller should fall back to cleanup",
+        );
+        return undefined;
       }
     },
 

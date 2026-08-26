@@ -46,6 +46,7 @@ import {
   createEvidencePlan,
   type EvidencePlan,
 } from "./evidence-plan.js";
+import { renderRecoveryDirective } from "./recovery-directive.js";
 
 // REASONING-REPAIR-BOUNDARY-1 Wave 3：修订授权 + 候选谱系 + 计量接线
 import { evaluateRepairAuthorization } from "../../v2/core/repair-authorization-policy.js";
@@ -462,6 +463,9 @@ export class NarrativeAgentLoop {
         "以上正文必须原样保留。请从其末尾继续写作；如输出完整本章正文，必须包含该前缀，不得从头重写。",
         "",
       );
+    }
+    if (input.recoveryDirective) {
+      promptParts.push(renderRecoveryDirective(input.recoveryDirective), "");
     }
     promptParts.push(
       input.chapterIntent,

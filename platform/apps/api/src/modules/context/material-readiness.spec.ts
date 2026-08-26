@@ -70,6 +70,40 @@ it('auto-fills inferable author materials when the outline and prior chapter are
   expect(readiness.proposals.filter((row) => row.value.trim()).every((row) => !row.requiresConfirmation)).toBe(true);
 });
 
+it('automatically adopts an explicit genre found in the outline when the project genre is empty', () => {
+  const snapshot = makeSnapshot({});
+  snapshot.outline = {
+    id: 1,
+    content: `# ${'\u6545\u4e8b\u5927\u7eb2'}\n${'\u90fd\u5e02\u5f02\u80fd'}: ${'\u4e3b\u89d2\u5728\u65e7\u57ce\u8ffd\u67e5\u5931\u8e2a\u6848'}`,
+    currentVersion: 1,
+    usable: true,
+  };
+
+  const readiness = classifyMaterialReadiness(snapshot, 1);
+  const genre = readiness.proposals.find((row) => row.field === 'genre');
+
+  expect(genre?.value).toContain('\u90fd\u5e02');
+  expect(genre?.requiresConfirmation).toBe(false);
+});
+
+it('requires confirmation only when an explicit outline genre conflicts with the project genre', () => {
+  const snapshot = makeSnapshot({});
+  snapshot.project.genre = '\u7384\u5e7b';
+  snapshot.outline = {
+    id: 1,
+    content: `# ${'\u6545\u4e8b\u5927\u7eb2'}\n${'\u90fd\u5e02\u5f02\u80fd'}: ${'\u4e3b\u89d2\u5728\u65e7\u57ce\u8ffd\u67e5\u5931\u8e2a\u6848'}`,
+    currentVersion: 1,
+    usable: true,
+  };
+
+  const readiness = classifyMaterialReadiness(snapshot, 1);
+  const genre = readiness.proposals.find((row) => row.field === 'genre');
+
+  expect(genre?.requiresConfirmation).toBe(true);
+  expect(genre?.source).toEqual(expect.arrayContaining(['project.genre']));
+  expect(readiness.status).toBe('confirmation_required');
+});
+
 describe('classifyMaterialReadiness style_profile contract', () => {
   it('initial style proposal carries consumable editorial guidance without previous chapters', () => {
     // 第 1 章生成：无前章正文，previousContinuation 缺失。

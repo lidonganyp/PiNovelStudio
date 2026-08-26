@@ -8,7 +8,7 @@
 
 ### Gemini 3.7 Flash 主线路由切换（2026-08-18）
 
-`config/model-routing.json` 已升级至 v4.32.0。正式 `novel_generate_chapter` 的 Gemini writer identity 已统一为 `gemini-3.7-flash`，生产主 API 为 Aimagichub（`https://aimagichub.xyz/v1`）；Solov 保留为显式对比端点，不作为静默 fallback。在 `PINOVEL_DEV_MODE=1` 的本地正式入口验证中，隔离 xinmo 第18章工作区、相同入口参数的测试结果为：Solov 2/2 次 HTTP 404；Aimagichub 4/4 次完成模型调用，其中 2 次 `status=ok/selectedSource=editorial`（约 34–52 秒），另 2 次在 StoryPreservation 门禁阻断（非网络失败）。因此主线路选择 Aimagichub；这不是关闭发布身份门禁后的生产验收，文学门禁波动仍需后续持续观察。
+`config/model-routing.json` 已升级至 v4.32.0。正式 `novel_generate_chapter` 的 Gemini writer identity 已统一为 `gemini-3.7-flash`，生产主 API 为 Aimagichub（`https://aimagichub.xyz/v1`）；Solov 是同一 Gemini 身份的备用渠道，Aimagichub 失败时只切换 Solov，Solov 失败时只切回 Aimagichub，绝不切换 Claude。此前 Solov 端点的 HTTP 404 仅代表旧端点验证结果，不再作为当前路由策略依据；生产仍要求两个渠道分别配置凭证并保持 fail-closed。
 
 **没有可在当前 HEAD 直接验证且可运行的生产身份。** 本地运行时指针当前为 `rel-prod-134`，但那不是 clean checkout 可恢复、也不是 `778b9f3` 能过 G6 的基线；`rel-prod-145` 对应当前提交但仍为 `approved_dev`，且当前工作树不可复现。
 
@@ -363,7 +363,7 @@ Phase 5 受控生产接入实现（"guided facade vs 9 工具" 的受控对照�
 
 `config/model-routing.json` v4.31.0 是唯一运行时真相源：
 
-- Gemini 3.1 Pro Preview：NovelOS Agentic 与作者风格整章优化主写；未传 `writerModel` 时分别使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`。`fallback=[]`，失败 hard block，不静默切换 Claude 或其他正文模型。
+- Gemini 3.1 Pro Preview：NovelOS Agentic 与作者风格整章优化主写；未传 `writerModel` 时分别使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`。Aimagichub 与 Solov 是同一 Gemini 身份的互备渠道；两个渠道均失败时才 hard block，不静默切换 Claude 或其他正文模型。
 - Claude Opus 4.6：通过显式 `writerModel=claude` 使用独立 raw/editorial 路由；继续负责正式 StyleShaper、Stage 8 final gate 与 character_agent，不是 Gemini 的自动 fallback。
 - 生产决策：不再让 AI judge 替用户决定文学质量。GPT judge、opportunity judge、reverse review 仅保留在隔离评测与回放，不进入 `novel_generate_chapter`。
 - `AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1`：第 18-20 章的一次序列偏好仅保留为历史实验，不再外推为全局生产策略。固定写前场景解法与 `boundedBestOf3` 已退出生产；普通 raw 是默认基线，候选必须逐章与 raw 比较。

@@ -93,6 +93,11 @@ export function buildAgentLineageIndex(input: {
   const packages = collab.workPackages ?? {};
   const decisions = collab.decisions ?? [];
 
+  const recoveryTraces = [
+    ["generationRecovery", input.stageResults.generationRecovery],
+    ["finalGenerationRecovery", input.stageResults.finalGenerationRecovery],
+  ] as const;
+
   for (const [role, result] of Object.entries(results)) {
     const lineage = (result.lineage ?? {}) as Record<string, unknown>;
     const pkg = packages[role] ?? {};
@@ -178,6 +183,50 @@ export function buildAgentLineageIndex(input: {
     push(byCandidate, entry.candidateId, entry);
     push(bySession, entry.agentSessionId, entry);
     push(byRole, entry.agentRole, entry);
+  }
+
+  // Recovery attempts are first-class lineage edges. Keep both endpoints
+  // queryable so an audit can start from either the failed source candidate
+  // or the accepted replacement candidate.
+  for (const [traceName, rawTrace] of recoveryTraces) {
+    if (!rawTrace || typeof rawTrace !== "object") continue;
+    const trace = rawTrace as {
+      attempts?: Array<{
+        attempt?: number;
+        sourceCandidateId?: string | null;
+        resultCandidateId?: string | null;
+        outcome?: string;
+        reason?: string;
+        evidence?: string[];
+      }>;
+    };
+    for (const attempt of trace.attempts ?? []) {
+      const sourceCandidateId = attempt.sourceCandidateId ?? null;
+      const resultCandidateId = attempt.resultCandidateId ?? null;
+      if (!sourceCandidateId && !resultCandidateId) {
+        incomplete.push(`${traceName}: recovery attempt missing candidate ids`);
+      }
+      const entry: LineageIndexEntry = {
+        orchestratorRunId,
+        workspaceId: input.workspaceId,
+        chapterId: input.chapterId,
+        candidateId: resultCandidateId,
+        sourceCandidateId,
+        parentCandidateId: sourceCandidateId,
+        agentRole: "generation_recovery",
+        stage: traceName,
+        status: attempt.outcome,
+        refs: [
+          `recovery:${traceName}:${String(attempt.attempt ?? all.length + 1)}`,
+          ...(attempt.reason ? [`reason:${attempt.reason}`] : []),
+          ...(attempt.evidence ?? []).slice(0, 8),
+        ],
+      };
+      all.push(entry);
+      push(byCandidate, sourceCandidateId, entry);
+      push(byCandidate, resultCandidateId, entry);
+      push(byRole, entry.agentRole, entry);
+    }
   }
 
   // 若尚无 agentResults，但有 novelos 会话，仍建立最小索引

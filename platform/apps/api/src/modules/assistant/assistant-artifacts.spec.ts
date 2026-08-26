@@ -172,6 +172,7 @@ describe('applyAssistantArtifacts', () => {
       action: 'generate_chapter',
       chapterNumber: 2,
       confirmGeneration: true,
+      targetWordCount: { min: 2500, max: 2750 },
       userContent: '生成第二章',
       envelope: {
         reply: '已提交正式生成',
@@ -181,6 +182,7 @@ describe('applyAssistantArtifacts', () => {
     expect(prisma.novelDocument.create).not.toHaveBeenCalled();
     expect(jobs.submitChapterGeneration).toHaveBeenCalledWith(1, 128, 4, {
       continuationMode: undefined,
+      targetWordCount: { min: 2500, max: 2750 },
     });
     expect(result.generationJobId).toBe('gen-4');
     expect(result.artifacts.publicEntry).toBe('novel_generate_chapter');

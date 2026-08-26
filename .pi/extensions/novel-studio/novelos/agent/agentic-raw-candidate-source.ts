@@ -90,6 +90,8 @@ import {
   getDefaultForbiddenResources,
   getInputFieldWhitelist,
 } from "../../v2/core/agent-input-whitelist.js";
+import type { RecoveryDirective } from "./recovery-directive.js";
+import type { ChineseAiLanguageGuidance } from "../../craft/chinese-ai-language-guidance.js";
 
 // ============================================================================
 // 公共接口（编排器通过此接口调用，不直接依赖 NovelOS 内部）
@@ -107,6 +109,10 @@ export interface AgenticRawSourceInput {
   /** Existing chapter prefix for append/continuation generation. */
   continuationMode?: "replace" | "append";
   currentChapterDraft?: string;
+  /** 编排器生成的中文网文自然表达软提示；仅改善表达，不构成硬约束。 */
+  chineseAiLanguageGuidance?: Pick<ChineseAiLanguageGuidance, "block" | "datasetId" | "recordIds" | "blockHash">;
+  /** Structured verifier/FactGuard feedback for a complete replacement candidate. */
+  recoveryDirective?: RecoveryDirective;
   intent: ChapterIntent;
   context: CompiledContext;
   characterNames: string[];
@@ -370,6 +376,7 @@ export const AGENTIC_RAW_KIND = "agentic_raw";
 export const NOVELOS_SYSTEM_PROMPT =
   "你是顶尖网文作家。你将基于本章意图、种子上下文与叙事证据生成章节正文。" +
   "仅当现有上下文不足以保证事实、人物状态或因果关系正确时，才调用叙事证据工具查证。" +
+  "写作时避免把抽象状态写成参数或结论：不要默认套用‘慢了半拍/短了半寸/少了两分/凝实一分’等伪精确变化，不要用‘平静而顺利/看起来重得多/近乎诡异’等成对评价替代过程证据，不要堆叠‘一串串+形容词+气泡/回响’的动态模板。优先写可观察的动作、阻力、来源、方向、身体反应、选择与后果。‘不是X，而是Y’只有在提供具体事实区分或角色有意修辞时使用；避免与‘绝对/终极/维度/瞬杀’等能力宣告连续组合。以上是软指导：类型化修辞、明确计量系统、角色口吻和作者有意的比喻应保留。" +
   "只输出正文，不要写大纲、注释或分析。";
 
 // ============================================================================
@@ -401,6 +408,7 @@ export function createAgenticRawCandidateSource(
         projectRoot,
         continuationMode,
         currentChapterDraft,
+        recoveryDirective,
         intent,
         context,
         characterNames,
@@ -440,7 +448,10 @@ export function createAgenticRawCandidateSource(
             `- ${entry.activationId}: ${entry.packageId}@${entry.version} / ${entry.targetStage} / ${entry.purpose}`
           ).join("\n")
         : "";
-      const effectiveSystemPrompt = (systemPromptOverride ?? NOVELOS_SYSTEM_PROMPT) + catalogBlock;
+      const naturalnessBlock = input.chineseAiLanguageGuidance?.block
+        ? `\n\n${input.chineseAiLanguageGuidance.block}`
+        : "";
+      const effectiveSystemPrompt = (systemPromptOverride ?? NOVELOS_SYSTEM_PROMPT) + naturalnessBlock + catalogBlock;
 
       // ── 0. P1-5 修复：包装 modelGenerate 捕获真实模型名 ──────────────
       // 原先 candidate.model 固定为 "novelos_agentic"，导致 detectModelVersion
@@ -816,6 +827,7 @@ export function createAgenticRawCandidateSource(
           evalPrefix,
           continuationMode,
           currentChapterDraft,
+          recoveryDirective,
           // Phase 2C：传入预创建的 plan（allowedTools 已在 runtime 创建前过滤，
           // loop 不再内部 createEvidencePlan，直接消费此 plan 的 mustVerify + stopConditions）
           evidencePlan,

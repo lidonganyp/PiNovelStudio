@@ -40,6 +40,12 @@ export interface NovelRuntimeConfig {
   novelStudioProjectRoot: string;
   /** 临时 workspace 根目录（容器 volume 挂载点，R7） */
   tempWorkspaceRoot: string;
+  /**
+   * 失败归档根目录：生成失败时把临时 workspace（含 traces/）rename 到此处，
+   * 避免 finally 无条件 cleanup 抹掉失败证据。空串时由 workspace-manager
+   * derive 为 tempWorkspaceRoot 同级的 `novel-runtime-archive`。
+   */
+  workspaceArchiveRoot: string;
   /** Node 环境 */
   nodeEnv: "development" | "production" | "test";
   /** Provider env keys that must be present before production can serve work. */
@@ -176,6 +182,7 @@ export function loadConfig(): NovelRuntimeConfig {
       "NOVEL_TEMP_WORKSPACE_ROOT",
       "/var/lib/novel-runtime/workspaces",
     ),
+    workspaceArchiveRoot: optionalEnv("NOVEL_WORKSPACE_ARCHIVE_ROOT", ""),
     nodeEnv,
     requiredProviderEnvKeys,
   };
@@ -225,6 +232,7 @@ export function makeConfigForTest(overrides: Partial<NovelRuntimeConfig> = {}): 
     novelStudioDistPath: "/app/novel-studio/dist/index.js",
     novelStudioProjectRoot: "/app/novel-studio",
     tempWorkspaceRoot: "./.tmp/test-workspaces",
+    workspaceArchiveRoot: "",
     nodeEnv: "test",
     requiredProviderEnvKeys: [],
     ...overrides,

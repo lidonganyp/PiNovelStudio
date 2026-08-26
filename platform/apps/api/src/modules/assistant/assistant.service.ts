@@ -14,11 +14,13 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  Max,
   IsObject,
   IsOptional,
   IsString,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 import { decryptSecret } from '../../common/crypto/aes-gcm';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -35,7 +37,12 @@ import { parsePlannerEnvelope } from './planner-envelope';
 import { parseAssistantRequest } from '../context/assistant-contract';
 import { compileProjectContext } from '../context/context-compiler';
 import { envelopeFromUnknown, FailureHttpException, FAILURE_CODES, makeFailure } from '../context/failure-envelope';
-import { ASSISTANT_ACTIONS, type AssistantAction, type ContextManifest } from '../context/types';
+import {
+  ASSISTANT_ACTIONS,
+  type AssistantAction,
+  type ContextManifest,
+  type TargetWordRange,
+} from '../context/types';
 import { isUsableStoryOutline } from '../jobs/book-context';
 import {
   inferGenerateChapterNumber,
@@ -56,6 +63,20 @@ import {
 import { chapterNumberFromTitle } from '../context/chapter-number';
 import { inferContinuationMode } from '../jobs/chapter-continuation';
 import type { ContinuationMode } from '../context/types';
+
+class TargetWordRangeDto implements TargetWordRange {
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(100_000)
+  min!: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(100_000)
+  max!: number;
+}
 
 export class PostAssistantMessageDto {
   @IsString()
@@ -80,6 +101,11 @@ export class PostAssistantMessageDto {
   @IsOptional()
   @IsIn(['replace', 'append'])
   continuationMode?: ContinuationMode;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TargetWordRangeDto)
+  targetWordCount?: TargetWordRangeDto;
 
   @IsOptional()
   @IsIn(['apply_and_generate', 'save_draft', 'cancel', 'revise'])
@@ -381,6 +407,7 @@ export class AssistantService {
             confirmGeneration: false,
             envelope,
             continuationMode,
+            targetWordCount: request.targetWordCount,
           });
           let next = await prepareGenerationSteward({
             prisma: this.prisma,
@@ -388,6 +415,7 @@ export class AssistantService {
             projectId,
             chapterNumber,
             continuationMode,
+            targetWordCount: request.targetWordCount,
           });
           if (next.status === 'ready') {
             next = {
@@ -399,6 +427,7 @@ export class AssistantService {
                 projectId,
                 chapterNumber,
                 continuationMode,
+                targetWordCount: request.targetWordCount,
               }),
               publicEntry: 'novel_generate_chapter',
             };
@@ -412,6 +441,7 @@ export class AssistantService {
               proposalId: next.proposalId,
               sourceVersion: next.sourceVersion,
               continuationMode,
+              targetWordCount: request.targetWordCount,
             });
           }
           onDelta?.(next.reply);
@@ -440,6 +470,7 @@ export class AssistantService {
             confirmGeneration,
             envelope,
             continuationMode,
+            targetWordCount: request.targetWordCount,
           });
           reply = applied.content;
           metadata = applied.metadata;
@@ -887,6 +918,7 @@ export class AssistantService {
             sourceVersion: request.sourceVersion,
             confirmedFields: request.confirmedFields,
             continuationMode: request.continuationMode,
+            targetWordCount: request.targetWordCount,
           });
     } else {
       const chapterNumber = request.chapterNumber
@@ -908,6 +940,7 @@ export class AssistantService {
         projectId,
         chapterNumber,
         continuationMode: request.continuationMode,
+        targetWordCount: request.targetWordCount,
       });
       if (steward.status === 'ready') {
         steward.generationJobId = await submitReadyGenerationSteward({
@@ -917,6 +950,7 @@ export class AssistantService {
           projectId,
           chapterNumber,
           continuationMode: request.continuationMode,
+          targetWordCount: request.targetWordCount,
         });
         steward.publicEntry = 'novel_generate_chapter';
       } else if (steward.status === 'auto_fill' && steward.proposalId) {
@@ -929,6 +963,7 @@ export class AssistantService {
           proposalId: steward.proposalId,
           sourceVersion: steward.sourceVersion,
           continuationMode: request.continuationMode,
+          targetWordCount: request.targetWordCount,
         });
       }
     }

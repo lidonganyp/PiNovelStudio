@@ -277,6 +277,8 @@ const GENERATION_ROUTE_ALIASES = new Set([
   "novelos_agentic",
   "agentic_raw",
   "narrator_primary",
+  "v2_rawstage2_gemini31_solov",
+  "v2_amplified_gemini31_solov",
   "v2_rawstage2",
   "v2_rawstage2_gemini31",
   "v2_amplified",

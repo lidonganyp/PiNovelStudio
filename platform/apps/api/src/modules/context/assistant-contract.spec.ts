@@ -56,6 +56,27 @@ describe('assistant action contract', () => {
     expect(request.chapterNumber).toBe(2);
   });
 
+  it('extracts the requested final chapter length from a fill-to command', () => {
+    const request = parseAssistantRequest({
+      content: '根据小说大纲，完善第十七章，补满2500字',
+    });
+
+    expect(request.targetWordCount).toEqual({ min: 2500, max: 2750 });
+  });
+
+  it('does not confuse a chapter number with a target length', () => {
+    const request = parseAssistantRequest({ content: '完善第十七章' });
+
+    expect(request.targetWordCount).toBeUndefined();
+  });
+
+  it('rejects an invalid explicit target range', () => {
+    expect(() => parseAssistantRequest({
+      content: '完善第十七章',
+      targetWordCount: { min: 3000, max: 2500 },
+    })).toThrowError(FailureHttpException);
+  });
+
   it('parses steward confirmation protocol fields', () => {
     const request = parseAssistantRequest({
       content: '采用并继续生成',

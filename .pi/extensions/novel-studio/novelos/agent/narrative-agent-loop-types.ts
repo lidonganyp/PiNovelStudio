@@ -32,6 +32,7 @@ import type {
 import type { EvidenceRecord } from "../../v2/core/evidence-governance-contracts.js";
 import type { RepairStopReason } from "../../v2/core/repair-authorization-contracts.js";
 import type { RepairBudgetConfig, RepairBudgetSnapshot } from "./repair-budget.js";
+import type { RecoveryDirective } from "./recovery-directive.js";
 
 // ============================================================================
 // 类型
@@ -70,6 +71,8 @@ export interface AgentLoopInput {
   /** Existing chapter prefix that must be preserved in append mode. */
   continuationMode?: "replace" | "append";
   currentChapterDraft?: string;
+  /** Structured feedback for replacing a failed candidate with a complete new one. */
+  recoveryDirective?: RecoveryDirective;
   /**
    * Phase 2C：调用方预创建的 EvidencePlan。
    *

@@ -296,6 +296,54 @@ describe('JobsService HTTP generation delivery contract', () => {
     }));
   });
 
+  it('keeps the requested chapter length on the queued HTTP generation payload', async () => {
+    const { service, prisma } = makeService({ status: 'ok', result: {} });
+    const previous = env.NOVEL_RUNTIME_MODE;
+    (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = 'http';
+    prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
+      chapterNumber: 17,
+      version: 3,
+      content: '第十七章已有正文。',
+      seed: {
+        version: 2,
+        intent: '完成第十七章冲突',
+        endingGoal: '留下章末钩子',
+      },
+    });
+    const buildRuntimeWorkspaceInput = vi.spyOn(
+      service as never as { buildRuntimeWorkspaceInput(input: unknown): Promise<Record<string, unknown>> },
+      'buildRuntimeWorkspaceInput',
+    ).mockResolvedValue({ workspaceDocuments: [], projectConfig: {} });
+    vi.spyOn(
+      service as never as { estimateMaxCharge(): Promise<bigint> },
+      'estimateMaxCharge',
+    ).mockResolvedValue(100n);
+    const runHttpGeneration = vi.spyOn(
+      service as never as { runHttpGeneration(input: unknown): Promise<void> },
+      'runHttpGeneration',
+    ).mockResolvedValue();
+    vi.spyOn(service, 'getJob').mockResolvedValue({ jobId: 'queued-job' });
+
+    try {
+      await service.submitChapterGeneration(1, 2, 3, {
+        continuationMode: 'append',
+        targetWordCount: { min: 2500, max: 2500 },
+      });
+
+      expect(buildRuntimeWorkspaceInput).toHaveBeenCalledWith(expect.objectContaining({
+        continuationMode: 'append',
+        targetWordCount: { min: 2500, max: 2500 },
+      }));
+      expect(runHttpGeneration).toHaveBeenCalledWith(expect.objectContaining({
+        continuationMode: 'append',
+        continuationDraft: '第十七章已有正文。',
+        targetWordCount: { min: 2500, max: 2500 },
+      }));
+    } finally {
+      (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
+    }
+  });
+
   it('refuses to overwrite a chapter edited after generation started', async () => {
     const { service, prisma } = makeService({
       status: 'ok',
@@ -630,11 +678,14 @@ describe('JobsService HTTP generation delivery contract', () => {
     });
 
     await (service as never as { runHttpGeneration(value: typeof input & {
-      continuationMode: 'append'; continuationDraft: string; runtimeWorkspaceInput: Record<string, unknown>;
+      continuationMode: 'append'; continuationDraft: string;
+      targetWordCount: { min: number; max: number };
+      runtimeWorkspaceInput: Record<string, unknown>;
     }): Promise<void> }).runHttpGeneration({
       ...input,
       continuationMode: 'append',
       continuationDraft: '作者已经完成的第十七章前半段。',
+      targetWordCount: { min: 2500, max: 2750 },
       runtimeWorkspaceInput: { workspaceDocuments: [], projectConfig: {} },
     });
 
@@ -644,6 +695,7 @@ describe('JobsService HTTP generation delivery contract', () => {
       expect.objectContaining({
         continuationMode: 'append',
         currentChapterDraft: '作者已经完成的第十七章前半段。',
+        targetWordCount: { min: 2500, max: 2750 },
       }),
     );
     expect(billing.finalizeHold).toHaveBeenCalledWith({ jobId: 'job-1', outcome: 'failure' });
@@ -804,9 +856,19 @@ describe('JobsService HTTP generation delivery contract', () => {
         id: 2,
       },
     ]);
-    prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
-      content: '很长的前文。苏晴离开了。沈砚握紧铜哨：不要相信沈建国。',
-      chapterNumber: 1,
+    // 按查询条件区分：前章（chapterNumber=1）返回正文全文；当前章（id 查询）
+    // 返回空草稿。否则同一 mock 值会让 append 兜底把"前章正文"误当成
+    // 当前章草稿传给 runtime，与"不得塞前章正文"的断言语义混淆。
+    prisma.novelChapter.findFirst = vi.fn().mockImplementation(async (args: {
+      where?: { chapterNumber?: number; id?: number };
+    }) => {
+      if (args?.where?.chapterNumber === 1) {
+        return {
+          content: '很长的前文。苏晴离开了。沈砚握紧铜哨：不要相信沈建国。',
+          chapterNumber: 1,
+        };
+      }
+      return { content: '', version: 1, chapterNumber: 2 };
     });
 
     await (service as never as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration({

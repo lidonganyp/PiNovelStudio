@@ -362,6 +362,12 @@ test("gate: active release 存在但 fingerprint 不匹配 → blocked", () => {
     });
     assert.equal(result.ok, false, "fingerprint 不匹配应 blocked");
     assert.equal(result.failureEnvelope.stage, "g6_release_gate");
+    assert.equal(
+      result.failureEnvelope.code,
+      "environment_fingerprint_mismatch",
+      "指纹漂移必须使用独立错误码，不能被平台归类为叙事状态 hash mismatch",
+    );
+    assert.equal(result.failureEnvelope.gate, "environment_fingerprint");
     assert.match(
       result.failureEnvelope.reason,
       /fingerprint/i,

@@ -18,6 +18,7 @@ import type {
 } from "./types.js";
 import type { WriterPromptProfile } from "./model-prompt-adapter.js";
 import type { AuthorStyleStrategyParams } from "../learning/author-style-strategy-registry.js";
+import { hashText } from "./candidate-revision-store.js";
 
 export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编辑。你的唯一任务是改表达，不是改故事。
 
@@ -35,6 +36,16 @@ export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编�
 
 风格档案只提供定性参考，历史统计不得转成正文配额。
 
+【中文网文自然表达软检查】
+- 不要默认重复“慢了/迟了/顿了半拍”“短了半寸”“少了两分”“凝实了一分”等伪精确状态变化；除非它是明确的世界观、距离、伤势或战斗计量。
+- 慎用“眉宇间沉得像压着一层铅块”“眼底藏着化不开的阴影”这类身体部位+抽象状态+封闭比喻；优先写眉眼、语气、手部动作、停顿和可见后果。
+- 不用“整个过程平静而顺利”“简单而高效”替代过程证据；补出步骤、阻力、失败、代价或实际结果。
+- 慎用“比表面看起来重得多”“远比想象中复杂”等表面/深层抽象比较；把“重/复杂/危险”落到阻力、信息、资源或关系后果。
+- 慎用“一串串/一阵阵+急促/低沉/细碎+气泡/回响/光线”等动态模板；交代来源、方向和叙事功能。
+- 慎用“心跳沉稳得近乎诡异”等生理事实+旁白结论；让环境压力和人物判断证明异常。
+- “不是X，而是Y”与“绝对/终极/维度/瞬杀”等能力命名连续出现时，优先改为伤口、动作、队友反应和具体结果；具体事实区分、技能专名和角色宣言可保留。
+- 这些是软检查，不是禁词表；保留作者风格、角色声音、类型修辞和明确计量。
+
 【内容完整约束】
 - 初稿中的每一句话都是故事内容的组成部分——包括动作、对白、设定说明、内心独白、临别赠言、旁白议论等。
 - 严禁以"精简讲述""优化节奏""避免冗余"为由删除对白、设定说明或内心独白。
@@ -50,7 +61,24 @@ export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编�
 
 const MAX_GUIDANCE_ITEMS = 12;
 const MAX_GUIDANCE_CHARS = 1600;
+const MAX_RECOVERY_FINDINGS = 8;
+const MAX_RECOVERY_PREVIOUS_TEXT_CHARS = 12000;
+const MAX_RECOVERY_CODE_CHARS = 160;
+const MAX_RECOVERY_MESSAGE_CHARS = 600;
+const MAX_RECOVERY_EVIDENCE_REF_CHARS = 320;
 const DEFAULT_TIMEOUT_MS = 600000;
+
+export interface AuthorStyleRecoveryFinding {
+  code: string;
+  message: string;
+  evidenceRef?: string;
+}
+
+export interface AuthorStyleRecoveryFeedback {
+  kind: "fact_guard" | "completeness";
+  previousEditorialText: string;
+  findings: AuthorStyleRecoveryFinding[];
+}
 
 export interface AuthorStyleOptimizationInput {
   sourceCandidate: Candidate;
@@ -58,6 +86,8 @@ export interface AuthorStyleOptimizationInput {
   /** Append mode keeps the author-authored prefix and writes only at its end. */
   continuationMode?: "replace" | "append";
   currentChapterDraft?: string;
+  /** The previous style attempt changed the protected prefix; force suffix-only output. */
+  continuationPrefixRecovery?: boolean;
   intent: ChapterIntent;
   context: CompiledContext;
   constitution: ConstitutionSnapshot | null;
@@ -114,6 +144,10 @@ export interface AuthorStyleOptimizationInput {
       reason: string;
     }>;
   };
+  /** Bounded evidence from a failed final gate, used to regenerate one complete editorial candidate. */
+  recoveryFeedback?: AuthorStyleRecoveryFeedback;
+  /** 与初稿共用的中文网文自然表达软提示，不是禁词表。 */
+  chineseAiLanguageGuidanceBlock?: string;
 }
 
 export interface AuthorStyleOptimizationResult {
@@ -174,6 +208,48 @@ function classifyModelFailure(error: unknown): "model_timeout" | "model_error" {
 interface ParsedStyleGuidance {
   referenceIds: string[];
   guidance: string[];
+}
+
+function boundedPromptField(value: string, maxChars: number): string {
+  return value.trim().slice(0, maxChars);
+}
+
+function buildRecoveryFeedbackBlock(feedback: AuthorStyleRecoveryFeedback): string {
+  const findings = feedback.findings
+    .slice(0, MAX_RECOVERY_FINDINGS)
+    .map((finding, index) => {
+      const code = boundedPromptField(finding.code, MAX_RECOVERY_CODE_CHARS);
+      const message = boundedPromptField(finding.message, MAX_RECOVERY_MESSAGE_CHARS);
+      const evidenceRef = boundedPromptField(
+        finding.evidenceRef ?? "",
+        MAX_RECOVERY_EVIDENCE_REF_CHARS,
+      );
+      return `${index + 1}. code=${code || "unspecified"}; message=${message || "unspecified"}`
+        + (evidenceRef ? `; evidenceRef=${evidenceRef}` : "");
+    })
+    .join("\n");
+  const previousEditorialText = boundedPromptField(
+    feedback.previousEditorialText,
+    MAX_RECOVERY_PREVIOUS_TEXT_CHARS,
+  );
+  const findingList = findings || "（复检未提供可展示的结构化证据）";
+  const previousDraft = previousEditorialText || "（上一轮未返回可用正文）";
+
+  if (feedback.kind === "completeness") {
+    return "【完整性复检恢复（重试）】\n"
+      + "上一轮作者风格优化稿不完整，可能发生输出截断或悬空结尾，不能交付。\n"
+      + `${findingList}\n`
+      + "上一稿只用于定位截断位置，不是续写底稿。必须基于后文的【NovelOS Agentic 初稿】重新生成修复后的完整章节正文，从正文第一段开始写到完整章末；不得只续写尾部或只补写结尾。\n"
+      + "只输出章节正文，不得输出补丁、解释、复检报告、修改清单或 Markdown 标题。\n"
+      + `【上一轮未通过的作者风格优化稿（仅诊断）】\n${previousDraft}`;
+  }
+
+  return "【最终事实复检恢复（重试）】\n"
+    + "上一轮作者风格优化稿存在以下事实问题，不能交付。\n"
+    + `${findingList}\n`
+    + "上一稿只用于定位事实问题，不构成任何新事实授权。必须基于后文的【NovelOS Agentic 初稿】作为事实底稿，移除未授权内容并生成修复后的完整章节正文；不得只输出局部补丁。\n"
+    + "只输出章节正文，不得输出补丁、解释、复检报告、修改清单或 Markdown 标题。\n"
+    + `【上一轮未通过的作者风格优化稿（仅诊断）】\n${previousDraft}`;
 }
 
 function parseStyleReference(reference: StyleReference): Record<string, unknown> | null {
@@ -350,9 +426,23 @@ export function buildAuthorStyleUserPrompt(
 ): string {
   const parts: string[] = [];
   if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
+    const protectedPrefix = input.currentChapterDraft.trimEnd();
     parts.push(
-      "CONTINUATION MODE: The existing author draft is authoritative. Preserve its prefix exactly once; do not rewrite or repeat it. Continue only from the end of that prefix. If returning a complete chapter, include the original prefix once and append only the new prose."
+      "CONTINUATION MODE: The existing author draft is authoritative. Preserve its prefix exactly once. The exact text between the markers below is protected and must not be rewritten, summarized, corrected, or repeated. Continue only from its end."
     );
+    parts.push(
+      "[EXACT AUTHOR PREFIX - COPY-PROTECTED]\n"
+      + protectedPrefix
+      + "\n[END EXACT AUTHOR PREFIX]",
+    );
+    if (input.continuationPrefixRecovery) {
+      parts.push(
+        "CONTINUATION PREFIX RECOVERY: The previous style attempt changed the protected prefix. "
+        + "For this retry, output ONLY the new suffix after [END EXACT AUTHOR PREFIX]. "
+        + "Do not output the chapter title, any earlier paragraph, or a rewritten version of the prefix. "
+        + "The host will prepend the protected prefix automatically.",
+      );
+    }
   }
   parts.push(
     "【表达优化硬边界】\n" +
@@ -391,6 +481,12 @@ export function buildAuthorStyleUserPrompt(
       "状态变化是故事事实，不是可删的表达细节；请在相同主体和对象上保留结果。",
     );
   }
+  if (input.recoveryFeedback) {
+    parts.push(buildRecoveryFeedbackBlock(input.recoveryFeedback));
+  }
+  if (input.chineseAiLanguageGuidanceBlock) {
+    parts.push(input.chineseAiLanguageGuidanceBlock);
+  }
   parts.push(`请优化第 ${input.chapterNumber} 章完整正文。`);
   const contractLines: string[] = [];
   const eventSummaries = input.intent.authorEventSummaries ?? [];
@@ -421,7 +517,13 @@ export function buildAuthorStyleUserPrompt(
       "不得调换、删除或合并导致事件结果变化；必须保持每个事件的先后顺序、因果关系和状态变化。",
     );
   }
-  parts.push(`【NovelOS Agentic 初稿】\n${input.sourceCandidate.text}`);
+  const sourceText = getStyleSourceText(input);
+  const sourceLabel = input.continuationMode === "append"
+    ? "【NovelOS Agentic 初稿（仅供表达优化）】"
+    : "【NovelOS Agentic 初稿】";
+  parts.push(
+    `${sourceLabel}\n${sourceText || "（没有可单独优化的新后缀；保持原文并只输出必要的新内容。）"}`,
+  );
   parts.push(`【作者风格档案（定性指导）】\n${guidance.guidance.map((item) => `- ${item}`).join("\n")}`);
   if (input.intent.inviolableFacts.length > 0) {
     parts.push(`【不可改变的事实】\n${input.intent.inviolableFacts.map((item) => `- ${item}`).join("\n")}`);
@@ -451,9 +553,26 @@ export function buildAuthorStyleUserPrompt(
   parts.push(
     "只改表达，不改事件、动作和因果。" +
     "主体、动作、对象、结果、事件顺序必须与初稿一致。" +
-    "只输出优化后的完整正文，从正文第一段直接开始；严禁输出构思、计划、大纲、逐段润色说明或任何非正文内容。",
+    input.continuationMode === "append"
+      ? "续写模式下只输出从受保护前缀末尾开始的新正文后缀；不要输出章节标题、受保护前缀或任何非正文说明。"
+      : "只输出优化后的完整正文，从正文第一段直接开始；严禁输出构思、计划、大纲、逐段润色说明或任何非正文内容。",
   );
   return parts.join("\n\n");
+}
+
+/**
+ * In append mode the existing chapter is already authoritative. Showing the
+ * model only the new suffix avoids asking it to rewrite a long protected
+ * prefix and makes the output contract mechanically enforceable.
+ */
+function getStyleSourceText(input: AuthorStyleOptimizationInput): string {
+  const source = input.sourceCandidate.text.trim();
+  const prefix = input.currentChapterDraft?.trim() ?? "";
+  if (input.continuationMode !== "append" || !prefix) return source;
+  if (source === prefix) return "";
+  if (source.startsWith(`${prefix}\n`)) return source.slice(prefix.length).trim();
+  if (source.startsWith(prefix)) return source.slice(prefix.length).trim();
+  return source;
 }
 
 export class AuthorStyleOptimizer {
@@ -500,7 +619,10 @@ export class AuthorStyleOptimizer {
     const route = resolveEditorialCandidateRoute(input.writerPromptProfile);
     const modelInput: ModelGenerateInput = {
       route,
-      systemPrompt: STYLE_SYSTEM_PROMPT,
+      systemPrompt: input.continuationMode === "append"
+        ? STYLE_SYSTEM_PROMPT
+          + "\nAPPEND MODE RULE: when the user prompt contains CONTINUATION MODE, output only the new suffix and never rewrite the protected prefix."
+        : STYLE_SYSTEM_PROMPT,
       userPrompt,
       kind: "author_style_optimization",
       timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -521,9 +643,12 @@ export class AuthorStyleOptimizer {
           retryWithReducedGuidance: isRetry,
         };
       }
+      const recoveryIdSuffix = input.recoveryFeedback
+        ? `:recovery:${input.recoveryFeedback.kind}:${hashText(output.text).slice(0, 16)}`
+        : "";
       return {
         candidate: {
-          id: `candidate:author_style:${input.sourceCandidate.id}${isRetry ? ":retry" : ""}`,
+          id: `candidate:author_style:${input.sourceCandidate.id}${isRetry ? ":retry" : ""}${recoveryIdSuffix}`,
           text: output.text,
           kind: "editorial_amplified",
           model: output.model,

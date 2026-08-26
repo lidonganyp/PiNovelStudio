@@ -51,7 +51,8 @@ export interface ChineseNarrativeNaturalnessFinding {
     | "abstract_sensory_actor"       // 抽象感官名词做主动作（冷空气裹着柴油味钻进领口）
     | "translated_collocation"       // 翻译腔硬搭配（阳光砸在脸上 / 目光劈下来）
     | "mechanical_measurement"       // 机械量化关系（松了半分 / 短了半寸 / 退了半步）
-    | "hard_synesthesia_verb";       // 硬通感动词（声音拽断 / 视线切碎 / 寒意咬住）
+    | "hard_synesthesia_verb"       // 硬通感动词（声音拽断 / 视线切碎 / 寒意咬住）
+    | "compound_ai_expression";     // 用户样例中的组合式 AI 腔（单词本身不构成禁词）
   /** 命中处的上下文片段（命中词 + 前后少量字符） */
   text: string;
   /** 命中在原文中的字符偏移 */
@@ -412,8 +413,53 @@ const HARD_SYNESTHESIA_VERB_PATTERNS: PatternSpec[] = [
   { type: "hard_synesthesia_verb", pattern: /(?:声音|嗓音|话音|气息|寒意|杀意|怒意|视线|目光|气味|腥气|光影|阴影|夜色|寂静|沉默)[^，。；！？\n]{0,4}(?:拽断|撕裂|切碎|割断|咬住|咬断|撕开|撕碎|绞断|刺穿|刺破|劈开|劈断|割裂|绞碎|拧断|掐断)/gu, suggestion: "「声音被拽断」式硬通感。感官不能被物理破坏：『话音陡然止住』；『视线切碎』→『视线被截断』或用人物动作体现。" },
 ];
 
+/**
+ * P57 用户反馈补充：组合式 AI 腔。
+ *
+ * 这些规则只在多个成分以高频模板组合时命中；“平静”“一分”“看起来”等
+ * 单独出现不构成风险。命中结果是软诊断，供作者风格优化和 trace 使用，不能单独阻断章节。
+ */
+const COMPOUND_AI_EXPRESSION_PATTERNS: PatternSpec[] = [
+  {
+    type: "compound_ai_expression",
+    pattern: /(?:眉宇间|眼底|脸上|眼神里|眸底|目光中)[^。！？\n]{0,8}(?:沉得|沉重得|复杂得|凝滞得|压得|重得)[^。！？\n]{0,8}(?:像|仿佛|如同)[^。！？\n]{0,16}(?:铅块|阴影|乌云|浓雾|寒意|铁锈)/gu,
+    suggestion: "身体部位+抽象状态+封闭比喻容易形成 AI 腔。优先写人物当下的动作、视线或可见反应；只有确有角色口吻或有意修辞时保留。",
+  },
+  {
+    type: "compound_ai_expression",
+    pattern: /(?:眉宇间|眼底|目光中|眼神里|脸上)?(?:的)?(?:轻慢|傲慢|冷意|气息|状态|气势|杀意|疲惫|怒意|苍老虚弱的气息|压迫感)[^，。！？\n]{0,14}(?:少了|多了|凝实了|凝实|压低了|抬高了|淡了|浓了|重了|轻了|深了|浅了)[^，。！？\n]{0,4}(?:一分|两分|几分|半分)/gu,
+    suggestion: "‘少了两分/凝实了一分’是伪精确程度模板。改写为具体变化、动作后果或人物判断；有明确计量含义时不要机械替换。",
+  },
+  {
+    type: "compound_ai_expression",
+    pattern: /(?:整个过程|整个行动|这一过程|过程|动作|战斗|处理|交涉|推进|进展|配合|行动)[^。！？\n]{0,4}(?:平静而顺利|简单而高效|稳定且安全|顺利而完整|有序而高效|快速而准确|平稳而自然)/gu,
+    suggestion: "成对评价把过程封成空泛结论。补出谁做了什么、遇到什么阻力以及结果如何，让过程由动作呈现。",
+  },
+  {
+    type: "compound_ai_expression",
+    pattern: /(?:比(?:表面|看起来|看上去|想象中|预料中)|(?:表面|看起来|看上去|想象中|预料中)[^。！？\n]{0,10}(?:比|却比|远比))[^。！？\n]{0,10}(?:重得多|复杂得多|危险得多|深得多|难得多|快得多|强得多|冷得多|严重得多|高得多)/gu,
+    suggestion: "‘比表面看起来重得多’属于抽象比较级封口。落到具体阻力、代价、范围或人物误判，避免只给程度结论。",
+  },
+  {
+    type: "compound_ai_expression",
+    pattern: /(?:一串串|一阵阵|一缕缕|一片片|一层层|一团团|一簇簇)[^，。！？\n]{0,4}(?:急促|低沉|细碎|凌乱|刺耳|幽暗|微弱|绵密|冰冷|黏稠)[^，。！？\n]{0,4}(?:的)?(?:气泡|回响|光线|水花|声响|雾气|火星|寒意|脚步声|涟漪)/gu,
+    suggestion: "叠量词+动态修饰+名词容易成为模型默认镜头模板。保留真正需要的数量，改用来源、方向和变化过程。",
+  },
+  {
+    type: "compound_ai_expression",
+    pattern: /(?:心跳|呼吸|脉搏|气息|喘息|心律)[^，。！？\n]{0,8}(?:沉稳|平稳|安静|规律|均匀)[^，。！？\n]{0,4}(?:得|却)[^，。！？\n]{0,6}(?:近乎诡异|不合常理|令人发寒|反常得|诡异得|让人发冷)/gu,
+    suggestion: "生理状态+异常结论容易显得旁白替读者下判断。写出呼吸节拍、身体动作或旁观者的具体反应。",
+  },
+  {
+    type: "compound_ai_expression",
+    pattern: /不是[^。！？\n]{0,24}(?:能|可以|打出|做到|配合)[^。！？\n]{0,16}(?:的)?[^。！？\n]{0,8}[，,；;]\s*(?:那是|而是)[^。！？\n]{0,10}(?:绝对|终极|维度|瞬杀|湮灭|碾压|无解|毁灭)/gu,
+    suggestion: "‘不是 X，而是 Y’叠加绝对/终极/维度/瞬杀命名时组合 AI 感明显。改为具体战果、技能机制或角色口吻，避免旁白拔高。",
+  },
+];
+
 /** P42 新增 4 类中文母语镜头 patterns 聚合 */
 const P42_COLLOCATION_PATTERNS: PatternSpec[] = [
+  ...COMPOUND_AI_EXPRESSION_PATTERNS,
   ...ABSTRACT_SENSORY_ACTOR_PATTERNS,
   ...TRANSLATED_COLLOCATION_PATTERNS,
   ...MECHANICAL_MEASUREMENT_PATTERNS,
@@ -422,6 +468,7 @@ const P42_COLLOCATION_PATTERNS: PatternSpec[] = [
 
 /** P42 新增类型优先级（用于与现有类型重叠时去重，数值越大优先级越高） */
 const P42_TYPE_PRIORITY: Record<string, number> = {
+  compound_ai_expression: 6,
   hard_synesthesia_verb: 5,
   translated_collocation: 4,
   abstract_sensory_actor: 3,
@@ -987,6 +1034,10 @@ export class ChineseNarrativeNaturalnessScanner {
     const p42Final = p42Deduped.filter((f) => {
       const fLen = matchLengths.get(f.index) ?? f.text.length;
       const fEnd = f.index + fLen;
+      // P57 组合式表达是更高层的证据：保留组合命中，避免被单一旧规则吞掉。
+      if (f.type === "compound_ai_expression") {
+        return true;
+      }
       return !existingIntervals.some((iv) => f.index < iv.end && fEnd > iv.start);
     });
 
@@ -1006,6 +1057,12 @@ export class ChineseNarrativeNaturalnessScanner {
     const nativeSyntaxCount = nativeSyntaxFindings.length;
 
     // P33 六大类翻译腔 findings 聚合
+    const compoundIntervals = p42Final
+      .filter((f) => f.type === "compound_ai_expression")
+      .map((f) => ({
+        start: f.index,
+        end: f.index + (matchLengths.get(f.index) ?? f.text.length),
+      }));
     const p33Findings: ChineseNarrativeNaturalnessFinding[] = [
       ...fragmentParagraphFindings,
       ...p33PatternMatches.map((m) => ({
@@ -1015,7 +1072,13 @@ export class ChineseNarrativeNaturalnessScanner {
         suggestion: m.suggestion,
         severity: "medium" as const,
       })),
-    ];
+    ].filter((f) => {
+      if (f.type === "compound_ai_expression") {
+        return true;
+      }
+      const fEnd = f.index + f.text.length;
+      return !compoundIntervals.some((iv) => f.index < iv.end && fEnd > iv.start);
+    });
     const p33TranslationToneFindings = {
       fragmentParagraphFindings,
       actionNounSubjectFindings,
@@ -1216,6 +1279,7 @@ const REVISION_PRIORITY: Array<{ type: ChineseNarrativeNaturalnessFinding["type"
   { type: "postpositive_modifier", label: "定语后置/语序颠倒" },
   // P42 新增：中文母语镜头 4 类搭配（用户 2026-07-07 任务规格书）
   { type: "hard_synesthesia_verb", label: "硬通感动词（感官被物理破坏）" },
+  { type: "compound_ai_expression", label: "组合式 AI 腔（抽象状态/伪精确/封闭比较）" },
   { type: "translated_collocation", label: "翻译腔硬搭配（光线/视线+砸/劈+身体部位）" },
   { type: "abstract_sensory_actor", label: "抽象感官做主动作（冷空气裹着钻进领口）" },
   { type: "mechanical_measurement", label: "机械量化关系（松了半分/短了半寸）" },

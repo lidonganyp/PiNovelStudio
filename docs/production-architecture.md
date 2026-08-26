@@ -67,9 +67,13 @@ Preflight
 GEMINI_API_KEY=...
 GOOGLE_GEMINI_BASE_URL=https://aimagichub.xyz/v1
 GEMINI_MODEL=gemini-3.7-flash
+# Optional peer channel used for automatic Gemini-only recovery
+GEMINI_SOLOV_API_KEY=...
+GEMINI_SOLOV_BASE_URL=https://api.solov.cc/v1
+GEMINI_SOLOV_MODEL=gemini-3.7-flash
 ```
 
-`GEMINI_SOLOV_*`、`GEMINI_AIMAGICHUB_*` 只是 `.env` 中的预留比较变量；当前生产路由只读取 `GEMINI_API_KEY`、`GOOGLE_GEMINI_BASE_URL`、`GEMINI_MODEL`，不会自动在 Aimagichub 与 Solov 之间切换。故障时本次运行阻断，用户显式重新发起另一 writer 运行才会换模型/线路。
+生产 Gemini writer 默认使用 Aimagichub。发生可恢复的传输失败时，路由适配器只在同一 Gemini 3.7 Flash 身份下切换到 Solov；Solov 反过来也只切回 Aimagichub。两条渠道都未配置时仍按原有 fail-closed 规则阻断。Claude 路由仅在用户显式选择 `writerModel=claude` 时使用，绝不作为 Gemini 的静默 fallback。
 
 ## 4. Workspace 前置条件
 

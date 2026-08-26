@@ -29,21 +29,36 @@ import { hashText, buildCandidateId } from "../dist/v2/core/candidate-revision-s
 import { buildChapterContract, renderContract } from "../dist/v2/core/model-prompt-adapter.js";
 import { detectModelVersion } from "../dist/v2/learning/model-version-migration.js";
 
-const AGENTIC_TEXT = [
+function buildSufficientText(paragraphs, minimum = 3200) {
+  const output = [...paragraphs];
+  let sequence = 1;
+  while (output.join("\n\n").replace(/\s/g, "").length < minimum) {
+    const marker = String.fromCodePoint(0x4e00 + sequence);
+    const markerNext = String.fromCodePoint(0x4e00 + sequence + 70);
+    const markerLast = String.fromCodePoint(0x4e00 + sequence + 140);
+    output.push(
+      `第${marker}段，${markerNext}叶${markerLast}尘沿${marker}着石${markerNext}壁确${markerLast}认灵${marker}气流${markerNext}向与门${markerLast}外脚${marker}步的变化，记下观察${markerNext}，再将下一步行动压在心底。`,
+    );
+    sequence += 1;
+  }
+  return output.join("\n\n");
+}
+
+const AGENTIC_TEXT = buildSufficientText([
   "叶尘站在密室中央，手心贴着传承玉简的冰冷表面。",
   "灵气从玉简中涌出，顺着他的经脉蔓延，封印开始松动。",
   "他感到体内力量在攀升，炼体期的壁障出现了裂痕。",
   "门外传来脚步声，追踪者已经逼近。叶尘收回手，将玉简藏入怀中。",
-].join("\n\n");
+]);
 
-const STYLED_TEXT = [
+const STYLED_TEXT = buildSufficientText([
   "叶尘站在密室中央。",
   "手心贴着传承玉简。冰凉。",
   "灵气从玉简里涌出来，顺着经脉蔓延。封印松动了。",
   "他感到体内力量在攀升。炼体期的壁障，出现了裂痕。",
   "门外传来脚步声。追踪者逼近了。",
   "叶尘收回手。玉简藏入怀中。",
-].join("\n\n");
+]);
 
 function makeIntent() {
   return {

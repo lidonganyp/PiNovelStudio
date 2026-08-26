@@ -5,7 +5,7 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 import type { FailureEnvelope, FailureSeverity } from './types';
 
 const SENSITIVE_RE =
-  /stack|api[_-]?key|authorization|postgres|mongodb|ECONNREFUSED|aimagichub|openai|anthropic|solov|bearer\s+[a-z0-9.-]+|sk-[a-z0-9]+/i;
+  /stack|api[_-]?key|authorization|postgres|mongodb|ECONNREFUSED|aimagichub|openai|anthropic|solov|gemini|claude|\bglm\b|deepseek|qwen|doubao|ernie|provider|secret|token\s*[=:]|bearer\s+[a-z0-9.-]+|sk-[a-z0-9]+/i;
 
 export const FAILURE_CODES = {
   historyLoadFailed: 'history_load_failed',
@@ -19,6 +19,7 @@ export const FAILURE_CODES = {
   jobSubmitFailed: 'job_submit_failed',
   runtimePreflightFailed: 'runtime_preflight_failed',
   stateStoreHashMismatch: 'state_store_hash_mismatch',
+  environmentFingerprintMismatch: 'environment_fingerprint_mismatch',
   generationFailed: 'generation_failed',
   narrativeStateCommitFailed: 'narrative_state_commit_failed',
   sseInterrupted: 'sse_interrupted',
@@ -44,6 +45,7 @@ export function makeFailure(input: {
   retryPlan?: string;
   userActionRequired?: string[];
   fixInstructions?: string[];
+  traceArchivePath?: string;
 }): FailureEnvelope {
   return {
     stage: input.stage,
@@ -56,6 +58,7 @@ export function makeFailure(input: {
     retryPlan: input.retryPlan,
     userActionRequired: input.userActionRequired,
     fixInstructions: input.fixInstructions,
+    traceArchivePath: input.traceArchivePath,
   };
 }
 

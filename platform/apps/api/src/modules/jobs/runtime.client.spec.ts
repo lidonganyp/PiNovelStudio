@@ -38,6 +38,32 @@ describe('RuntimeClient request boundary', () => {
     );
   });
 
+  it('retries a transient connection failure before reporting the runtime as unreachable', async () => {
+    const fetchFailed = Object.assign(new Error('fetch failed'), {
+      cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3100'), {
+        code: 'ECONNREFUSED',
+      }),
+    });
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(fetchFailed)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: 'ok',
+          result: { status: 'ok', text: 'generated' },
+          metering: { modelCallCount: 1 },
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new RuntimeClient();
+    (client as never as { retryDelayMs: number }).retryDelayMs = 0;
+
+    await expect(client.invoke('task-token', 'novel_generate_chapter', {})).resolves.toMatchObject({
+      status: 'ok',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps a 422 failureEnvelope instead of collapsing seed_readiness into generation_failed', async () => {
     vi.stubGlobal(
       'fetch',

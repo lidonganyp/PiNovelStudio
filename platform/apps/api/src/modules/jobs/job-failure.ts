@@ -40,21 +40,26 @@ export function runtimeInvokeFailure(
       failureEnvelope?: Record<string, unknown>;
       reason?: unknown;
       status?: unknown;
+      /** runtime 422 响应顶层字段：失败归档的 workspace 路径（含 traces/） */
+      traceArchivePath?: unknown;
     };
+    const traceArchivePath = typeof value.traceArchivePath === 'string' && value.traceArchivePath.trim()
+      ? value.traceArchivePath.trim()
+      : undefined;
     const raw = value.failureEnvelope;
     if (raw && typeof raw === 'object') {
       const reason = typeof raw.reason === 'string' && raw.reason.trim()
         ? raw.reason.trim()
         : '运行时预检或生成失败';
-      const code = codeFromRuntimeReason(reason, value.status);
+      const code = codeFromRuntimeFailure(raw, reason, value.status);
       return new JobFailureError(makeFailure({
         stage: typeof raw.stage === 'string' ? raw.stage : stageForCode(code),
         gate: typeof raw.gate === 'string' ? raw.gate : 'runtime',
         code,
         severity: severityForCode(code),
         reason,
-        recoverable: code !== FAILURE_CODES.stateStoreHashMismatch,
-        retryPlan: code === FAILURE_CODES.stateStoreHashMismatch ? undefined : 'retry_same_stage',
+        recoverable: isNonRecoverablePreflightCode(code) ? false : true,
+        retryPlan: isNonRecoverablePreflightCode(code) ? undefined : 'retry_same_stage',
         evidence: raw.evidence,
         userActionRequired: Array.isArray(raw.userActionRequired)
           ? raw.userActionRequired.filter((item): item is string => typeof item === 'string')
@@ -62,6 +67,7 @@ export function runtimeInvokeFailure(
         fixInstructions: Array.isArray(raw.fixInstructions)
           ? raw.fixInstructions.filter((item): item is string => typeof item === 'string')
           : undefined,
+        traceArchivePath,
       }));
     }
     if (typeof value.reason === 'string' && value.reason.trim()) {
@@ -73,8 +79,9 @@ export function runtimeInvokeFailure(
         code,
         severity: severityForCode(code),
         reason,
-        recoverable: code !== FAILURE_CODES.stateStoreHashMismatch,
-        retryPlan: code === FAILURE_CODES.stateStoreHashMismatch ? undefined : 'retry_same_stage',
+        recoverable: isNonRecoverablePreflightCode(code) ? false : true,
+        retryPlan: isNonRecoverablePreflightCode(code) ? undefined : 'retry_same_stage',
+        traceArchivePath,
       }));
     }
   }
@@ -124,6 +131,9 @@ export function readStoredFailure(
         fixInstructions: Array.isArray(row.fixInstructions)
           ? row.fixInstructions.filter((item): item is string => typeof item === 'string')
           : undefined,
+        traceArchivePath: typeof row.traceArchivePath === 'string' && row.traceArchivePath.trim()
+          ? row.traceArchivePath.trim()
+          : undefined,
       };
     }
   }
@@ -143,8 +153,8 @@ function classifyMessage(message: string): FailureEnvelope {
       code,
       severity: severityForCode(code),
       reason: tagged[2] || message,
-      recoverable: code !== FAILURE_CODES.stateStoreHashMismatch,
-      retryPlan: code === FAILURE_CODES.stateStoreHashMismatch ? undefined : 'retry_same_stage',
+      recoverable: isNonRecoverablePreflightCode(code) ? false : true,
+      retryPlan: isNonRecoverablePreflightCode(code) ? undefined : 'retry_same_stage',
     });
   }
   if (/state_store_hash_mismatch|哈希不一致/.test(message)) {
@@ -202,7 +212,24 @@ function codeFromRuntimeReason(reason: string, status: unknown): string {
   return FAILURE_CODES.generationFailed;
 }
 
+function codeFromRuntimeFailure(
+  failure: Record<string, unknown>,
+  reason: string,
+  status: unknown,
+): string {
+  if (failure.code === FAILURE_CODES.environmentFingerprintMismatch) {
+    return FAILURE_CODES.environmentFingerprintMismatch;
+  }
+  return codeFromRuntimeReason(reason, status);
+}
+
+function isNonRecoverablePreflightCode(code: string): boolean {
+  return code === FAILURE_CODES.stateStoreHashMismatch
+    || code === FAILURE_CODES.environmentFingerprintMismatch;
+}
+
 function stageForCode(code: string): string {
+  if (code === FAILURE_CODES.environmentFingerprintMismatch) return 'g6_release_gate';
   if (code === FAILURE_CODES.stateStoreHashMismatch) return 'runtime.preflight';
   if (code === FAILURE_CODES.runtimePreflightFailed) return 'runtime.preflight';
   if (code === FAILURE_CODES.narrativeStateCommitFailed) return 'runtime.commit';
@@ -210,6 +237,7 @@ function stageForCode(code: string): string {
 }
 
 function severityForCode(code: string): FailureEnvelope['severity'] {
+  if (code === FAILURE_CODES.environmentFingerprintMismatch) return 'preflight';
   if (code === FAILURE_CODES.stateStoreHashMismatch) return 'preflight';
   if (code === FAILURE_CODES.runtimePreflightFailed) return 'preflight';
   return 'hard';
