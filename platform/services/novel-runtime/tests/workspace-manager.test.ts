@@ -52,8 +52,8 @@ after(() => {
   }
 });
 
-function makeManager() {
-  return createWorkspaceManager({ tempWorkspaceRoot: TEST_ROOT });
+function makeManager(options: { capabilityPackageSourceRoot?: string } = {}) {
+  return createWorkspaceManager({ tempWorkspaceRoot: TEST_ROOT, ...options });
 }
 
 function readText(path: string): string {
@@ -65,6 +65,26 @@ function readJson<T = unknown>(path: string): T {
 }
 
 describe("P0-4 workspace-manager.materializeWorkspace", () => {
+  test("复制 release-bound frozen capability package set 到 job root", () => {
+    const sourceRoot = join(TEST_ROOT, "release-source");
+    const sourcePath = join(sourceRoot, "data", "runtime", "capability-package-set.json");
+    mkdirSync(join(sourceRoot, "data", "runtime"), { recursive: true });
+    writeFileSync(sourcePath, JSON.stringify({ schemaVersion: "capability-package-set-v1", packages: [], payloads: [] }));
+
+    const wm = makeManager({ capabilityPackageSourceRoot: sourceRoot });
+    const result = wm.materializeWorkspace({
+      jobId: "job-capability-set-1",
+      workspaceId: "u1_p1",
+      projectConfig: { genre: "武侠" },
+      documents: [],
+    });
+
+    const targetPath = join(result.tempProjectRoot, "data", "runtime", "capability-package-set.json");
+    assert.equal(readText(targetPath), readText(sourcePath));
+    wm.cleanupWorkspace("job-capability-set-1");
+    rmSync(sourceRoot, { recursive: true, force: true });
+  });
+
   test("创建完整目录结构 + config.json", () => {
     const wm = makeManager();
     const result = wm.materializeWorkspace({

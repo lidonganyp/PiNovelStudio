@@ -32,7 +32,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync, renameSync, readdirSync } from "node:fs";
 import { join, resolve, isAbsolute, dirname } from "node:path";
 import type * as pino from "pino";
 
@@ -123,6 +123,12 @@ export interface WorkspaceManagerDeps {
    * tempWorkspaceRoot 同级的 `novel-runtime-archive`）。
    */
   workspaceArchiveRoot?: string;
+  /**
+   * Release-bound source for immutable runtime assets such as the frozen
+   * capability package set. Missing assets intentionally remain missing so
+   * the production extension fails closed instead of silently using defaults.
+   */
+  capabilityPackageSourceRoot?: string;
   logger?: pino.Logger;
 }
 
@@ -169,6 +175,11 @@ function assertSafeName(name: string, field: "jobId" | "workspaceId"): void {
  */
 export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
   const { tempWorkspaceRoot, logger } = deps;
+  const capabilityPackageSourceRoot = deps.capabilityPackageSourceRoot
+    ? (isAbsolute(deps.capabilityPackageSourceRoot)
+        ? deps.capabilityPackageSourceRoot
+        : resolve(process.cwd(), deps.capabilityPackageSourceRoot))
+    : undefined;
   const absRoot = isAbsolute(tempWorkspaceRoot)
     ? tempWorkspaceRoot
     : resolve(process.cwd(), tempWorkspaceRoot);
@@ -217,6 +228,24 @@ export function createWorkspaceManager(deps: WorkspaceManagerDeps) {
         mkdirSync(join(workspacePath, "styles"), { recursive: true });
         mkdirSync(join(workspacePath, "traces"), { recursive: true });
         mkdirSync(join(workspacePath, "chapter-continuity"), { recursive: true });
+
+        // The extension resolves the frozen capability package set relative
+        // to the per-job project root. Copy the release-bound asset into that
+        // root; do not synthesize it when the source is absent, preserving the
+        // production fail-closed contract.
+        const capabilityPackageSource = capabilityPackageSourceRoot
+          ? join(capabilityPackageSourceRoot, "data", "runtime", "capability-package-set.json")
+          : undefined;
+        if (capabilityPackageSource && existsSync(capabilityPackageSource)) {
+          const capabilityPackageTarget = join(
+            tempProjectRoot,
+            "data",
+            "runtime",
+            "capability-package-set.json",
+          );
+          mkdirSync(dirname(capabilityPackageTarget), { recursive: true });
+          copyFileSync(capabilityPackageSource, capabilityPackageTarget);
+        }
 
         // 写入 config.json（项目级配置）
         atomicWriteJson(

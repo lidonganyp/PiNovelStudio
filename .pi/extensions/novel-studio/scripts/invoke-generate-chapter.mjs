@@ -159,7 +159,9 @@ try {
     params,
     undefined,
     undefined,
-    { cwd: projectRoot },
+    // Eval harness materializes and owns this isolated root; mark the hand-off
+    // trusted so the production wrapper applies the same contract as Runtime.
+    { cwd: projectRoot, __novelRuntimeTrustedRoot: true },
   );
 } catch (error) {
   console.error(`[invoke-generate-chapter] 工具执行异常：${String(error)}`);

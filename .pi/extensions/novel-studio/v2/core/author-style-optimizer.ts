@@ -88,6 +88,8 @@ export interface AuthorStyleOptimizationInput {
   currentChapterDraft?: string;
   /** The previous style attempt changed the protected prefix; force suffix-only output. */
   continuationPrefixRecovery?: boolean;
+  /** The previous style attempt echoed the complete source and appended a second rewrite. */
+  completeChapterEchoRecovery?: boolean;
   intent: ChapterIntent;
   context: CompiledContext;
   constitution: ConstitutionSnapshot | null;
@@ -173,6 +175,7 @@ export interface AuthorStyleOptimizationResult {
     | "model_timeout"
     | "model_error"
     | "continuation_prefix_mismatch"
+    | "complete_chapter_echo"
     | null;
   styleProfileLoaded: boolean;
   styleGuidanceConsumed: boolean;
@@ -443,6 +446,16 @@ export function buildAuthorStyleUserPrompt(
         + "The host will prepend the protected prefix automatically.",
       );
     }
+  }
+  if (input.completeChapterEchoRecovery) {
+    parts.push(
+      "COMPLETE CHAPTER ECHO RECOVERY: The previous style attempt copied the entire Agentic draft "
+      + "and then appended a second rewritten chapter. Produce exactly one chapter only. "
+      + "Never paste the source chapter and then restate it; each event and paragraph may appear once. "
+      + (input.continuationMode === "append"
+        ? "In continuation mode, output only the new suffix after the protected prefix; the host prepends the prefix."
+        : "In replace mode, output one complete optimized chapter from the source, with no duplicated opening or second pass."),
+    );
   }
   parts.push(
     "【表达优化硬边界】\n" +

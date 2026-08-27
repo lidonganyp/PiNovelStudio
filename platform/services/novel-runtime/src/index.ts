@@ -159,6 +159,8 @@ async function main(): Promise<void> {
   const workspaceManager = createWorkspaceManager({
     tempWorkspaceRoot: config.tempWorkspaceRoot,
     workspaceArchiveRoot: config.workspaceArchiveRoot,
+    capabilityPackageSourceRoot:
+      process.env.PINOVEL_FINGERPRINT_ROOT?.trim() || config.novelStudioProjectRoot,
     logger,
   });
   logger.info(

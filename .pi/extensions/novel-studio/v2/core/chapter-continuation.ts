@@ -9,6 +9,32 @@ function normalizeContinuationText(text: string): string {
 }
 
 /**
+ * Detect a style response that contains the complete source chapter followed
+ * by another substantial chapter rewrite. This is different from an exact
+ * adjacent paragraph duplicate: the second copy is usually paraphrased, so
+ * FactGuard's byte-level duplicate scanner cannot identify it reliably.
+ *
+ * A style candidate is allowed to grow modestly, but it must not prepend the
+ * entire source and then append another near-chapter-sized payload. The
+ * conservative ratio/size thresholds avoid treating ordinary sentence-level
+ * expansion as a duplicate while catching the observed source+rewrite shape.
+ */
+export function hasCompleteChapterEcho(
+  source: string,
+  generated: string,
+  minimumLengthRatio = 1.5,
+  minimumExtraLength = 800,
+): boolean {
+  const normalizedSource = normalizeContinuationText(source);
+  const normalizedGenerated = normalizeContinuationText(generated);
+  if (!normalizedSource || !normalizedGenerated) return false;
+  if (!normalizedGenerated.startsWith(normalizedSource)) return false;
+  const extraLength = normalizedGenerated.length - normalizedSource.length;
+  if (extraLength < minimumExtraLength) return false;
+  return normalizedGenerated.length >= normalizedSource.length * minimumLengthRatio;
+}
+
+/**
  * Detect a model response that appears to be a rewritten complete prefix.
  * A suffix-only response is valid; an exact complete chapter is also valid.
  * When the first line substantially overlaps the author prefix but is not

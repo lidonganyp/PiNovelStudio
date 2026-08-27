@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   hasContinuationPrefixMismatch,
+  hasCompleteChapterEcho,
   mergeChapterContinuation,
   repairAdjacentDuplicateParagraphs,
 } from "../dist/v2/core/chapter-continuation.js";
@@ -44,6 +45,36 @@ test("continuation prefix comparison rejects a near-identical rewritten opening"
   const existing = "雨水顺着旧仓库的铁皮檐滴落下来。李一凡站在门外，没有立刻进去。";
   const rewritten = `X${existing.slice(1)}\n\n新的续写内容。`;
   assert.equal(hasContinuationPrefixMismatch(existing, rewritten), true);
+});
+
+test("complete chapter echo detects a full source followed by a substantial rewrite", () => {
+  const source = "第一段已确认。第二段保留动作和结果。";
+  const rewritten = "李一凡身侧的暗金色眼眸微微一沉，重新组织了这一章的叙述。".repeat(80);
+  assert.equal(hasCompleteChapterEcho(source, `${source}${rewritten}`), true);
+});
+
+test("complete chapter echo allows a short legitimate extension", () => {
+  const source = "第一段已确认。第二段保留动作和结果。";
+  assert.equal(hasCompleteChapterEcho(source, `${source}\n新的短句。`), false);
+});
+
+test("complete chapter echo ignores CRLF normalization", () => {
+  const source = "第一段已确认。\n第二段保留动作和结果。";
+  const rewritten = "补充的整章改写内容。".repeat(100);
+  assert.equal(hasCompleteChapterEcho(source, `${source.replace(/\n/g, "\r\n")}${rewritten}`), true);
+});
+
+test("suffix-only output is not a complete chapter echo", () => {
+  const source = "第一段已确认。第二段保留动作和结果。";
+  const suffix = "新的后缀内容。".repeat(100);
+  assert.equal(hasCompleteChapterEcho(source, suffix), false);
+});
+
+test("merging a rewritten suffix with the source exposes a complete chapter echo", () => {
+  const source = "第一段已确认。第二段保留动作和结果。";
+  const rewrittenSuffix = "这是对整章内容的二次改写，但模型只返回了后缀。".repeat(100);
+  assert.equal(hasCompleteChapterEcho(source, `${source}\n\n${rewrittenSuffix}`), true);
+  assert.equal(hasCompleteChapterEcho(source, rewrittenSuffix), false);
 });
 
 test("continuation repair leaves an existing duplicate inside the protected author prefix untouched", () => {

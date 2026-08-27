@@ -269,6 +269,42 @@ test("append mode retries a rewritten prefix and succeeds with the strict suffix
   }
 });
 
+test("production recovery rejects a complete author-style echo and preserves the Agentic candidate", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-author-style-echo-recovery-"));
+  const echoedRewrite = "\n\n这是风格模型追加的整章改写段落，不能与原始章节同时保留。".repeat(80);
+  const echoedChapter = `${COMPLETE_DRAFT}${echoedRewrite}`;
+  const stylePrompts = [];
+
+  try {
+    const result = await createUnifiedOrchestrator().orchestrate(makeInput(projectRoot, {
+      agenticCandidateSource: {
+        async generate() {
+          return makeAgenticResult(COMPLETE_DRAFT, 1);
+        },
+      },
+      modelGenerate: async (input) => {
+        stylePrompts.push(input.userPrompt);
+        return {
+          text: echoedChapter,
+          model: "gemini-recovery-test",
+          route: input.route,
+          durationMs: 1,
+          finishReason: "stop",
+        };
+      },
+    }));
+
+    assert.equal(result.status, "ok", JSON.stringify(result.failureEnvelope));
+    assert.equal(stylePrompts.length, 2);
+    assert.match(stylePrompts[1], /COMPLETE CHAPTER ECHO RECOVERY/);
+    assert.equal(result.text, COMPLETE_DRAFT);
+    assert.equal(result.stageResults.finalFactRecheck.ok, true);
+    assert.equal(result.stageResults.authorStyleOptimizationNoopRecovery.reason, "complete_chapter_echo");
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test("production recovery retries when the first Agentic call throws", async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-agentic-throw-recovery-"));
   let agenticCalls = 0;

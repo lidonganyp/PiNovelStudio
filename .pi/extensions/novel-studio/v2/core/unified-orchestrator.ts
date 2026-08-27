@@ -230,6 +230,7 @@ import { checkCandidateTextHashBinding, hashText } from "./candidate-revision-st
 import {
   mergeChapterContinuation,
   hasContinuationPrefixMismatch,
+  hasCompleteChapterEcho,
   repairAdjacentDuplicateParagraphs,
 } from "./chapter-continuation.js";
 import {
@@ -386,6 +387,7 @@ import {
 function preserveContinuationStyleResult(
   result: AuthorStyleOptimizationResult,
   input: UnifiedOrchestratorInput,
+  sourceCandidateText?: string,
 ): AuthorStyleOptimizationResult {
   if (!result.candidate) {
     return result;
@@ -405,6 +407,21 @@ function preserveContinuationStyleResult(
   const mergedText = input.continuationMode === "append" && input.currentChapterDraft?.trim()
     ? mergeChapterContinuation(input.currentChapterDraft, result.candidate.text)
     : result.candidate.text;
+  // Check both the raw model response and the host-merged continuation. In
+  // append mode a provider may return only a rewritten suffix; merging the
+  // protected draft can then create the same full-chapter + rewrite echo even
+  // though the response itself did not start with the source chapter.
+  if (
+    sourceCandidateText
+    && hasCompleteChapterEcho(sourceCandidateText, mergedText)
+  ) {
+    return {
+      ...result,
+      candidate: null,
+      failureKind: "complete_chapter_echo",
+      failureReason: "风格优化结果先完整复制初稿，又追加大段二次整章改写，已拒绝重复候选并请求定向重试。",
+    };
+  }
   const text = repairAdjacentDuplicateParagraphs(
     mergedText,
     input.continuationMode === "append" ? input.currentChapterDraft ?? "" : "",
@@ -2195,7 +2212,7 @@ export class UnifiedOrchestrator {
       let styleResult = await timeAsync("stage3_authorStyleOptimization", () =>
         createAuthorStyleOptimizer().optimize(styleOptimizationInput),
       );
-      styleResult = preserveContinuationStyleResult(styleResult, input);
+      styleResult = preserveContinuationStyleResult(styleResult, input, agenticCandidate.text);
       stageResults.authorStyleOptimization = {
         styleProfileLoaded: styleResult.styleProfileLoaded,
         styleGuidanceConsumed: styleResult.styleGuidanceConsumed,
@@ -2278,14 +2295,17 @@ export class UnifiedOrchestrator {
         && (
           styleResult.failureKind === "empty_result" ||
           styleResult.failureKind === "model_timeout" ||
-          styleResult.failureKind === "continuation_prefix_mismatch"
+          styleResult.failureKind === "continuation_prefix_mismatch" ||
+          styleResult.failureKind === "complete_chapter_echo"
         );
       if (transientStyleFailure) {
         const firstFailureKind = styleResult.failureKind;
         const firstFailureReason = styleResult.failureReason ?? "未产出候选";
         const retryInput = styleResult.failureKind === "continuation_prefix_mismatch"
           ? { ...styleOptimizationInput, continuationPrefixRecovery: true }
-          : styleOptimizationInput;
+          : styleResult.failureKind === "complete_chapter_echo"
+            ? { ...styleOptimizationInput, completeChapterEchoRecovery: true }
+            : styleOptimizationInput;
         const retryResult = await timeAsync("stage3_authorStyleOptimizationRetry", () =>
           createAuthorStyleOptimizer().optimize(retryInput),
         );
@@ -2301,7 +2321,7 @@ export class UnifiedOrchestrator {
           candidateId: retryResult.candidate?.id ?? null,
         };
         styleResult = retryResult;
-        styleResult = preserveContinuationStyleResult(styleResult, input);
+        styleResult = preserveContinuationStyleResult(styleResult, input, agenticCandidate.text);
       }
       let initialStyledCandidate = styleResult.candidate;
       if (
@@ -2321,6 +2341,28 @@ export class UnifiedOrchestrator {
         };
         stageResults.authorStyleOptimizationNoopRecovery = {
           reason: "continuation_prefix_mismatch",
+          candidateId: initialStyledCandidate.id,
+          sourceCandidateId: agenticCandidate.id,
+          retryAttempted: transientStyleFailure,
+          disposition: "preserve_agentic_candidate_for_normal_gates",
+        };
+      }
+      if (
+        !initialStyledCandidate
+        && styleResult.failureKind === "complete_chapter_echo"
+      ) {
+        // A second echo is never eligible for downstream gates. The Agentic
+        // candidate already passed its generation/fact gates, so retain it as
+        // an explicit no-op editorial result and continue normal validation.
+        initialStyledCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
+        styleResult = {
+          ...styleResult,
+          candidate: initialStyledCandidate,
+          failureKind: null,
+          failureReason: null,
+        };
+        stageResults.authorStyleOptimizationNoopRecovery = {
+          reason: "complete_chapter_echo",
           candidateId: initialStyledCandidate.id,
           sourceCandidateId: agenticCandidate.id,
           retryAttempted: transientStyleFailure,
@@ -2532,7 +2574,7 @@ export class UnifiedOrchestrator {
             reducedGuidanceRatio: 0.5,
           }),
         );
-        retryStyleResult = preserveContinuationStyleResult(retryStyleResult, input);
+        retryStyleResult = preserveContinuationStyleResult(retryStyleResult, input, agenticCandidate.text);
         stageResults.authorStyleOptimizationUnverifiableRetry = {
           styleProfileLoaded: retryStyleResult.styleProfileLoaded,
           styleGuidanceConsumed: retryStyleResult.styleGuidanceConsumed,
@@ -2544,7 +2586,23 @@ export class UnifiedOrchestrator {
           firstPreservationUnverifiable: true,
           firstPreservationReason: preservation.reason,
         };
-        const retryCandidate = retryStyleResult.candidate;
+        let retryCandidate = retryStyleResult.candidate;
+        if (!retryCandidate && retryStyleResult.failureKind === "complete_chapter_echo") {
+          retryCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
+          retryStyleResult = {
+            ...retryStyleResult,
+            candidate: retryCandidate,
+            failureKind: null,
+            failureReason: null,
+          };
+          stageResults.authorStyleOptimizationNoopRecovery = {
+            reason: "complete_chapter_echo",
+            candidateId: retryCandidate.id,
+            sourceCandidateId: agenticCandidate.id,
+            retryAttempted: true,
+            disposition: "preserve_agentic_candidate_for_normal_gates",
+          };
+        }
         if (retryCandidate) {
           const retryPreservation = timeSync("stage4b_retryStoryPreservation", () =>
             checkEditorialStoryPreservation({
@@ -2683,7 +2741,7 @@ export class UnifiedOrchestrator {
             },
           }),
         );
-        driftRetryStyleResult = preserveContinuationStyleResult(driftRetryStyleResult, input);
+        driftRetryStyleResult = preserveContinuationStyleResult(driftRetryStyleResult, input, agenticCandidate.text);
         stageResults.authorStyleOptimizationDriftRetry = {
           styleProfileLoaded: driftRetryStyleResult.styleProfileLoaded,
           styleGuidanceConsumed: driftRetryStyleResult.styleGuidanceConsumed,
@@ -2694,7 +2752,23 @@ export class UnifiedOrchestrator {
           retryWithReducedGuidance: driftRetryStyleResult.retryWithReducedGuidance,
           firstDriftReason: preservation.reason,
         };
-        const driftRetryCandidate = driftRetryStyleResult.candidate;
+        let driftRetryCandidate = driftRetryStyleResult.candidate;
+        if (!driftRetryCandidate && driftRetryStyleResult.failureKind === "complete_chapter_echo") {
+          driftRetryCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
+          driftRetryStyleResult = {
+            ...driftRetryStyleResult,
+            candidate: driftRetryCandidate,
+            failureKind: null,
+            failureReason: null,
+          };
+          stageResults.authorStyleOptimizationNoopRecovery = {
+            reason: "complete_chapter_echo",
+            candidateId: driftRetryCandidate.id,
+            sourceCandidateId: agenticCandidate.id,
+            retryAttempted: true,
+            disposition: "preserve_agentic_candidate_for_normal_gates",
+          };
+        }
         if (driftRetryCandidate) {
           const driftRetryPreservation = timeSync("stage4b_retryStoryPreservationDrift", () =>
             checkEditorialStoryPreservation({
@@ -3010,8 +3084,24 @@ export class UnifiedOrchestrator {
             ...(recoveryFeedback ? { recoveryFeedback } : {}),
           }),
         );
-        recoveredStyleResult = preserveContinuationStyleResult(recoveredStyleResult, input);
-        const recoveredCandidate = recoveredStyleResult.candidate;
+        recoveredStyleResult = preserveContinuationStyleResult(recoveredStyleResult, input, agenticCandidate.text);
+        let recoveredCandidate = recoveredStyleResult.candidate;
+        if (!recoveredCandidate && recoveredStyleResult.failureKind === "complete_chapter_echo") {
+          recoveredCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
+          recoveredStyleResult = {
+            ...recoveredStyleResult,
+            candidate: recoveredCandidate,
+            failureKind: null,
+            failureReason: null,
+          };
+          stageResults.authorStyleOptimizationNoopRecovery = {
+            reason: "complete_chapter_echo",
+            candidateId: recoveredCandidate.id,
+            sourceCandidateId: agenticCandidate.id,
+            retryAttempted: true,
+            disposition: "preserve_agentic_candidate_for_normal_gates",
+          };
+        }
         if (!recoveredCandidate) {
           finalRecoveryAttempts.push({
             attempt,
