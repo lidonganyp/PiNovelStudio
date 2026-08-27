@@ -48,6 +48,39 @@ test("duplicate recovery removes only the later repeated sentence", () => {
   assert.equal(repaired.removed.length, 1);
 });
 
+test("duplicate recovery removes a repeated window that crosses sentence boundaries", () => {
+  const text = "前文。第一句保留。\n\n第二句保留。\n\n第一句保留。\n\n第二句保留。\n\n新的结尾。";
+  const firstStart = text.indexOf("第一句保留。\n\n第二句");
+  const excerpt = text.slice(firstStart, firstStart + 10);
+  const repaired = repairDuplicateFindings(text, [{
+    source: "duplicate_scan",
+    evidence: `大段重复：\"${excerpt}...\"`,
+    span: { start: firstStart, end: firstStart + excerpt.length },
+  }]);
+
+  assert.equal(repaired.changed, true);
+  assert.equal(repaired.text, "前文。第一句保留。\n\n第二句保留。\n\n新的结尾。");
+});
+
+test("duplicate recovery removes an appended compressed duplicate tail", () => {
+  const source = [
+    "落点偏了半米。\n\n不远处传来战术靴踩碎碎石的轻响。",
+    "\n\n一凡？你刚才去哪儿了？信号断了整整三分钟。",
+    "\n\n我来封路。李一凡站直身子，深吸了一口气，准备迎接新的战斗。",
+  ].join("");
+  const text = `${source}\n\n落点偏了半米。\n\n不远处传来战术靴踩碎碎石的轻响。\n\n一凡？你刚才去哪儿了？信号断了整整三分钟。\n\n我来封路。李一凡站直身子，深吸了一口气，准备迎接新的战斗。`;
+  const firstStart = text.indexOf("。\n\n不远处传来战术靴踩碎碎石的轻响");
+  const excerpt = text.slice(firstStart, firstStart + 24);
+  const repaired = repairDuplicateFindings(text, [{
+    source: "duplicate_scan",
+    evidence: `大段重复：\"${excerpt}...\"`,
+    span: { start: firstStart, end: firstStart + excerpt.length },
+  }]);
+
+  assert.equal(repaired.changed, true);
+  assert.equal(repaired.text, source);
+});
+
 test("draft selection never returns an empty string when a readable candidate exists", () => {
   const result = selectRecoverableDraft([
     { source: "editorial", text: "" },
