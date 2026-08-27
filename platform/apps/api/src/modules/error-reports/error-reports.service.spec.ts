@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import {
   DEFAULT_ERROR_REPORT_RETENTION_DAYS,
   ErrorReportsService,
@@ -12,6 +13,9 @@ function makePrisma() {
       create: vi.fn(),
       findMany: vi.fn(),
       deleteMany: vi.fn(),
+    },
+    novelGenerationJob: {
+      findUnique: vi.fn(),
     },
   };
 }
@@ -35,6 +39,7 @@ describe('ErrorReportsService', () => {
     const prisma = makePrisma();
     const existing = { id: 7, reportId: 'report-7' };
     prisma.novelErrorReport.findUnique.mockResolvedValue(existing);
+    prisma.novelGenerationJob.findUnique.mockResolvedValue({ userId: 3, projectId: 2, chapterId: 1 });
     const service = new ErrorReportsService(prisma as never);
 
     const result = await service.recordClientError(3, 'job-1', {
@@ -46,6 +51,51 @@ describe('ErrorReportsService', () => {
 
     expect(result).toEqual(existing);
     expect(prisma.novelErrorReport.create).not.toHaveBeenCalled();
+  });
+
+  it('requires the browser report to belong to the authenticated user', async () => {
+    const prisma = makePrisma();
+    prisma.novelErrorReport.findUnique.mockResolvedValue(null);
+    prisma.novelGenerationJob.findUnique.mockResolvedValue(null);
+    const service = new ErrorReportsService(prisma as never);
+
+    await expect(service.recordClientError(3, 'job-1', {
+      code: 'sse_interrupted',
+      stage: 'assistant.sse',
+      message: 'stream closed',
+    })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.novelGenerationJob.findUnique.mockResolvedValue({
+      userId: 4,
+      projectId: 2,
+      chapterId: 1,
+    });
+    await expect(service.recordClientError(3, 'job-1', {
+      code: 'sse_interrupted',
+      stage: 'assistant.sse',
+      message: 'stream closed',
+    })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('bounds diagnostic strings before persistence', async () => {
+    const prisma = makePrisma();
+    prisma.novelErrorReport.create.mockImplementation(async ({ data }) => data);
+    const service = new ErrorReportsService(prisma as never);
+
+    await service.recordServerError({
+      code: 'runtime_error',
+      stage: 'runtime',
+      severity: 'hard',
+      message: 'x'.repeat(20_000),
+      diagnostic: { stack: 'y'.repeat(30_000) },
+    });
+
+    const data = prisma.novelErrorReport.create.mock.calls[0][0].data as {
+      safeMessage: string;
+      diagnostic: unknown;
+    };
+    expect(data.safeMessage).toHaveLength(2_000);
+    expect(JSON.stringify(data.diagnostic).length).toBeLessThanOrEqual(16_100);
   });
 
   it('assigns the default retention expiry to new reports', async () => {

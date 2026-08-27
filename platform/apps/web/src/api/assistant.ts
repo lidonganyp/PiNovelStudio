@@ -264,6 +264,43 @@ export function userFacingFailure(failure: FailureEnvelope | string): string {
   return text;
 }
 
+/** Best-effort browser-only diagnostics. Server failure events are already
+ * persisted by the API and must not be submitted a second time here. */
+export async function reportClientError(
+  jobId: string | undefined,
+  input: {
+    code: string;
+    stage: string;
+    message: string;
+    stack?: string;
+    lastEventType?: string;
+    requestId?: string;
+    traceId?: string;
+    diagnostic?: Record<string, unknown>;
+  },
+  projectId?: number,
+): Promise<void> {
+  if (!jobId && projectId === undefined) return;
+  const token = tokenStorage.get();
+  const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    const endpoint = jobId
+      ? `/api/jobs/${encodeURIComponent(jobId)}/client-errors`
+      : `/api/projects/${projectId}/client-errors`;
+    await fetch(endpoint, {
+      method: 'POST',
+      keepalive: true,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ ...input, clientEventId: randomId }),
+    });
+  } catch {
+    // Error reporting must never block retry or alter the user workflow.
+  }
+}
+
 /**
  * 发送消息并流式消费 SSE 响应。
  * 每个事件回调一次；连接失败抛错由调用方处理。
@@ -275,19 +312,32 @@ export async function sendMessageStream(
   signal?: AbortSignal,
 ): Promise<void> {
   const token = tokenStorage.get();
-  const response = await fetch(
-    `/api/projects/${projectId}/assistant/messages`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/projects/${projectId}/assistant/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(request),
+        signal,
       },
-      body: JSON.stringify(request),
-      signal,
-    },
-  );
+    );
+  } catch (error: unknown) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      await reportClientError(undefined, {
+        code: 'assistant_request_failed',
+        stage: 'assistant.http',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      }, projectId);
+    }
+    throw error;
+  }
   if (!response.ok || !response.body) {
     let failure: FailureEnvelope | undefined;
     let message = '请求失败';
@@ -305,6 +355,11 @@ export async function sendMessageStream(
       onEvent({ type: 'failure', failure });
       throw new Error(userFacingFailure(failure));
     }
+    await reportClientError(undefined, {
+      code: 'assistant_http_error',
+      stage: 'assistant.http',
+      message,
+    }, projectId);
     throw new Error(userFacingFailure(message));
   }
 
@@ -313,8 +368,24 @@ export async function sendMessageStream(
   let buffer = '';
   let completed = false;
   let streamError: string | null = null;
+  let lastJobId: string | undefined;
   for (;;) {
-    const { done, value } = await reader.read();
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (error: unknown) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        await reportClientError(lastJobId, {
+          code: 'sse_interrupted',
+          stage: 'assistant.sse',
+          message: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          lastEventType: completed ? 'done' : 'stream',
+        }, projectId);
+      }
+      throw error;
+    }
+    const { done, value } = chunk;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let separator = buffer.indexOf('\n\n');
@@ -356,6 +427,7 @@ export async function sendMessageStream(
             continue;
           }
           if (event.type === 'job_submitted' && typeof event.jobId === 'string') {
+            lastJobId = event.jobId;
             onEvent({
               type: 'job_submitted',
               jobId: event.jobId,
@@ -368,12 +440,29 @@ export async function sendMessageStream(
             completed = true;
             onEvent(event as unknown as AssistantStreamEvent);
           }
-        } catch {
+        } catch (error: unknown) {
+          await reportClientError(lastJobId, {
+            code: 'sse_event_parse_failed',
+            stage: 'assistant.sse',
+            message: error instanceof Error ? error.message : 'SSE event parse failed',
+            stack: error instanceof Error ? error.stack : undefined,
+            lastEventType: 'event_parse',
+          }, projectId);
           /* 跳过无法解析的行 */
         }
       }
     }
   }
   if (streamError) throw new Error(streamError);
-  if (!completed) throw new Error('规划模型连接中断，请重试');
+  if (!completed) {
+    const error = new Error('规划模型连接中断，请重试');
+    await reportClientError(lastJobId, {
+      code: 'sse_incomplete',
+      stage: 'assistant.sse',
+      message: error.message,
+      stack: error.stack,
+      lastEventType: 'stream_end',
+    }, projectId);
+    throw error;
+  }
 }

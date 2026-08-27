@@ -9,6 +9,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -58,6 +59,7 @@ import {
   type ContinuationMode,
 } from './chapter-continuation';
 import type { TargetWordRange } from '../context/types';
+import { ErrorReportsService } from '../error-reports/error-reports.service';
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -138,6 +140,7 @@ export class JobsService implements OnModuleInit {
     private readonly billing: BillingService,
     private readonly rates: RatesService,
     private readonly runtime: RuntimeClient,
+    @Optional() private readonly errorReports?: ErrorReportsService,
   ) {}
 
   /**
@@ -190,8 +193,26 @@ export class JobsService implements OnModuleInit {
           this.logger.error(
             `failed to release interrupted job hold ${job.jobId}: ${error instanceof Error ? error.message : String(error)}`,
           );
+          await this.recordServerErrorSafely({
+            jobId: job.jobId,
+            code: 'generation_interrupted_recovery_failed',
+            stage: 'jobs.startup_recovery',
+            gate: 'billing_release',
+            severity: 'fatal',
+            message: error instanceof Error ? error.message : String(error),
+            diagnostic: { operation: 'finalize_interrupted_hold' },
+          });
           throw error;
         }
+        await this.recordServerErrorSafely({
+          jobId: job.jobId,
+          code: 'generation_interrupted_recovery_failed',
+          stage: 'jobs.startup_recovery',
+          gate: 'billing_release',
+          severity: 'fatal',
+          message: error instanceof Error ? error.message : String(error),
+          diagnostic: { operation: 'finalize_interrupted_hold' },
+        });
       }
       try {
         await this.prisma.novelGenerationJob.update({
@@ -210,6 +231,14 @@ export class JobsService implements OnModuleInit {
         this.logger.error(
           `failed to mark interrupted job ${job.jobId}: ${error instanceof Error ? error.message : String(error)}`,
         );
+        await this.recordServerErrorSafely({
+          jobId: job.jobId,
+          code: 'generation_interrupted_persist_failed',
+          stage: 'jobs.startup_recovery',
+          gate: 'job_update',
+          severity: 'fatal',
+          message: error instanceof Error ? error.message : String(error),
+        });
         throw error;
       }
     }
@@ -375,16 +404,48 @@ export class JobsService implements OnModuleInit {
     try {
       await this.billing.createHold({ userId, jobId, amount: maxCharge });
     } catch (error: unknown) {
-      await this.prisma.novelGenerationJob.update({
+      const failure = jobFailureFromUnknown(error);
+      try {
+        await this.prisma.novelGenerationJob.update({
         where: { jobId },
         data: {
           status: error instanceof InsufficientBalanceException ? 'insufficient_balance' : 'failed',
           failureMessage: error instanceof InsufficientBalanceException
             ? '可用余额不足'
             : '计费预占失败',
-          failure: jobFailureFromUnknown(error),
+          failure,
           completedAt: new Date(),
         },
+        });
+      } catch (updateError: unknown) {
+        this.logger.error(
+          `failed to persist billing hold failure ${jobId}: ${updateError instanceof Error ? updateError.message : String(updateError)}`,
+        );
+        await this.recordServerErrorSafely({
+          userId,
+          projectId,
+          chapterId,
+          jobId,
+          code: 'billing_hold_failure_persist_failed',
+          stage: 'jobs.billing_hold',
+          gate: 'job_update',
+          severity: 'fatal',
+          message: updateError instanceof Error ? updateError.message : String(updateError),
+          diagnostic: { originalFailure: failure },
+        });
+        throw updateError;
+      }
+      await this.recordServerErrorSafely({
+        userId,
+        projectId,
+        chapterId,
+        jobId,
+        code: error instanceof InsufficientBalanceException ? 'insufficient_balance' : 'billing_hold_failed',
+        stage: 'jobs.billing_hold',
+        gate: 'billing_reservation',
+        severity: error instanceof InsufficientBalanceException ? 'recoverable' : 'fatal',
+        message: error instanceof Error ? error.message : String(error),
+        diagnostic: { failure },
       });
       throw error;
     }
@@ -745,6 +806,16 @@ export class JobsService implements OnModuleInit {
     jobId: string,
     failure: ReturnType<typeof jobFailureFromUnknown>,
   ): Promise<void> {
+    await this.recordServerErrorSafely({
+      jobId,
+      code: failure.code,
+      stage: failure.stage,
+      gate: failure.gate,
+      severity: failure.severity,
+      message: failure.reason,
+      diagnostic: { failure },
+      archivePath: failure.traceArchivePath,
+    });
     let settledAmount = 0n;
     try {
       const finalized = await this.billing.finalizeHold({ jobId, outcome: 'failure' });
@@ -764,6 +835,15 @@ export class JobsService implements OnModuleInit {
         this.logger.error(
           `failed to release generation hold ${jobId}; leaving job active for recovery: ${error instanceof Error ? error.message : String(error)}`,
         );
+        await this.recordServerErrorSafely({
+          jobId,
+          code: failure.code,
+          stage: failure.stage,
+          gate: failure.gate,
+          severity: failure.severity,
+          message: error instanceof Error ? error.message : String(error),
+          diagnostic: { failure, operation: 'finalize_failed_generation_hold' },
+        });
         return;
       }
     }
@@ -782,6 +862,26 @@ export class JobsService implements OnModuleInit {
     } catch (error: unknown) {
       this.logger.error(
         `released hold for failed generation ${jobId}, but could not close job: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      await this.recordServerErrorSafely({
+        jobId,
+        code: failure.code,
+        stage: failure.stage,
+        gate: failure.gate,
+        severity: 'fatal',
+        message: error instanceof Error ? error.message : String(error),
+        diagnostic: { failure, operation: 'persist_failed_generation' },
+      });
+    }
+  }
+
+  private async recordServerErrorSafely(input: Parameters<ErrorReportsService['recordServerError']>[0]): Promise<void> {
+    if (!this.errorReports) return;
+    try {
+      await this.errorReports.recordServerError(input);
+    } catch (error: unknown) {
+      this.logger.error(
+        `error report capture failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

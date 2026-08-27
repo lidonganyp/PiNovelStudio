@@ -410,6 +410,38 @@ model NovelGenerationJob {
   @@map("novel_generation_jobs")
 }
 
+/// Structured, bounded diagnostics for generation failures and browser-side
+/// observations. Detailed diagnostics expire unless an administrator pins them.
+model NovelErrorReport {
+  id               Int       @id @default(autoincrement())
+  reportId         String    @unique @default(uuid()) @map("report_id")
+  userId           Int?      @map("user_id")
+  projectId        Int?      @map("project_id")
+  chapterId        Int?      @map("chapter_id")
+  jobId            String?   @map("job_id")
+  requestId        String?   @map("request_id")
+  traceId          String?   @map("trace_id")
+  clientEventId    String?   @unique @map("client_event_id")
+  code             String
+  stage            String
+  gate             String?
+  severity         String
+  source           String    @default("server")
+  safeMessage      String    @map("safe_message")
+  diagnostic       Json?
+  errorFingerprint String    @map("error_fingerprint")
+  occurrences      Int       @default(1)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  expiresAt        DateTime  @map("expires_at")
+  pinnedAt         DateTime? @map("pinned_at")
+
+  @@index([expiresAt, pinnedAt])
+  @@index([jobId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([code, createdAt])
+  @@map("novel_error_reports")
+}
+
 /// One-time receipt for an authenticated internal request.  The runtime uses a
 /// fresh nonce for every transport attempt, while this durable record rejects
 /// a captured HMAC request across API instances and restarts.
