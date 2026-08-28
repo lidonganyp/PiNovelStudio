@@ -4852,6 +4852,7 @@ export class UnifiedOrchestrator {
       scanFinalTextCompleteness(finalText, {
         finishReason: selectedCandidate?.finishReason,
         chapterNumber: input.chapterNumber,
+        minWordCount: input.targetWordCount?.min ?? 2000,
       })
     );
     stageResults.finalTextCompleteness = {

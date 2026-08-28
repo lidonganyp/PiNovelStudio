@@ -31,6 +31,8 @@ export interface CompletenessReport {
 export interface CompletenessOptions {
   finishReason?: string | null;
   chapterNumber?: number;
+  /** Production chapter floor; omitted for legacy/evaluation callers. */
+  minWordCount?: number;
 }
 
 /** 句末标点（含中文省略号、引号闭合） */
@@ -71,6 +73,8 @@ export function scanFinalTextCompleteness(
       findings: [{ code: "empty_text", severity: "hard", reason: "最终正文为空" }],
     };
   }
+
+  const minWordCount = options?.minWordCount;
 
   const finishReason = options?.finishReason?.trim().toLowerCase();
   if (
@@ -220,6 +224,21 @@ export function scanFinalTextCompleteness(
   }
 
   // 4. 缺少句末标点（review，不阻断）
+  if (Number.isSafeInteger(minWordCount) && (minWordCount as number) > 0) {
+    const wordCount = trimmed.replace(/\s+/gu, '').length;
+    if (wordCount < (minWordCount as number)) {
+      return {
+        status: 'blocked',
+        passed: false,
+        findings: [{
+          code: 'minimum_word_count',
+          severity: 'hard',
+          reason: `chapter text has ${wordCount} characters; minimum is ${minWordCount}`,
+        }],
+      };
+    }
+  }
+
   const lastChar = trimmed[trimmed.length - 1];
   if (!TERMINAL_PUNCT.test(lastChar)) {
     return {

@@ -15,7 +15,8 @@
     "db:studio": "dotenv -e ../../.env -- prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "ledger:reconcile": "tsx scripts/ledger-reconcile.ts",
-    "maintenance:purge-error-reports": "tsx scripts/purge-error-reports.ts"
+    "maintenance:purge-error-reports": "tsx scripts/purge-error-reports.ts",
+    "maintenance:repair-narrative-state": "tsx scripts/repair-narrative-state.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

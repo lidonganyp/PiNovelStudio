@@ -8,7 +8,11 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { countWords, requireOwnedProject } from '../../common/ownership';
-import { hashChapterText, reanchorNarrativeStateToChapter } from '../context/context-compiler';
+import {
+  ensureChapterFinalTextCommit,
+  hashChapterText,
+  reanchorNarrativeStateToChapter,
+} from '../context/context-compiler';
 import type {
   CreateChapterDto,
   RestoreVersionDto,
@@ -176,6 +180,7 @@ export class ChaptersService {
         novelDocument?: {
           findFirst?: (args: unknown) => Promise<{ id: number; content: string; currentVersion: number } | null>;
           update?: (args: unknown) => Promise<unknown>;
+          create?: (args: unknown) => Promise<{ id: number; content: string; currentVersion: number }>;
         };
         novelDocumentVersion?: { create?: (args: unknown) => Promise<unknown> };
       }).novelDocument;
@@ -186,6 +191,8 @@ export class ChaptersService {
         const narrative = await documentDelegate.findFirst({
           where: { projectId, userId, documentType: 'narrative_state', deletedAt: null },
         });
+        let reanchoredContent = narrative?.content;
+        let reanchorChanged = false;
         if (narrative) {
           const repaired = reanchorNarrativeStateToChapter(
             narrative.content,
@@ -193,19 +200,56 @@ export class ChaptersService {
             hashChapterText(nextContent.replace(/^\uFEFF/, '').trim()),
             chapter.chapterNumber,
           );
-          if (repaired.updatedEntries > 0) {
+          reanchoredContent = repaired.content;
+          reanchorChanged = repaired.updatedEntries > 0;
+          if (narrative && documentDelegate && documentVersionDelegate && false && repaired.updatedEntries > 0) {
+            const nextVersion = narrative!.currentVersion + 1;
+            await documentDelegate!.update!({
+              where: { id: narrative!.id },
+              data: { content: repaired.content, currentVersion: nextVersion },
+            });
+            await documentVersionDelegate!.create!({
+              data: {
+                documentId: narrative!.id,
+                createdBy: userId,
+                versionNumber: nextVersion,
+                content: repaired.content,
+                changeSummary: `同步第${nextChapterNumber}章正文哈希引用`,
+              },
+            });
+          }
+        }
+
+        // A manual save is an explicit final-text acceptance boundary. Keep
+        // the state compact, but bind the chapter watermark to its real hash
+        // so the next chapter's preflight can prove continuity.
+        const committed = ensureChapterFinalTextCommit(
+          reanchoredContent ?? JSON.stringify({
+            schemaVersion: 1,
+            workspaceId: `u${userId}_p${projectId}`,
+            canon: [],
+            character: [],
+            promise: [],
+            pattern: [],
+            updatedAt: new Date().toISOString(),
+            }),
+          nextChapterNumber,
+          nextContent,
+        );
+        if (committed.updated) {
+          if (narrative) {
             const nextVersion = narrative.currentVersion + 1;
             await documentDelegate.update({
               where: { id: narrative.id },
-              data: { content: repaired.content, currentVersion: nextVersion },
+              data: { content: committed.content, currentVersion: nextVersion },
             });
             await documentVersionDelegate.create({
               data: {
                 documentId: narrative.id,
                 createdBy: userId,
                 versionNumber: nextVersion,
-                content: repaired.content,
-                changeSummary: `同步第${nextChapterNumber}章正文哈希引用`,
+                content: committed.content,
+                changeSummary: `chapter ${nextChapterNumber} final text commit`,
               },
             });
           }

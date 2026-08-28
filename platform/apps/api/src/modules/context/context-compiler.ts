@@ -157,6 +157,64 @@ export function reanchorNarrativeStateToChapter(
   }
 }
 
+/**
+ * Bind a manually accepted chapter to the narrative state without copying
+ * chapter prose. The marker is deterministic and its sourceRef is pinned to
+ * the normalized final-text hash, so preflight can prove continuity later.
+ */
+export function ensureChapterFinalTextCommit(
+  narrativeJson: string | undefined,
+  chapterNumber: number,
+  finalText: string,
+): { content: string; updated: boolean; hash: string } {
+  const hash = hashChapterText(finalText);
+  if (!narrativeJson || !Number.isSafeInteger(chapterNumber) || chapterNumber < 1) {
+    return { content: narrativeJson ?? '', updated: false, hash };
+  }
+  try {
+    const parsed = JSON.parse(narrativeJson) as Record<string, unknown>;
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      return { content: narrativeJson, updated: false, hash };
+    }
+    const canon = Array.isArray(parsed.canon) ? parsed.canon : [];
+    const markerId = `canon:chapter-final:ch${chapterNumber}`;
+    const marker = {
+      id: markerId,
+      kind: 'canon',
+      fact: `chapter ${chapterNumber} final text accepted`,
+      category: 'timeline',
+      sourceChapter: `ch${chapterNumber}`,
+      sourceRef: `ch${chapterNumber}#finalText:${hash}`,
+      confidence: 1,
+      lastUpdated: new Date().toISOString(),
+    };
+    const existingIndex = canon.findIndex((entry) =>
+      entry && typeof entry === 'object' && (entry as { id?: unknown }).id === markerId,
+    );
+    const nextCanon = [...canon];
+    const existing = existingIndex >= 0 ? nextCanon[existingIndex] : undefined;
+    const existingRef = existing && typeof existing === 'object'
+      ? (existing as { sourceRef?: unknown }).sourceRef
+      : undefined;
+    if (existingRef === marker.sourceRef) {
+      return { content: narrativeJson, updated: false, hash };
+    }
+    if (existingIndex >= 0) nextCanon[existingIndex] = marker;
+    else nextCanon.push(marker);
+    parsed.canon = nextCanon;
+
+    const currentMatch = typeof parsed.lastCommittedChapter === 'string'
+      ? parsed.lastCommittedChapter.match(/^ch(\d+)$/u)
+      : null;
+    const currentChapter = currentMatch ? Number(currentMatch[1]) : 0;
+    if (chapterNumber > currentChapter) parsed.lastCommittedChapter = `ch${chapterNumber}`;
+    parsed.updatedAt = new Date().toISOString();
+    return { content: JSON.stringify(parsed, null, 2), updated: true, hash };
+  } catch {
+    return { content: narrativeJson, updated: false, hash };
+  }
+}
+
 export function compileProjectContext(input: CompileProjectContextInput): CompiledProjectContext {
   const profile = getContextBudgetProfile(input.contextProfile);
   const profileName = profile.name;

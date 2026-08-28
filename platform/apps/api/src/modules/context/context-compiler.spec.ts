@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertNoFullPreviousChapter,
   compileProjectContext,
+  ensureChapterFinalTextCommit,
   findStateHashMismatch,
   hashChapterText,
   reanchorNarrativeStateToChapter,
@@ -26,6 +27,46 @@ import {
 } from './fixtures';
 
 describe('ContextCompiler', () => {
+  it('binds a manually accepted chapter to its final-text hash without storing prose', () => {
+    const result = ensureChapterFinalTextCommit(
+      JSON.stringify({
+        schemaVersion: 1,
+        workspaceId: 'p252',
+        canon: [],
+        character: [],
+        promise: [],
+        pattern: [],
+        lastCommittedChapter: 'ch17',
+      }),
+      19,
+      '第十九章正文',
+    );
+    const parsed = JSON.parse(result.content) as {
+      canon: Array<{ sourceChapter: string; sourceRef: string; fact: string }>;
+      lastCommittedChapter: string;
+    };
+    const hash = hashChapterText('第十九章正文');
+    expect(result.updated).toBe(true);
+    expect(parsed.lastCommittedChapter).toBe('ch19');
+    expect(parsed.canon).toContainEqual(expect.objectContaining({
+      sourceChapter: 'ch19',
+      sourceRef: `ch19#finalText:${hash}`,
+    }));
+    expect(result.content).not.toContain('第十九章正文');
+  });
+
+  it('is idempotent and does not move the watermark backwards', () => {
+    const first = ensureChapterFinalTextCommit(
+      JSON.stringify({ schemaVersion: 1, workspaceId: 'p252', canon: [], lastCommittedChapter: 'ch19' }),
+      17,
+      '旧章节',
+    );
+    const second = ensureChapterFinalTextCommit(first.content, 17, '旧章节');
+    expect(first.updated).toBe(true);
+    expect(second.updated).toBe(false);
+    expect(JSON.parse(second.content).lastCommittedChapter).toBe('ch19');
+  });
+
   it('includes a compact catalog for every chapter without injecting full chapter prose', () => {
     const compiled = compileProjectContext({
       characters: FIXTURE_CHARACTERS,

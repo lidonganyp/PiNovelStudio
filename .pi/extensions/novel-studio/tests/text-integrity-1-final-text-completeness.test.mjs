@@ -118,6 +118,17 @@ test("TEXT-INTEGRITY-1 unit: 只阻断确定性截断，缺标点但语义不明
   assert.equal(ambiguous.findings[0]?.code, "missing_terminal_punctuation");
 });
 
+test("PRODUCTION-MIN-WORDS-1: short final text is blocked below 2000 characters", () => {
+  const report = scanFinalTextCompleteness("他推开门，看见雨停了。".repeat(100), {
+    chapterNumber: 20,
+    finishReason: "stop",
+    minWordCount: 2000,
+  });
+  assert.equal(report.status, "blocked");
+  assert.equal(report.passed, false);
+  assert.equal(report.findings[0]?.code, "minimum_word_count");
+});
+
 test("FINAL-TRUNCATION-TAIL-1 unit: 完整句后残留短中文词干属于 hard truncation", () => {
   const report = scanFinalTextCompleteness("李一凡把力量压了回去。黑色虚");
   assert.equal(report.status, "blocked");
