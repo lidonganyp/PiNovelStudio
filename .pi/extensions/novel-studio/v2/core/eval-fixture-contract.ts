@@ -117,6 +117,12 @@ export interface EvalFixtureWorkspaceSnapshotV1 {
    * Runner 物化为 scratch workspace 的 styles/profile.json。
    */
   styleProfile?: Record<string, unknown>;
+  /**
+   * 前章连续性快照（chapter-continuity/{N-1}.json）。
+   * 该快照是没有正文或正式 state store 时的最小连续性证据；Runner
+   * 会按 chapterSeed.chapterNumber - 1 物化到 scratch workspace。
+   */
+  chapterContinuity?: Record<string, unknown>;
   /** 前章正文快照（第 2 章及以后必需）。 */
   historicalChapters: EvalFixtureHistoricalChapter[];
 }

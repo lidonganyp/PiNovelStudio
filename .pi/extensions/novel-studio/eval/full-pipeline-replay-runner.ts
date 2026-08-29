@@ -445,6 +445,14 @@ function materializeWorkspace(
     mkdirSync(stylesDir, { recursive: true });
     writeJson(join(stylesDir, "profile.json"), fixture.workspace.styleProfile);
   }
+  if (fixture.workspace.chapterContinuity) {
+    const continuityDir = join(workspacePath, "chapter-continuity");
+    mkdirSync(continuityDir, { recursive: true });
+    writeJson(
+      join(continuityDir, `${fixture.chapterSeed.chapterNumber - 1}.json`),
+      fixture.workspace.chapterContinuity,
+    );
+  }
   writeJson(
     join(seriesPath, "narrative-state.json"),
     fixture.priorNarrativeState ?? {

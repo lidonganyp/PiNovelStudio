@@ -294,6 +294,7 @@ export function captureEvalFixture(
     ({} as Record<string, unknown>);
   const outline = readTextIfExists(join(workspacePath, "series", "outline.md"));
   const characterProfiles = collectCharacterProfiles(workspacePath);
+  const styleProfile = readJsonIfExists(join(workspacePath, "styles", "profile.json"));
   const includeContent =
     options.replayMode === "recorded" ||
     options.replayMode === "production_like" ||
@@ -303,6 +304,12 @@ export function captureEvalFixture(
     options.chapterNumber,
     includeContent,
   );
+  const chapterContinuity =
+    options.chapterNumber > 1
+      ? readJsonIfExists(
+          join(workspacePath, "chapter-continuity", `${options.chapterNumber - 1}.json`),
+        )
+      : undefined;
 
   // -- 前章 NarrativeState（第 2 章及以后必需） ---------------------------
   let priorNarrativeState: Record<string, unknown> | null = null;
@@ -363,6 +370,8 @@ export function captureEvalFixture(
       config,
       ...(outline !== undefined ? { outline } : {}),
       characterProfiles,
+      ...(styleProfile !== undefined ? { styleProfile } : {}),
+      ...(chapterContinuity !== undefined ? { chapterContinuity } : {}),
       historicalChapters,
     },
     chapterSeed: {

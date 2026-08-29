@@ -134,6 +134,14 @@ function makeWorkspace(projectRoot, workspaceId, opts = {}) {
       JSON.stringify({ canon: [], promises: [] }),
     );
   }
+  if (opts.styleProfile) {
+    mkdirSync(join(ws, "styles"), { recursive: true });
+    writeFileSync(join(ws, "styles", "profile.json"), JSON.stringify(opts.styleProfile));
+  }
+  if (opts.chapterContinuity) {
+    mkdirSync(join(ws, "chapter-continuity"), { recursive: true });
+    writeFileSync(join(ws, "chapter-continuity", "1.json"), JSON.stringify(opts.chapterContinuity));
+  }
   return ws;
 }
 
@@ -609,6 +617,35 @@ test("capture: 合法 workspace + manifest → fixture 落盘 + hash + 幂等索
     });
     const lines2 = readFileSync(indexPath, "utf-8").trim().split("\n");
     assert.equal(lines1.length, lines2.length);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture: 采集 style profile 与前章 continuity 快照", () => {
+  const root = makeTempRoot();
+  try {
+    const styleProfile = { name: "test-style", editorialGuidance: ["保持克制"] };
+    const chapterContinuity = {
+      chapterNumber: 1,
+      lastEventSummary: "前章结尾",
+      finalTextHash: "0123456789ab",
+      openHooks: ["待回收"],
+    };
+    makeWorkspace(root, "ws-cap-snapshot", { styleProfile, chapterContinuity });
+    const result = captureEvalFixture({
+      projectRoot: root,
+      workspaceId: "ws-cap-snapshot",
+      chapterNumber: 2,
+      chapterId: "chapter-002",
+      chapterTitle: "第二章",
+      replayMode: "stub",
+      manifest: makeManifest("rel-cap-snapshot", "frozen"),
+      archiveDir: join(root, "fixtures"),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.deepEqual(result.fixture.workspace.styleProfile, styleProfile);
+    assert.deepEqual(result.fixture.workspace.chapterContinuity, chapterContinuity);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
