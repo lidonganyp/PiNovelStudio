@@ -408,6 +408,28 @@ test("gate: active release 存在且 fingerprint 匹配 → ok + 携带 releaseI
   }
 });
 
+test("gate: R2 candidate can collect evidence before promotion while retaining identity and approval checks", () => {
+  const root = makeTempRoot();
+  const prev = clearDevMode();
+  try {
+    const fpHash = "matched-candidate-hash";
+    const manifest = makeManifest("rel-r2-candidate", "frozen", fpHash, null, { changeClass: "R2" });
+    setupReleaseInRoot(root, manifest);
+    const input = { projectRoot: PROJECT_ROOT, evolutionRoot: root, targetReleaseId: manifest.releaseId, currentFingerprintHash: fpHash, requireActiveApproval: false };
+    const result = evaluateProductionReleaseGate(input);
+    assert.equal(result.ok, true);
+    assert.equal(result.devMode, false);
+    assert.equal(result.canaryEvidenceRunId, null);
+    assert.equal(evaluateProductionReleaseGate({ ...input, requireActiveApproval: true }).ok, false);
+    assert.equal(evaluateProductionReleaseGate({ ...input, currentFingerprintHash: "changed" }).ok, false);
+    setActiveProduction(root, manifest.releaseId);
+    assert.equal(evaluateProductionReleaseGate({ ...input, targetReleaseId: undefined }).ok, false);
+  } finally {
+    restoreDevMode(prev);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("gate: R2 active_prod 缺少 promote canary 证据事件 → blocked", () => {
   const root = makeTempRoot();
   const workspacePath = join(root, "workspaces", "ws-test");
@@ -629,7 +651,7 @@ test("captureDefaultEnvironmentFingerprint: 实际 model-routing 内容变化必
   }
 });
 
-test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元数据", () => {
+test("captureDefaultEnvironmentFingerprint: 使用当前 GPT 主写生产元数据", () => {
   const projectRoot = makeTempRoot();
   try {
     const configDir = join(projectRoot, "config");
@@ -637,7 +659,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元�
     writeFileSync(join(configDir, "model-routing.json"), '{"_version":"test"}\n', "utf-8");
 
     const expectedFingerprint = collectDefaultEnvironmentFingerprint(projectRoot);
-    assert.equal(expectedFingerprint.generationModel, "gemini-3.8-flash");
+    assert.equal(expectedFingerprint.generationModel, "gpt-6-astra");
     assert.equal(DEFAULT_RELEASE_FINGERPRINT_SPEC.modelRoutingPath, "config/model-routing.json");
     assert.ok(
       DEFAULT_RELEASE_FINGERPRINT_SPEC.envSwitchNames.includes("PINOVEL_EVAL_REPLAY_TRANSPORT"),
@@ -646,7 +668,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 Gemini 主写生产元�
     assert.equal(
       captureDefaultEnvironmentFingerprint(projectRoot),
       computeFingerprintHash(expectedFingerprint),
-      "默认生产指纹必须绑定实际路由文件与 Gemini 3.8 Flash 主写元数据",
+      "默认生产指纹必须绑定实际路由文件与 gpt-6-astra 主写元数据",
     );
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -658,7 +680,7 @@ test("evolution CLI: capture 与生产门禁使用同一当前路由真相源", 
   const specSource = readFileSync(join(EXT_ROOT, "v2", "governance", "environment-fingerprint.ts"), "utf-8");
   assert.match(cliSource, /collectDefaultEnvironmentFingerprint/);
   assert.match(specSource, /modelRoutingPath:\s*["']config\/model-routing\.json["']/);
-  assert.match(specSource, /generationModel:\s*["']gemini-3\.7-flash["']/);
+  assert.match(specSource, /generationModel:\s*["']gpt-6-astra["']/);
   assert.doesNotMatch(
     specSource,
     /modelRoutingPath:\s*["']\.pi\/extensions\/novel-studio\/config\/model-routing\.json["']/,

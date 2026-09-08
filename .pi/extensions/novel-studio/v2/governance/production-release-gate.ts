@@ -674,7 +674,7 @@ export function evaluateProductionReleaseGate(
   }
 
   let canaryEvidenceRunId: string | null = null;
-  if (manifest.changeClass === "R2" || manifest.changeClass === "R3") {
+  if ((!candidateEval || manifest.status === "active_prod") && (manifest.changeClass === "R2" || manifest.changeClass === "R3")) {
     let events;
     try {
       events = registry.loadStateEvents(manifest.releaseId);
