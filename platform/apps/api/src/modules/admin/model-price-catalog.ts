@@ -71,7 +71,7 @@ export function normalizeModelId(raw: string): string {
     .replace(/_/g, '-');
 }
 
-/** 取路径最后一段，便于 gemini-3.7-flash 对齐 google/gemini-3.7-flash。 */
+/** 取路径最后一段，便于 gemini-3.8-flash 对齐 google/gemini-3.8-flash。 */
 export function modelIdTail(raw: string): string {
   const normalized = normalizeModelId(raw);
   const slash = normalized.lastIndexOf('/');

@@ -9,10 +9,10 @@ import { env } from '../../config/env';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { ProviderCredential, RateSnapshot } from './rates.types';
 
-/** 后台常填展示名时，仍用于 Gemini 写作链路计费。 */
+/** 将正文路由映射到同一模型的费率。 */
 const MODEL_RATE_ALIASES: Record<string, string[]> = {
-  v2_rawstage2_gemini31: ['gemini-3.7-flash', 'gemini'],
-  v2_amplified_gemini31: ['gemini-3.7-flash', 'gemini'],
+  v2_rawstage2_gpt6astra: ['gpt-6-astra'],
+  v2_amplified_gpt6astra: ['gpt-6-astra'],
 };
 
 @Injectable()

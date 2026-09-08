@@ -6,6 +6,7 @@
 
 import { getAgentModelConfig, getApiKey, getProviderDefaultConfig } from "../utils/config.js";
 import { fetchWithTimeout } from "./request-timeout.js";
+import { callOpenAIResponses } from "./openai-responses.js";
 import { localizeLlmMessages } from "../utils/llm-language-guard.js";
 
 export interface GPTMessage {
@@ -51,6 +52,7 @@ export class GPTAPI {
   private baseUrl: string;
   private apiKey: string;
   private model: string;
+  private readonly api?: "responses";
   private defaultTemperature = 0;
   private defaultMaxTokens = 2048;
 
@@ -58,11 +60,13 @@ export class GPTAPI {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
+    api?: "responses";
   }) {
     const defaults = getProviderDefaultConfig("gpt");
     this.apiKey = options?.apiKey || defaults.apiKey;
     this.baseUrl = options?.baseUrl || defaults.base_url;
     this.model = options?.model || defaults.model;
+    this.api = options?.api ?? (this.baseUrl === defaults.base_url ? defaults.request_options?.api : undefined);
   }
 
   /**
@@ -77,6 +81,12 @@ export class GPTAPI {
       response_format?: { type: "json_object" | "text" };
     }
   ): Promise<GPTResponse> {
+    if (this.api === "responses") {
+      return callOpenAIResponses(this.baseUrl, this.apiKey, options?.model || this.model, localizeLlmMessages(messages), {
+        max_tokens: options?.max_tokens ?? this.defaultMaxTokens,
+        jsonMode: options?.response_format?.type === "json_object",
+      });
+    }
     const url = `${this.baseUrl}/chat/completions`;
 
     const request: GPTRequest = {
@@ -190,5 +200,6 @@ export async function createGPTAPI(agentName: string): Promise<GPTAPI> {
     apiKey: getApiKey(config.provider) || undefined,
     baseUrl: config.base_url,
     model: config.model,
+    api: config.request_options?.api,
   });
 }

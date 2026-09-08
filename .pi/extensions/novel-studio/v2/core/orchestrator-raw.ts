@@ -348,9 +348,9 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
   }
   const promptAdapter = adaptWriterPrompt({
     profile: input.rawPromptProfile ?? resolveWriterPromptProfile({
-      route: "v2_rawstage2_gemini31",
-      provider: "gemini31",
-      model: "gemini-3.7-flash",
+      route: "v2_rawstage2_gpt6astra",
+      provider: "gpt",
+      model: "gpt-6-astra",
     }),
     chapterNumber: input.chapterNumber,
     contract: chapterContract,

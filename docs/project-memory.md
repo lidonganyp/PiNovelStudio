@@ -1,14 +1,16 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-08-18
+**快照日期**：2026-09-08
 **代码基线**：工作树主链路仍是 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写“当前唯一 active_prod”，一律以本节为准。
 
-## 现行发布状态（2026-08-18，唯一当前声明）
+## 现行发布状态（2026-09-08，唯一当前声明）
 
-### Gemini 3.7 Flash 主线路由切换（2026-08-18）
+### gpt-6-astra 主线路由切换（2026-09-08）
 
-`config/model-routing.json` 已升级至 v4.32.0。正式 `novel_generate_chapter` 的 Gemini writer identity 已统一为 `gemini-3.7-flash`，生产主 API 为 Aimagichub（`https://aimagichub.xyz/v1`）；Solov 是同一 Gemini 身份的备用渠道，Aimagichub 失败时只切换 Solov，Solov 失败时只切回 Aimagichub，绝不切换 Claude。此前 Solov 端点的 HTTP 404 仅代表旧端点验证结果，不再作为当前路由策略依据；生产仍要求两个渠道分别配置凭证并保持 fail-closed。
+本轮实测补充：`novel_generate_chapter` 在 xinmo 独立副本上预检通过，但当前实际 pointer 为 `rel-prod-149`（Gemini 3.7 Flash），G6 因构建、路由和 generationModel 差异阻断，尚无新第21章。真实端点禁用 Chat Completions（403），Responses 文本/工具调用成功；已接入 Responses 传输，初稿和风格客户端均返回 gpt-6-astra。编译通过；相关回归184通过、1历史跳过，路由审计0错误。尚待本地 Git 提交明确授权以冻结干净发布身份，然后完成新身份评测、审批、准入和晋级。主工作区原稿未改。证据与待办：`reports/xinmo-ch21-gpt6astra-test/release-preparation.md`。下文此前的“未运行真实付费调用”和旧 pointer 描述是历史状态，以本段为准；本轮真实调用仅为接口验证，不是整章成功。
+
+`config/model-routing.json` v4.34.0 将 `novel_generate_chapter` 默认正文主写切为 `gpt-6-astra`：Agentic 初稿与作者风格整章优化分别使用 `v2_rawstage2_gpt6astra` / `v2_amplified_gpt6astra`，prompt profile 为 `gpt_writer_v1`。端点默认 `https://shunfen6.win/v1`，凭证为 `GPT_API_KEY`，模型独立读取 `GPT_WRITER_MODEL`，不继承结构化节点的 `GPT_MODEL`。旧 Gemini 生产写路由移除，Gemini 仅用于隔离评测；Claude 仍须显式选择。平台 bootstrap、计费路由和 runtime 必需凭证同步为 GPT。此项为本地代码/配置切换，未运行真实付费生成、未部署或更新发布身份，也不声称文学质量收益。旧 prompt registry 的冻结 Gemini bundle 属于历史评测证据，不得改贴为 GPT 验收证据。
 
 **没有可在当前 HEAD 直接验证且可运行的生产身份。** 本地运行时指针当前为 `rel-prod-134`，但那不是 clean checkout 可恢复、也不是 `778b9f3` 能过 G6 的基线；`rel-prod-145` 对应当前提交但仍为 `approved_dev`，且当前工作树不可复现。
 

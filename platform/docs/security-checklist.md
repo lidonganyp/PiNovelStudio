@@ -24,7 +24,7 @@
 | `NOVEL_TASK_TOKEN_HMAC_KEY` | 任务令牌 | ≥32 字符，禁止 `dev-only-` |
 | `AES_MASTER_KEY` | Provider 密钥加密 | 64 hex；禁止连续 `0123456789abcdef` |
 | `BOOTSTRAP_ADMIN_PASSWORD` | 首个管理员 | ≥16 字符，显式设置 |
-| `BOOTSTRAP_GEMINI_API_KEY` | 生产费率 bootstrap | 真实凭证 |
+| `BOOTSTRAP_GPT_API_KEY` | 生产费率 bootstrap | 真实凭证 |
 | `ALIPAY_*` / `WECHAT_*` | 收款 | live 至少一套完整；P6-6 仍待商户号 |
 | `PINOVEL_RELEASE_COMMIT` | runtime 身份指纹 | 必须等于当前 release manifest |
 | `CORS_ORIGINS` | 浏览器来源 | 生产必须公开 HTTPS，禁止 localhost |

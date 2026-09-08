@@ -1,8 +1,8 @@
 # 生产架构说明
 
 **状态**：生产基线
-**核对日期**：2026-08-19
-**路由真相源**：[`config/model-routing.json`](../config/model-routing.json)（v4.32.0）
+**核对日期**：2026-09-08
+**路由真相源**：[`config/model-routing.json`](../config/model-routing.json)（v4.34.0）
 
 本文只描述当前生产代码。旧 Stage0–8、固定多候选、机器文学裁判和 one-shot raw 流程属于隔离评测或历史资料，不是生产章节生成路径。
 
@@ -54,26 +54,25 @@ Preflight
 
 | 用途 | 路由 | provider / model | 端点 | fallback |
 |---|---|---|---|---|
-| 默认 Agentic 初稿 | `v2_rawstage2_gemini31` | `gemini31 / gemini-3.7-flash` | `GOOGLE_GEMINI_BASE_URL`（当前 Aimagichub） | `[]` |
-| 默认作者风格优化 | `v2_amplified_gemini31` | `gemini31 / gemini-3.7-flash` | 同上 | `[]` |
+| 默认 Agentic 初稿 | `v2_rawstage2_gpt6astra` | `gpt / gpt-6-astra` | `GPT_BASE_URL`（默认 shunfen6.win） | `[]` |
+| 默认作者风格优化 | `v2_amplified_gpt6astra` | `gpt / gpt-6-astra` | 同上 | `[]` |
 | 显式 Claude 正文 | `v2_rawstage2` / `v2_amplified` | `claude / claude-opus-4-6` | 按配置与 `.env` | `[]` |
 | 文学 judge | `v2_opportunity_judge` / `v2_literary_judge` | `gpt / gpt-5.6-sol` | 评测/回放 | 生产禁用 |
 
-生产默认使用 `gemini-3.7-flash`。配置仍保留 `gemini31` 这个 provider/route 名称，是为了兼容既有 trace 和协议字段，不表示仍在调用 Gemini 3.1 Pro。
+生产默认使用 `gpt-6-astra` 与 `gpt_writer_v1`。旧 Gemini 生产写路由已删除，Gemini 仅保留隔离评测路由。
 
-默认 Gemini 的环境变量为：
+默认正文模型的环境变量为：
 
 ```env
-GEMINI_API_KEY=...
-GOOGLE_GEMINI_BASE_URL=https://aimagichub.xyz/v1
-GEMINI_MODEL=gemini-3.7-flash
-# Optional peer channel used for automatic Gemini-only recovery
-GEMINI_SOLOV_API_KEY=...
-GEMINI_SOLOV_BASE_URL=https://api.solov.cc/v1
-GEMINI_SOLOV_MODEL=gemini-3.7-flash
+GPT_API_KEY=...
+GPT_BASE_URL=https://shunfen6.win/v1
+GPT_MODEL=gpt-5.5
+GPT_WRITER_MODEL=gpt-6-astra
 ```
 
-生产 Gemini writer 默认使用 Aimagichub。发生可恢复的传输失败时，路由适配器只在同一 Gemini 3.7 Flash 身份下切换到 Solov；Solov 反过来也只切回 Aimagichub。两条渠道都未配置时仍按原有 fail-closed 规则阻断。Claude 路由仅在用户显式选择 `writerModel=claude` 时使用，绝不作为 Gemini 的静默 fallback。
+正文模型独立读取 `GPT_WRITER_MODEL`；省略时使用配置中的 `gpt-6-astra`，不会继承结构化节点的 `GPT_MODEL`。正文请求失败后按既有策略有界恢复，耗尽则阻断，不自动切换其他模型。Claude 仅由显式 `writerModel=claude` 选择。
+
+平台部署须配置 `BOOTSTRAP_GPT_API_KEY`、`BOOTSTRAP_GPT_API_BASE_URL` 与供应商确认的输入/输出费率；两条生产计费路由与正文路由一致。模型路由变更会改变发布身份，正式部署仍须通过 G6 发布门禁。
 
 ## 4. Workspace 前置条件
 

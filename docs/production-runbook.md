@@ -1,6 +1,6 @@
 # 生产运行手册
 
-**核对日期**：2026-08-19
+**核对日期**：2026-09-08
 
 ## 1. 发布前检查
 
@@ -64,7 +64,9 @@ novel_generate_chapter --workspaceId xinmo --chapterId ch18 --chapterNumber 18
 node .pi/extensions/novel-studio/scripts/production-generate-chapter.mjs xinmo ch18 18 --project-root=D:\CODE\PiNovelStudio
 ```
 
-省略 `writerModel` 使用默认 Gemini 3.7 Flash；只有用户明确选择时才传 `--writer-model=claude`。不要在生产入口传 `modelTestRoute`、`boundedBestOf3`、`qualityExperiment` 或 mock 字段。
+省略 `writerModel` 或传 `--writer-model=gpt6astra` 使用默认 gpt-6-astra；只有用户明确选择时才传 `--writer-model=claude`。正文使用 `GPT_API_KEY` / `GPT_BASE_URL`，`GPT_WRITER_MODEL` 默认 gpt-6-astra；`GPT_MODEL` 仅控制其他 GPT 节点。不要在生产入口传 `modelTestRoute`、`boundedBestOf3`、`qualityExperiment` 或 mock 字段。
+
+当前 GPT 端点禁用 `/chat/completions`；`providers.gpt.request_options.api=responses` 指定 `/responses` 传输，保留 NovelOS 的 ReAct 文本编排。JSON 输出通过 `text.format` 请求；空文、拒绝、未完成和截断响应均阻断。使用相同 GPT 端点的审批传输沿用此配置，模型身份仍读取其独立配置。
 
 ## 4. 成功判定
 
@@ -88,7 +90,7 @@ node .pi/extensions/novel-studio/scripts/production-generate-chapter.mjs xinmo c
 | `severity=recoverable` 且 `gate=model_timeout` | 工具层按预算自动重试一次；仍失败则人工稍后重试 |
 | Agentic 验证、风格优化、Story Preservation、FinalFactRecheck、Completeness 失败 | 视为阻断，不交付初稿；修复输入或重新生成 |
 | 原子保存/状态提交失败 | 检查 trace；系统应回滚章节文件，不要手工拼接正文和状态 |
-| Gemini 线路鉴权、配额或网络失败 | 本次运行阻断，不静默切 Claude；确认 API 后重新发起运行 |
+| GPT 线路鉴权、配额或网络失败 | 本次运行阻断，不静默切换其他模型；确认 API 后重新发起运行 |
 | `stage=g6_release_gate` / 指纹不匹配 | 停止生成；回到干净发布基线重新 capture/verify/审批，不设置开发旁路冒充生产 |
 
 ## 6. 生产与评测的边界

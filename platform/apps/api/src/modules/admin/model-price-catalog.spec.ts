@@ -14,8 +14,8 @@ import {
 const OPENROUTER_FIXTURE = JSON.stringify({
   data: [
     {
-      id: 'google/gemini-3.7-flash',
-      name: 'Google: Gemini 3.7 Flash',
+      id: 'google/gemini-3.8-flash',
+      name: 'Google: Gemini 3.8 Flash',
       pricing: { prompt: '0.000000375', completion: '0.000001875' },
     },
     {
@@ -44,19 +44,19 @@ describe('model price catalog', () => {
         data: [
           { id: 'bad/model', pricing: { prompt: '-1', completion: '0.000001' } },
           {
-            id: 'google/gemini-3.7-flash',
+            id: 'google/gemini-3.8-flash',
             pricing: { prompt: '0.000000375', completion: '0.000001875' },
           },
         ],
       }),
       7.2,
     );
-    expect(entries.map((item) => item.id)).toEqual(['google/gemini-3.7-flash']);
+    expect(entries.map((item) => item.id)).toEqual(['google/gemini-3.8-flash']);
   });
 
   it('parses OpenRouter JSON prompt/completion prices', () => {
     const entries = parseOpenRouterModels(OPENROUTER_FIXTURE, 7.2);
-    const gemini = entries.find((item) => item.id === 'google/gemini-3.7-flash');
+    const gemini = entries.find((item) => item.id === 'google/gemini-3.8-flash');
     expect(gemini?.source).toBe('openrouter');
     expect(gemini?.inputYuanPerMillion).toBeCloseTo(2.7, 6);
     expect(gemini?.outputYuanPerMillion).toBeCloseTo(13.5, 6);
@@ -119,8 +119,8 @@ describe('model price catalog', () => {
     }
   });
 
-  it('matches gemini-3.7-flash to google/gemini-3.7-flash', async () => {
-    const result = await lookupModelPrice('gemini-3.7-flash', {
+  it('matches gemini-3.8-flash to google/gemini-3.8-flash', async () => {
+    const result = await lookupModelPrice('gemini-3.8-flash', {
       cache: new Map(),
       fetch: async (url) => {
         if (url.includes('openrouter')) {
@@ -131,7 +131,7 @@ describe('model price catalog', () => {
     });
     expect(result.found).toBe(true);
     if (result.found) {
-      expect(result.matchedId).toBe('google/gemini-3.7-flash');
+      expect(result.matchedId).toBe('google/gemini-3.8-flash');
       expect(result.inputPricePerMillionFen).toBe('270');
       expect(result.outputPricePerMillionFen).toBe('1350');
     }
@@ -149,22 +149,22 @@ describe('model price catalog', () => {
   });
 
   it('ranks exact tail matches above loose includes', () => {
-    const matches = pickBestMatches('gemini-3.7-flash', [
+    const matches = pickBestMatches('gemini-3.8-flash', [
       {
-        id: 'google/gemini-3.7-flash-lite',
+        id: 'google/gemini-3.8-flash-lite',
         source: 'openrouter',
         inputYuanPerMillion: 1,
         outputYuanPerMillion: 2,
         nativeCurrency: 'USD',
       },
       {
-        id: 'google/gemini-3.7-flash',
+        id: 'google/gemini-3.8-flash',
         source: 'openrouter',
         inputYuanPerMillion: 2.7,
         outputYuanPerMillion: 13.5,
         nativeCurrency: 'USD',
       },
     ]);
-    expect(matches[0]?.id).toBe('google/gemini-3.7-flash');
+    expect(matches[0]?.id).toBe('google/gemini-3.8-flash');
   });
 });

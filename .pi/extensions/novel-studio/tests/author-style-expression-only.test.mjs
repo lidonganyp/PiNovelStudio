@@ -25,7 +25,7 @@ function makeInput(overrides = {}) {
       id: "agentic-1",
       text: DRAFT,
       source: "agentic",
-      model: "gemini-3.7-flash",
+      model: "gemini-3.8-flash",
     },
     chapterNumber: 1,
     intent: {
@@ -43,7 +43,7 @@ function makeInput(overrides = {}) {
     constitution: null,
     modelGenerate: async () => ({
       text: DRAFT,
-      model: "gemini-3.7-flash",
+      model: "gemini-3.8-flash",
       route: "v2_amplified_gemini31",
       durationMs: 1,
     }),
@@ -97,7 +97,7 @@ test("optimize 把表达硬边界送进模型，而不是只写在注释里", as
       captured = input;
       return {
         text: DRAFT,
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         route: "v2_amplified_gemini31",
         durationMs: 1,
       };

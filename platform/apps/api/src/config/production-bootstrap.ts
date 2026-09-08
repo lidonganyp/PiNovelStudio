@@ -9,8 +9,8 @@ export interface ProductionBootstrapConfig {
   adminEmail: string;
   adminPassword: string;
   aesMasterKey: string;
-  geminiApiKey: string;
-  geminiApiBaseUrl: string;
+  gptApiKey: string;
+  gptApiBaseUrl: string;
   inputPricePerMillionFen: bigint;
   outputPricePerMillionFen: bigint;
 }
@@ -42,31 +42,31 @@ export function resolveProductionBootstrapConfig(
   });
   const aesMasterKey = requireValue(env, 'AES_MASTER_KEY');
   parseAesMasterKey(aesMasterKey);
-  const geminiApiBaseUrl =
-    env.BOOTSTRAP_GEMINI_API_BASE_URL?.trim() ||
-    'https://generativelanguage.googleapis.com';
-  let parsedGeminiUrl: URL;
+  const gptApiBaseUrl =
+    env.BOOTSTRAP_GPT_API_BASE_URL?.trim() ||
+    'https://shunfen6.win/v1';
+  let parsedGptUrl: URL;
   try {
-    parsedGeminiUrl = new URL(geminiApiBaseUrl);
+    parsedGptUrl = new URL(gptApiBaseUrl);
   } catch {
-    throw new Error('BOOTSTRAP_GEMINI_API_BASE_URL must be a valid HTTPS URL');
+    throw new Error('BOOTSTRAP_GPT_API_BASE_URL must be a valid HTTPS URL');
   }
-  if (parsedGeminiUrl.protocol !== 'https:') {
-    throw new Error('BOOTSTRAP_GEMINI_API_BASE_URL must be a valid HTTPS URL');
+  if (parsedGptUrl.protocol !== 'https:') {
+    throw new Error('BOOTSTRAP_GPT_API_BASE_URL must be a valid HTTPS URL');
   }
   return {
     adminEmail,
     adminPassword,
     aesMasterKey,
-    geminiApiKey: requireValue(env, 'BOOTSTRAP_GEMINI_API_KEY'),
-    geminiApiBaseUrl,
+    gptApiKey: requireValue(env, 'BOOTSTRAP_GPT_API_KEY'),
+    gptApiBaseUrl,
     inputPricePerMillionFen: parsePositiveFen(
       env,
-      'BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN',
+      'BOOTSTRAP_GPT_INPUT_PRICE_PER_MILLION_FEN',
     ),
     outputPricePerMillionFen: parsePositiveFen(
       env,
-      'BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN',
+      'BOOTSTRAP_GPT_OUTPUT_PRICE_PER_MILLION_FEN',
     ),
   };
 }

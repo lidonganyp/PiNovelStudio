@@ -116,23 +116,23 @@ test("explicit recovery returns frozen raw without a raw network call and preser
   }
 });
 
-test("explicit Gemini recovery reuses only a frozen Gemini raw without a raw network call", async () => {
+test("explicit GPT recovery reuses only a frozen GPT raw without a raw network call", async () => {
   const fixture = makeFixture({
-    rawModel: "gemini-3.1-pro",
-    modelVersion: "gemini-3.1-pro",
+    rawModel: "gpt-6-astra",
+    modelVersion: "gpt-6-astra",
     rawFinishReason: "stop",
   });
   try {
     const calls = [];
     const recovery = createBlockedRawRecovery({
       ...fixture,
-      writerModel: "gemini31",
+      writerModel: "gpt6astra",
       generationModelGenerate: async (input) => {
         calls.push(input.kind);
         return {
           text: "editorial response",
-          model: "gemini-3.1-pro",
-          provider: "gemini31",
+          model: "gpt-6-astra",
+          provider: "gpt",
           route: input.route,
           durationMs: 12,
           finishReason: "stop",
@@ -141,31 +141,31 @@ test("explicit Gemini recovery reuses only a frozen Gemini raw without a raw net
     });
 
     const raw = await recovery.generationModelGenerate({
-      route: "v2_rawstage2_gemini31",
+      route: "v2_rawstage2_gpt6astra",
       kind: "raw_chapter",
       systemPrompt: "system",
       userPrompt: "user",
     });
 
     assert.equal(raw.text, fixture.storedText);
-    assert.equal(raw.model, "gemini-3.1-pro");
-    assert.equal(raw.provider, "gemini31");
+    assert.equal(raw.model, "gpt-6-astra");
+    assert.equal(raw.provider, "gpt");
     assert.deepEqual(calls, []);
   } finally {
     fixture.cleanup();
   }
 });
 
-test("Gemini recovery rejects a frozen Claude raw", () => {
+test("GPT recovery rejects a frozen Claude raw", () => {
   const fixture = makeFixture();
   try {
     assert.throws(
       () => createBlockedRawRecovery({
         ...fixture,
-        writerModel: "gemini31",
+        writerModel: "gpt6astra",
         generationModelGenerate: async () => assert.fail("network must not be called"),
       }),
-      /Gemini|gemini-3\.1/i,
+      /gpt-6-astra/i,
     );
   } finally {
     fixture.cleanup();

@@ -73,7 +73,7 @@ function parseArgs(argv) {
     end: 5,
     seeds: [1],
     realModel: false,
-    writerModel: undefined,         // "claude" | "gemini31" | undefined
+    writerModel: undefined,         // "claude" | "gpt6astra" | undefined（默认 → gpt-6-astra）
     candidateTimeoutMs: 600000,
     stopOnFailure: false,
     recoverBlockedRaw: false,
@@ -218,7 +218,7 @@ function printHelp() {
   --seeds <a,b,c>             多个种子（每个 workspace × 章节 × seed 全组合）
   --real-model                启用真实模型调用（默认 stub 模式）
   --stub                      强制 stub 模式（默认）
-  --writer-model <id>         "claude" | "gemini31"（默认 undefined → Gemini）
+  --writer-model <id>         "claude" | "gpt6astra"（默认 undefined → gpt-6-astra）
   --candidate-timeout-ms <n>  单候选超时（默认 600000）
   --stop-on-failure           首章失败即终止（默认 false）
   --recover-blocked-raw       启用 blocked raw 恢复路径（默认 false）

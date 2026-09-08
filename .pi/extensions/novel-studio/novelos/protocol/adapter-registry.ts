@@ -174,15 +174,37 @@ export const defaultAdapterRegistry = new AdapterRegistry();
 defaultAdapterRegistry.registerAdapter(createReactTextAdapter());
 
 // 注册生产默认 route（全部使用 ReAct）
+// GPT6-ASTRA-PRODUCTION-SWITCH-1：生产 writer family 切换为 gpt-6-astra
+// （shunfen6.win OpenAI 兼容端点，单一渠道，无互备）。Claude 仍为显式
+// writerModel=claude 备选；旧 Gemini 生产写路由已按版本收敛原则删除。
 const PRODUCTION_ROUTES = [
-  "gemini_writer_v2",
-  "v2_rawstage2_gemini31",
-  "v2_amplified_gemini31",
+  "gpt_writer_v1",
+  "v2_rawstage2_gpt6astra",
+  "v2_amplified_gpt6astra",
   "v2_rawstage2",
   "v2_amplified",
   "narrator_primary",
   "stage2_narrator",
 ];
+
+function productionCapabilityKeyForRoute(route: string): CapabilityKey {
+  if (route !== "v2_rawstage2" && route !== "v2_amplified") {
+    return {
+      provider: "gpt",
+      endpoint: "openai-compat",
+      model: "gpt-6-astra",
+      protocol: "react-text",
+      adapterVersion: "react-text-v1",
+    };
+  }
+  return {
+    provider: "claude",
+    endpoint: "anthropic-native",
+    model: "claude-opus-4-6",
+    protocol: "react-text",
+    adapterVersion: "react-text-v1",
+  };
+}
 
 for (const route of PRODUCTION_ROUTES) {
   defaultAdapterRegistry.registerRoute(
@@ -190,15 +212,7 @@ for (const route of PRODUCTION_ROUTES) {
       route,
       protocol: "react-text",
       adapterVersion: "react-text-v1",
-      capabilityKey: {
-        provider: route.includes("gemini") ? "gemini" : "claude",
-        endpoint: route.includes("gemini") ? "openai-compat" : "anthropic-native",
-        model: route.includes("gemini")
-          ? "gemini-3.1-pro"
-          : "claude-opus-4-6",
-        protocol: "react-text",
-        adapterVersion: "react-text-v1",
-      },
+      capabilityKey: productionCapabilityKeyForRoute(route),
     },
     true, // isProduction = true
   );

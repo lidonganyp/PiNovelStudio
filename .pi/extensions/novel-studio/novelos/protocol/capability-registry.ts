@@ -308,7 +308,26 @@ export function initializeDefaultCapabilities(): void {
   }
 
   // ---- Endpoint 级声明：ReAct（生产默认）----
-  // Gemini OpenAI-compatible endpoint（当前生产路径）
+  // gpt-6-astra OpenAI-compatible endpoint（GPT6-ASTRA-PRODUCTION-SWITCH-1：当前生产写路径）
+  defaultCapabilityRegistry.register({
+    key: {
+      provider: "gpt",
+      endpoint: "openai-compat",
+      model: "gpt-6-astra",
+      protocol: "react-text",
+      adapterVersion: "react-text-v1",
+    },
+    capability: createEndpointCapability({
+      nativeSystemInstruction: true,
+      usageMetrics: true,
+      finishReason: true,
+    }),
+    source: "responses-endpoint-probe",
+    declaredAt: "2026-09-08",
+    notes: "GPT6-ASTRA-PRODUCTION-SWITCH-1：ReAct 文本协议通过 shunfen6.win Responses API 传输。真实端点已验证文本、工具调用和 usage；不代表完整章节已通过生产验收。证据：reports/xinmo-ch21-gpt6astra-test/endpoint-probe.json",
+  });
+
+  // Gemini OpenAI-compatible endpoint（eval/lab：modelTestRoute=gemini31 等）
   defaultCapabilityRegistry.register({
     key: {
       provider: "gemini",
@@ -324,7 +343,7 @@ export function initializeDefaultCapabilities(): void {
     }),
     source: "manual-verified",
     declaredAt: "2026-08-12",
-    notes: "生产默认 ReAct 路径：gemini_writer_v2 → openai-compat endpoint",
+    notes: "eval/lab ReAct 路径（modelTestRoute=gemini31 / nb4_generate_gemini31）；GPT6-ASTRA-PRODUCTION-SWITCH-1 后不再是我生产写路径",
   });
 
   // Claude endpoint（显式 writerModel=claude 路径）

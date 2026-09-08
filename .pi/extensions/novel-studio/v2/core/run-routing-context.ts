@@ -18,7 +18,7 @@ import {
   type RouteFallbackPolicy,
 } from "./route-catalog.js";
 
-export type WriterModelChoice = "claude" | "gemini31";
+export type WriterModelChoice = "claude" | "gpt6astra";
 
 export type BudgetProfileName = "production_default" | "recovery_tight" | "eval_lab" | "preview";
 
@@ -150,15 +150,17 @@ export function resolveWriterRoutes(
       writerModel: "claude",
     };
   }
-  // 默认 Gemini 生产（含显式 gemini31）
+  // 默认 gpt-6-astra 生产（含显式 gpt6astra）。
+  // GPT6-ASTRA-PRODUCTION-SWITCH-1：旧 gemini31 writerModel 选项已按版本收敛原则移除，
+  // 不保留并行回退；gemini31 仅保留 eval 路由（nb4_generate_gemini31 等）。
   return {
-    rawRoute: "v2_rawstage2_gemini31",
-    amplifiedRoute: "v2_amplified_gemini31",
+    rawRoute: "v2_rawstage2_gpt6astra",
+    amplifiedRoute: "v2_amplified_gpt6astra",
     judgeRoute: "v2_opportunity_judge",
-    provider: "gemini31",
-    model: "gemini-3.7-flash",
-    explicit: writerModel === "gemini31",
-    writerModel: "gemini31",
+    provider: "gpt",
+    model: "gpt-6-astra",
+    explicit: writerModel === "gpt6astra",
+    writerModel: "gpt6astra",
   };
 }
 
@@ -177,7 +179,7 @@ export function resolveRunRouting(input: ResolveRunRoutingInput): RunRoutingCont
   let provider: string;
   let model: string;
   let explicitWriterSelection = false;
-  let writerModel: WriterModelChoice = "gemini31";
+  let writerModel: WriterModelChoice = "gpt6astra";
   let routeClass: RouteClass = "production";
   let budgetProfile: BudgetProfileName = input.budgetProfile ?? "production_default";
 
@@ -188,7 +190,7 @@ export function resolveRunRouting(input: ResolveRunRoutingInput): RunRoutingCont
       doubao: { generate: "nb4_generate_doubao", provider: "doubao", model: "doubao-seed-2-1-pro-260628" },
       gpt: { generate: "nb4_generate_gpt56", provider: "gpt", model: "gpt-5.6-sol" },
       claude: { generate: "v2_rawstage2", provider: "claude", model: "claude-opus-4-6" },
-      gemini31: { generate: "nb4_generate_gemini31", provider: "gemini31", model: "gemini-3.7-flash" },
+      gemini31: { generate: "nb4_generate_gemini31", provider: "gemini31", model: "gemini-3.8-flash" },
       deepseek: { generate: "narrator_testing_deepseek", provider: "deepseek", model: "deepseek-v4-flash" },
     };
     const locked = testMap[input.modelTestRoute];
@@ -277,12 +279,10 @@ const GENERATION_ROUTE_ALIASES = new Set([
   "novelos_agentic",
   "agentic_raw",
   "narrator_primary",
-  "v2_rawstage2_gemini31_solov",
-  "v2_amplified_gemini31_solov",
+  "v2_rawstage2_gpt6astra",
+  "v2_amplified_gpt6astra",
   "v2_rawstage2",
-  "v2_rawstage2_gemini31",
   "v2_amplified",
-  "v2_amplified_gemini31",
 ]);
 
 /**

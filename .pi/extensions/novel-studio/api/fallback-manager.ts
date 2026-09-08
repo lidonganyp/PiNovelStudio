@@ -24,6 +24,7 @@ import type { GPTMessage } from "./gpt.js";
 import { fetchWithTimeout } from "./request-timeout.js";
 import { parseAnthropicResponse } from "./anthropic-stream.js";
 import { parseOpenAIStream } from "./openai-stream.js";
+import { callOpenAIResponses } from "./openai-responses.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   assertProviderAuthorized,
@@ -199,11 +200,15 @@ const MAIN_ROUTE_ALLOWED_PROVIDERS: Set<string> = new Set(["doubao"]);
 // MODEL-ROUTING-CLAUDE46-1A: 生产 v2 路由 provider allowlist。
 // 派工卡 §3 Required Change #4：为生产正文路由增加 provider allowlist。
 // 即使 config 误配置 fallback 含未授权 provider，本守卫也会过滤掉。
-// - v2_rawstage2 / v2_amplified: 只允许 claude（raw/editorial 正文唯一正式主写）
+// - v2_rawstage2_gpt6astra / v2_amplified_gpt6astra: 只允许 gpt（GPT6-ASTRA-PRODUCTION-SWITCH-1
+//   后的生产正文主写，shunfen6.win 单渠道，无互备 provider）
+// - v2_rawstage2 / v2_amplified: 只允许 claude（显式 writerModel=claude 的 raw/editorial 正文）
 // - v2_chinese_calibration: 只允许 doubao（仅中文校准，不混入其他 provider）
 // - v2_opportunity_judge / v2_literary_judge: 只允许 gpt（异源 judge，Claude/Doubao 不得自审）
 // 不在 map 中的路由不受 allowlist 限制（保持向后兼容，如 narrator_testing_* / v2_direct_*）。
 const V2_ROUTE_PROVIDER_ALLOWLIST: Record<string, Set<string>> = {
+  "v2_rawstage2_gpt6astra": new Set(["gpt"]),
+  "v2_amplified_gpt6astra": new Set(["gpt"]),
   v2_rawstage2: new Set(["claude"]),
   v2_amplified: new Set(["claude"]),
   v2_chinese_calibration: new Set(["doubao"]),
@@ -633,7 +638,7 @@ export class APIFallbackManager {
               modelToUse,
               messages,
               resolvedCallOptions,
-              provider.request_options
+              gatewayConfigured ? undefined : provider.request_options
             );
           }
           fellBack = providerKey !== primaryProvider;
@@ -839,6 +844,7 @@ export class APIFallbackManager {
                 temperature: resolvedTemperature,
                 max_tokens: resolvedMaxTokens,
                 thinking: provider.request_options?.thinking,
+                api: provider.request_options?.api,
               }
             );
             response = {
@@ -1004,6 +1010,7 @@ export class APIFallbackManager {
                 max_tokens: resolvedMaxTokens,
                 responseFormat: options?.responseFormat ?? { type: "json_object" },
                 thinking: provider.request_options?.thinking,
+                api: provider.request_options?.api,
               }
             );
           } else {
@@ -1252,7 +1259,7 @@ export class APIFallbackManager {
     }
 
     const routeModelEnv = typeof routing === "object" ? routing.model_env : undefined;
-    if (routeModelEnv && process.env[routeModelEnv]) return process.env[routeModelEnv] as string;
+    if (isPrimary && routeModelEnv) return process.env[routeModelEnv]?.trim() || resolvedModel;
     return getModelOverride(providerKey, resolvedModel) || resolvedModel;
   }
 
@@ -1308,6 +1315,13 @@ export class APIFallbackManager {
       options,
       requestOptions,
     );
+    if (requestOptions?.api === "responses") {
+      return callOpenAIResponses(baseUrl, apiKey, model, localizeLlmMessages(messages), {
+        max_tokens: options?.max_tokens,
+        jsonMode: (request.response_format as { type?: string } | undefined)?.type === "json_object",
+        timeoutMs: options?.timeoutMs,
+      });
+    }
     if (streamResponse) request.stream = true;
     const response = await fetchWithTimeout(
       joinUrl(baseUrl, "chat/completions"),
@@ -1417,8 +1431,16 @@ export class APIFallbackManager {
       max_tokens?: number;
       responseFormat?: { type: "json_object" | "text" };
       thinking?: ProviderRequestOptions["thinking"];
+      api?: ProviderRequestOptions["api"];
     }
   ): Promise<{ content: string; finish_reason: string }> {
+    if (options?.api === "responses") {
+      const response = await callOpenAIResponses(baseUrl, apiKey, model, localizeLlmMessages(messages), {
+        max_tokens: options?.max_tokens ?? 2048,
+        jsonMode: options?.responseFormat?.type === "json_object",
+      });
+      return { content: response.choices[0].message.content, finish_reason: response.choices[0].finish_reason };
+    }
     const request: Record<string, unknown> = {
       model,
       messages: localizeLlmMessages(messages),

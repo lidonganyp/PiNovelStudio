@@ -55,10 +55,10 @@ services:
       AES_MASTER_KEY: ${AES_MASTER_KEY:?AES_MASTER_KEY is required}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
-      BOOTSTRAP_GEMINI_API_KEY: ${BOOTSTRAP_GEMINI_API_KEY:?BOOTSTRAP_GEMINI_API_KEY is required}
-      BOOTSTRAP_GEMINI_API_BASE_URL: ${BOOTSTRAP_GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com}
-      BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN: ${BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN:?BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN is required}
-      BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN: ${BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN:?BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN is required}
+      BOOTSTRAP_GPT_API_KEY: ${BOOTSTRAP_GPT_API_KEY:?BOOTSTRAP_GPT_API_KEY is required}
+      BOOTSTRAP_GPT_API_BASE_URL: ${BOOTSTRAP_GPT_API_BASE_URL:-https://shunfen6.win/v1}
+      BOOTSTRAP_GPT_INPUT_PRICE_PER_MILLION_FEN: ${BOOTSTRAP_GPT_INPUT_PRICE_PER_MILLION_FEN:?BOOTSTRAP_GPT_INPUT_PRICE_PER_MILLION_FEN is required}
+      BOOTSTRAP_GPT_OUTPUT_PRICE_PER_MILLION_FEN: ${BOOTSTRAP_GPT_OUTPUT_PRICE_PER_MILLION_FEN:?BOOTSTRAP_GPT_OUTPUT_PRICE_PER_MILLION_FEN is required}
     depends_on:
       api-migrate:
         condition: service_completed_successfully
@@ -87,7 +87,7 @@ services:
       NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
       # Must exactly match runtime modelCalls.requestedRoute values, and each
       # key must have a current enabled model_rates row before API starts.
-      NOVEL_BILLING_REQUIRED_MODELS: v2_rawstage2_gemini31,v2_amplified_gemini31
+      NOVEL_BILLING_REQUIRED_MODELS: v2_rawstage2_gpt6astra,v2_amplified_gpt6astra
       # 默认关闭占位助手；配置 PLANNER_API_* 后可切 http 直连规划模型。
       PLANNER_MODE: ${PLANNER_MODE:-disabled}
       PLANNER_API_BASE_URL: ${PLANNER_API_BASE_URL:-}
@@ -142,7 +142,7 @@ services:
       # The bootstrap job encrypts the credential in the control plane; runtime
       # fetches it over the HMAC-protected internal API after API readiness.
       NOVEL_PROVIDER_CREDENTIALS_SOURCE: platform
-      NOVEL_REQUIRED_PROVIDER_KEYS: GEMINI_API_KEY
+      NOVEL_REQUIRED_PROVIDER_KEYS: GPT_API_KEY
       # Never allow the extension's local development bypass in the production image.
       PINOVEL_DEV_MODE: '0'
       # The runtime image intentionally has no .git directory. Bind its G6

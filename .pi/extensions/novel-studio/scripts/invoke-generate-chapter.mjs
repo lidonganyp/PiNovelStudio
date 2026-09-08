@@ -116,7 +116,7 @@ if (evalLayer === "B0") {
       chapterId,
       chapterNumber,
       projectRoot,
-      writerModel: writerModel === "claude" || writerModel === "gemini31" ? writerModel : undefined,
+      writerModel: writerModel === "claude" || writerModel === "gpt6astra" ? writerModel : undefined,
     });
   } catch (error) {
     console.error(`[invoke-generate-chapter] independent raw 失败：${String(error)}`);

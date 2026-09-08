@@ -195,7 +195,7 @@ export const DEFAULT_RELEASE_FINGERPRINT_SPEC = {
     "ARK_API_KEY",
     "ERNIE_API_KEY",
   ],
-  generationModel: "gemini-3.7-flash",
+  generationModel: "gpt-6-astra",
   judgeModel: "gpt5.6-sol",
   proxyApprovalModel: "gpt5.6-sol",
   seed: 0,
@@ -330,7 +330,7 @@ function getGitHead(projectRoot: string): string {
 
 function getWorktreeDirty(projectRoot: string): boolean {
   try {
-    const status = execSync("git status --porcelain", {
+    const status = execSync("git status --porcelain --ignore-submodules=all", {
       cwd: projectRoot,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],

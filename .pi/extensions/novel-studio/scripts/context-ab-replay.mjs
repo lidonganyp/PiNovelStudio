@@ -6,7 +6,7 @@
  *   - D_pm 组（单因素消融）：保持 A 的 maxItems/摘要长度不变，只排除 PatternMemory
  *
  * 口径（Gemini 冻结基线，2026-08-11）：
- *   - route = v2_rawstage2_gemini31，provider = gemini31，model = gemini-3.1-pro-preview
+ *   - route = nb4_generate_gemini31（v4.34.0 后的 gemini eval 路由；历史基线为 v2_rawstage2_gemini31），provider = gemini31
  *   - temperature = 0.72，maxTokens = 2048，DISABLE_FALLBACK=1
  *   - 场景 = SC1/SC6/SC7（高信号集），seed 0/1/2，共 9 arm 样本
  *   - schemaTokenCost 与状态注入正交（工具 schema 成本），不作为本轮压缩收益
@@ -69,8 +69,10 @@ const MODE_DIR = DRY_RUN ? "dry-run" : "real";
 const REPORT_SUBDIR = ABLATION_ARM === "D_pm" ? MODE_DIR : `${MODE_DIR}-${ABLATION_ARM}`;
 const REPORT_DIR = join(PROJECT_ROOT, "reports", "phase6-context-ab", REPORT_SUBDIR);
 
-// Gemini 冻结基线路由（唯一真相源为 config/model-routing.json v4.31.0）
-const MODEL_ROUTE = process.env.PINOVEL_TOOL_AB_ROUTE ?? "v2_rawstage2_gemini31";
+// Gemini 冻结基线路由。GPT6-ASTRA-PRODUCTION-SWITCH-1（v4.34.0）：旧生产写路由
+// v2_rawstage2_gemini31 已删除；本 eval 固定到保留的 gemini eval 路由 nb4_generate_gemini31
+// （provider=gemini31，gemini_validation 授权不变）。历史冻结基线（v4.31.0 口径）保留为对照。
+const MODEL_ROUTE = process.env.PINOVEL_TOOL_AB_ROUTE ?? "nb4_generate_gemini31";
 const PROVIDER = "gemini31";
 const MODEL = "gemini-3.1-pro-preview";
 const TEMPERATURE = 0.72;

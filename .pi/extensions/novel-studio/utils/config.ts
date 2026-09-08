@@ -50,6 +50,7 @@ export interface AgentRoutingEntry {
 export type ProviderProtocol = "openai" | "anthropic" | "claude" | "chat";
 
 export interface ProviderRequestOptions {
+  api?: "responses";
   auth?: "bearer" | "x-api-key";
   thinking?: {
     type: "enabled" | "disabled";
@@ -510,7 +511,12 @@ export async function getAgentModelConfig(
     resolvedModel = provider.models[firstModelKey]?.id || firstModelKey;
   }
 
-  resolvedModel = getModelOverride(providerKey, resolvedModel);
+  const routeModelEnv = typeof routing === "object" && routing.provider === providerKey
+    ? routing.model_env
+    : undefined;
+  resolvedModel = routeModelEnv
+    ? process.env[routeModelEnv]?.trim() || resolvedModel
+    : getModelOverride(providerKey, resolvedModel);
 
   return {
     provider: providerKey,

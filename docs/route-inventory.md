@@ -1,7 +1,7 @@
 # 模型路由现状审计与基线冻结（WP-00）
 
 **快照日期**：2026-08-12  
-**配置真相源**：`config/model-routing.json`（v4.31.0）  
+**配置真相源**：`config/model-routing.json`（v4.34.0）
 **运行时入口**：`novel_generate_chapter` → `handlers/public-handlers.ts` → `v2/core/unified-entry.ts` → `v2/core/unified-orchestrator.ts`
 
 本文件冻结本轮治理基线。目标不是重建第二套路由系统，而是统一并补齐：
@@ -17,8 +17,8 @@
 
 | 任务 | 当前路由 | provider / model | 生产可用 | fallback | 说明 |
 |---|---|---|---:|---:|---|
-| Agentic 初稿 | `v2_rawstage2_gemini31` | gemini31 / gemini-3.1-pro-preview | 是 | `[]` | 默认 `writerModel` 省略时解析到此 |
-| 作者风格优化 | `v2_amplified_gemini31` | gemini31 / gemini-3.1-pro-preview | 是 | `[]` | 生产必须经过风格整章优化 |
+| Agentic 初稿 | `v2_rawstage2_gpt6astra` | gpt / gpt-6-astra | 是 | `[]` | 默认 `writerModel` 省略时解析到此 |
+| 作者风格优化 | `v2_amplified_gpt6astra` | gpt / gpt-6-astra | 是 | `[]` | 生产必须经过风格整章优化 |
 | 显式 Claude 初稿 | `v2_rawstage2` | claude / claude-opus-4-6 | 是（显式） | `[]` | 仅 `writerModel=claude` |
 | 显式 Claude 风格 | `v2_amplified` | claude / claude-opus-4-6 | 是（显式） | `[]` | 仅 `writerModel=claude` |
 | 事实验证 / FactGuard | 本地规则 + 结构化解析 | local / 结构化模型 | 是 | 同阶段策略 | 不可因降本绕过 |
@@ -32,7 +32,7 @@
 
 `resolveWriterModelRouteLock(writerModel)`（`unified-entry.ts`）：
 
-- `writerModel === undefined | "gemini31"` → Gemini 生产锁
+- `writerModel === undefined | "gpt6astra"` → gpt-6-astra 生产锁
 - `writerModel === "claude"` → Claude 显式锁
 - `writerModel` 与 `modelTestRoute` **不能同时设置**
 

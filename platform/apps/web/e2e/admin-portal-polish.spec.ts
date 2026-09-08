@@ -30,11 +30,11 @@ test('admin overview usage revenue and rate lookup, portal project cards', async
 
   await page.goto('/admin/models');
   await page.getByRole('button', { name: '新增费率' }).click();
-  await page.getByPlaceholder('gemini-3.7-flash 或 Qwen/Qwen2.5-7B-Instruct').fill(
-    'gemini-3.7-flash',
+  await page.getByPlaceholder('gemini-3.8-flash 或 Qwen/Qwen2.5-7B-Instruct').fill(
+    'gemini-3.8-flash',
   );
   await page.getByRole('button', { name: '查询公开价' }).click();
-  await expect(page.getByText(/已匹配 google\/gemini-3.7-flash/)).toBeVisible({
+  await expect(page.getByText(/已匹配 google\/gemini-3.8-flash/)).toBeVisible({
     timeout: 20_000,
   });
 });

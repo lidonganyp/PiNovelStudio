@@ -196,9 +196,9 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
       (call) => call.kind === "author_style_optimization",
     );
     assert.ok(styleModelCall, "默认路径必须记录作者风格整章优化调用");
-    assert.equal(styleModelCall.route, "v2_amplified_gemini31");
-    assert.equal(styleModelCall.expectedProvider, "gemini31");
-    assert.equal(styleModelCall.expectedModel, "gemini-3.7-flash");
+    assert.equal(styleModelCall.route, "v2_amplified_gpt6astra");
+    assert.equal(styleModelCall.expectedProvider, "gpt");
+    assert.equal(styleModelCall.expectedModel, "gpt-6-astra");
 
     // 固定场景候选源已退出生产；trace 必须明确记录退休状态。
     assert.ok(

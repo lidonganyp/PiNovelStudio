@@ -47,6 +47,7 @@ import type {
   AnonymousMapping,
 } from "./chapter-proxy-approval-types.js";
 import { localizeLlmMessages, localizeLlmText } from "../../utils/llm-language-guard.js";
+import { callOpenAIResponses, usesConfiguredResponsesEndpoint } from "../../api/openai-responses.js";
 import {
   CHAPTER_PROXY_APPROVAL_REVIEWER_MODEL,
 } from "./chapter-proxy-approval-types.js";
@@ -502,6 +503,14 @@ export async function callOpenAIChatCompletions(
   }
 
   const url = `${apiBaseUrl.replace(/\/+$/, "")}/chat/completions`;
+  if (usesConfiguredResponsesEndpoint(apiBaseUrl)) {
+    const started = Date.now();
+    const response = await callOpenAIResponses(apiBaseUrl, apiKey, modelId, prepareChatCompletionsMessages(messages, options?.responseFormat), {
+      timeoutMs: options?.timeoutMs ?? 60000,
+      jsonMode: options?.responseFormat === "json_object",
+    });
+    return { text: response.choices[0].message.content, model: response.model, durationMs: Date.now() - started };
+  }
   const body: Record<string, unknown> = {
     model: modelId,
     messages: prepareChatCompletionsMessages(messages, options?.responseFormat),
@@ -680,6 +689,14 @@ export function createOpenAIChatCompletionsFn(options: {
     messages: Array<{ role: string; content: string }>,
     callOpts?: { timeoutMs?: number; responseFormat?: "json_object" | "json_schema" },
   ): Promise<Gpt56SolCallResult> => {
+    if (usesConfiguredResponsesEndpoint(apiBaseUrl)) {
+      const started = Date.now();
+      const response = await callOpenAIResponses(apiBaseUrl, apiKey, modelId, prepareChatCompletionsMessages(messages, callOpts?.responseFormat), {
+        timeoutMs: callOpts?.timeoutMs ?? 300000,
+        jsonMode: callOpts?.responseFormat === "json_object",
+      });
+      return { text: response.choices[0].message.content, model: response.model, durationMs: Date.now() - started };
+    }
     const requestBody: Record<string, unknown> = {
       model: modelId,
       messages: prepareChatCompletionsMessages(messages, callOpts?.responseFormat),

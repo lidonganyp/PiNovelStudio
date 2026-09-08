@@ -31,11 +31,11 @@ docker compose up -d
 | 现象 | 排查 |
 |---|---|
 | `api` 起不来，日志 `production requires PAYMENT_MODE=live` | 生产 env 仍是 stub；改 `PAYMENT_MODE=live` 并补商户凭证 |
-| `api-bootstrap` 失败 | 缺 `BOOTSTRAP_ADMIN_*` / Gemini key / 费率分值 |
+| `api-bootstrap` 失败 | 缺 `BOOTSTRAP_ADMIN_*` / `BOOTSTRAP_GPT_API_KEY` / GPT 费率分值 |
 | 生成 402 / `insufficient_balance` | 用户可用余额 < 预估 `maxCharge`；管理台调账或让用户充值 |
 | 生成 409「已有进行中的生成任务」 | 每用户同时只允许 1 个章节生成；等当前任务结束或查 `novel_generation_jobs` |
 | 支付通知不入账 | 核对验签、订单金额、`PAYMENT_NOTIFY_BASE_URL` HTTPS、查单补偿是否把单标 expired |
-| runtime 不监听 | `NOVEL_REQUIRED_PROVIDER_KEYS`（当前 `GEMINI_API_KEY`）注入失败；看 runtime 日志 |
+| runtime 不监听 | `NOVEL_REQUIRED_PROVIDER_KEYS`（当前 `GPT_API_KEY`）注入失败；看 runtime 日志 |
 | 管理台 403 | 账号 `role` 不是 `admin`；用 seed/bootstrap 管理员登录 |
 | 注册 403「当前未开放注册」 | 管理台关闭了 `registration_enabled` |
 

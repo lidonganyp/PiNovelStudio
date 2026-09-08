@@ -7,8 +7,8 @@ const config: ProductionBootstrapConfig = {
   adminEmail: 'admin@example.com',
   adminPassword: 'a-secure-bootstrap-password-123',
   aesMasterKey: 'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd',
-  geminiApiKey: 'gemini-key',
-  geminiApiBaseUrl: 'https://generativelanguage.googleapis.com',
+  gptApiKey: 'gpt-key',
+  gptApiBaseUrl: 'https://shunfen6.win/v1',
   inputPricePerMillionFen: 120n,
   outputPricePerMillionFen: 480n,
 };
@@ -61,14 +61,14 @@ function makeDb(): BootstrapDatabase & { users: unknown[]; providers: unknown[];
 }
 
 describe('production bootstrap state', () => {
-  it('creates admin, encrypted Gemini provider, and both production route rates', async () => {
+  it('creates admin, encrypted GPT provider, and both production route rates', async () => {
     const db = makeDb();
     await bootstrapProductionState(db, config);
     expect(db.users).toHaveLength(1);
     expect(db.providers).toHaveLength(1);
     expect(db.rates).toHaveLength(2);
-    expect(db.providers[0]).toMatchObject({ providerKey: 'gemini', enabled: true });
-    expect((db.providers[0] as { apiKeyEncrypted: string }).apiKeyEncrypted).not.toContain('gemini-key');
+    expect(db.providers[0]).toMatchObject({ providerKey: 'gpt', enabled: true });
+    expect((db.providers[0] as { apiKeyEncrypted: string }).apiKeyEncrypted).not.toContain('gpt-key');
   });
 
   it('is idempotent when the same state already exists', async () => {

@@ -8,27 +8,27 @@ describe('RatesService production eligibility', () => {
       modelRate: { findFirst },
     } as never);
 
-    await expect(service.findEffectiveRate('v2_rawstage2_gemini31')).rejects.toThrow(
+    await expect(service.findEffectiveRate('v2_rawstage2_gpt6astra')).rejects.toThrow(
       /生效费率/,
     );
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          modelKey: 'v2_rawstage2_gemini31',
+          modelKey: 'v2_rawstage2_gpt6astra',
           provider: { is: { enabled: true } },
         }),
       }),
     );
   });
 
-  it('uses gemini-3.7-flash as a billing alias for Gemini writing routes', async () => {
+  it('uses gpt-6-astra as a billing alias for GPT writing routes', async () => {
     const aliasRate = {
-      modelKey: 'gemini-3.7-flash',
-      displayName: 'gemini-3.7-flash',
+      modelKey: 'gpt-6-astra',
+      displayName: 'gpt-6-astra',
       inputPricePerMillion: 100n,
       outputPricePerMillion: 250n,
       effectiveFrom: new Date('2026-01-01T00:00:00Z'),
-      provider: { providerKey: 'gemini-3.7-flash', enabled: true },
+      provider: { providerKey: 'gpt', enabled: true },
     };
     const findFirst = vi.fn()
       .mockResolvedValueOnce(null)
@@ -37,8 +37,8 @@ describe('RatesService production eligibility', () => {
       modelRate: { findFirst },
     } as never);
 
-    const rate = await service.findEffectiveRate('v2_rawstage2_gemini31');
-    expect(rate.modelKey).toBe('gemini-3.7-flash');
-    expect(findFirst.mock.calls[1][0].where.modelKey).toBe('gemini-3.7-flash');
+    const rate = await service.findEffectiveRate('v2_rawstage2_gpt6astra');
+    expect(rate.modelKey).toBe('gpt-6-astra');
+    expect(findFirst.mock.calls[1][0].where.modelKey).toBe('gpt-6-astra');
   });
 });

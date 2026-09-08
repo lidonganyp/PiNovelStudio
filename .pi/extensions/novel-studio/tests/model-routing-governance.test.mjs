@@ -37,13 +37,13 @@ async function importDist(rel) {
 }
 
 describe("WP-01 路由契约与运行锁", () => {
-  test("默认生产路由使用 Gemini", async () => {
+  test("默认生产路由使用 gpt-6-astra", async () => {
     const mod = await importDist("v2/core/run-routing-context.js");
     const ctx = mod.resolveRunRouting({});
-    assert.equal(ctx.provider, "gemini31");
-    assert.equal(ctx.model, "gemini-3.7-flash");
-    assert.equal(ctx.generationRoute, "v2_rawstage2_gemini31");
-    assert.equal(ctx.editorialRoute, "v2_amplified_gemini31");
+    assert.equal(ctx.provider, "gpt");
+    assert.equal(ctx.model, "gpt-6-astra");
+    assert.equal(ctx.generationRoute, "v2_rawstage2_gpt6astra");
+    assert.equal(ctx.editorialRoute, "v2_amplified_gpt6astra");
     assert.equal(ctx.routeClass, "production");
     assert.equal(ctx.fallbackPolicy, "none");
     assert.equal(ctx.explicitWriterSelection, false);
@@ -59,13 +59,13 @@ describe("WP-01 路由契约与运行锁", () => {
     assert.equal(ctx.writerModel, "claude");
   });
 
-  test("Gemini 锁下 Claude provider 调用被阻断（无静默切换）", async () => {
+  test("gpt-6-astra 锁下 Claude provider 调用被阻断（无静默切换）", async () => {
     const mod = await importDist("v2/core/run-routing-context.js");
     const ctx = mod.resolveRunRouting({});
     const result = mod.assertModelCallMatchesLock({
       routing: ctx,
       stage: "agenticGeneration",
-      route: "v2_rawstage2_gemini31",
+      route: "v2_rawstage2_gpt6astra",
       provider: "claude",
       model: "claude-opus-4-6",
       role: "generation",
@@ -519,11 +519,11 @@ describe("WP-07 质量-成本联合指标", () => {
 });
 
 describe("配置层：默认生产路由契约快照", () => {
-  test("config 默认 Gemini 写路由 fallback=[]", () => {
+  test("config 默认写路由 fallback=[]（gpt-6-astra 默认 + Claude 显式）", () => {
     const config = require(resolve(extensionRoot, "../../../config/model-routing.json"));
     for (const name of [
-      "v2_rawstage2_gemini31",
-      "v2_amplified_gemini31",
+      "v2_rawstage2_gpt6astra",
+      "v2_amplified_gpt6astra",
       "v2_rawstage2",
       "v2_amplified",
       "narrator_primary",
@@ -532,6 +532,16 @@ describe("配置层：默认生产路由契约快照", () => {
       assert.ok(entry, name);
       assert.deepEqual(entry.fallback, [], name);
     }
-    assert.equal(config.agent_routing.narrator_primary.provider, "gemini31");
+    assert.equal(config.agent_routing.narrator_primary.provider, "gpt");
+    assert.equal(config.agent_routing.narrator_primary.model, "gpt-6-astra");
+    // GPT6-ASTRA-PRODUCTION-SWITCH-1：旧 Gemini 生产写路由已物理删除。
+    for (const stale of [
+      "v2_rawstage2_gemini31",
+      "v2_amplified_gemini31",
+      "v2_rawstage2_gemini31_solov",
+      "v2_amplified_gemini31_solov",
+    ]) {
+      assert.equal(config.agent_routing[stale], undefined, stale);
+    }
   });
 });

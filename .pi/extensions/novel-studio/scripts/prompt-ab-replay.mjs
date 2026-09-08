@@ -6,7 +6,7 @@
  * - P-B（Gemini 专属）：Gemini 专属 systemPrompt（GEMINI_RETRIEVAL_SYSTEM_PROMPT_BASE）
  *
  * 复数场景：3 批 × 3 seed（seed 0-8），批次偏移 seed 起始值（batch b → seeds [b*3 .. b*3+2]）。
- * 固定维度：9 专用工具（arm=A）+ 完整上下文 + A 组预算 + Gemini 生产 route（narrator_primary, fallback=[]）。
+ * 固定维度：9 专用工具（arm=A）+ 完整上下文 + A 组预算 + Gemini eval route（nb4_generate_gemini31, fallback=[]）。
  *
  * 用法：
  *   # dry-run（随机性 stub，零 API，验证框架）
@@ -18,7 +18,8 @@
  *
  * 授权边界（fail-closed）：
  *   - 真实模式必须显式 --require-auth 且 PINOVEL_BENCHMARK_COST_PROFILE=gemini_validation。
- *   - 强制 route=narrator_primary（provider=gemini31, fallback=[]），不得改为 GPT/Claude/GLM。
+ *   - 强制 route=nb4_generate_gemini31（provider=gemini31, fallback=[]，GPT6-ASTRA-PRODUCTION-SWITCH-1
+ *     后的 gemini eval 路由），不得改为 GPT/Claude/GLM。
  *   - 未授权时真实模式拒绝启动（不会静默降级到 stub 或其他 provider）。
  *
  * 输出：
@@ -53,7 +54,7 @@ if (existsSync(envPath)) {
 }
 
 // ── 固定参数 ──
-const GEMINI_ROUTE = "narrator_primary";
+const GEMINI_ROUTE = "nb4_generate_gemini31";
 const TEMPERATURE = 0.72;
 const MAX_TOKENS = 2048;
 const SEEDS_PER_BATCH = 3;
@@ -103,7 +104,7 @@ function seedsForBatch(batch) {
 // ── 真实模型 modelFn（仅在 real 模式构建）──
 let modelFn = null;
 if (!DRY_RUN) {
-  // gemini_validation profile 已在上方强制；route 固定为 narrator_primary（fallback=[]）。
+  // gemini_validation profile 已在上方强制；route 固定为 nb4_generate_gemini31（gemini eval 路由，fallback=[]）。
   const realRunner = await import(
     `file://${join(EXT_ROOT, "dist-eval", "novelos", "eval", "tool-ab-real-runner.js")}`
   );

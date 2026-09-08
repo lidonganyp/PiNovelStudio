@@ -275,8 +275,11 @@ export function collectReplayTransportEvidence(
  *
  * production_like / dev_real_model 回放必须消费 fixture.provenance.modelRoute，
  * 不得让调用脚本回退到开发缺省（GLM 锁）：
- *  - Gemini 生产路由（v2_rawstage2_gemini31 / v2_amplified_gemini31）→ 不传
- *    路由参数（modelTestRoute=undefined 即生产默认 Gemini 主链路）；
+ *  - gpt-6-astra 生产路由（v2_rawstage2_gpt6astra / v2_amplified_gpt6astra，
+ *    GPT6-ASTRA-PRODUCTION-SWITCH-1 后的默认）→ 不传路由参数
+ *    （modelTestRoute=undefined 即生产默认 gpt-6-astra 主链路）；
+ *  - 历史 Gemini 生产路由（v2_rawstage2_gemini31 / v2_amplified_gemini31，
+ *    仅存在于历史 fixture）→ 不传路由参数（当前生产默认同为非 Claude 主链路）；
  *  - Claude 显式生产路由（v2_rawstage2 / v2_amplified）→ --writer-model=claude；
  *  - eval 锁路由（unified-entry resolveModelTestRouteLock 已知 alias）→
  *    --model-test-route=<alias>；
@@ -287,6 +290,8 @@ export function resolveModelRouteInvokeArgs(
 ): { ok: true; args: string[] } | { ok: false; reason: string } {
   const route = fixture.provenance.modelRoute;
   if (
+    route === "v2_rawstage2_gpt6astra" ||
+    route === "v2_amplified_gpt6astra" ||
     route === "v2_rawstage2_gemini31" ||
     route === "v2_amplified_gemini31"
   ) {
@@ -310,7 +315,7 @@ export function resolveModelRouteInvokeArgs(
   }
   return {
     ok: false,
-    reason: `fixture ${fixture.fixtureId} 声明未知生产路由 modelRoute="${route}"；已知：v2_rawstage2_gemini31 / v2_amplified_gemini31 / v2_rawstage2 / v2_amplified / eval 锁路由（${[...EVAL_LOCK_ROUTES].join("|")}）`,
+    reason: `fixture ${fixture.fixtureId} 声明未知生产路由 modelRoute="${route}"；已知：v2_rawstage2_gpt6astra / v2_amplified_gpt6astra / v2_rawstage2_gemini31 / v2_amplified_gemini31 / v2_rawstage2 / v2_amplified / eval 锁路由（${[...EVAL_LOCK_ROUTES].join("|")}）`,
   };
 }
 

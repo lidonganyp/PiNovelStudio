@@ -29,10 +29,10 @@ describe('production compose readiness wiring', () => {
 
     expect(apiSection).toMatch(/healthcheck:/);
     expect(apiSection).toMatch(/\/api\/health/);
-    expect(apiSection).toMatch(/NOVEL_BILLING_REQUIRED_MODELS:\s+.*v2_rawstage2_gemini31/);
-    expect(apiSection).toMatch(/v2_amplified_gemini31/);
+    expect(apiSection).toMatch(/NOVEL_BILLING_REQUIRED_MODELS:\s+.*v2_rawstage2_gpt6astra/);
+    expect(apiSection).toMatch(/v2_amplified_gpt6astra/);
     expect(apiSection).toMatch(/CORS_ORIGINS:\s+\$\{CORS_ORIGINS:\?CORS_ORIGINS is required in production\}/);
-    expect(runtimeSection).toMatch(/NOVEL_REQUIRED_PROVIDER_KEYS:\s+GEMINI_API_KEY/);
+    expect(runtimeSection).toMatch(/NOVEL_REQUIRED_PROVIDER_KEYS:\s+GPT_API_KEY/);
     expect(runtimeSection).toMatch(/NODE_ENV:\s+production/);
     expect(runtimeSection).toMatch(/PINOVEL_DEV_MODE:\s+'0'/);
     expect(runtimeSection).toMatch(/PINOVEL_RELEASE_COMMIT:\s+\$\{PINOVEL_RELEASE_COMMIT:\?PINOVEL_RELEASE_COMMIT is required/);
@@ -47,7 +47,7 @@ describe('production compose readiness wiring', () => {
     );
     expect(compose).toMatch(/^\x20{2}api-bootstrap:\r?\n/m);
     expect(compose).toMatch(/BOOTSTRAP_ADMIN_EMAIL/);
-    expect(compose).toMatch(/BOOTSTRAP_GEMINI_API_KEY/);
+    expect(compose).toMatch(/BOOTSTRAP_GPT_API_KEY/);
     expect(compose).toMatch(/service_completed_successfully/);
   });
 

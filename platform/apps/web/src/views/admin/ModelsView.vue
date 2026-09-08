@@ -288,7 +288,7 @@ onMounted(() => {
     <el-dialog v-model="providerDialog" title="新增供应商" width="480px">
       <el-form label-position="top">
         <el-form-item label="providerKey">
-          <el-input v-model="providerForm.providerKey" placeholder="gemini 或 gemini-3.7-flash" />
+          <el-input v-model="providerForm.providerKey" placeholder="gemini 或 gemini-3.8-flash" />
         </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="providerForm.name" />
@@ -311,7 +311,7 @@ onMounted(() => {
         <el-form-item label="模型 key">
           <el-input
             v-model="rateForm.modelKey"
-            placeholder="gemini-3.7-flash 或 Qwen/Qwen2.5-7B-Instruct"
+            placeholder="gemini-3.8-flash 或 Qwen/Qwen2.5-7B-Instruct"
             @keyup.enter="onLookupPrice"
           >
             <template #append>

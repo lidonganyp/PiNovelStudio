@@ -339,9 +339,9 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           // REAL-QUALITY-1-PREFLIGHT：单次路由锁定 + 可复现种子
           writerModel: {
             type: "string",
-            enum: ["gemini31", "claude"],
-            default: "gemini31",
-            description: "正文主写模型：Gemini 3.7 Flash（默认）。通常省略本字段或传 gemini31；仅当用户明确要求 Claude 时才允许传 claude。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。",
+            enum: ["gpt6astra", "claude"],
+            default: "gpt6astra",
+            description: "正文主写模型：gpt-6-astra（默认，GPT6-ASTRA-PRODUCTION-SWITCH-1）。通常省略本字段或传 gpt6astra；仅当用户明确要求 Claude 时才允许传 claude。两者 raw/editorial 路由均 fallback=[]，失败时阻断，不静默切换其他正文模型。旧 gemini31 选项已按版本收敛原则移除。",
           },
           // PRODUCTION-ROLLOUT-AUDIT-1 P0-1b/P0-10：modelTestRoute 已从公开 schema 移除
           // （eval-only 模型对比路由）。生产路径不接受显式模型对比路由；内部 handler 仍
@@ -416,7 +416,7 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         reviewToken?: string;
         reviewDecision?: "confirm" | "reject";
         reviewFeedback?: string;
-        writerModel?: "claude" | "gemini31";
+        writerModel?: "claude" | "gpt6astra";
         seed?: number;
         candidateTimeoutMs?: number;
         previewTotalTimeoutMs?: number;

@@ -6,7 +6,7 @@
  *
  * Usage:
  *   node scripts/production-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber>
- *        [--writer-model=gemini31|claude] [--project-root=<isolatedRoot>]
+ *        [--writer-model=gpt6astra|claude] [--project-root=<isolatedRoot>]
  *
  * V2_FORCE_STUB=1 is allowed for isolated deterministic runs. It is not
  * production submit evidence.
@@ -72,15 +72,15 @@ if (positional.includes("mock") || positional.includes("true")) {
 }
 
 const writerModel = flags["writer-model"] ?? flags.writerModel;
-if (writerModel && writerModel !== "gemini31" && writerModel !== "claude") {
-  reject(`writerModel=${writerModel} is not allowed; use omitted/gemini31/claude`);
+if (writerModel && writerModel !== "gpt6astra" && writerModel !== "claude") {
+  reject(`writerModel=${writerModel} is not allowed; use omitted/gpt6astra/claude`);
 }
 
 const workspaceId = positional[0];
 const chapterId = positional[1];
 const chapterNumber = Number(positional[2]);
 if (!workspaceId || !chapterId || !Number.isFinite(chapterNumber) || chapterNumber < 1) {
-  reject("usage: node production-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber> [--writer-model=gemini31|claude] [--project-root=<path>]");
+  reject("usage: node production-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber> [--writer-model=gpt6astra|claude] [--project-root=<path>]");
 }
 
 const projectRoot = flags["project-root"]
@@ -115,12 +115,12 @@ const params = {
   chapterId: String(chapterId),
   chapterNumber,
 };
-if (writerModel === "claude" || writerModel === "gemini31") {
+if (writerModel === "claude" || writerModel === "gpt6astra") {
   params.writerModel = writerModel;
 }
 
 console.log(
-  `[production-generate-chapter] workspace=${workspaceId} chapter=${chapterId} writerModel=${writerModel ?? "default-gemini31"} projectRoot=${projectRoot}`,
+  `[production-generate-chapter] workspace=${workspaceId} chapter=${chapterId} writerModel=${writerModel ?? "default-gpt6astra"} projectRoot=${projectRoot}`,
 );
 
 const result = await generateChapterTool.execute(

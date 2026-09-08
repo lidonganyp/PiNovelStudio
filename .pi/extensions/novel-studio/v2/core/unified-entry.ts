@@ -707,7 +707,7 @@ export function resolveModelTestRouteLock(
       generateRoute: "nb4_generate_gemini31",
       judgeRoute: "v2_opportunity_judge",
       provider: "gemini31",
-      model: "gemini-3.7-flash",
+      model: "gemini-3.8-flash",
     };
   }
   return null;
@@ -724,7 +724,7 @@ export interface WriterModelRouteLock {
 
 /** Resolve the production writer without changing the heterogeneous GPT judge. */
 export function resolveWriterModelRouteLock(
-  writerModel: "claude" | "gemini31" | undefined,
+  writerModel: "claude" | "gpt6astra" | undefined,
 ): WriterModelRouteLock | null {
   if (writerModel === "claude") {
     return {
@@ -736,14 +736,14 @@ export function resolveWriterModelRouteLock(
       promptProfile: "claude_writer_v1",
     };
   }
-  if (writerModel === "gemini31" || writerModel === undefined) {
+  if (writerModel === "gpt6astra" || writerModel === undefined) {
     return {
-      rawRoute: "v2_rawstage2_gemini31",
-      amplifiedRoute: "v2_amplified_gemini31",
+      rawRoute: "v2_rawstage2_gpt6astra",
+      amplifiedRoute: "v2_amplified_gpt6astra",
       judgeRoute: "v2_opportunity_judge",
-      provider: "gemini31",
-      model: "gemini-3.7-flash",
-      promptProfile: "gemini_writer_v2",
+      provider: "gpt",
+      model: "gpt-6-astra",
+      promptProfile: "gpt_writer_v1",
     };
   }
   return null;
@@ -2047,7 +2047,7 @@ export async function runUnifiedPipeline(
   const writerRouteLock = testRouteLock ? null : resolveWriterModelRouteLock(writerModel);
   // WP-01：任务级路由一次解析并冻结（与 writer/test lock 对齐，不另建第二套路由）。
   const runRouting: RunRoutingContext = resolveRunRouting({
-    writerModel: writerModel === "claude" || writerModel === "gemini31" ? writerModel : undefined,
+    writerModel: writerModel === "claude" || writerModel === "gpt6astra" ? writerModel : undefined,
     modelTestRoute: modelTestRoute ? String(modelTestRoute) : undefined,
     budgetProfile: testRouteLock ? "eval_lab" : effectiveFullPipelinePreview ? "preview" : "production_default",
     caller: "novel_generate_chapter",
@@ -2635,7 +2635,7 @@ export async function runUnifiedPipeline(
           provider: testRouteLock.provider,
           model: testRouteLock.model,
         })
-      : writerRouteLock?.promptProfile ?? "gemini_writer_v2",
+      : writerRouteLock?.promptProfile ?? "gpt_writer_v1",
     // REAL-QUALITY-1-PREFLIGHT：透传 seed 让 Thompson Sampling / judge 匿名 A/B
     // 可复现。未传时 orchestrator 内部 rng 回退到 Math.random（非确定性），
     // 仅已准入 active 策略参与 Thompson Sampling；candidate 不受随机阈值过滤。

@@ -15,7 +15,7 @@ async function main(): Promise<void> {
     await prisma.$transaction(async (tx) => {
       await bootstrapProductionState(tx as unknown as BootstrapDatabase, config);
     });
-    console.log('[bootstrap] admin and Gemini billing routes are ready');
+    console.log('[bootstrap] admin and gpt-6-astra billing routes are ready');
   } finally {
     await prisma.$disconnect();
   }

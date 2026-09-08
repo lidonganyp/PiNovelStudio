@@ -619,12 +619,14 @@ export function evaluateReplayCliSuccess(
     const routes = input.modelCallsByRequestedRoute ?? {};
     const providers = input.modelCallsByProvider ?? {};
     for (const provider of Object.keys(providers)) {
-      if (provider !== "gemini31" && provider !== "claude") {
+      if (provider !== "gpt" && provider !== "gemini31" && provider !== "claude") {
         reasons.push(`provider 路由漂移：${provider}`);
       }
     }
     for (const route of Object.keys(routes)) {
       const allowed =
+        route === "v2_rawstage2_gpt6astra" ||
+        route === "v2_amplified_gpt6astra" ||
         route === "v2_rawstage2_gemini31" ||
         route === "v2_amplified_gemini31" ||
         route === "v2_rawstage2" ||

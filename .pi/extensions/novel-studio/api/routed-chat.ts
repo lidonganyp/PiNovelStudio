@@ -15,6 +15,7 @@ import {
 import { localizeLlmMessages } from "../utils/llm-language-guard.js";
 import { fetchWithTimeout } from "./request-timeout.js";
 import { parseAnthropicResponse } from "./anthropic-stream.js";
+import { callOpenAIResponses } from "./openai-responses.js";
 import { assertProviderAuthorized } from "./benchmark-cost-profile.js";
 
 export interface RoutedChatMessage {
@@ -194,6 +195,12 @@ export class RoutedChatAPI {
     options?: RoutedChatOptions
   ): Promise<RoutedChatResponse> {
     const model = options?.model || this.config.model;
+    if (this.config.requestOptions?.api === "responses") {
+      return callOpenAIResponses(this.config.baseUrl, this.apiKey, model, messages, {
+        max_tokens: options?.max_tokens ?? this.config.maxTokens,
+        jsonMode: options?.jsonMode || options?.response_format?.type === "json_object",
+      });
+    }
     const request: Record<string, unknown> = {
       model,
       messages,

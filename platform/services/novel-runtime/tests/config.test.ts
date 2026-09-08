@@ -45,34 +45,34 @@ function withRuntimeEnv(
 }
 
 describe("production provider credential gate", () => {
-  const originalGemini = process.env.GEMINI_API_KEY;
+  const originalGpt = process.env.GPT_API_KEY;
 
   afterEach(() => {
-    if (originalGemini === undefined) delete process.env.GEMINI_API_KEY;
-    else process.env.GEMINI_API_KEY = originalGemini;
+    if (originalGpt === undefined) delete process.env.GPT_API_KEY;
+    else process.env.GPT_API_KEY = originalGpt;
   });
 
-  it("rejects a production runtime with no required Gemini credential", () => {
-    delete process.env.GEMINI_API_KEY;
+  it("rejects a production runtime with no required GPT credential", () => {
+    delete process.env.GPT_API_KEY;
     assert.throws(
       () =>
         assertRequiredProviderCredentials(
           makeConfigForTest({
             nodeEnv: "production",
-            requiredProviderEnvKeys: ["GEMINI_API_KEY"],
+            requiredProviderEnvKeys: ["GPT_API_KEY"],
           }),
         ),
-      /GEMINI_API_KEY/,
+      /GPT_API_KEY/,
     );
   });
 
   it("accepts credentials injected from either env or platform", () => {
-    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.GPT_API_KEY = "test-gpt-key";
     assert.doesNotThrow(() =>
       assertRequiredProviderCredentials(
         makeConfigForTest({
           nodeEnv: "production",
-          requiredProviderEnvKeys: ["GEMINI_API_KEY"],
+          requiredProviderEnvKeys: ["GPT_API_KEY"],
         }),
       ),
     );
@@ -83,7 +83,7 @@ describe("runtime startup configuration", () => {
   it("rejects the development release-gate bypass in production", () => {
     withRuntimeEnv({
       PINOVEL_DEV_MODE: "1",
-      NOVEL_REQUIRED_PROVIDER_KEYS: "GEMINI_API_KEY",
+      NOVEL_REQUIRED_PROVIDER_KEYS: "GPT_API_KEY",
     }, () => {
       process.env.NODE_ENV = "production";
       assert.throws(

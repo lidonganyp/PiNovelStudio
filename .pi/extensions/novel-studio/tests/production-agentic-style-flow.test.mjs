@@ -168,7 +168,7 @@ test("生产主链路强制执行 Agentic + 作者风格优化，且不调用机
       context: makeContext(),
       constitution: null,
       characterNames: ["李一凡"],
-      rawPromptProfile: "gemini_writer_v2",
+      rawPromptProfile: "gpt_writer_v1",
       modelGenerate,
       generationModelGenerate: modelGenerate,
       judgeModelGenerate: async () => {
@@ -180,7 +180,7 @@ test("生产主链路强制执行 Agentic + 作者风格优化，且不调用机
     assert.equal(result.status, "ok", JSON.stringify(result.failureEnvelope));
     assert.equal(agenticCalls, 1);
     assert.deepEqual(modelCalls, [{
-      route: "v2_amplified_gemini31",
+      route: "v2_amplified_gpt6astra",
       kind: "author_style_optimization",
     }]);
     assert.equal(result.text, STYLED_TEXT);
@@ -242,7 +242,7 @@ test("NovelOS 验证未清零时生产流程阻断且不保存", async () => {
       context: makeContext(),
       constitution: null,
       characterNames: ["李一凡"],
-      rawPromptProfile: "gemini_writer_v2",
+      rawPromptProfile: "gpt_writer_v1",
       modelGenerate: async () => {
         downstreamCalls += 1;
         throw new Error("验证失败后不得继续调用模型");

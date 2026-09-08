@@ -61,7 +61,7 @@ test("independent raw：eval-only + stub generate 写出 result 与 raw_direct t
   }
 });
 
-test("evalMode=B0 + writerModel=gemini31 请求 v2_rawstage2_gemini31", async () => {
+test("evalMode=B0 + writerModel=gpt6astra 请求 v2_rawstage2_gpt6astra", async () => {
   const prev = process.env.PINOVEL_EVAL_ONLY;
   process.env.PINOVEL_EVAL_ONLY = "1";
   const requested = [];
@@ -73,7 +73,7 @@ test("evalMode=B0 + writerModel=gemini31 请求 v2_rawstage2_gemini31", async ()
       chapterId: "chapter-001",
       chapterNumber: 1,
       projectRoot: root,
-      writerModel: "gemini31",
+      writerModel: "gpt6astra",
       evalMode: "B0",
       evalPrefix: "independent-raw",
       evalIntent: {
@@ -104,7 +104,7 @@ test("evalMode=B0 + writerModel=gemini31 请求 v2_rawstage2_gemini31", async ()
       evalPromptProfile: "generic_writer_v1",
     });
     assert.ok(
-      requested.includes("v2_rawstage2_gemini31"),
+      requested.includes("v2_rawstage2_gpt6astra"),
       `routes=${JSON.stringify(requested)}`,
     );
     assert.equal(requested.includes("v2_rawstage2"), false, `未锁路由仍请求 v2_rawstage2：${JSON.stringify(requested)}`);

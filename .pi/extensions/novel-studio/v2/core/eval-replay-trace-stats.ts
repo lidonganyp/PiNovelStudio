@@ -54,6 +54,12 @@ const GEMINI31_PRODUCTION_EXPECTATION: ProductionLikeRouteExpectation = {
   allowedRequestedRoutes: ["v2_rawstage2_gemini31", "v2_amplified_gemini31"],
 };
 
+/** GPT6-ASTRA-PRODUCTION-SWITCH-1 后的默认生产写预期；旧 Gemini 预期仅用于解析历史 trace。 */
+const GPT6ASTRA_PRODUCTION_EXPECTATION: ProductionLikeRouteExpectation = {
+  allowedProviders: ["gpt"],
+  allowedRequestedRoutes: ["v2_rawstage2_gpt6astra", "v2_amplified_gpt6astra"],
+};
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -328,13 +334,21 @@ export function resolveProductionLikeRouteExpectation(
   ) {
     return GEMINI31_PRODUCTION_EXPECTATION;
   }
+  if (
+    route.includes("gpt6astra") ||
+    version.includes("gpt-6-astra") ||
+    route === "v2_rawstage2_gpt6astra" ||
+    route === "v2_amplified_gpt6astra"
+  ) {
+    return GPT6ASTRA_PRODUCTION_EXPECTATION;
+  }
   if (route === "v2_rawstage2" || route === "v2_amplified") {
     return {
       allowedProviders: ["claude"],
       allowedRequestedRoutes: ["v2_rawstage2", "v2_amplified"],
     };
   }
-  return GEMINI31_PRODUCTION_EXPECTATION;
+  return GPT6ASTRA_PRODUCTION_EXPECTATION;
 }
 
 export interface ProductionLikeEvidenceCheckInput {

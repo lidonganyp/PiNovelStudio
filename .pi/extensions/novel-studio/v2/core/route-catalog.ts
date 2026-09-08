@@ -34,12 +34,10 @@ export const PRODUCTION_CHAPTER_CALLERS = [
   "unified_orchestrator",
 ] as const;
 
-/** 明确生产写路由（默认 Gemini + 显式 Claude） */
+/** 明确生产写路由（默认 gpt-6-astra + 显式 Claude） */
 const PRODUCTION_WRITER_ROUTES = new Set([
-  "v2_rawstage2_gemini31",
-  "v2_rawstage2_gemini31_solov",
-  "v2_amplified_gemini31",
-  "v2_amplified_gemini31_solov",
+  "v2_rawstage2_gpt6astra",
+  "v2_amplified_gpt6astra",
   "v2_rawstage2",
   "v2_amplified",
   "narrator_primary",

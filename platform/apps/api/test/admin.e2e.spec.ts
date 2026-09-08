@@ -347,7 +347,7 @@ describe('管理后台 e2e', () => {
 
     const forbidden = await app.inject({
       method: 'GET',
-      url: '/api/admin/model-rates/lookup?q=gemini-3.7-flash',
+      url: '/api/admin/model-rates/lookup?q=gemini-3.8-flash',
       headers: { authorization: `Bearer ${userToken}` },
     });
     expect([401, 403]).toContain(forbidden.statusCode);

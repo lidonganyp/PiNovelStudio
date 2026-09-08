@@ -28,8 +28,8 @@ PI Agent（编排大脑）
     → Agentic FactGuard → 作者风格整章优化 → StoryPreservation
     → FinalFactRecheck → Completeness → FinalStateCommit → AtomicSave + Trace
 
-AI 路由策略（真相源: config/model-routing.json v4.31.0）:
-├── Gemini 3.1 Pro: 默认 NovelOS Agentic + 作者风格整章优化；fallback=[]
+AI 路由策略（真相源: config/model-routing.json v4.34.0）:
+├── gpt-6-astra: 默认 NovelOS Agentic + 作者风格整章优化；fallback=[]
 ├── Claude Opus 4.6: 显式 `writerModel=claude` 正文备选，并继续负责风格塑形、终审与角色节点；不作为静默 fallback
 ├── 同模型 bounded best-of-3: 显式 `boundedBestOf3=true` 时由当前主写生成 raw + 最多 2 个场景解法候选；Gemini 4 次尝试中 2 次受控且均由 raw 胜出，默认关闭
 ├── gpt-5.6-sol: 仅隔离评测/回放使用，生产调用数为 0
@@ -101,7 +101,7 @@ PINOVEL_MODEL_REQUEST_TIMEOUT_MS=300000
 
 ## 开发路线图
 
-当前跨会话状态、已完成清理、授权边界和已知阻断见 [项目记忆](./docs/project-memory.md)。截至 2026-07-20，Gemini 3.1 Pro Preview 已成为默认主写并启用 `gemini_writer_v2`；Claude 4.6 为显式备选。AI 文学 judge 尚未通过自然人对齐，当前只提供诊断证据，不能自动覆盖 Gemini raw。
+当前跨会话状态、已完成清理、授权边界和已知阻断见 [项目记忆](./docs/project-memory.md)。默认主写为 gpt-6-astra，使用 `gpt_writer_v1`；Claude 4.6 为显式备选。生产必经 Agentic 初稿与作者风格整章优化，文学评价权归用户，机器文学 judge 仅用于隔离评测。
 
 ### Phase 1: 基础架构 ✅
 

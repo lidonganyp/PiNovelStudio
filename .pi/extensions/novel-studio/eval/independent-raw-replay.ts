@@ -22,7 +22,7 @@ export interface IndependentRawReplayInput {
   chapterNumber: number;
   projectRoot: string;
   modelGenerate?: ModelGenerateFn;
-  writerModel?: "claude" | "gemini31";
+  writerModel?: "claude" | "gpt6astra";
 }
 
 export interface IndependentRawReplayOutput {

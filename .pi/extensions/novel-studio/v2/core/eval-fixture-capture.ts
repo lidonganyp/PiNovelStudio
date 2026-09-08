@@ -95,8 +95,8 @@ export interface CaptureFixtureResult {
 // 默认值
 // ============================================================================
 
-const DEFAULT_MODEL_ROUTE = "v2_rawstage2_gemini31";
-const DEFAULT_PROVIDER = "gemini";
+const DEFAULT_MODEL_ROUTE = "v2_rawstage2_gpt6astra";
+const DEFAULT_PROVIDER = "gpt";
 const DEFAULT_GRADER_VERSION = "deterministic-v1";
 const DEFAULT_MODEL_POLICY = {
   requestTimeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS) || 120_000,

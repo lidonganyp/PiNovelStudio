@@ -98,12 +98,12 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
       }
     });
 
-    test("stage2_narrator 当前默认切换为 Gemini，Claude 专用 route 仍保持 4.6", () => {
+    test("stage2_narrator 当前默认切换为 gpt-6-astra，Claude 专用 route 仍保持 4.6", () => {
       const config = loadRoutingConfig();
       const route = config.stage_routing.stage2_narrator;
       assert.ok(route);
-      assert.equal(route.provider, "gemini31");
-      assert.equal(route.model, "gemini-3.7-flash");
+      assert.equal(route.provider, "gpt");
+      assert.equal(route.model, "gpt-6-astra");
       assert.equal(config.agent_routing.v2_rawstage2.provider, "claude");
       assert.equal(config.agent_routing.v2_rawstage2.model, EXPECTED_CLAUDE_MODEL);
     });
@@ -121,10 +121,10 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
     });
   });
 
-  describe("Gemini 默认主写与 Claude 风格职责分离", () => {
-    test("model_strategy.narrator_primary 为 Gemini 3.7 Flash", () => {
+  describe("gpt-6-astra 默认主写与 Claude 风格职责分离", () => {
+    test("model_strategy.narrator_primary 为 gpt-6-astra", () => {
       const config = loadRoutingConfig();
-      assert.equal(config.model_strategy.narrator_primary, "gemini-3.7-flash");
+      assert.equal(config.model_strategy.narrator_primary, "gpt-6-astra");
     });
 
     test("model_strategy.style_shaper 为 claude-opus-4-6", () => {
@@ -132,10 +132,10 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
       assert.equal(config.model_strategy.style_shaper, EXPECTED_CLAUDE_MODEL);
     });
 
-    test("agent_routing.narrator_primary.provider 为 gemini31", () => {
+    test("agent_routing.narrator_primary.provider 为 gpt", () => {
       const config = loadRoutingConfig();
-      assert.equal(config.agent_routing.narrator_primary.provider, "gemini31");
-      assert.equal(config.agent_routing.narrator_primary.model, "gemini-3.7-flash");
+      assert.equal(config.agent_routing.narrator_primary.provider, "gpt");
+      assert.equal(config.agent_routing.narrator_primary.model, "gpt-6-astra");
     });
   });
 
@@ -174,9 +174,9 @@ describe("MODEL-ROUTING-CLAUDE46-1B: Claude 4.6 全项目切换", () => {
   });
 
   describe("生产路由当前态不声明 claude-opus-4-8 / Doubao 主写", () => {
-    test("productionCurrent.narrator_primary 为 Gemini 3.7 Flash", () => {
+    test("productionCurrent.narrator_primary 为 gpt-6-astra", () => {
       const current = loadProductionCurrent();
-      assert.equal(current.narrator_primary, "gemini-3.7-flash");
+      assert.equal(current.narrator_primary, "gpt-6-astra");
     });
 
     test("productionCurrent.style_shaper 不为 claude-opus-4-8", () => {

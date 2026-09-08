@@ -243,7 +243,7 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     );
   });
 
-  it("dist/ JS 文件数 <= 351（防通配 include 退化为全量编译）", () => {
+  it("dist/ JS 文件数 <= 352（含 Responses 传输，防通配 include 退化为全量编译）", () => {
     const distCount = countJsFiles(DIST_DIR);
     assert.ok(distCount > 0, "dist/ JS 文件数应 > 0（需先 npm run build）");
     // 2026-08-12：自主性控制面 + 恢复控制面 + 用户反馈证据管道新增生产模块；阈值曾上调到 290。
@@ -296,8 +296,8 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     // tool-result-trust / trust-audit / authority-matrix 等）接入生产闭包，干净闭包 334 → ~351。
     // 阈值上调到 351。守卫仍是绊线：真正「退化」信号是旧通配 include 的全量树（~460），远高于此。
     assert.ok(
-      distCount <= 351,
-      `dist/ JS 文件数（${distCount}）应 <= 351（生产闭包约 351，含 RRB 修复授权 + CEG trust/evidence 模块；旧通配 include 接近全量 ~460）；超过说明 tsconfig.prod.json 退化为全量编译`,
+      distCount <= 352,
+      `dist/ JS 文件数（${distCount}）应 <= 352（原闭包 351 + api/openai-responses.js；旧通配 include 接近全量 ~460）；超过说明 tsconfig.prod.json 退化为全量编译`,
     );
   });
 });

@@ -260,14 +260,14 @@ describe("MODEL-PROMPT-ADAPTER-1", () => {
     assert.doesNotMatch(adapted.userPrompt, /蓄水|感知锚点|CONTRACT|多写短句|限制长句/);
   });
 
-  test("buildRawPrompt 默认 Gemini v2，显式 profile 可消融且记录适配元数据", () => {
+  test("buildRawPrompt 默认 GPT，显式 profile 可消融且记录适配元数据", () => {
     const defaultPrompt = buildRawPrompt(makeInput());
     const genericPrompt = buildRawPrompt(makeInput("generic_writer_v1"));
     const gptPrompt = buildRawPrompt(makeInput("gpt_writer_v1"));
     const chinesePrompt = buildRawPrompt(makeInput("chinese_writer_v1"));
     const geminiPrompt = buildRawPrompt(makeInput("gemini_writer_v2"));
 
-    assert.equal(defaultPrompt.promptAdapter.profile, "gemini_writer_v2");
+    assert.equal(defaultPrompt.promptAdapter.profile, "gpt_writer_v1");
     assert.equal(genericPrompt.promptAdapter.profile, "generic_writer_v1");
     assert.equal(gptPrompt.promptAdapter.profile, "gpt_writer_v1");
     assert.equal(chinesePrompt.promptAdapter.profile, "chinese_writer_v1");

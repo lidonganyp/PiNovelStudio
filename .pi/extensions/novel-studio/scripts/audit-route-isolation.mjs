@@ -23,10 +23,8 @@ function loadRouting() {
 }
 
 const PRODUCTION_WRITER_ROUTES = new Set([
-  "v2_rawstage2_gemini31",
-  "v2_rawstage2_gemini31_solov",
-  "v2_amplified_gemini31",
-  "v2_amplified_gemini31_solov",
+  "v2_rawstage2_gpt6astra",
+  "v2_amplified_gpt6astra",
   "v2_rawstage2",
   "v2_amplified",
   "narrator_primary",
@@ -107,21 +105,29 @@ function main() {
     }
   }
 
-  // 默认生产写：narrator_primary / gemini raw
+  // 默认生产写：narrator_primary / gpt6astra raw
   const primary = resolveEntry(routes.narrator_primary);
-  if (!primary || primary.provider !== "gemini31") {
+  if (!primary || primary.provider !== "gpt") {
     issues.push({
       level: "error",
       route: "narrator_primary",
-      message: `默认生产主写应为 gemini31，实际 ${primary?.provider}`,
+      message: `默认生产主写应为 gpt（gpt-6-astra），实际 ${primary?.provider}`,
     });
   }
-  const geminiRaw = resolveEntry(routes.v2_rawstage2_gemini31);
-  if (!geminiRaw || geminiRaw.provider !== "gemini31") {
+  const gptAstraRaw = resolveEntry(routes.v2_rawstage2_gpt6astra);
+  if (!gptAstraRaw || gptAstraRaw.provider !== "gpt") {
     issues.push({
       level: "error",
-      route: "v2_rawstage2_gemini31",
-      message: "默认 Agentic/raw 路由缺失或非 gemini31",
+      route: "v2_rawstage2_gpt6astra",
+      message: "默认 Agentic/raw 路由缺失或非 gpt",
+    });
+  }
+  const gptAstraAmplified = resolveEntry(routes.v2_amplified_gpt6astra);
+  if (!gptAstraAmplified || gptAstraAmplified.provider !== "gpt") {
+    issues.push({
+      level: "error",
+      route: "v2_amplified_gpt6astra",
+      message: "作者风格优化路由缺失或非 gpt",
     });
   }
 

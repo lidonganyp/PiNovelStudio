@@ -80,7 +80,7 @@ test("生产 agentic_style blocked：stageResults 含 layeredBudget + failureStr
       writerModel: undefined,
       budgetProfile: "production_default",
     });
-    assert.equal(runRouting.provider, "gemini31");
+    assert.equal(runRouting.provider, "gpt");
 
     const agenticCandidateSource = {
       async generate() {
@@ -130,11 +130,11 @@ test("生产 agentic_style blocked：stageResults 含 layeredBudget + failureStr
     assert.ok(result.stageResults.controlPlane?.runRouting);
     assert.equal(
       result.stageResults.controlPlane.runRouting.provider,
-      "gemini31",
+      "gpt",
     );
     assert.equal(
       result.stageResults.controlPlane.runRouting.generationRoute,
-      "v2_rawstage2_gemini31",
+      "v2_rawstage2_gpt6astra",
     );
 
     // WP-03：分层预算报告
@@ -204,7 +204,7 @@ test("生产 agentic_style blocked：stageResults 含 layeredBudget + failureStr
     );
     assert.equal(
       result.stageResults.qualityCostAnalysis.observation.provider,
-      "gemini31",
+      "gpt",
     );
 
     // 聚合包

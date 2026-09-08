@@ -133,16 +133,13 @@ export interface ModelGenerateOutput {
 export type ModelGenerateFn = (input: ModelGenerateInput) => Promise<ModelGenerateOutput>;
 
 /**
- * Pre-authorized prose recovery order. Gemini recovery stays inside the same
- * provider/model family and only changes the configured transport channel.
- * Claude is an explicit writer choice and never participates in this chain.
+ * Pre-authorized prose recovery order. GPT6-ASTRA-PRODUCTION-SWITCH-1:
+ * gpt-6-astra 走单一 shunfen6.win 渠道，无互备渠道，因此生产写路由无预授权回退链
+ * （fallback=[]，传输失败即 hard block）。旧 Gemini Aimagichub/Solov 对等渠道链已随
+ * gemini31 生产写路由删除。Claude is an explicit writer choice and never participates
+ * in this chain.
  */
-const WRITER_FALLBACK_ROUTES: Record<string, string[]> = {
-  v2_rawstage2_gemini31: ["v2_rawstage2_gemini31_solov"],
-  v2_rawstage2_gemini31_solov: ["v2_rawstage2_gemini31"],
-  v2_amplified_gemini31: ["v2_amplified_gemini31_solov"],
-  v2_amplified_gemini31_solov: ["v2_amplified_gemini31"],
-};
+const WRITER_FALLBACK_ROUTES: Record<string, string[]> = {};
 
 export function authorizedWriterFallbackRoutes(route: string): string[] {
   return [...(WRITER_FALLBACK_ROUTES[route] ?? [])];

@@ -43,9 +43,9 @@ export interface BootstrapDatabase {
   };
 }
 
-const PRODUCTION_GEMINI_ROUTES = [
-  ['v2_rawstage2_gemini31', 'Gemini 3.7 Flash — NovelOS Agentic'],
-  ['v2_amplified_gemini31', 'Gemini 3.7 Flash — Author Style Optimizer'],
+const PRODUCTION_GPT_ROUTES = [
+  ['v2_rawstage2_gpt6astra', 'gpt-6-astra — NovelOS Agentic'],
+  ['v2_amplified_gpt6astra', 'gpt-6-astra — Author Style Optimizer'],
 ] as const;
 
 async function ensureAdmin(db: BootstrapDatabase, config: ProductionBootstrapConfig): Promise<void> {
@@ -64,28 +64,28 @@ async function ensureAdmin(db: BootstrapDatabase, config: ProductionBootstrapCon
   });
 }
 
-async function ensureGeminiProvider(db: BootstrapDatabase, config: ProductionBootstrapConfig): Promise<BootstrapProvider> {
-  const existing = await db.modelProvider.findUnique({ where: { providerKey: 'gemini' } });
+async function ensureGptProvider(db: BootstrapDatabase, config: ProductionBootstrapConfig): Promise<BootstrapProvider> {
+  const existing = await db.modelProvider.findUnique({ where: { providerKey: 'gpt' } });
   if (existing) {
     let credentialMatches = false;
-    try { credentialMatches = decryptSecret(existing.apiKeyEncrypted, config.aesMasterKey) === config.geminiApiKey; } catch { credentialMatches = false; }
-    if (existing.enabled && existing.apiBaseUrl === config.geminiApiBaseUrl && credentialMatches) return existing;
+    try { credentialMatches = decryptSecret(existing.apiKeyEncrypted, config.aesMasterKey) === config.gptApiKey; } catch { credentialMatches = false; }
+    if (existing.enabled && existing.apiBaseUrl === config.gptApiBaseUrl && credentialMatches) return existing;
     return db.modelProvider.update({
       where: { id: existing.id },
       data: {
-        name: 'Google Gemini',
-        apiBaseUrl: config.geminiApiBaseUrl,
-        apiKeyEncrypted: encryptSecret(config.geminiApiKey, config.aesMasterKey),
+        name: 'gpt-6-astra',
+        apiBaseUrl: config.gptApiBaseUrl,
+        apiKeyEncrypted: encryptSecret(config.gptApiKey, config.aesMasterKey),
         enabled: true,
       },
     });
   }
   return db.modelProvider.create({
     data: {
-      providerKey: 'gemini',
-      name: 'Google Gemini',
-      apiBaseUrl: config.geminiApiBaseUrl,
-      apiKeyEncrypted: encryptSecret(config.geminiApiKey, config.aesMasterKey),
+      providerKey: 'gpt',
+      name: 'gpt-6-astra',
+      apiBaseUrl: config.gptApiBaseUrl,
+      apiKeyEncrypted: encryptSecret(config.gptApiKey, config.aesMasterKey),
       enabled: true,
     },
   });
@@ -116,8 +116,8 @@ async function ensureRouteRate(
 
 export async function bootstrapProductionState(db: BootstrapDatabase, config: ProductionBootstrapConfig): Promise<void> {
   await ensureAdmin(db, config);
-  const provider = await ensureGeminiProvider(db, config);
-  for (const [modelKey, displayName] of PRODUCTION_GEMINI_ROUTES) {
+  const provider = await ensureGptProvider(db, config);
+  for (const [modelKey, displayName] of PRODUCTION_GPT_ROUTES) {
     await ensureRouteRate(db, { modelKey, displayName, providerId: provider.id, config });
   }
 }
