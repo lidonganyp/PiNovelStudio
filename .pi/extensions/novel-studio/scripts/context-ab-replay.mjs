@@ -69,9 +69,9 @@ const MODE_DIR = DRY_RUN ? "dry-run" : "real";
 const REPORT_SUBDIR = ABLATION_ARM === "D_pm" ? MODE_DIR : `${MODE_DIR}-${ABLATION_ARM}`;
 const REPORT_DIR = join(PROJECT_ROOT, "reports", "phase6-context-ab", REPORT_SUBDIR);
 
-// Gemini 冻结基线路由。GPT6-ASTRA-PRODUCTION-SWITCH-1（v4.34.0）：旧生产写路由
-// v2_rawstage2_gemini31 已删除；本 eval 固定到保留的 gemini eval 路由 nb4_generate_gemini31
-// （provider=gemini31，gemini_validation 授权不变）。历史冻结基线（v4.31.0 口径）保留为对照。
+// Gemini 冻结基线路由。GEMINI38-FLASH-PRODUCTION-RESTORE-1（v4.35.0）后生产写路由已复原为
+// v2_rawstage2_gemini31；本 eval 仍固定到隔离 eval 路由 nb4_generate_gemini31
+// （provider=gemini31，gemini_validation 授权不变），不占用生产路由。历史冻结基线（v4.31.0 口径）保留为对照。
 const MODEL_ROUTE = process.env.PINOVEL_TOOL_AB_ROUTE ?? "nb4_generate_gemini31";
 const PROVIDER = "gemini31";
 const MODEL = "gemini-3.1-pro-preview";

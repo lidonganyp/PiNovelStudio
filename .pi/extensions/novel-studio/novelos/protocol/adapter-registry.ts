@@ -15,10 +15,11 @@
  * - 不再依赖 provider 级回退，避免 endpoint 更换后错误复用 capability
  */
 
+import { getGeminiWriterModel } from "../../utils/config.js";
 import type { ModelProtocolAdapter } from "./protocol-adapter.js";
 import type { ProtocolKind } from "./model-turn.js";
 import type { CapabilityKey } from "./capability-registry.js";
-import { defaultCapabilityRegistry } from "./capability-registry.js";
+import { defaultCapabilityRegistry, initializeDefaultCapabilities } from "./capability-registry.js";
 import { createReactTextAdapter } from "./adapters/react-text-adapter.js";
 
 // ============================================================================
@@ -174,13 +175,13 @@ export const defaultAdapterRegistry = new AdapterRegistry();
 defaultAdapterRegistry.registerAdapter(createReactTextAdapter());
 
 // 注册生产默认 route（全部使用 ReAct）
-// GPT6-ASTRA-PRODUCTION-SWITCH-1：生产 writer family 切换为 gpt-6-astra
-// （shunfen6.win OpenAI 兼容端点，单一渠道，无互备）。Claude 仍为显式
-// writerModel=claude 备选；旧 Gemini 生产写路由已按版本收敛原则删除。
+// GEMINI38-FLASH-PRODUCTION-RESTORE-1：生产 writer family 复原为 配置的 Gemini 模型
+// （单一 .env 配置渠道）。Claude 仍为显式 writerModel=claude 备选；
+// gpt-6-astra 生产写路由已按版本收敛原则删除。
 const PRODUCTION_ROUTES = [
-  "gpt_writer_v1",
-  "v2_rawstage2_gpt6astra",
-  "v2_amplified_gpt6astra",
+  "gemini_writer_v2",
+  "v2_rawstage2_gemini31",
+  "v2_amplified_gemini31",
   "v2_rawstage2",
   "v2_amplified",
   "narrator_primary",
@@ -190,9 +191,12 @@ const PRODUCTION_ROUTES = [
 function productionCapabilityKeyForRoute(route: string): CapabilityKey {
   if (route !== "v2_rawstage2" && route !== "v2_amplified") {
     return {
-      provider: "gpt",
+      provider: "gemini",
       endpoint: "openai-compat",
-      model: "gpt-6-astra",
+      get model(): string {
+        initializeDefaultCapabilities();
+        return getGeminiWriterModel();
+      },
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     };

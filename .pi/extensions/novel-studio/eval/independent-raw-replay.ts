@@ -6,15 +6,61 @@
  * 与 quality-trace，供 FullPipelineReplayRunner 归档为 ReplayRunManifest。
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { createHash } from "node:crypto";
 
 import { runUnifiedPipeline } from "../v2/core/unified-entry.js";
 import { createLegacyModelGenerateFn } from "../v2/adapters/legacy-model-route-adapter.js";
-import type { ModelGenerateFn } from "../v2/adapters/legacy-model-route-adapter.js";
+import type { ModelGenerateFn, ModelGenerateInput, ModelGenerateOutput } from "../v2/adapters/legacy-model-route-adapter.js";
 import type { ChapterIntent } from "../v2/core/chapter-intent-builder.js";
 import type { CompiledContext } from "../v2/core/types.js";
 import type { V2Output } from "../v2/core/types.js";
+import { loadWorkspace, loadCharacterProfiles } from "../v2/adapters/legacy-workspace-adapter.js";
+import { resolveExistingChapterFile } from "../utils/chapter-path.js";
+import { resolveWorkspacePath } from "../utils/fs.js";
+import { localizeLlmText } from "../utils/llm-language-guard.js";
+
+export function buildIndependentRawInput(input: IndependentRawReplayInput): {
+  prefix: string;
+  sources: Array<{ path: string; sha256: string }>;
+} {
+  if (!Number.isInteger(input.chapterNumber) || input.chapterNumber < 1) {
+    throw new Error("B0 chapterNumber 必须为正整数");
+  }
+  resolveWorkspacePath(join(input.projectRoot, "workspaces"), input.workspaceId);
+  const bundle = loadWorkspace(input.workspaceId, input.projectRoot);
+  const characters = loadCharacterProfiles(bundle);
+  if (typeof bundle.config.genre !== "string" || !bundle.config.genre.trim() || characters.length === 0) {
+    throw new Error("B0 缺少作品类型或角色基础资料");
+  }
+  const sources: Array<{ path: string; sha256: string }> = [];
+  const readSource = (path: string): string => {
+    const text = readFileSync(path, "utf-8");
+    sources.push({ path: relative(bundle.workspacePath, path).replace(/\\/g, "/"), sha256: createHash("sha256").update(text).digest("hex") });
+    return text;
+  };
+  readSource(join(bundle.workspacePath, "config.json"));
+  const basicConfig = Object.fromEntries(
+    ["novelName", "name", "genre", "subGenres", "tagline", "themeKeywords", "worldKeyTerms", "characters", "targetWordCount"]
+      .filter((field) => bundle.config[field] !== undefined)
+      .map((field) => [field, bundle.config[field]]),
+  );
+  const parts = [`本章任务：根据以下作者资料写第${input.chapterNumber}章。`, `作品基础资料：\n${JSON.stringify(basicConfig)}`];
+  for (const character of characters) {
+    parts.push(readSource(join(bundle.workspacePath, "characters", `${character.id}.md`)));
+  }
+  for (const file of ["CORE-WRITING-PRINCIPLES.md", "WORLDBUILDING-CANON.md", "series/outline.md", `series/ch${input.chapterNumber}-outline-explicit.md`]) {
+    const path = join(bundle.workspacePath, file);
+    if (existsSync(path)) parts.push(`${file}\n${readSource(path)}`);
+  }
+  if (input.chapterNumber > 1) {
+    const previousPath = resolveExistingChapterFile(bundle.workspacePath, String(input.chapterNumber - 1));
+    if (!previousPath) throw new Error("B0 缺少前章正文，无法进行同任务续写对照");
+    parts.push(`前章正文：\n${readSource(previousPath.path)}`);
+  }
+  return { prefix: localizeLlmText(parts.join("\n\n")), sources };
+}
 
 export interface IndependentRawReplayInput {
   workspaceId: string;
@@ -22,7 +68,7 @@ export interface IndependentRawReplayInput {
   chapterNumber: number;
   projectRoot: string;
   modelGenerate?: ModelGenerateFn;
-  writerModel?: "claude" | "gpt6astra";
+  writerModel?: "claude" | "gemini31";
 }
 
 export interface IndependentRawReplayOutput {
@@ -80,6 +126,8 @@ export async function runIndependentRawReplay(
   if (process.env.PINOVEL_EVAL_ONLY !== "1") {
     throw new Error("runIndependentRawReplay 仅允许 PINOVEL_EVAL_ONLY=1");
   }
+  const rawInput = buildIndependentRawInput(input);
+  const inputConsumption: Array<{ inputSha256: string; userPromptSha256: string; sourceCount: number; consumed: boolean }> = [];
   const modelGenerate = input.modelGenerate ?? createLegacyModelGenerateFn();
   const result = await runUnifiedPipeline({
     workspaceId: input.workspaceId,
@@ -88,10 +136,20 @@ export async function runIndependentRawReplay(
     projectRoot: input.projectRoot,
     writerModel: input.writerModel,
     evalMode: "B0",
-    evalPrefix: "independent-raw",
+    evalPrefix: rawInput.prefix,
     evalIntent: emptyIntent(),
     evalContext: emptyContext(),
-    evalModelGenerate: modelGenerate,
+    evalModelGenerate: async (request: ModelGenerateInput): Promise<ModelGenerateOutput> => {
+      const consumed = request.userPrompt.includes(rawInput.prefix);
+      if (!consumed) throw new Error("B0 作品输入未进入模型请求");
+      inputConsumption.push({
+        inputSha256: createHash("sha256").update(rawInput.prefix).digest("hex"),
+        userPromptSha256: createHash("sha256").update(request.userPrompt).digest("hex"),
+        sourceCount: rawInput.sources.length,
+        consumed,
+      });
+      return modelGenerate(request);
+    },
     evalPromptProfile: "generic_writer_v1",
   });
 
@@ -120,6 +178,8 @@ export async function runIndependentRawReplay(
             stage: "v2_final_selected",
             evidence: {
               modelCalls: extractModelCalls(result),
+              inputSources: rawInput.sources,
+              inputConsumption,
             },
           },
         ],

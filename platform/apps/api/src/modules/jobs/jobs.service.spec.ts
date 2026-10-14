@@ -241,7 +241,7 @@ describe('JobsService HTTP generation delivery contract', () => {
       version: 1,
       seed: { intent: '推进冲突', endingGoal: '留下悬念' },
     });
-    rates.buildRateSnapshot.mockRejectedValue(new NotFoundException('未找到模型 v2_rawstage2_gpt6astra 的生效费率'));
+    rates.buildRateSnapshot.mockRejectedValue(new NotFoundException('未找到模型 v2_rawstage2_gemini31 的生效费率'));
     try {
       await expect(service.submitChapterGeneration(1, 2, 3)).rejects.toMatchObject({
         status: 503,
@@ -273,7 +273,7 @@ describe('JobsService HTTP generation delivery contract', () => {
     (env as { NOVEL_BILLING_REQUIRED_MODELS: string }).NOVEL_BILLING_REQUIRED_MODELS = '';
     try {
       const models = (service as never as { requiredBillingModels(): string[] }).requiredBillingModels();
-      expect(models).toEqual(['v2_rawstage2_gpt6astra', 'v2_amplified_gpt6astra']);
+      expect(models).toEqual(['v2_rawstage2_gemini31', 'v2_amplified_gemini31']);
       expect(models).not.toContain('stub-writer');
     } finally {
       (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;

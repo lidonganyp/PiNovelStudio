@@ -1,8 +1,8 @@
 # 生产架构说明
 
 **状态**：生产基线
-**核对日期**：2026-09-08
-**路由真相源**：[`config/model-routing.json`](../config/model-routing.json)（v4.34.0）
+**核对日期**：2026-10-05
+**路由真相源**：[`config/model-routing.json`](../config/model-routing.json)（v4.35.0）
 
 本文只描述当前生产代码。旧 Stage0–8、固定多候选、机器文学裁判和 one-shot raw 流程属于隔离评测或历史资料，不是生产章节生成路径。
 
@@ -54,25 +54,26 @@ Preflight
 
 | 用途 | 路由 | provider / model | 端点 | fallback |
 |---|---|---|---|---|
-| 默认 Agentic 初稿 | `v2_rawstage2_gpt6astra` | `gpt / gpt-6-astra` | `GPT_BASE_URL`（默认 shunfen6.win） | `[]` |
-| 默认作者风格优化 | `v2_amplified_gpt6astra` | `gpt / gpt-6-astra` | 同上 | `[]` |
+| 默认 Agentic 初稿 | `v2_rawstage2_gemini31` | `gemini31 / .env GEMINI_MODEL 解析` | `GOOGLE_GEMINI_BASE_URL`（单渠道） | `[]` |
+| 默认作者风格优化 | `v2_amplified_gemini31` | `gemini31 / .env GEMINI_MODEL 解析` | 同上 | `[]` |
 | 显式 Claude 正文 | `v2_rawstage2` / `v2_amplified` | `claude / claude-opus-4-6` | 按配置与 `.env` | `[]` |
-| 文学 judge | `v2_opportunity_judge` / `v2_literary_judge` | `gpt / gpt-5.6-sol` | 评测/回放 | 生产禁用 |
+| 文学 judge | `v2_opportunity_judge` / `v2_literary_judge` | `gpt / gpt-5.6-sol` | 评测/回放（`NOVELOS_JUDGE_*` env） | 生产禁用 |
 
-生产默认使用 `gpt-6-astra` 与 `gpt_writer_v1`。旧 Gemini 生产写路由已删除，Gemini 仅保留隔离评测路由。
+生产写模型与端点由仓库根目录 `.env` 唯一决定（WRITER-ENV-UNIFY-1，v4.36.0）：`GEMINI_MODEL` / `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`。`gemini31` 只是稳定路由标识（provider ID），不再绑定具体模型版本；改模型或端点只需修改 `.env`，无需改源码、测试或路由版本号。请求失败仅在 `GOOGLE_GEMINI_BASE_URL` 单一渠道内有界重试，耗尽即阻断，不自动切换 Claude/GPT/Doubao/Solov。缺 `GEMINI_MODEL` 或 `GOOGLE_GEMINI_BASE_URL` 时启动即明确报错，不静默回退旧模型。历史记录：v4.34.0 曾切换 gpt-6-astra 为生产正文，已被 v4.35.0 复原；v4.35.0 的 Aimagichub + Solov 双互备渠道已被 v4.36.0 按版本收敛原则物理删除。
 
 默认正文模型的环境变量为：
 
 ```env
-GPT_API_KEY=...
-GPT_BASE_URL=https://shunfen6.win/v1
-GPT_MODEL=gpt-5.5
-GPT_WRITER_MODEL=gpt-6-astra
+GEMINI_API_KEY=...
+GOOGLE_GEMINI_BASE_URL=https://aimagichub.xyz/v1
+GEMINI_MODEL=gemini-4-argon
 ```
 
-正文模型独立读取 `GPT_WRITER_MODEL`；省略时使用配置中的 `gpt-6-astra`，不会继承结构化节点的 `GPT_MODEL`。正文请求失败后按既有策略有界恢复，耗尽则阻断，不自动切换其他模型。Claude 仅由显式 `writerModel=claude` 选择。
+正文模型独立读取 `GEMINI_MODEL`；缺失或未解析时启动即明确报错（fail-closed），不会继承结构化节点的 `GPT_MODEL`，也不回退旧模型。正文请求失败仅在 `GOOGLE_GEMINI_BASE_URL` 单一渠道内有界重试，耗尽则阻断，不自动切换其他模型。Claude 仅由显式 `writerModel=claude` 选择。
 
-平台部署须配置 `BOOTSTRAP_GPT_API_KEY`、`BOOTSTRAP_GPT_API_BASE_URL` 与供应商确认的输入/输出费率；两条生产计费路由与正文路由一致。模型路由变更会改变发布身份，正式部署仍须通过 G6 发布门禁。
+gpt provider（gpt-5.5）回归结构化规划/门禁节点专用，`providers.gpt.request_options.api=responses` 指定 `/responses` 传输；评测 judge 路由（gpt-5.6-sol）显式走 `/chat/completions` SSE 避免网关超时，生产路径调用数为 0。
+
+平台部署须配置 `BOOTSTRAP_GEMINI_API_KEY`、`BOOTSTRAP_GEMINI_API_BASE_URL` 与供应商确认的输入/输出费率；两条生产计费路由与正文路由一致。模型路由变更会改变发布身份，正式部署仍须通过 G6 发布门禁。
 
 ## 4. Workspace 前置条件
 

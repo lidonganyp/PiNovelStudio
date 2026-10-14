@@ -119,11 +119,11 @@ const AMPLIFIED_ROUTE_RE = /amplified|author_style|style_optimization/i;
 const FORBIDDEN_INDEPENDENT_RAW_KIND_RE =
   /judge|verifier|amplified|author_style|style_optimization|calibration/i;
 
-/** B0 独立裸写允许的语义路由；judge / verifier / 未知路由不得混入。旧 Gemini 路由保留用于解析历史 trace。 */
+/** B0 独立裸写允许的语义路由；judge / verifier / 未知路由不得混入。旧 gpt6astra 路由保留用于解析历史 trace。 */
 const INDEPENDENT_RAW_ALLOWED_ROUTES = new Set([
   "v2_rawstage2",
-  "v2_rawstage2_gpt6astra",
   "v2_rawstage2_gemini31",
+  "v2_rawstage2_gpt6astra",
 ]);
 
 function collectArmModelCalls(runRoot: string | null): ReturnType<typeof extractReplayModelCalls> {
@@ -245,7 +245,7 @@ function collectFixtureHashBinding(runRoot: string | null): boolean {
  * independent_raw 必须同时具备：
  *  - invocation.command.args 含 --eval-layer=B0，且 transportEvidence.evalLayer=B0；
  *  - 每条结构化 modelCall 的 requestedRoute/route 都属于 B0 裸写允许名单
- *    （v2_rawstage2 / v2_rawstage2_gpt6astra，历史 trace 的 v2_rawstage2_gemini31 也允许），
+ *    （v2_rawstage2_gemini31（单一配置渠道）/ v2_rawstage2，历史 trace 的 v2_rawstage2_gpt6astra 也允许），
  *    不得混入 judge / verifier / 未知路由；
  *  - 若存在 manifest，fixture.json 的 hash 必须与 sample.fixtureHash 一致。
  * 不得凭 trace 自写的 matrixArm / evalMode / schemaId 定身份。

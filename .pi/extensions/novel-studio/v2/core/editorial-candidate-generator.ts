@@ -38,32 +38,19 @@ import {
 
 // 常量
 
-/** Explicit Claude/non-gpt editorial route. */
+/** Explicit Claude/non-Gemini editorial route. */
 const EDITORIAL_CANDIDATE_ROUTE = "v2_amplified";
 
-/** Default gpt-6-astra editorial route, isolated from Claude fallback. */
-const GPT6ASTRA_EDITORIAL_CANDIDATE_ROUTE = "v2_amplified_gpt6astra";
-
-/**
- * Retained eval-only Gemini editorial route.
- * GPT6-ASTRA-PRODUCTION-SWITCH-1：生产 Gemini 写路由已删除；gemini profile 仅在
- * modelTestRoute=gemini31 等 lab 路径出现，且实际调用会被 wrapModelGenerateLockedToRoute
- * 锁定到 lab 路由。返回保留的 nb4_generate_gemini31 保持 Gemini family 隔离，
- * 不静默切换到 Claude。
- */
-const GEMINI_EDITORIAL_CANDIDATE_ROUTE = "nb4_generate_gemini31";
+/** Default Gemini editorial route, isolated from Claude fallback. */
+const GEMINI_EDITORIAL_CANDIDATE_ROUTE = "v2_amplified_gemini31";
 
 /** Keep ordinary editorial prose on the chapter's explicitly selected writer family. */
 export function resolveEditorialCandidateRoute(
   writerPromptProfile?: WriterPromptProfile,
 ): string {
-  if (writerPromptProfile === "gemini_writer_v1" || writerPromptProfile === "gemini_writer_v2") {
-    return GEMINI_EDITORIAL_CANDIDATE_ROUTE;
-  }
-  if (writerPromptProfile === "gpt_writer_v1") {
-    return GPT6ASTRA_EDITORIAL_CANDIDATE_ROUTE;
-  }
-  return EDITORIAL_CANDIDATE_ROUTE;
+  return writerPromptProfile === "gemini_writer_v1" || writerPromptProfile === "gemini_writer_v2"
+    ? GEMINI_EDITORIAL_CANDIDATE_ROUTE
+    : EDITORIAL_CANDIDATE_ROUTE;
 }
 
 /**

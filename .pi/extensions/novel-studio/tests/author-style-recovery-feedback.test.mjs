@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import {
   buildAuthorStyleUserPrompt,
+  collectAuthorStyleGuidance,
   createAuthorStyleOptimizer,
 } from "../dist/v2/core/author-style-optimizer.js";
 import { getInputFieldWhitelist } from "../dist/v2/core/agent-input-whitelist.js";
@@ -36,6 +37,23 @@ function makeInput(recoveryFeedback) {
 
 test("author_style 工作包白名单允许结构化恢复反馈", () => {
   assert.ok(getInputFieldWhitelist("author_style").includes("recoveryFeedback"));
+});
+
+test("风格档案中的历史比例/清单指导不会触发机械控制审计", () => {
+  const guidance = collectAuthorStyleGuidance({
+    styleReferences: [{
+      id: "legacy-style",
+      kind: "fingerprint",
+      content: JSON.stringify({
+        editorialGuidance: [
+          "对白比例保持在30%",
+          "每段不少于80字",
+          "用冷静的动作和可见后果承载情绪",
+        ],
+      }),
+    }],
+  }, []);
+  assert.deepEqual(guidance.guidance, ["[通用] 用冷静的动作和可见后果承载情绪"]);
 });
 
 test("fact_guard 恢复提示以 Agentic raw 为事实底稿并要求只返回修复后的完整正文", () => {

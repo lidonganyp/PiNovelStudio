@@ -9,6 +9,7 @@
  * 本模块统一既有 ModelLock / writerRouteLock，不另建第二套路由系统。
  */
 
+import { getGeminiWriterModel } from "../../utils/config.js";
 import { createHash, randomBytes } from "node:crypto";
 import { loadModelRoutingSync, type AgentRoutingEntry } from "../../utils/config.js";
 import type { ModelLock } from "./control-plane.js";
@@ -18,7 +19,7 @@ import {
   type RouteFallbackPolicy,
 } from "./route-catalog.js";
 
-export type WriterModelChoice = "claude" | "gpt6astra";
+export type WriterModelChoice = "claude" | "gemini31";
 
 export type BudgetProfileName = "production_default" | "recovery_tight" | "eval_lab" | "preview";
 
@@ -150,17 +151,17 @@ export function resolveWriterRoutes(
       writerModel: "claude",
     };
   }
-  // 默认 gpt-6-astra 生产（含显式 gpt6astra）。
-  // GPT6-ASTRA-PRODUCTION-SWITCH-1：旧 gemini31 writerModel 选项已按版本收敛原则移除，
-  // 不保留并行回退；gemini31 仅保留 eval 路由（nb4_generate_gemini31 等）。
+  // 默认 Gemini 生产（含显式 gemini31）。
+  // GEMINI38-FLASH-PRODUCTION-RESTORE-1：旧 gpt6astra writerModel 选项已按版本收敛原则移除，
+  // 不保留并行回退；gpt provider 仅服务结构化节点。
   return {
-    rawRoute: "v2_rawstage2_gpt6astra",
-    amplifiedRoute: "v2_amplified_gpt6astra",
+    rawRoute: "v2_rawstage2_gemini31",
+    amplifiedRoute: "v2_amplified_gemini31",
     judgeRoute: "v2_opportunity_judge",
-    provider: "gpt",
-    model: "gpt-6-astra",
-    explicit: writerModel === "gpt6astra",
-    writerModel: "gpt6astra",
+    provider: "gemini31",
+    model: getGeminiWriterModel(),
+    explicit: writerModel === "gemini31",
+    writerModel: "gemini31",
   };
 }
 
@@ -179,7 +180,7 @@ export function resolveRunRouting(input: ResolveRunRoutingInput): RunRoutingCont
   let provider: string;
   let model: string;
   let explicitWriterSelection = false;
-  let writerModel: WriterModelChoice = "gpt6astra";
+  let writerModel: WriterModelChoice = "gemini31";
   let routeClass: RouteClass = "production";
   let budgetProfile: BudgetProfileName = input.budgetProfile ?? "production_default";
 
@@ -190,7 +191,7 @@ export function resolveRunRouting(input: ResolveRunRoutingInput): RunRoutingCont
       doubao: { generate: "nb4_generate_doubao", provider: "doubao", model: "doubao-seed-2-1-pro-260628" },
       gpt: { generate: "nb4_generate_gpt56", provider: "gpt", model: "gpt-5.6-sol" },
       claude: { generate: "v2_rawstage2", provider: "claude", model: "claude-opus-4-6" },
-      gemini31: { generate: "nb4_generate_gemini31", provider: "gemini31", model: "gemini-3.8-flash" },
+      gemini31: { generate: "nb4_generate_gemini31", provider: "gemini31", model: getGeminiWriterModel() },
       deepseek: { generate: "narrator_testing_deepseek", provider: "deepseek", model: "deepseek-v4-flash" },
     };
     const locked = testMap[input.modelTestRoute];
@@ -279,10 +280,10 @@ const GENERATION_ROUTE_ALIASES = new Set([
   "novelos_agentic",
   "agentic_raw",
   "narrator_primary",
-  "v2_rawstage2_gpt6astra",
-  "v2_amplified_gpt6astra",
   "v2_rawstage2",
+  "v2_rawstage2_gemini31",
   "v2_amplified",
+  "v2_amplified_gemini31",
 ]);
 
 /**

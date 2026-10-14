@@ -68,20 +68,25 @@ function makeChapterOutline(chapterNumber, title) {
 - **字数目标**：850`;
 }
 
-function makeMockGLMResponse(content) {
+// outline_planner 路由（provider=gpt / gpt-5.5）当前走 OpenAI Responses 传输
+// （POST /responses）；mock 必须返回 Responses 格式载荷（status=completed +
+// output[].content[].text），Chat Completions 形状会被解析层拒绝。
+function makeMockGPTResponsesPayload(content) {
   return {
     id: "mock-response-id",
-    object: "chat.completion",
-    created: Date.now(),
-    model: "glm-5.2",
-    choices: [
+    object: "response",
+    status: "completed",
+    model: "gpt-5.5",
+    output: [
       {
-        index: 0,
-        message: {
-          role: "assistant",
-          content,
-        },
-        finish_reason: "stop",
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: content,
+          },
+        ],
       },
     ],
     usage: {
@@ -140,8 +145,8 @@ function installFetchQueue(contents) {
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify(makeMockGLMResponse(content ?? "")),
-      json: async () => makeMockGLMResponse(content ?? ""),
+      text: async () => JSON.stringify(makeMockGPTResponsesPayload(content ?? "")),
+      json: async () => makeMockGPTResponsesPayload(content ?? ""),
       headers: {
         get: (name) => name.toLowerCase() === "content-type" ? "application/json" : null,
       },

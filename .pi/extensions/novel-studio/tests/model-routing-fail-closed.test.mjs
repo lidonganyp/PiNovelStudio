@@ -235,6 +235,13 @@ describe("MODEL-ROUTING-CLAUDE46-1A：route-level fallback 覆盖 provider-level
     process.env.CLAUDE_BASE_URL = "https://fake-claude.example.com/v1";
     process.env.GPT_API_KEY = "fake-gpt-key";
     process.env.GPT_BASE_URL = "https://fake-gpt.example.com/v1";
+    // WRITER-ENV-UNIFY-1：占位符解析对整个路由表 fail-closed；
+    // 前组测试的 afterEach 会删除 loadProjectDotEnv 回填的 key，
+    // 这里必须显式提供固定测试变量，否则 v2_rawstage2 解析前就因
+    // "GEMINI_MODEL is required in .env" 阻断（与 Gemini 写路由无关也会触发）。
+    process.env.GEMINI_MODEL = "gemini-fail-closed-test";
+    process.env.GOOGLE_GEMINI_BASE_URL = "https://gemini-fail-closed.test/v1";
+    process.env.GEMINI_API_KEY = "fake-gemini-key";
   });
 
   afterEach(() => {

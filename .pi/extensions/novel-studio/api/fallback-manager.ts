@@ -26,6 +26,7 @@ import { parseAnthropicResponse } from "./anthropic-stream.js";
 import { parseOpenAIStream } from "./openai-stream.js";
 import { callOpenAIResponses } from "./openai-responses.js";
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   assertProviderAuthorized,
   filterFallbackChainByProfile,
@@ -86,45 +87,54 @@ export interface GPTFallbackResult {
 
 type RouteConfig = string | AgentRoutingEntry | undefined;
 
-type GeminiChannel = "aimagichub" | "solov";
-
 function routeEntryOf(routing: RouteConfig): AgentRoutingEntry | undefined {
   return typeof routing === "object" && routing !== null ? routing : undefined;
 }
 
 /**
- * Resolve credentials for a route without allowing the Solov peer route to
- * silently reuse the Aimagichub endpoint. The unsuffixed Aimagichub route
- * keeps the historical generic env names for backwards compatibility.
+ * Resolve one transport per provider. Writer channel aliases cannot override
+ * GEMINI_API_KEY / GOOGLE_GEMINI_BASE_URL.
+ *
+ * 历史 P0-3 的 Sub2API 网关出口（SUB2API_INTERNAL_LLM_* 覆写）已随 platform
+ * R4 改造（原生 provider 直连）按版本收敛原则物理删除；旧网关变量残留环境
+ * 不再能劫持统一 writer 渠道。
+ *
+ * WRITER-ENV-RUN-FREEZE-2：任务级 writer 运行配置（模型、地址、密钥）通过
+ * AsyncLocalStorage 随异步上下文传播。统一入口在任务开始时构建一次不可变
+ * 快照并用 runWithWriterRunConfig 包裹本次任务的全部模型调用；并发任务各自
+ * 持有独立快照，互不覆盖、互不清除（取代旧的进程级单例冻结——该设计会让
+ * 任务 B 覆盖/清除任务 A 的快照）。快照命中同 provider 的 transport 与模型
+ * 解析时始终返回快照值，运行中 process.env 变化不影响当前任务。
  */
+export interface WriterRunConfig {
+  readonly provider: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly model: string;
+}
+
+const writerRunConfigStorage = new AsyncLocalStorage<WriterRunConfig>();
+
+/**
+ * 在给定 writer 运行配置的异步上下文内执行 fn。
+ * fn 内同 provider 的模型/transport 解析消费冻结快照；快照经 Object.freeze
+ * 变为不可变，嵌套调用（任务内子上下文）形成独立作用域，外层不受内层影响。
+ */
+export function runWithWriterRunConfig<T>(config: WriterRunConfig, fn: () => T): T {
+  return writerRunConfigStorage.run(Object.freeze({ ...config }), fn);
+}
+
 function resolveRouteTransport(
   providerKey: string,
   provider: ProviderConfig,
   routing: RouteConfig,
-  gatewayConfigured: boolean,
 ): { apiKey: string | null; baseUrl: string | null } {
-  if (gatewayConfigured) {
-    return {
-      apiKey: getApiKey(providerKey),
-      baseUrl: process.env.SUB2API_INTERNAL_LLM_BASE_URL ?? null,
-    };
+  const runConfig = writerRunConfigStorage.getStore();
+  if (runConfig && runConfig.provider === providerKey) {
+    return { apiKey: runConfig.apiKey, baseUrl: runConfig.baseUrl };
   }
 
   const routeEntry = routeEntryOf(routing);
-  const channel = routeEntry?.channel as GeminiChannel | undefined;
-  if (providerKey === "gemini31" && channel) {
-    const prefix = `GEMINI_${channel.toUpperCase()}`;
-    const channelApiKey = process.env[`${prefix}_API_KEY`] || null;
-    const channelBaseUrl = process.env[`${prefix}_BASE_URL`] || null;
-    if (channel === "solov") {
-      return { apiKey: channelApiKey, baseUrl: channelBaseUrl };
-    }
-    return {
-      apiKey: channelApiKey || (routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey)),
-      baseUrl: channelBaseUrl || (routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || null : null) || provider.base_url,
-    };
-  }
-
   return {
     apiKey: routeEntry?.api_key_env ? process.env[routeEntry.api_key_env] || null : getApiKey(providerKey),
     baseUrl: (routeEntry?.base_url_env ? process.env[routeEntry.base_url_env] || null : null)
@@ -200,15 +210,15 @@ const MAIN_ROUTE_ALLOWED_PROVIDERS: Set<string> = new Set(["doubao"]);
 // MODEL-ROUTING-CLAUDE46-1A: 生产 v2 路由 provider allowlist。
 // 派工卡 §3 Required Change #4：为生产正文路由增加 provider allowlist。
 // 即使 config 误配置 fallback 含未授权 provider，本守卫也会过滤掉。
-// - v2_rawstage2_gpt6astra / v2_amplified_gpt6astra: 只允许 gpt（GPT6-ASTRA-PRODUCTION-SWITCH-1
-//   后的生产正文主写，shunfen6.win 单渠道，无互备 provider）
+// - v2_rawstage2_gemini31 / v2_amplified_gemini31: 只允许 gemini31
+//   （GEMINI38-FLASH-PRODUCTION-RESTORE-1 后的生产正文主写，单一 .env 配置渠道）
 // - v2_rawstage2 / v2_amplified: 只允许 claude（显式 writerModel=claude 的 raw/editorial 正文）
 // - v2_chinese_calibration: 只允许 doubao（仅中文校准，不混入其他 provider）
 // - v2_opportunity_judge / v2_literary_judge: 只允许 gpt（异源 judge，Claude/Doubao 不得自审）
 // 不在 map 中的路由不受 allowlist 限制（保持向后兼容，如 narrator_testing_* / v2_direct_*）。
 const V2_ROUTE_PROVIDER_ALLOWLIST: Record<string, Set<string>> = {
-  "v2_rawstage2_gpt6astra": new Set(["gpt"]),
-  "v2_amplified_gpt6astra": new Set(["gpt"]),
+  "v2_rawstage2_gemini31": new Set(["gemini31"]),
+  "v2_amplified_gemini31": new Set(["gemini31"]),
   v2_rawstage2: new Set(["claude"]),
   v2_amplified: new Set(["claude"]),
   v2_chinese_calibration: new Set(["doubao"]),
@@ -531,10 +541,9 @@ export class APIFallbackManager {
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      // The internal Sub2API gateway is the only production egress. Route-level
-      // provider credentials must not bypass the gateway when it is configured.
-      const gatewayConfigured = Boolean(process.env.SUB2API_INTERNAL_LLM_BASE_URL);
-      const transport = resolveRouteTransport(providerKey, provider, routing, gatewayConfigured);
+      // Writer transport 解析：任务级冻结快照优先，其次 route-level env 与
+      // per-provider 配置。Sub2API 网关覆写已删除（见 resolveRouteTransport 注释）。
+      const transport = resolveRouteTransport(providerKey, provider, routing);
       const apiKey = transport.apiKey;
       if (!apiKey) continue;
 
@@ -559,9 +568,7 @@ export class APIFallbackManager {
         ? normalizeProviderBaseUrl(providerKey, transport.baseUrl)
         : null;
       if (!baseUrl) continue;
-      // Sub2API exposes one OpenAI-compatible chat-completions endpoint. Do not
-      // let Claude/Gemini provider metadata select a direct Anthropic/Google path.
-      const protocol = gatewayConfigured ? "openai" : (provider.protocol || this.inferProtocol(providerKey));
+      const protocol = provider.protocol || this.inferProtocol(providerKey);
       const resolvedCallOptions: ChatCallOptions = {
         ...callOptions,
         temperature: callOptions?.temperature ?? provider.temperature?.[agentName],
@@ -638,7 +645,7 @@ export class APIFallbackManager {
               modelToUse,
               messages,
               resolvedCallOptions,
-              gatewayConfigured ? undefined : provider.request_options
+              provider.request_options
             );
           }
           fellBack = providerKey !== primaryProvider;
@@ -746,12 +753,7 @@ export class APIFallbackManager {
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const transport = resolveRouteTransport(
-        providerKey,
-        provider,
-        routing,
-        Boolean(process.env.SUB2API_INTERNAL_LLM_BASE_URL),
-      );
+      const transport = resolveRouteTransport(providerKey, provider, routing);
       const apiKey = transport.apiKey;
       if (!apiKey) continue;
 
@@ -947,12 +949,7 @@ export class APIFallbackManager {
       const provider = providers[providerKey];
       if (!provider) continue;
 
-      const transport = resolveRouteTransport(
-        providerKey,
-        provider,
-        routing,
-        Boolean(process.env.SUB2API_INTERNAL_LLM_BASE_URL),
-      );
+      const transport = resolveRouteTransport(providerKey, provider, routing);
       const apiKey = transport.apiKey;
       if (!apiKey) continue;
 
@@ -1234,6 +1231,13 @@ export class APIFallbackManager {
     provider: Pick<ProviderConfig, "model" | "models">,
     routing: RouteConfig
   ): string {
+    // WRITER-ENV-RUN-FREEZE-2：任务快照包含模型；命中同 provider 时模型
+    // 解析返回快照值，运行中修改 GEMINI_MODEL 等环境变量不会中途换模。
+    const runConfig = writerRunConfigStorage.getStore();
+    if (runConfig && runConfig.provider === providerKey) {
+      return runConfig.model;
+    }
+
     const routingModel = typeof routing === "object" ? routing.model : undefined;
     const isPrimary = typeof routing === "object"
       ? routing.provider === providerKey
@@ -1315,9 +1319,13 @@ export class APIFallbackManager {
       options,
       requestOptions,
     );
-    if (requestOptions?.api === "responses") {
+    // JUDGE-GATEWAY-STREAMING-1：调用方显式 stream:true（judge 路由）时优先走
+    // /chat/completions SSE，不被 provider 级 responses 配置覆盖——非流式 /responses
+    // 会撞网关超时（504）。仅非流式请求才按 provider 配置选择 /responses 传输。
+    if (!streamResponse && requestOptions?.api === "responses") {
       return callOpenAIResponses(baseUrl, apiKey, model, localizeLlmMessages(messages), {
         max_tokens: options?.max_tokens,
+        temperature: supportsSamplingParameters(providerKey, model) ? options?.temperature : undefined,
         jsonMode: (request.response_format as { type?: string } | undefined)?.type === "json_object",
         timeoutMs: options?.timeoutMs,
       });
@@ -1437,6 +1445,7 @@ export class APIFallbackManager {
     if (options?.api === "responses") {
       const response = await callOpenAIResponses(baseUrl, apiKey, model, localizeLlmMessages(messages), {
         max_tokens: options?.max_tokens ?? 2048,
+        temperature: supportsSamplingParameters(providerKey, model) ? options?.temperature : undefined,
         jsonMode: options?.responseFormat?.type === "json_object",
       });
       return { content: response.choices[0].message.content, finish_reason: response.choices[0].finish_reason };

@@ -44,6 +44,14 @@ async function loadGenerateChapterTool() {
   return fakePi.tools.get("novel_generate_chapter");
 }
 
+/** WRITER-ENV-UNIFY-1：测试断言读有效配置（.env GEMINI_MODEL 解析值）。 */
+async function getGeminiWriterModel() {
+  const { getGeminiWriterModel: resolve } = await import(
+    pathToFileURL(join(EXT_ROOT, "dist", "utils", "config.js")).href
+  );
+  return resolve();
+}
+
 function createMinimalWorkspace() {
   rmSync(PHASE5_WORKSPACE, { recursive: true, force: true });
   mkdirSync(join(PHASE5_WORKSPACE, "chapters"), { recursive: true });
@@ -196,9 +204,9 @@ describe("Phase 5/7：统一主链路为唯一生产路径", () => {
       (call) => call.kind === "author_style_optimization",
     );
     assert.ok(styleModelCall, "默认路径必须记录作者风格整章优化调用");
-    assert.equal(styleModelCall.route, "v2_amplified_gpt6astra");
-    assert.equal(styleModelCall.expectedProvider, "gpt");
-    assert.equal(styleModelCall.expectedModel, "gpt-6-astra");
+    assert.equal(styleModelCall.route, "v2_amplified_gemini31");
+    assert.equal(styleModelCall.expectedProvider, "gemini31");
+    assert.equal(styleModelCall.expectedModel, await getGeminiWriterModel());
 
     // 固定场景候选源已退出生产；trace 必须明确记录退休状态。
     assert.ok(

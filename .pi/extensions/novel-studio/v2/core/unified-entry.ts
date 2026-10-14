@@ -18,6 +18,11 @@
  *   novel_generate_chapter 始终调用本入口，无回滚分支。
  */
 
+import { getApiKey, getBaseUrl, getGeminiWriterModel, loadModelRoutingSync } from "../../utils/config.js";
+import {
+  runWithWriterRunConfig,
+  type WriterRunConfig,
+} from "../../api/fallback-manager.js";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import type {
@@ -707,7 +712,7 @@ export function resolveModelTestRouteLock(
       generateRoute: "nb4_generate_gemini31",
       judgeRoute: "v2_opportunity_judge",
       provider: "gemini31",
-      model: "gemini-3.8-flash",
+      model: getGeminiWriterModel(),
     };
   }
   return null;
@@ -724,7 +729,7 @@ export interface WriterModelRouteLock {
 
 /** Resolve the production writer without changing the heterogeneous GPT judge. */
 export function resolveWriterModelRouteLock(
-  writerModel: "claude" | "gpt6astra" | undefined,
+  writerModel: "claude" | "gemini31" | undefined,
 ): WriterModelRouteLock | null {
   if (writerModel === "claude") {
     return {
@@ -736,14 +741,14 @@ export function resolveWriterModelRouteLock(
       promptProfile: "claude_writer_v1",
     };
   }
-  if (writerModel === "gpt6astra" || writerModel === undefined) {
+  if (writerModel === "gemini31" || writerModel === undefined) {
     return {
-      rawRoute: "v2_rawstage2_gpt6astra",
-      amplifiedRoute: "v2_amplified_gpt6astra",
+      rawRoute: "v2_rawstage2_gemini31",
+      amplifiedRoute: "v2_amplified_gemini31",
       judgeRoute: "v2_opportunity_judge",
-      provider: "gpt",
-      model: "gpt-6-astra",
-      promptProfile: "gpt_writer_v1",
+      provider: "gemini31",
+      model: getGeminiWriterModel(),
+      promptProfile: "gemini_writer_v2",
     };
   }
   return null;
@@ -1857,7 +1862,11 @@ export async function runUnifiedPipeline(
     chapterNumber,
     persist: !effectiveFullPipelinePreview,
   });
-  const seal = <T extends V2Output>(output: T): T => auditSession.attachToOutput(output);
+  // WRITER-ENV-RUN-FREEZE-2：任务级 writer 快照经 AsyncLocalStorage 随本次任务
+  // 的模型调用传播，任务结束自动随上下文回收，无需（也不允许）全局清除。
+  const seal = <T extends V2Output>(output: T): T => {
+    return auditSession.attachToOutput(output);
+  };
 
   try {
   auditSession.start({
@@ -2047,12 +2056,38 @@ export async function runUnifiedPipeline(
   const writerRouteLock = testRouteLock ? null : resolveWriterModelRouteLock(writerModel);
   // WP-01：任务级路由一次解析并冻结（与 writer/test lock 对齐，不另建第二套路由）。
   const runRouting: RunRoutingContext = resolveRunRouting({
-    writerModel: writerModel === "claude" || writerModel === "gpt6astra" ? writerModel : undefined,
+    writerModel: writerModel === "claude" || writerModel === "gemini31" ? writerModel : undefined,
     modelTestRoute: modelTestRoute ? String(modelTestRoute) : undefined,
     budgetProfile: testRouteLock ? "eval_lab" : effectiveFullPipelinePreview ? "preview" : "production_default",
     caller: "novel_generate_chapter",
   });
   void fingerprintRunRouting(runRouting);
+  // WRITER-ENV-RUN-FREEZE-2：任务开始时构建 writer 运行配置快照（模型、地址、密钥）。
+  // 真实网络模式（非 stub / 非 eval 回放 / 非显式测试路由）下，按 runRouting.provider
+  // 解析一次 base URL、API key 与模型并冻结为不可变快照；快照经 AsyncLocalStorage
+  // 包裹本次任务的全部模型调用（见 modelGenerate 组装处），运行期间 .env /
+  // process.env 变化不影响当前任务，并发任务互不覆盖。关键配置缺失时
+  // fail-closed：任务开始即阻断，不等到请求期 401 才暴露。
+  let writerRunConfig: WriterRunConfig | null = null;
+  if (!useStub && evalReplayTransport === null && !testRouteLock) {
+    const writerProvider = runRouting.provider;
+    if (writerProvider === "gemini31" || writerProvider === "claude") {
+      const providerConfig = loadModelRoutingSync().providers[writerProvider];
+      const frozenBaseUrl = getBaseUrl(writerProvider, providerConfig?.base_url ?? "");
+      const frozenApiKey = getApiKey(writerProvider) ?? "";
+      if (!frozenBaseUrl || !frozenApiKey) {
+        throw new Error(
+          `[writer-env-fail-closed] writer provider ${writerProvider} 统一配置不完整（gemini31 需要 GOOGLE_GEMINI_BASE_URL + GEMINI_API_KEY；claude 需要 CLAUDE_API_KEY），拒绝启动任务`,
+        );
+      }
+      writerRunConfig = {
+        provider: writerProvider,
+        baseUrl: frozenBaseUrl,
+        apiKey: frozenApiKey,
+        model: runRouting.model,
+      };
+    }
+  }
   const generationModelLock = testRouteLock
     ? { route: testRouteLock.generateRoute, provider: testRouteLock.provider, model: testRouteLock.model }
     : writerRouteLock
@@ -2348,11 +2383,18 @@ export async function runUnifiedPipeline(
   // 真实生成走 createLegacyModelGenerateFn（动态 import fallback-manager）。
   // F4-4：解析链 recorded -> synthetic -> stub (V2_FORCE_STUB) -> legacy 真实模型；
   // recorded/synthetic 的传输 env 完整性已在管线入口 fail-closed 校验（见 useStub 附近）。
-  const baseModelGenerate: ModelGenerateFn = evalReplayTransport
+  const rawModelGenerate: ModelGenerateFn = evalReplayTransport
     ? evalReplayTransport
     : useStub
       ? createStubModelGenerateFn()
       : createLegacyModelGenerateFn();
+  // WRITER-ENV-RUN-FREEZE-2：真实网络模式下，本次任务的全部模型调用都在
+  // writerRunConfig 快照的 AsyncLocalStorage 上下文内执行——模型、地址、
+  // 密钥三者一起冻结，运行中修改环境变量不会换模/换端点，并发任务互不干扰。
+  const frozenWriterRunConfig = writerRunConfig;
+  const baseModelGenerate: ModelGenerateFn = frozenWriterRunConfig
+    ? (input) => runWithWriterRunConfig(frozenWriterRunConfig, () => rawModelGenerate(input))
+    : rawModelGenerate;
 
   // REAL-QUALITY-1-PREFLIGHT：单次路由锁定（modelTestRoute=glm）— 双轨分锁
   // 把生成调用（raw + editorial candidate）锁定到 nb4_generate_glm，
@@ -2635,7 +2677,7 @@ export async function runUnifiedPipeline(
           provider: testRouteLock.provider,
           model: testRouteLock.model,
         })
-      : writerRouteLock?.promptProfile ?? "gpt_writer_v1",
+      : writerRouteLock?.promptProfile ?? "gemini_writer_v2",
     // REAL-QUALITY-1-PREFLIGHT：透传 seed 让 Thompson Sampling / judge 匿名 A/B
     // 可复现。未传时 orchestrator 内部 rng 回退到 Math.random（非确定性），
     // 仅已准入 active 策略参与 Thompson Sampling；candidate 不受随机阈值过滤。
@@ -2822,6 +2864,7 @@ export async function runUnifiedPipeline(
   }); // runInTrustContextAsync — TrustAudit 并发隔离
   } catch (pipelineErr) {
     // 未捕获异常：写 run_interrupted + failure_recorded，再结构化返回（不静默）
+    // WRITER-ENV-RUN-FREEZE-2：writer 快照随 AsyncLocalStorage 上下文自动回收，无需清理。
     const msg = pipelineErr instanceof Error ? pipelineErr.message : String(pipelineErr);
     try {
       auditSession.finalizeInterrupted(`pipeline exception: ${msg}`, pipelineErr);

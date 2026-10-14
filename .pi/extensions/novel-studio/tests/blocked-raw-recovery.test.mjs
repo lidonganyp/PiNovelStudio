@@ -116,23 +116,23 @@ test("explicit recovery returns frozen raw without a raw network call and preser
   }
 });
 
-test("explicit GPT recovery reuses only a frozen GPT raw without a raw network call", async () => {
+test("explicit Gemini recovery reuses only a frozen Gemini raw without a raw network call", async () => {
   const fixture = makeFixture({
-    rawModel: "gpt-6-astra",
-    modelVersion: "gpt-6-astra",
+    rawModel: "gemini-3.8-flash",
+    modelVersion: "gemini-3.8-flash",
     rawFinishReason: "stop",
   });
   try {
     const calls = [];
     const recovery = createBlockedRawRecovery({
       ...fixture,
-      writerModel: "gpt6astra",
+      writerModel: "gemini31",
       generationModelGenerate: async (input) => {
         calls.push(input.kind);
         return {
           text: "editorial response",
-          model: "gpt-6-astra",
-          provider: "gpt",
+          model: "gemini-3.8-flash",
+          provider: "gemini31",
           route: input.route,
           durationMs: 12,
           finishReason: "stop",
@@ -141,31 +141,31 @@ test("explicit GPT recovery reuses only a frozen GPT raw without a raw network c
     });
 
     const raw = await recovery.generationModelGenerate({
-      route: "v2_rawstage2_gpt6astra",
+      route: "v2_rawstage2_gemini31",
       kind: "raw_chapter",
       systemPrompt: "system",
       userPrompt: "user",
     });
 
     assert.equal(raw.text, fixture.storedText);
-    assert.equal(raw.model, "gpt-6-astra");
-    assert.equal(raw.provider, "gpt");
+    assert.equal(raw.model, "gemini-3.8-flash");
+    assert.equal(raw.provider, "gemini31");
     assert.deepEqual(calls, []);
   } finally {
     fixture.cleanup();
   }
 });
 
-test("GPT recovery rejects a frozen Claude raw", () => {
+test("Gemini recovery rejects a frozen Claude raw", () => {
   const fixture = makeFixture();
   try {
     assert.throws(
       () => createBlockedRawRecovery({
         ...fixture,
-        writerModel: "gpt6astra",
+        writerModel: "gemini31",
         generationModelGenerate: async () => assert.fail("network must not be called"),
       }),
-      /gpt-6-astra/i,
+      /Gemini|gemini-3\.8/i,
     );
   } finally {
     fixture.cleanup();

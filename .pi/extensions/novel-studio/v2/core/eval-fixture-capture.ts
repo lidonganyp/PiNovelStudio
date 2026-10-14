@@ -26,6 +26,7 @@ import { join, basename } from "node:path";
 import {
   EVAL_FIXTURE_SCHEMA_ID,
   EVAL_FIXTURE_SCHEMA_VERSION,
+  EVAL_FIXTURE_SUPPORTING_FILES,
   EVAL_PROTOCOL_VERSION,
   computeEvalFixtureHash,
   validateEvalFixtureV1,
@@ -34,6 +35,8 @@ import {
   type EvalContractError,
 } from "./eval-fixture-contract.js";
 import type { EvolutionReleaseManifest } from "../governance/evolution-release-types.js";
+import { resolveExistingChapterFile } from "../../utils/chapter-path.js";
+import { loadStyleProfile, loadWorkspace } from "../adapters/legacy-workspace-adapter.js";
 
 // ============================================================================
 // 类型
@@ -95,7 +98,7 @@ export interface CaptureFixtureResult {
 // 默认值
 // ============================================================================
 
-const DEFAULT_MODEL_ROUTE = "v2_rawstage2_gpt6astra";
+const DEFAULT_MODEL_ROUTE = "v2_rawstage2_gemini31";
 const DEFAULT_PROVIDER = "gpt";
 const DEFAULT_GRADER_VERSION = "deterministic-v1";
 const DEFAULT_MODEL_POLICY = {
@@ -127,7 +130,10 @@ function deriveFixtureId(options: CaptureFixtureOptions): string {
 function readJsonIfExists(path: string): Record<string, unknown> | undefined {
   if (!existsSync(path)) return undefined;
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
   } catch {
     return undefined;
   }
@@ -177,14 +183,18 @@ function collectHistoricalChapters(
   if (!existsSync(chaptersDir) || !statSync(chaptersDir).isDirectory()) {
     return snapshots;
   }
-  const chapterFiles = readdirSync(chaptersDir)
-    .filter((f) => /\.(json|md|txt)$/i.test(f))
-    .sort();
-  for (const file of chapterFiles) {
-    const match = file.match(/chapter[-_]?(\d+)/i);
-    const num = match ? Number(match[1]) : Number.NaN;
-    if (!Number.isInteger(num) || num < 1 || num >= targetChapterNumber) continue;
-    const content = readFileSync(join(chaptersDir, file), "utf-8");
+  const chapterNumbers = new Set<number>();
+  for (const file of readdirSync(chaptersDir)) {
+    const match = file.match(/^(?:chapter-(?:chapter-)?|ch)?(\d+)\.md$/);
+    const chapterNumber = match ? Number(match[1]) : Number.NaN;
+    if (Number.isSafeInteger(chapterNumber) && chapterNumber >= 1 && chapterNumber < targetChapterNumber) {
+      chapterNumbers.add(chapterNumber);
+    }
+  }
+  for (const num of [...chapterNumbers].sort((left, right) => left - right)) {
+    const chapter = resolveExistingChapterFile(workspacePath, String(num));
+    if (!chapter || !statSync(chapter.path).isFile()) continue;
+    const content = readFileSync(chapter.path, "utf-8");
     snapshots.push({
       chapterNumber: num,
       chapterId: `chapter-${String(num).padStart(3, "0")}`,
@@ -294,9 +304,35 @@ export function captureEvalFixture(
     ({} as Record<string, unknown>);
   const outline = readTextIfExists(join(workspacePath, "series", "outline.md"));
   const characterProfiles = collectCharacterProfiles(workspacePath);
-  const styleProfile = readJsonIfExists(join(workspacePath, "styles", "profile.json"));
+  const loadedStyle = loadStyleProfile(loadWorkspace(options.workspaceId, options.projectRoot), options.projectRoot);
+  const styleProfile = loadedStyle ? JSON.parse(loadedStyle.content) as Record<string, unknown> : undefined;
+  const constitutionPath = join(workspacePath, "creative-constitution.json");
+  const creativeConstitution = readJsonIfExists(constitutionPath);
+  const storePath = join(workspacePath, "narrative-state-store.json");
+  const narrativeStateStore = readJsonIfExists(storePath);
+  const skeleton = readJsonIfExists(join(workspacePath, "series", "skeleton.json"));
+  const supportingFiles: Record<string, string> = {};
+  for (const relativePath of [...EVAL_FIXTURE_SUPPORTING_FILES, `series/ch${options.chapterNumber}-outline-explicit.md`]) {
+    const content = readTextIfExists(join(workspacePath, relativePath));
+    if (content !== undefined) supportingFiles[relativePath] = content;
+  }
+  if (existsSync(constitutionPath) && creativeConstitution === undefined) {
+    errors.push({
+      field: "/workspace/creativeConstitution",
+      rule: "invalid_snapshot",
+      message: `作品宪章无法读取为 JSON 对象：${constitutionPath}`,
+    });
+  }
+  if (existsSync(storePath) && (narrativeStateStore === undefined || narrativeStateStore.workspaceId !== options.workspaceId)) {
+    errors.push({
+      field: "/workspace/narrativeStateStore",
+      rule: "invalid_state_store",
+      message: `权威状态库必须为同一 workspace 的 JSON 对象：${storePath}`,
+    });
+  }
   const includeContent =
     options.replayMode === "recorded" ||
+    options.replayMode === "dev_real_model" ||
     options.replayMode === "production_like" ||
     options.replayMode === "candidate_like";
   const historicalChapters = collectHistoricalChapters(
@@ -322,12 +358,13 @@ export function captureEvalFixture(
     );
     const fallbackPath = join(workspacePath, "narrative-state.json");
     priorNarrativeState =
+      readJsonIfExists(join(workspacePath, "series", "narrative-state.json")) ??
       readJsonIfExists(statePath) ?? readJsonIfExists(fallbackPath) ?? null;
-    if (priorNarrativeState === null) {
+    if (priorNarrativeState === null && narrativeStateStore === undefined && chapterContinuity === undefined && skeleton === undefined) {
       errors.push({
         field: "/priorNarrativeState",
         rule: "missing_prior_state",
-        message: `第 ${options.chapterNumber} 章需要前章 NarrativeState（未找到 ${statePath} 或 ${fallbackPath}）`,
+        message: `第 ${options.chapterNumber} 章需要前章状态或连续性快照（未找到 ${storePath}、chapter-continuity/${priorNum}.json、series/skeleton.json 或旧 NarrativeState）`,
       });
     }
   }
@@ -371,6 +408,10 @@ export function captureEvalFixture(
       ...(outline !== undefined ? { outline } : {}),
       characterProfiles,
       ...(styleProfile !== undefined ? { styleProfile } : {}),
+      ...(creativeConstitution !== undefined ? { creativeConstitution } : {}),
+      ...(narrativeStateStore !== undefined ? { narrativeStateStore } : {}),
+      ...(skeleton !== undefined ? { skeleton } : {}),
+      ...(Object.keys(supportingFiles).length > 0 ? { supportingFiles } : {}),
       ...(chapterContinuity !== undefined ? { chapterContinuity } : {}),
       historicalChapters,
     },

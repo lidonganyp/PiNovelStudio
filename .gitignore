@@ -264,3 +264,6 @@ config/production-identity/active.pack.json
 
 # 一次性调试脚本（_tmp 前缀）
 .pi/extensions/novel-studio/scripts/_tmp*.mjs
+
+# 用户章节同步工作文件（本地工具产物，不进入发布基线）
+/sync-chapters.json

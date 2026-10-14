@@ -4,7 +4,7 @@
  * 真相源：docs/evolution-release-governance-development-plan.md §2.2 / §3 / Phase G2
  *
  * 从 NovelBench runtime-provenance-collector.ts 抽取的共享、无 eval 依赖的环境指纹能力。
- * 本模块自包含（不 import novelbench/ 或 eval/），可被生产闭包与 eval 闭包同时消费，
+ * 本模块不依赖 novelbench/ 或 eval/，可被生产闭包与 eval 闭包同时消费。
  * 避免生产代码依赖 eval 模块（任务卡硬约束）。
  *
  * 指纹覆盖（计划 §2.2）：
@@ -28,6 +28,7 @@
  * - 只读用户文件计算 hash，不修改用户 WIP
  */
 
+import { getGeminiWriterModel, getProviderDefaultConfig } from "../../utils/config.js";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -90,6 +91,8 @@ export interface EnvironmentFingerprint {
   toolSchemaHash: string;
   /** 生成模型标识（如 glm-5.2） */
   generationModel: string;
+  /** Effective OpenAI-compatible writer endpoint, without credentials. */
+  generationBaseUrl?: string;
   /** 裁判模型标识 */
   judgeModel: string;
   /** 代理审批模型标识（gpt5.6-sol） */
@@ -151,6 +154,7 @@ export interface CollectEnvironmentFingerprintInput {
   timeoutMs: number;
   fallbackPolicy: string;
   generationModel: string;
+  generationBaseUrl?: string;
   judgeModel: string;
   proxyApprovalModel: string;
   /** 非秘密环境开关变量名列表 */
@@ -195,7 +199,7 @@ export const DEFAULT_RELEASE_FINGERPRINT_SPEC = {
     "ARK_API_KEY",
     "ERNIE_API_KEY",
   ],
-  generationModel: "gpt-6-astra",
+  get generationModel(): string { return getGeminiWriterModel(); },
   judgeModel: "gpt5.6-sol",
   proxyApprovalModel: "gpt5.6-sol",
   seed: 0,
@@ -219,6 +223,7 @@ export interface BehavioralFingerprintFields {
   promptBundleHash: string;
   toolSchemaHash: string;
   generationModel: string;
+  generationBaseUrl?: string;
   judgeModel: string;
   proxyApprovalModel: string;
   activeStrategyIds: string[];
@@ -410,6 +415,7 @@ export function collectEnvironmentFingerprint(
     timeoutMs,
     fallbackPolicy,
     generationModel,
+    generationBaseUrl,
     judgeModel,
     proxyApprovalModel,
     envSwitchNames,
@@ -474,6 +480,8 @@ export function collectEnvironmentFingerprint(
     promptBundleHash,
     toolSchemaHash,
     generationModel,
+    // generationBaseUrl 为可选字段：仅在存在时写入，保持 hash 对 undefined 与空串的可区分性
+    ...(generationBaseUrl ? { generationBaseUrl } : {}),
     judgeModel,
     proxyApprovalModel,
     activeStrategyIds: [...activeStrategyIds].sort(),
@@ -530,6 +538,7 @@ export function extractBehavioralFingerprintFields(
     | "promptBundleHash"
     | "toolSchemaHash"
     | "generationModel"
+    | "generationBaseUrl"
     | "judgeModel"
     | "proxyApprovalModel"
     | "activeStrategyIds"
@@ -552,6 +561,7 @@ export function extractBehavioralFingerprintFields(
     promptBundleHash: fp.promptBundleHash,
     toolSchemaHash: fp.toolSchemaHash,
     generationModel: fp.generationModel,
+    ...(fp.generationBaseUrl ? { generationBaseUrl: fp.generationBaseUrl } : {}),
     judgeModel: fp.judgeModel,
     proxyApprovalModel: fp.proxyApprovalModel,
     activeStrategyIds: [...fp.activeStrategyIds].sort(),
@@ -612,6 +622,7 @@ export function collectDefaultEnvironmentFingerprint(
     timeoutMs: Number(process.env.PINOVEL_MODEL_REQUEST_TIMEOUT_MS ?? 300000),
     fallbackPolicy: spec.fallbackPolicy,
     generationModel: spec.generationModel,
+    generationBaseUrl: getProviderDefaultConfig("gemini31").base_url,
     judgeModel: spec.judgeModel,
     proxyApprovalModel: spec.proxyApprovalModel,
     envSwitchNames: [...spec.envSwitchNames],
@@ -636,6 +647,7 @@ export function diffBehavioralFingerprintFields(
     "promptBundleHash",
     "toolSchemaHash",
     "generationModel",
+    "generationBaseUrl",
     "judgeModel",
     "proxyApprovalModel",
     "constitutionHash",
@@ -878,6 +890,18 @@ export function verifyEnvironmentFingerprint(
     detail: modelMatch
       ? `model=${actual.generationModel}`
       : `recorded=${recorded.generationModel}, actual=${actual.generationModel}`,
+  });
+
+  // generationBaseUrl 一致（可选字段：undefined 与空串均视为未设置）
+  const normalizeBaseUrl = (value?: string): string => (value?.trim() ? value.trim() : "(unset)");
+  const baseUrlMatch =
+    normalizeBaseUrl(recorded.generationBaseUrl) === normalizeBaseUrl(actual.generationBaseUrl);
+  checks.push({
+    name: "generationBaseUrl 一致",
+    passed: baseUrlMatch,
+    detail: baseUrlMatch
+      ? `baseUrl=${normalizeBaseUrl(actual.generationBaseUrl)}`
+      : `recorded=${normalizeBaseUrl(recorded.generationBaseUrl)}, actual=${normalizeBaseUrl(actual.generationBaseUrl)}`,
   });
 
   // seed 一致

@@ -24,8 +24,6 @@ export interface ModelRoutingConfig {
 export interface AgentRoutingEntry {
   provider: string;
   model: string;
-  /** Gemini transport channel used by the production peer-channel fallback. */
-  channel?: "aimagichub" | "solov";
   note?: string;
   /**
    * MODEL-ROUTING-CLAUDE46-1A: route-level fallback chain.
@@ -295,7 +293,7 @@ export async function saveJsonConfig<T>(path: string, data: T): Promise<void> {
  */
 export async function loadModelRouting(): Promise<ModelRoutingConfig> {
   const path = getConfigPath("model-routing.json");
-  return loadJsonConfig<ModelRoutingConfig>(path);
+  return resolveRoutingEnvironment(await loadJsonConfig<ModelRoutingConfig>(path));
 }
 
 export function loadModelRoutingSync(): ModelRoutingConfig {
@@ -304,7 +302,38 @@ export function loadModelRoutingSync(): ModelRoutingConfig {
   if (!existsSync(path)) {
     throw new Error(`Config file not found: ${path}`);
   }
-  return JSON.parse(readFileSync(path, "utf-8")) as ModelRoutingConfig;
+  return resolveRoutingEnvironment(JSON.parse(readFileSync(path, "utf-8")) as ModelRoutingConfig);
+}
+
+/** Resolve the two writer configuration references without duplicating model/URL defaults. */
+export function resolveRoutingEnvironment<T>(routing: T): T {
+  loadProjectDotEnv();
+  const resolveValue = (value: unknown): unknown => {
+    if (value === "${GEMINI_MODEL}") return getGeminiWriterModel();
+    if (value === "${GOOGLE_GEMINI_BASE_URL}") {
+      const url = process.env.GOOGLE_GEMINI_BASE_URL?.trim();
+      if (!url) throw new Error("GOOGLE_GEMINI_BASE_URL is required in .env");
+      const parsed = new URL(url);
+      if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+        throw new Error("GOOGLE_GEMINI_BASE_URL must be an HTTP(S) API URL without credentials");
+      }
+      return url.replace(/\/+$/, "");
+    }
+    if (Array.isArray(value)) return value.map(resolveValue);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveValue(item)]));
+    }
+    return value;
+  };
+  return resolveValue(routing) as T;
+}
+
+/** Version-independent Gemini writer identity; gemini31 is only a stable route ID. */
+export function getGeminiWriterModel(): string {
+  loadProjectDotEnv();
+  const model = process.env.GEMINI_MODEL?.trim();
+  if (!model || model.startsWith("${")) throw new Error("GEMINI_MODEL is required in .env");
+  return model;
 }
 
 /**
@@ -382,12 +411,20 @@ export function clearConfigCache(): void {
  * 解析 .env 文件并写入 process.env。
  *
  * P28: 抽取共享解析逻辑，供 loadProjectDotEnv（不覆盖）和 reloadProjectEnv（覆盖）复用。
- * overrideExisting=false 时只填 process.env 中不存在的 key（保留既有行为）；
- * overrideExisting=true 时无条件覆盖（解决旧值驻留问题）。
+ * overrideExisting=false 时只填 process.env 中不存在的 key（保留既有行为，
+ * 外部环境注入优先）；overrideExisting=true 时无条件覆盖（解决旧值驻留问题）。
+ *
+ * WRITER-ENV-RELOAD-2：返回两组 key——written（本次由文件实际写入 process.env
+ * 的 key）与 declared（文件声明的全部 key，含因外部已注入而未写入的）。
+ * 调用方维护 fileOwnedEnvKeys 台账用 written；reload 的删除判定必须看
+ * declared：只要文件仍声明该 key，即使本次因已存在而未写入，也不得删除
+ * （修复 reload(false) 误删"文件仍声明但被外部注入占用"变量的缺陷）。
  */
-function parseDotEnvFile(envPath: string, overrideExisting: boolean): void {
+function parseDotEnvFile(envPath: string, overrideExisting: boolean): { written: Set<string>; declared: Set<string> } {
+  const writtenKeys = new Set<string>();
+  const declaredKeys = new Set<string>();
   if (!existsSync(envPath)) {
-    return;
+    return { written: writtenKeys, declared: declaredKeys };
   }
 
   const envContent = readFileSync(envPath, "utf-8");
@@ -411,11 +448,19 @@ function parseDotEnvFile(envPath: string, overrideExisting: boolean): void {
       value = value.slice(1, -1);
     }
 
-    if (key && (overrideExisting || !process.env[key])) {
-      process.env[key] = value;
+    if (key) {
+      declaredKeys.add(key);
+      if (overrideExisting || !process.env[key]) {
+        process.env[key] = value;
+        writtenKeys.add(key);
+      }
     }
   }
+  return { written: writtenKeys, declared: declaredKeys };
 }
+
+/** 每个 projectRoot 一份："由项目 .env 文件拥有"的 process.env key 台账。 */
+const fileOwnedEnvKeys: Map<string, Set<string>> = new Map();
 
 function loadProjectDotEnv(): void {
   const projectRoot = getProjectRoot();
@@ -425,15 +470,28 @@ function loadProjectDotEnv(): void {
 
   dotenvLoadedForRoot = projectRoot;
   const envPath = join(projectRoot, ".env");
-  parseDotEnvFile(envPath, false);
+  // override=false：只填外部环境未注入的 key；这些 key 归 .env 文件所有。
+  const { written } = parseDotEnvFile(envPath, false);
+  if (written.size > 0) {
+    const owned = fileOwnedEnvKeys.get(projectRoot) ?? new Set<string>();
+    for (const key of written) owned.add(key);
+    fileOwnedEnvKeys.set(projectRoot, owned);
+  }
 }
 
 /**
  * P28: 强制重新读取项目 .env，可覆盖 process.env 中已存在的旧值。
  *
  * 用途：用户修改 .env（如切换 DOUBAO_MODEL 从 Turbo 到 Pro）后，
- * novel_generate_chapter 在入口调用此函数确保读到最新配置，
- * 不被 dotenvLoadedForRoot 缓存或 `!process.env[key]` 不覆盖逻辑阻挡。
+ * 显式调用此函数重读最新配置，不被 dotenvLoadedForRoot 缓存或
+ * `!process.env[key]` 不覆盖逻辑阻挡。
+ *
+ * WRITER-ENV-RELOAD-2：重载会先清除"上次由 .env 文件写入、本次文件已不再
+ * 声明"的 key（delete process.env[key]），消除删除变量后的旧值残留。
+ * 删除判定看文件**声明**（declared）而非本次实际写入（written）：文件仍
+ * 声明的 key 即使因 process.env 已有值（override=false / 外部注入）而未
+ * 写入，也不得误删。外部注入语义由 loadProjectDotEnv（override=false，
+ * 外部优先）保留。文件整体不存在时，该 root 的全部文件拥有 key 一并清除。
  *
  * 不修改 .env 文件本身，只重读并覆盖 process.env。
  *
@@ -444,7 +502,21 @@ export function reloadProjectEnv(overrideExisting: boolean = true): void {
   const projectRoot = getProjectRoot();
   dotenvLoadedForRoot = projectRoot;
   const envPath = join(projectRoot, ".env");
-  parseDotEnvFile(envPath, overrideExisting);
+  const owned = fileOwnedEnvKeys.get(projectRoot) ?? new Set<string>();
+  const { written, declared } = parseDotEnvFile(envPath, overrideExisting);
+  // 清除"上次来自文件、本次文件已不再声明/文件整体不存在"的旧值残留。
+  for (const key of owned) {
+    if (!declared.has(key)) {
+      delete process.env[key];
+    }
+  }
+  // 台账更新：本次实际写入的 key 归文件所有；此前归文件所有且文件仍声明的
+  // key 保持归属（其值未被本次覆盖，来源仍是之前的文件写入）。
+  const nextOwned = new Set<string>(written);
+  for (const key of owned) {
+    if (declared.has(key)) nextOwned.add(key);
+  }
+  fileOwnedEnvKeys.set(projectRoot, nextOwned);
 }
 
 /**
@@ -562,17 +634,13 @@ export function getProviderDefaultConfig(
 /**
  * 获取 API Key（从环境变量）
  *
- * P0-3（第二轮 P0 修复）：若部署侧设置了 SUB2API_INTERNAL_LLM_API_KEY，
- * 所有 provider 强制使用该密钥走 Sub2API 内部 LLM 计费网关，
- * 不再直连 Gemini/Claude/GPT 等 Provider。满足冻结需求"所有 LLM 调用
- * 必须经过 Sub2API 计费网关"。未设置时保持原 per-provider env 行为，
- * 保证本地开发与测试不被破坏。
+ * 历史 P0-3 曾在此处用 SUB2API_INTERNAL_LLM_API_KEY 全局覆写所有 provider 密钥
+ * （Sub2API 计费网关唯一出口）。platform R4 改造（原生 provider 直连）已删除该网关，
+ * 部署侧不再设置 SUB2API_INTERNAL_LLM_*；按版本收敛原则，本分支已物理删除，
+ * 旧网关变量残留环境也不再能覆盖统一 writer 配置（GEMINI_API_KEY 等）。
  */
 export function getApiKey(providerKey: string): string | null {
   loadProjectDotEnv();
-  // P0-3：全局网关密钥覆写——所有 provider 共用 Sub2API 网关密钥
-  const sub2apiKey = process.env.SUB2API_INTERNAL_LLM_API_KEY;
-  if (sub2apiKey) return sub2apiKey;
   const envKey = resolveProviderApiKeyEnv(providerKey);
   return envKey ? process.env[envKey] || null : null;
 }
@@ -589,16 +657,13 @@ function resolveProviderApiKeyEnv(providerKey: string): string | undefined {
 /**
  * 获取 provider base URL。
  *
- * P0-3（第二轮 P0 修复）：若部署侧设置了 SUB2API_INTERNAL_LLM_BASE_URL，
- * 所有 provider 强制走 Sub2API 内部 LLM 计费网关（OpenAI 兼容协议）。
- * 未设置时保持原 per-provider env 行为（GLM_BASE_URL / CLAUDE_BASE_URL 等），
- * 保证本地开发与测试不被破坏。
+ * 历史 P0-3 曾在此处用 SUB2API_INTERNAL_LLM_BASE_URL 强制所有 provider 走
+ * Sub2API 内部计费网关。platform R4 改造（原生 provider 直连）已删除该网关；
+ * 按版本收敛原则，本分支已物理删除，旧网关变量残留环境也不再能覆盖
+ * 统一 writer 渠道地址（GOOGLE_GEMINI_BASE_URL 等）。
  */
 export function getBaseUrl(providerKey: string, defaultBaseUrl: string): string {
   loadProjectDotEnv();
-  // P0-3：全局网关 URL 覆写——所有 provider 强制走 Sub2API 计费网关
-  const sub2apiGateway = process.env.SUB2API_INTERNAL_LLM_BASE_URL;
-  if (sub2apiGateway) return sub2apiGateway;
   const envKey = configMap[providerKey]?.baseUrlEnv;
   return (envKey && process.env[envKey]) || defaultBaseUrl;
 }

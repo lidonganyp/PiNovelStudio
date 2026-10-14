@@ -178,7 +178,7 @@ test("CEG-0.4: 生产 A 基线检索参数与源码一致，不得顺手调整",
   assert.equal(CEG_PRODUCTION_A_BASELINE.recentPatternMemory.maxEntries, 4);
   assert.equal(CEG_PRODUCTION_A_BASELINE.retrievalCallLimit.withMustVerify, 4);
   assert.equal(CEG_PRODUCTION_A_BASELINE.retrievalCallLimit.withoutMustVerify, 2);
-  assert.equal(CEG_PRODUCTION_A_BASELINE.productionRendererProfile, "gpt_writer_v1");
+  assert.equal(CEG_PRODUCTION_A_BASELINE.productionRendererProfile, "gemini_writer_v2");
   assert.equal(CEG_PRODUCTION_A_BASELINE.layeredRendererProfile, "gemini_writer_v2_layered");
 
   const evidencePlanSrc = readSrc("novelos/agent/evidence-plan.ts");

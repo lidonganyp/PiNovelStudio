@@ -14,12 +14,16 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { NOVELOS_SYSTEM_PROMPT } from "../agent/agentic-raw-candidate-source.js";
 import { NARRATIVE_TOOL_NAMES } from "../tools/narrative-tools.js";
 import { DEFAULT_BUDGET_CONFIG } from "../runtime/budget-policy.js";
 import {
   CONTEXT_COMPILER_NAMES,
   ORCHESTRATOR_BUDGET_A,
+  PRODUCTION_NOVELOS_PROMPT,
+  PRODUCTION_STYLE_PROMPT,
+  PRODUCTION_WRITER_PROMPT,
+  EVAL_BASELINE_RETRIEVAL_PROMPT,
+  type PromptSlot,
 } from "./prompt-registry.js";
 import { resolveWriterPromptProfile } from "../../v2/core/model-prompt-adapter.js";
 import {
@@ -32,33 +36,74 @@ import {
 // 常量：生产实现文件路径（相对扩展 workspace 根）
 // ============================================================================
 
-/** user prompt renderer 实现文件（Agentic 的 intent/context 拼装 + loop 的 prompt 组装） */
-const USER_PROMPT_RENDERER_FILES = [
-  "novelos/agent/agentic-raw-candidate-source.ts",
-  "novelos/agent/narrative-agent-loop.ts",
-];
+/**
+ * 按 slot 采集的指纹文件集（REGISTRY-DRIFT-IDENTITY-1）。
+ *
+ * 每个 slot 采集该阶段实际使用的系统提示与实现文件：
+ * - novelos_agentic：Agentic ReAct 循环（prompt 拼装 + 工具协议 + 解析 + 终止协议）
+ * - style_optimizer：作者风格整章优化（v2/core/author-style-optimizer.ts）
+ * - writer_adapter：writer prompt 适配层（v2/core/model-prompt-adapter.ts）
+ * - retrieval_eval：隔离评测检索基线（novelos/eval/tool-ab-real-runner.ts）
+ */
+interface SlotFingerprintFiles {
+  userPromptRenderer: string[];
+  chapterContractRenderer: string[];
+  toolProtocol: string[];
+  outputParser: string[];
+  terminationProtocol: string[];
+}
 
-/** ChapterContract renderer 实现文件（renderContract / renderLayeredContract） */
-const CHAPTER_CONTRACT_RENDERER_FILES = [
-  "v2/core/model-prompt-adapter.ts",
-];
+const SLOT_FINGERPRINT_FILES: Record<PromptSlot, SlotFingerprintFiles> = {
+  novelos_agentic: {
+    userPromptRenderer: [
+      "novelos/agent/agentic-raw-candidate-source.ts",
+      "novelos/agent/narrative-agent-loop.ts",
+    ],
+    chapterContractRenderer: [
+      "v2/core/model-prompt-adapter.ts",
+    ],
+    toolProtocol: [
+      "novelos/adapters/tool-schema-injector.ts",
+      "novelos/adapters/react-tool-call-parser.ts",
+    ],
+    outputParser: [
+      "novelos/adapters/react-tool-call-parser.ts",
+    ],
+    terminationProtocol: [
+      "novelos/agent/narrative-agent-loop.ts",
+      "novelos/adapters/tool-schema-injector.ts",
+    ],
+  },
+  style_optimizer: {
+    userPromptRenderer: ["v2/core/author-style-optimizer.ts"],
+    chapterContractRenderer: ["v2/core/model-prompt-adapter.ts"],
+    toolProtocol: ["v2/core/author-style-optimizer.ts"],
+    outputParser: ["v2/core/author-style-optimizer.ts"],
+    terminationProtocol: ["v2/core/author-style-optimizer.ts"],
+  },
+  writer_adapter: {
+    userPromptRenderer: ["v2/core/model-prompt-adapter.ts"],
+    chapterContractRenderer: ["v2/core/model-prompt-adapter.ts"],
+    toolProtocol: ["v2/core/model-prompt-adapter.ts"],
+    outputParser: ["v2/core/model-prompt-adapter.ts"],
+    terminationProtocol: ["v2/core/model-prompt-adapter.ts"],
+  },
+  retrieval_eval: {
+    userPromptRenderer: ["novelos/eval/tool-ab-real-runner.ts"],
+    chapterContractRenderer: ["novelos/eval/tool-ab-real-runner.ts"],
+    toolProtocol: ["novelos/eval/tool-ab-real-runner.ts"],
+    outputParser: ["novelos/eval/tool-ab-real-runner.ts"],
+    terminationProtocol: ["novelos/eval/tool-ab-real-runner.ts"],
+  },
+};
 
-/** 工具协议实现文件（<tool_call> 注入约定 + parser） */
-const TOOL_PROTOCOL_FILES = [
-  "novelos/adapters/tool-schema-injector.ts",
-  "novelos/adapters/react-tool-call-parser.ts",
-];
-
-/** 输出解析器实现文件（tool-call 指令解析 + draft 提取） */
-const OUTPUT_PARSER_FILES = [
-  "novelos/adapters/react-tool-call-parser.ts",
-];
-
-/** 终止协议实现文件（<done> 标记 + stopReason 逻辑 + 调用约定尾部） */
-const TERMINATION_PROTOCOL_FILES = [
-  "novelos/agent/narrative-agent-loop.ts",
-  "novelos/adapters/tool-schema-injector.ts",
-];
+/** 各 slot 的生产系统提示（与 prompt-registry 的 SLOT_PROMPTS 同源） */
+const SLOT_SYSTEM_PROMPTS: Record<PromptSlot, string> = {
+  novelos_agentic: PRODUCTION_NOVELOS_PROMPT,
+  style_optimizer: PRODUCTION_STYLE_PROMPT,
+  writer_adapter: PRODUCTION_WRITER_PROMPT,
+  retrieval_eval: EVAL_BASELINE_RETRIEVAL_PROMPT,
+};
 
 // ============================================================================
 // Provider capability 声明（fail-closed）
@@ -97,9 +142,18 @@ const PROVIDER_CAPABILITY_DECLARATIONS: Record<string, Partial<ProviderCapabilit
   },
 };
 
+/**
+ * provider 键别名规范化（model-routing 的 provider 键 → 能力声明键）。
+ * gemini31 是 Gemini 渠道族的路由键（兼容 trace 的历史命名），能力等价于 gemini。
+ */
+const PROVIDER_KEY_ALIASES: Record<string, string> = {
+  gemini31: "gemini",
+};
+
 /** 未声明 provider 一律空声明（fail-closed：全部能力 false） */
 export function getProviderCapability(provider: string): ProviderCapability {
-  return createProviderCapability(PROVIDER_CAPABILITY_DECLARATIONS[provider] ?? {});
+  const normalized = PROVIDER_KEY_ALIASES[provider] ?? provider;
+  return createProviderCapability(PROVIDER_CAPABILITY_DECLARATIONS[normalized] ?? {});
 }
 
 // ============================================================================
@@ -121,15 +175,20 @@ function readSourceFiles(rootDir: string, relativePaths: string[]): string {
 // ============================================================================
 
 /**
- * 采集生产 Bundle 指纹输入。
+ * 采集生产 Bundle 指纹输入（按 slot，REGISTRY-DRIFT-IDENTITY-1）。
+ *
+ * systemPrompt 与 renderer/parser/协议实现文件按 slot 采集该阶段实际使用的
+ * 系统提示与实现；不再对全部 slot 统一使用 NovelOS Agentic 的提示与文件。
  *
  * @param opts
  *   - workspaceRoot：扩展 workspace 根（.pi/extensions/novel-studio），用于读取源码
+ *   - slot：采集的 prompt slot（决定 systemPrompt 与实现文件集）
  *   - identity：模型身份与请求参数（modelVersion / provider / route / temperature / maxTokens）
  *   - profileId：可选的 profile 覆盖；缺省用 resolveWriterPromptProfile 从 route/provider 解析
  */
 export function collectProductionBundleFingerprint(opts: {
   workspaceRoot: string;
+  slot: PromptSlot;
   identity: {
     modelVersion: string;
     provider: string;
@@ -145,6 +204,7 @@ export function collectProductionBundleFingerprint(opts: {
     model: identity.modelVersion,
     route: identity.route,
   });
+  const files = SLOT_FINGERPRINT_FILES[opts.slot];
 
   const toolSchema = Array.from(NARRATIVE_TOOL_NAMES).sort().join(",");
   const contextCompiler = Array.from(CONTEXT_COMPILER_NAMES).sort().join(",");
@@ -161,14 +221,14 @@ export function collectProductionBundleFingerprint(opts: {
     provider: identity.provider,
     route: identity.route,
     profileId,
-    systemPrompt: NOVELOS_SYSTEM_PROMPT,
-    userPromptRenderer: readSourceFiles(workspaceRoot, USER_PROMPT_RENDERER_FILES),
-    chapterContractRenderer: readSourceFiles(workspaceRoot, CHAPTER_CONTRACT_RENDERER_FILES),
+    systemPrompt: SLOT_SYSTEM_PROMPTS[opts.slot],
+    userPromptRenderer: readSourceFiles(workspaceRoot, files.userPromptRenderer),
+    chapterContractRenderer: readSourceFiles(workspaceRoot, files.chapterContractRenderer),
     toolSchema,
-    toolProtocol: readSourceFiles(workspaceRoot, TOOL_PROTOCOL_FILES),
+    toolProtocol: readSourceFiles(workspaceRoot, files.toolProtocol),
     contextCompiler,
-    outputParser: readSourceFiles(workspaceRoot, OUTPUT_PARSER_FILES),
-    terminationProtocol: readSourceFiles(workspaceRoot, TERMINATION_PROTOCOL_FILES),
+    outputParser: readSourceFiles(workspaceRoot, files.outputParser),
+    terminationProtocol: readSourceFiles(workspaceRoot, files.terminationProtocol),
     providerCapability: getProviderCapability(identity.provider),
     budget,
     temperature: identity.temperature,

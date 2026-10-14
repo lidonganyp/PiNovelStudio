@@ -29,15 +29,19 @@ describe('production compose readiness wiring', () => {
 
     expect(apiSection).toMatch(/healthcheck:/);
     expect(apiSection).toMatch(/\/api\/health/);
-    expect(apiSection).toMatch(/NOVEL_BILLING_REQUIRED_MODELS:\s+.*v2_rawstage2_gpt6astra/);
-    expect(apiSection).toMatch(/v2_amplified_gpt6astra/);
+    expect(apiSection).toMatch(/NOVEL_BILLING_REQUIRED_MODELS:\s+.*v2_rawstage2_gemini31/);
+    expect(apiSection).toMatch(/v2_amplified_gemini31/);
     expect(apiSection).toMatch(/CORS_ORIGINS:\s+\$\{CORS_ORIGINS:\?CORS_ORIGINS is required in production\}/);
-    expect(runtimeSection).toMatch(/NOVEL_REQUIRED_PROVIDER_KEYS:\s+GPT_API_KEY/);
+    expect(runtimeSection).toMatch(/NOVEL_REQUIRED_PROVIDER_KEYS:\s+GEMINI_API_KEY/);
     expect(runtimeSection).toMatch(/NODE_ENV:\s+production/);
     expect(runtimeSection).toMatch(/PINOVEL_DEV_MODE:\s+'0'/);
     expect(runtimeSection).toMatch(/PINOVEL_RELEASE_COMMIT:\s+\$\{PINOVEL_RELEASE_COMMIT:\?PINOVEL_RELEASE_COMMIT is required/);
     expect(runtimeSection).toMatch(/\.\.\/config\/production-identity:\/app\/pnovel\/config\/production-identity:ro/);
     expect(runtimeSection).toMatch(/api:\r?\n\s+condition: service_healthy/);
+    // P1-1：runtime 镜像不含仓库根 .env，统一 writer 三变量必须从部署入口 required 注入
+    expect(runtimeSection).toMatch(/GEMINI_MODEL:\s+\$\{GEMINI_MODEL:\?GEMINI_MODEL is required\}/);
+    expect(runtimeSection).toMatch(/GOOGLE_GEMINI_BASE_URL:\s+\$\{GOOGLE_GEMINI_BASE_URL:\?GOOGLE_GEMINI_BASE_URL is required\}/);
+    expect(runtimeSection).toMatch(/GEMINI_API_KEY:\s+\$\{GEMINI_API_KEY:\?GEMINI_API_KEY is required\}/);
   });
 
   it('runs the explicit first-deploy bootstrap before the API and runtime', () => {
@@ -47,8 +51,23 @@ describe('production compose readiness wiring', () => {
     );
     expect(compose).toMatch(/^\x20{2}api-bootstrap:\r?\n/m);
     expect(compose).toMatch(/BOOTSTRAP_ADMIN_EMAIL/);
-    expect(compose).toMatch(/BOOTSTRAP_GPT_API_KEY/);
+    expect(compose).toMatch(/BOOTSTRAP_GEMINI_API_KEY/);
     expect(compose).toMatch(/service_completed_successfully/);
+  });
+
+  it('derives the bootstrap writer channel from the unified deploy variables (P1-1)', () => {
+    const compose = readFileSync(
+      resolve(process.cwd(), '../../docker-compose.yml'),
+      'utf8',
+    );
+    const bootstrapSection = compose.match(
+      /^\x20{2}api-bootstrap:\r?\n([\s\S]*?)(?=^\x20{2}[a-z][\w-]*:\r?\n|^volumes:)/m,
+    )?.[1] ?? '';
+    // 密钥/地址/模型一律从统一 writer 变量派生（无 aimagichub 默认地址、无独立渠道变量）
+    expect(bootstrapSection).toMatch(/BOOTSTRAP_GEMINI_API_KEY:\s+\$\{GEMINI_API_KEY:\?GEMINI_API_KEY is required\}/);
+    expect(bootstrapSection).toMatch(/BOOTSTRAP_GEMINI_API_BASE_URL:\s+\$\{GOOGLE_GEMINI_BASE_URL:\?GOOGLE_GEMINI_BASE_URL is required\}/);
+    expect(bootstrapSection).toMatch(/BOOTSTRAP_GEMINI_MODEL:\s+\$\{GEMINI_MODEL:\?GEMINI_MODEL is required\}/);
+    expect(bootstrapSection).not.toMatch(/BOOTSTRAP_GEMINI_API_BASE_URL:-https:\/\/aimagichub\.xyz/);
   });
 
   it('uses a pnpm 10-compatible production dependency deployment command', () => {

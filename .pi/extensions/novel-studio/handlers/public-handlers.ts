@@ -69,7 +69,7 @@ export async function handleGenerateChapter(input: {
   previousChapterSummary?: string;
   styleProfile?: string;
   /** Production writer selection. Undefined uses Gemini; neither writer is a silent fallback. */
-  writerModel?: "claude" | "gpt6astra";
+  writerModel?: "claude" | "gemini31";
   /**
    * FULL-PIPELINE-PREVIEW-1：完整链路只读预览。
    * 执行统一主链路（NovelOS Agentic → 作者风格整章优化 → 事实复检），但跳过所有副作用

@@ -37,9 +37,11 @@ import {
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { resolveChapterFile } from "../utils/chapter-path.js";
 
 import {
   computeEvalFixtureHash,
+  isEvalFixtureSupportingFile,
   parseEvalFixtureV1,
   type EvalFixtureV1,
   type ReplayRunManifestV1,
@@ -275,10 +277,10 @@ export function collectReplayTransportEvidence(
  *
  * production_like / dev_real_model 回放必须消费 fixture.provenance.modelRoute，
  * 不得让调用脚本回退到开发缺省（GLM 锁）：
- *  - gpt-6-astra 生产路由（v2_rawstage2_gpt6astra / v2_amplified_gpt6astra，
- *    GPT6-ASTRA-PRODUCTION-SWITCH-1 后的默认）→ 不传路由参数
- *    （modelTestRoute=undefined 即生产默认 gpt-6-astra 主链路）；
- *  - 历史 Gemini 生产路由（v2_rawstage2_gemini31 / v2_amplified_gemini31，
+ *  - Gemini 生产路由（v2_rawstage2_gemini31 / v2_amplified_gemini31，
+ *    GEMINI38-FLASH-PRODUCTION-RESTORE-1 后的默认）→ 不传路由参数
+ *    （modelTestRoute=undefined 即生产默认 Gemini 主链路）；
+ *  - 历史 gpt-6-astra 生产路由（v2_rawstage2_gpt6astra / v2_amplified_gpt6astra，
  *    仅存在于历史 fixture）→ 不传路由参数（当前生产默认同为非 Claude 主链路）；
  *  - Claude 显式生产路由（v2_rawstage2 / v2_amplified）→ --writer-model=claude；
  *  - eval 锁路由（unified-entry resolveModelTestRouteLock 已知 alias）→
@@ -315,7 +317,7 @@ export function resolveModelRouteInvokeArgs(
   }
   return {
     ok: false,
-    reason: `fixture ${fixture.fixtureId} 声明未知生产路由 modelRoute="${route}"；已知：v2_rawstage2_gpt6astra / v2_amplified_gpt6astra / v2_rawstage2_gemini31 / v2_amplified_gemini31 / v2_rawstage2 / v2_amplified / eval 锁路由（${[...EVAL_LOCK_ROUTES].join("|")}）`,
+    reason: `fixture ${fixture.fixtureId} 声明未知生产路由 modelRoute="${route}"；已知：v2_rawstage2_gemini31 / v2_amplified_gemini31 / v2_rawstage2_gpt6astra / v2_amplified_gpt6astra / v2_rawstage2 / v2_amplified / eval 锁路由（${[...EVAL_LOCK_ROUTES].join("|")}）`,
   };
 }
 
@@ -406,7 +408,7 @@ function sha256File(path: string): string | null {
 }
 
 /** 把 fixture workspace 快照物化到 scratch workspace（含内容 hash 校验）。 */
-function materializeWorkspace(
+export function materializeWorkspace(
   lease: ScratchWorkspaceLease,
   fixture: EvalFixtureV1,
 ): { violations: IsolationViolation[] } {
@@ -429,10 +431,10 @@ function materializeWorkspace(
   writeJson(join(workspacePath, "config.json"), config);
 
   if (typeof fixture.workspace.outline === "string") {
-    writeFileSync(join(seriesPath, "outline.md"), fixture.workspace.outline + "\n", "utf-8");
+    writeFileSync(join(seriesPath, "outline.md"), fixture.workspace.outline, "utf-8");
   }
   for (const [characterId, profile] of Object.entries(fixture.workspace.characterProfiles)) {
-    writeFileSync(join(charactersPath, `${characterId}.md`), profile + "\n", "utf-8");
+    writeFileSync(join(charactersPath, `${characterId}.md`), profile, "utf-8");
   }
   if (fixture.workspace.worldItems) {
     writeJson(join(seriesPath, "world-items.json"), {
@@ -442,6 +444,22 @@ function materializeWorkspace(
   }
   if (fixture.workspace.skeleton) {
     writeJson(join(seriesPath, "skeleton.json"), fixture.workspace.skeleton);
+  }
+  if (fixture.workspace.creativeConstitution) {
+    writeJson(join(workspacePath, "creative-constitution.json"), fixture.workspace.creativeConstitution);
+  }
+  for (const [relativePath, content] of Object.entries(fixture.workspace.supportingFiles ?? {})) {
+    if (!isEvalFixtureSupportingFile(relativePath)) {
+      violations.push({ kind: "path_escape", detail: `不支持的 workspace 输入路径：${relativePath}` });
+      continue;
+    }
+    writeFileSync(join(workspacePath, relativePath), content, "utf-8");
+  }
+  if (fixture.workspace.narrativeStateStore) {
+    writeJson(join(workspacePath, "narrative-state-store.json"), {
+      ...fixture.workspace.narrativeStateStore,
+      workspaceId: lease.workspaceId,
+    });
   }
   // 风格档案物化：统一主链路 preflight 要求 styles/profile.json 存在
   //（模型调用前 hard block），回放快照内联档案物化到 scratch workspace。
@@ -458,17 +476,9 @@ function materializeWorkspace(
       fixture.workspace.chapterContinuity,
     );
   }
-  writeJson(
-    join(seriesPath, "narrative-state.json"),
-    fixture.priorNarrativeState ?? {
-      schemaVersion: 1,
-      canon: {},
-      characters: {},
-      promises: {},
-      patterns: {},
-      createdAt: new Date().toISOString(),
-    },
-  );
+  if (fixture.priorNarrativeState !== null) {
+    writeJson(join(seriesPath, "narrative-state.json"), fixture.priorNarrativeState);
+  }
 
   // F4-2：冻结 ChapterSeed 物化。loadChapterSeed 优先消费 series/chapter-seed-frozen.json
   //（身份匹配时原样返回，仅重写 workspaceId），保证回放种子确定性；
@@ -481,10 +491,8 @@ function materializeWorkspace(
   }
 
   for (const chapter of fixture.workspace.historicalChapters) {
-    const chapterDir = join(chaptersPath, `chapter-${chapter.chapterId}`);
-    mkdirSync(chapterDir, { recursive: true });
     if (typeof chapter.content === "string") {
-      const finalPath = join(chapterDir, "final.md");
+      const finalPath = resolveChapterFile(workspacePath, String(chapter.chapterNumber));
       writeFileSync(finalPath, chapter.content, "utf-8");
       const actualHash = createHash("sha256")
         .update(chapter.content, "utf-8")
@@ -1096,9 +1104,9 @@ export async function runFullPipelineReplay(
       join(sampleArchivePath, "state-projection.json"),
       {
         workspacePath: lease.workspacePath,
-        narrativeStatePath: join(lease.workspacePath, "series", "narrative-state.json"),
+        narrativeStatePath: join(lease.workspacePath, "narrative-state-store.json"),
         narrativeStateHash: sha256File(
-          join(lease.workspacePath, "series", "narrative-state.json"),
+          join(lease.workspacePath, "narrative-state-store.json"),
         ),
         chaptersDir: join(lease.workspacePath, "chapters"),
       },

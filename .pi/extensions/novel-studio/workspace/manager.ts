@@ -122,11 +122,21 @@ export class WorkspaceManager {
       }
     }
 
-    const config: WorkspaceConfig = {
+    // 模板可能不包含 characters 目录；先确保目录结构完整，再扫描角色文件，
+    // 否则 readdirSync 在无模板 characters 目录时稳定抛 ENOENT。
+    await this.ensureDirectories(workspaceId);
+
+    const config: WorkspaceConfig & { characters: string[] } = {
       workspaceId,
       novelName,
       genre,
       subGenres,
+      // Preflight requires an explicit character inventory. Populate it from
+      // copied character profiles so a freshly initialized workspace is
+      // immediately generatable instead of failing its first preflight.
+      characters: readdirSync(join(workspacePath, "characters"), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map((entry) => entry.name.replace(/\.md$/i, "")),
       styleProfile,
       styleOverrides: {},
       brainholePreferences: {
@@ -155,8 +165,6 @@ export class WorkspaceManager {
     await saveWorkspaceConfig(workspaceId, config);
     this.configCache.set(workspaceId, config);
 
-    await this.ensureDirectories(workspaceId);
-
     return config;
   }
 
@@ -170,10 +178,20 @@ export class WorkspaceManager {
       "worldbuilding",
       "characters",
       "chapters",
+      "styles",
     ];
 
     for (const dir of dirs) {
       await ensureDir(join(basePath, dir));
+    }
+    const stylePath = join(basePath, "styles", "profile.json");
+    if (!(await pathExists(stylePath))) {
+      await writeJsonAtomic(stylePath, {
+        id: "default",
+        name: "默认作者风格",
+        editorialGuidance: ["保持中文表达自然，动作和因果清晰，保留作者自己的叙事声音。"],
+        usagePolicy: "qualitative_only",
+      });
     }
   }
 

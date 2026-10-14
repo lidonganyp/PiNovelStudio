@@ -1,7 +1,7 @@
 # 模型路由现状审计与基线冻结（WP-00）
 
-**快照日期**：2026-08-12  
-**配置真相源**：`config/model-routing.json`（v4.34.0）
+**快照日期**：2026-08-12（2026-10-14 按路由真相源 v4.36.0 校订）
+**配置真相源**：`config/model-routing.json`（v4.36.0）
 **运行时入口**：`novel_generate_chapter` → `handlers/public-handlers.ts` → `v2/core/unified-entry.ts` → `v2/core/unified-orchestrator.ts`
 
 本文件冻结本轮治理基线。目标不是重建第二套路由系统，而是统一并补齐：
@@ -17,22 +17,24 @@
 
 | 任务 | 当前路由 | provider / model | 生产可用 | fallback | 说明 |
 |---|---|---|---:|---:|---|
-| Agentic 初稿 | `v2_rawstage2_gpt6astra` | gpt / gpt-6-astra | 是 | `[]` | 默认 `writerModel` 省略时解析到此 |
-| 作者风格优化 | `v2_amplified_gpt6astra` | gpt / gpt-6-astra | 是 | `[]` | 生产必须经过风格整章优化 |
+| Agentic 初稿 | `v2_rawstage2_gemini31` | gemini31 / `.env GEMINI_MODEL` 解析（当前 gemini-4-argon） | 是 | `[]` | 默认 `writerModel` 省略时解析到此；单渠道，失败仅同渠道有界重试 |
+| 作者风格优化 | `v2_amplified_gemini31` | gemini31 / `.env GEMINI_MODEL` 解析（当前 gemini-4-argon） | 是 | `[]` | 生产必须经过风格整章优化；单渠道，失败仅同渠道有界重试 |
 | 显式 Claude 初稿 | `v2_rawstage2` | claude / claude-opus-4-6 | 是（显式） | `[]` | 仅 `writerModel=claude` |
 | 显式 Claude 风格 | `v2_amplified` | claude / claude-opus-4-6 | 是（显式） | `[]` | 仅 `writerModel=claude` |
 | 事实验证 / FactGuard | 本地规则 + 结构化解析 | local / 结构化模型 | 是 | 同阶段策略 | 不可因降本绕过 |
-| 文学评测 judge | `v2_literary_judge` / `v2_opportunity_judge` | gpt / gpt-5.6-sol | **否（生产不调用）** | `[]` | 仅隔离评测 / 历史回放 |
+| 文学评测 judge | `v2_literary_judge` / `v2_opportunity_judge` | gpt / gpt-5.6-sol | **否（生产不调用）** | `[]` | 仅隔离评测 / 历史回放；SSE 传输 |
 | NovelBench 生成 | `nb4_generate_*` | glm/doubao/gpt/claude/gemini... | 否 | `[]` | lab / comparison only |
 | NovelBench judge | `nb4_judge_*` / `nb5_judge_*` | glm/doubao | 否 | `[]` | lab only |
 | 中文校准 | `v2_chinese_calibration` | doubao | 否（默认生产不入） | `[]` | 校准 / 受限 span 路径 |
 | 开发测试锁 | `narrator_testing_*` / `modelTestRoute` | glm/doubao/... | 否 | 多数 `[]` | 与生产 writer 互斥 |
 
+> 历史记录：v4.34.0 曾以 `v2_rawstage2_gpt6astra` / `v2_amplified_gpt6astra`（gpt / gpt-6-astra，`GPT_API_KEY` / `GPT_WRITER_MODEL`）为生产写路由；v4.35.0（GEMINI38-FLASH-PRODUCTION-RESTORE-1）复原 Gemini 为唯一生产正文模型并物理删除 gpt6astra 写路由，不保留并行回退。v4.36.0（WRITER-ENV-UNIFY-1）将写模型与端点收敛为 `.env` 单一配置入口（`GEMINI_MODEL` / `GOOGLE_GEMINI_BASE_URL`），并物理删除 Aimagichub/Solov 双渠道互备与 `GEMINI_SOLOV_*` / `GEMINI_AIMAGICHUB_*` 渠道变量。下文矩阵以 v4.36.0 为准。
+
 ### 1.1 默认生产解析（运行时）
 
 `resolveWriterModelRouteLock(writerModel)`（`unified-entry.ts`）：
 
-- `writerModel === undefined | "gpt6astra"` → gpt-6-astra 生产锁
+- `writerModel === undefined | "gemini31"` → Gemini 生产锁（`v2_rawstage2_gemini31` / `v2_amplified_gemini31`，profile `gemini_writer_v2`；实际模型由 `.env GEMINI_MODEL` 解析）
 - `writerModel === "claude"` → Claude 显式锁
 - `writerModel` 与 `modelTestRoute` **不能同时设置**
 

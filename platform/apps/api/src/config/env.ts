@@ -68,8 +68,8 @@ function normalizeIpv6(host: string): string | null {
 
 /** The unified production pipeline always settles both durable writer stages. */
 export const PRODUCTION_BILLING_MODEL_ROUTES = [
-  'v2_rawstage2_gpt6astra',
-  'v2_amplified_gpt6astra',
+  'v2_rawstage2_gemini31',
+  'v2_amplified_gemini31',
 ] as const;
 
 const envSchema = z

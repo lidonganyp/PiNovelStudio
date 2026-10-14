@@ -36,7 +36,7 @@ export function createBlockedRawRecovery(input: {
   workspaceId: string;
   chapterId: string;
   chapterNumber: number;
-  writerModel?: "claude" | "gpt6astra";
+  writerModel?: "claude" | "gemini31";
   generationModelGenerate: ModelGenerateFn;
 }): BlockedRawRecovery {
   const tracesDir = join(input.projectRoot, "workspaces", input.workspaceId, "traces");
@@ -80,11 +80,11 @@ export function createBlockedRawRecovery(input: {
     throw new Error(`blocked raw recovery rejects truncated finish reason: ${String(evidence.rawFinishReason)}`);
   }
   const writerModel = input.writerModel ?? "claude";
-  // GPT6-ASTRA-PRODUCTION-SWITCH-1：生产主写为 gpt-6-astra；旧 gemini31 选项已按版本收敛删除。
-  const expectedModelPattern = writerModel === "gpt6astra"
-    ? /^gpt-6-astra(?:$|[-_.])/i
+  // GEMINI38-FLASH-PRODUCTION-RESTORE-1：生产主写为 Gemini 3.8 Flash；旧 gpt6astra 选项已按版本收敛删除。
+  const expectedModelPattern = writerModel === "gemini31"
+    ? /^gemini-3\.8-flash(?:$|[-_.])/i
     : /^claude-opus-4-6(?:$|[-_.])/i;
-  const expectedModelLabel = writerModel === "gpt6astra" ? "gpt-6-astra" : "Claude 4.6";
+  const expectedModelLabel = writerModel === "gemini31" ? "Gemini 3.8 Flash" : "Claude 4.6";
   if (!evidence.rawModel || !expectedModelPattern.test(evidence.rawModel)) {
     throw new Error(`blocked raw recovery requires ${expectedModelLabel} raw model, got ${String(evidence.rawModel)}`);
   }
@@ -92,7 +92,7 @@ export function createBlockedRawRecovery(input: {
   const recoveredOutput: ModelGenerateOutput = {
     text: evidence.storedText,
     model: evidence.rawModel,
-    provider: writerModel === "gpt6astra" ? "gpt" : "anthropic",
+    provider: writerModel === "gemini31" ? "gemini31" : "anthropic",
     route: "v2_rawstage2",
     durationMs: 0,
     finishReason: evidence.rawFinishReason,

@@ -148,7 +148,7 @@ export function loadConfig(): NovelRuntimeConfig {
   }
   const requiredProviderEnvKeys = optionalEnv(
     "NOVEL_REQUIRED_PROVIDER_KEYS",
-    nodeEnv === "production" ? "GPT_API_KEY" : "",
+    nodeEnv === "production" ? "GEMINI_API_KEY" : "",
   )
     .split(",")
     .map((key) => key.trim())

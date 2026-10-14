@@ -12,6 +12,7 @@
 
 1. **novel-runtime 可整体抽取**。它位于 [sub2api/services/novel-runtime/](../../sub2api/services/novel-runtime/)，是独立的 Node/TypeScript Express 服务（监听 `127.0.0.1:3100`），依赖仅 express / jose / zod / pino / undici，与 Go 主体的耦合只通过 HTTP 回调（billing-client）与任务令牌签发密钥，无 Go 代码依赖。
 2. **PiNovelStudio 零改动即可脱离 sub2api 网关**。P0-3 网关出口是 env 条件性覆写（[api/fallback-manager.ts](../../.pi/extensions/novel-studio/api/fallback-manager.ts) 与 [utils/config.ts](../../.pi/extensions/novel-studio/utils/config.ts)）：只要**不设置** `SUB2API_INTERNAL_LLM_API_KEY` / `SUB2API_INTERNAL_LLM_BASE_URL`，模型调用即恢复原生 provider 直连。新平台不设置这两个 env 即可，PiNovelStudio 主链路代码一行不改。
+   > **历史状态（2026-10-14 更新）**：本结论基于当时 SUB2API 条件覆写分支仍存在的状态。platform R4 改造（原生 provider 直连）删除网关后，扩展侧 `SUB2API_INTERNAL_LLM_*` 覆写分支已按版本收敛原则物理删除（WRITER-ENV-UNIFY-1 复查整改）；旧网关变量残留环境不再影响任何渠道，统一 writer 配置只认 `GEMINI_MODEL` / `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`。
 3. **sub2api 前端无标准组件库**（package.json 中无 naive-ui / element-plus 等），5 个 novel Vue 视图只能做**结构参考**，UI 层按 Element Plus 全新实现。
 
 ---
@@ -227,7 +228,9 @@ platform/                          # pnpm workspace 根
 
 ### 4.4 PiNovelStudio 零改动结论（关键）
 
-- [api/fallback-manager.ts](../../.pi/extensions/novel-studio/api/fallback-manager.ts) 与 [utils/config.ts](../../.pi/extensions/novel-studio/utils/config.ts) 中的 sub2api 网关出口仅在 `SUB2API_INTERNAL_LLM_API_KEY` / `SUB2API_INTERNAL_LLM_BASE_URL` 存在时覆写。
+> **历史状态（2026-10-14 更新）**：下述"条件覆写"分支已按版本收敛原则物理删除（WRITER-ENV-UNIFY-1 复查整改）。`SUB2API_INTERNAL_LLM_*` 变量即使残留也不再影响任何渠道；统一 writer 配置只认 `.env` 的 `GEMINI_MODEL` / `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`，容器部署由 compose 从部署统一入口 required 注入。
+
+- ~~[api/fallback-manager.ts](../../.pi/extensions/novel-studio/api/fallback-manager.ts) 与 [utils/config.ts](../../.pi/extensions/novel-studio/utils/config.ts) 中的 sub2api 网关出口仅在 `SUB2API_INTERNAL_LLM_API_KEY` / `SUB2API_INTERNAL_LLM_BASE_URL` 存在时覆写。~~
 - **新平台部署中这两个 env 永远不设置** → 模型调用走原生 provider 直连（GLM/Claude/Doubao/Gemini 各自 base URL + key，从 `config/model-routing.json` 路由规则）。
 - Provider 凭证通过 novel-runtime 容器 env 注入（`GLM_*` / `CLAUDE_*` / `ARK_*` 等，与主仓库 `.env` 同名同义）。
 - 计量不依赖网关：novel-runtime 的 metering-binder 从 PiNovelStudio 返回的 `stageResults.modelCalls[]` 直接取数上报。
@@ -583,6 +586,7 @@ services:
 >
 > - **P3-2 验证**：`npm run build` 通过；88/88 测试绿（14 套件）；HMAC 与 Phase 2 契约逐字节对齐已核对（stableStringify 键字典序一致、canonical `${timestamp}\n${METHOD}\n${path}\n${sha256hex(body)}` 一致、Guard 取 `request.url.split('?')[0]` 与 runtime 签名路径一致、SettleCallDto/fen 字符串金额解析对齐 internal.controller）。
 > - **P3-6 验证**：PiNovelStudio 零改动成立。`utils/config.ts` 的 `getApiKey/getBaseUrl` 与 `api/fallback-manager.ts` 的 `gatewayConfigured` 均为 `SUB2API_INTERNAL_LLM_*` 环境变量条件分支；平台部署不设置该变量即自然回落 per-provider 直连（凭证由 runtime 容器 env 或 internal API 注入）。上述两文件均未被修改。
+>   - **2026-10-14 更新**：上述"两文件均未被修改"为当时快照。WRITER-ENV-UNIFY-1 复查整改已物理删除这两处 `SUB2API_INTERNAL_LLM_*` 条件分支（版本收敛原则：platform R4 已删除网关，扩展侧分支为死路径），并补回归测试确保旧变量残留不劫持统一 writer 渠道。
 > - **并行结论**（对用户问题的回答）：P3-1/2/3/6 与 Phase 2 无文件冲突，可并行（本次已并行完成）；P3-4/5 涉及 platform-api jobs 模块与 Phase 2 计费/内部 API 强耦合，须待 Phase 2 合入后开工。
 >
 > **执行偏差**（与原计划的差异）：

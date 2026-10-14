@@ -30,6 +30,30 @@ import { createHash } from "node:crypto";
 export const EVAL_FIXTURE_SCHEMA_ID = "pinovel.eval-fixture";
 export const EVAL_FIXTURE_SCHEMA_VERSION = 1;
 
+export const EVAL_FIXTURE_SUPPORTING_FILES = [
+  "CORE-WRITING-PRINCIPLES.md",
+  "WORLDBUILDING-CANON.md",
+  "STYLE-PROFILE.md",
+  "USER-REVISION-LEARNINGS.md",
+  "chapter-hooks-ledger.md",
+  "series/outline-full.md",
+  "series/unsettled-details.json",
+  "series/world-items.json",
+  "series/arc-registry-derived.json",
+  "series/arc-registry.json",
+  "series/narrative-state-derived.json",
+  "series/fatigue-state-derived.json",
+  "series/fatigue-state.json",
+  "series/reader-feedback.json",
+  "series/return-chapter-provenance.json",
+  "series/chapter-progression-contracts.json",
+] as const;
+
+export function isEvalFixtureSupportingFile(path: string): boolean {
+  return (EVAL_FIXTURE_SUPPORTING_FILES as readonly string[]).includes(path)
+    || /^series\/ch[1-9]\d*-outline-explicit\.md$/.test(path);
+}
+
 export const EVAL_RUN_MANIFEST_SCHEMA_ID = "pinovel.eval-replay-run-manifest";
 export const EVAL_RUN_MANIFEST_SCHEMA_VERSION = 1;
 
@@ -117,6 +141,12 @@ export interface EvalFixtureWorkspaceSnapshotV1 {
    * Runner 物化为 scratch workspace 的 styles/profile.json。
    */
   styleProfile?: Record<string, unknown>;
+  /** creative-constitution.json 原样快照。 */
+  creativeConstitution?: Record<string, unknown>;
+  /** narrative-state-store.json 权威快照；仅在隔离副本重绑定 workspaceId，不迁移事实条目。 */
+  narrativeStateStore?: Record<string, unknown>;
+  /** 生产读取的作者资料与种子/诊断依赖，按原路径及原文本冻结；不重建派生事实。 */
+  supportingFiles?: Record<string, string>;
   /**
    * 前章连续性快照（chapter-continuity/{N-1}.json）。
    * 该快照是没有正文或正式 state store 时的最小连续性证据；Runner
@@ -242,7 +272,7 @@ export interface EvalFixtureV1 {
   provenance: EvalFixtureProvenanceV1;
   workspace: EvalFixtureWorkspaceSnapshotV1;
   chapterSeed: EvalFixtureChapterSeedV1;
-  /** 前章 NarrativeState 快照；第 1 章为 null。 */
+  /** 旧 NarrativeState 投影快照；可为 null，权威状态见 workspace.narrativeStateStore。 */
   priorNarrativeState: Record<string, unknown> | null;
   modelPolicy: EvalFixtureModelPolicyV1;
   recordedToolResults?: EvalFixtureRecordedToolResult[];
@@ -370,6 +400,25 @@ function validateWorkspaceSnapshot(raw: unknown, errors: EvalContractError[]): v
     return;
   }
   requireNonEmptyString(raw, "sourceWorkspaceId", "/workspace", errors);
+  for (const field of ["narrativeStateStore", "creativeConstitution"] as const) {
+    if (raw[field] !== undefined && !isPlainObject(raw[field])) {
+      errors.push({ field: `/workspace/${field}`, rule: "invalid_snapshot", message: `${field} 必须为 JSON 对象` });
+    }
+  }
+  if (isPlainObject(raw.narrativeStateStore) && raw.narrativeStateStore.workspaceId !== raw.sourceWorkspaceId) {
+    errors.push({ field: "/workspace/narrativeStateStore/workspaceId", rule: "workspace_mismatch", message: "权威状态库必须属于 sourceWorkspaceId" });
+  }
+  if (raw.supportingFiles !== undefined) {
+    if (!isPlainObject(raw.supportingFiles)) {
+      errors.push({ field: "/workspace/supportingFiles", rule: "invalid_snapshot", message: "supportingFiles 必须为路径到文本的对象" });
+    } else {
+      for (const [path, content] of Object.entries(raw.supportingFiles)) {
+        if (!isEvalFixtureSupportingFile(path) || typeof content !== "string") {
+          errors.push({ field: `/workspace/supportingFiles/${path}`, rule: "invalid_supporting_file", message: "仅允许冻结已知生产输入路径的文本" });
+        }
+      }
+    }
+  }
   if (!isPlainObject(raw.config)) {
     errors.push({
       field: "/workspace/config",

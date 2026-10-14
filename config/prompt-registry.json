@@ -1,7 +1,7 @@
 {
   "schema": "pinovel-prompt-registry/v1",
   "version": "1.0.0",
-  "updatedAt": "2026-08-10T12:29:32.542Z",
+  "updatedAt": "2026-10-05T04:36:17.418Z",
   "versions": [
     {
       "versionId": "novelos_agentic-v1",
@@ -15,7 +15,7 @@
         "contextHash": "231f6970cf8d110e",
         "budgetHash": "5e66798af7a5163a"
       },
-      "status": "active",
+      "status": "held",
       "statusHistory": [
         {
           "from": "draft",
@@ -37,10 +37,17 @@
           "timestamp": "2026-08-10T12:29:32.207Z",
           "reason": "Phase 9 基线回放：确认为生产基线",
           "actor": "manual"
+        },
+        {
+          "from": "active",
+          "to": "held",
+          "timestamp": "2026-10-04T22:44:39.072Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：被 novelos_agentic-v3 取代，按版本收敛原则退出 active",
+          "actor": "manual"
         }
       ],
       "createdAt": "2026-08-10T12:29:32.205Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "updatedAt": "2026-10-04T22:44:39.072Z",
       "bundleManifest": {
         "bundleId": "4a4286681f8f2b93efb525d5726cc7872485a977db229e4740520229058cbe54",
         "modelVersion": "gemini-3.1-pro-preview",
@@ -74,7 +81,7 @@
         "contextHash": "231f6970cf8d110e",
         "budgetHash": "5e66798af7a5163a"
       },
-      "status": "active",
+      "status": "held",
       "statusHistory": [
         {
           "from": "draft",
@@ -96,10 +103,17 @@
           "timestamp": "2026-08-10T12:29:32.207Z",
           "reason": "Phase 9 基线回放：确认为生产基线",
           "actor": "manual"
+        },
+        {
+          "from": "active",
+          "to": "held",
+          "timestamp": "2026-10-04T22:44:39.075Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：被 style_optimizer-v2 取代，按版本收敛原则退出 active",
+          "actor": "manual"
         }
       ],
       "createdAt": "2026-08-10T12:29:32.206Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "updatedAt": "2026-10-04T22:44:39.075Z",
       "bundleManifest": {
         "bundleId": "446e5223b1d6dbff5b4b96442027a172605466ae83bacf70c547d6ee494d74e0",
         "modelVersion": "gemini-3.1-pro-preview",
@@ -134,7 +148,7 @@
         "contextHash": "231f6970cf8d110e",
         "budgetHash": "5e66798af7a5163a"
       },
-      "status": "active",
+      "status": "held",
       "statusHistory": [
         {
           "from": "draft",
@@ -156,10 +170,17 @@
           "timestamp": "2026-08-10T12:29:32.207Z",
           "reason": "Phase 9 基线回放：确认为生产基线",
           "actor": "manual"
+        },
+        {
+          "from": "active",
+          "to": "held",
+          "timestamp": "2026-10-04T22:44:39.077Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：被 writer_adapter-v2 取代，按版本收敛原则退出 active",
+          "actor": "manual"
         }
       ],
       "createdAt": "2026-08-10T12:29:32.206Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "updatedAt": "2026-10-04T22:44:39.077Z",
       "bundleManifest": {
         "bundleId": "d3e9babeed054262fc44cd1d0efc8a1c94a4931ab02e82e0710c0aba71087dce",
         "modelVersion": "gemini-3.1-pro-preview",
@@ -193,7 +214,7 @@
         "contextHash": "231f6970cf8d110e",
         "budgetHash": "5e66798af7a5163a"
       },
-      "status": "active",
+      "status": "held",
       "statusHistory": [
         {
           "from": "draft",
@@ -215,10 +236,17 @@
           "timestamp": "2026-08-10T12:29:32.207Z",
           "reason": "Phase 9 基线回放：确认为生产基线",
           "actor": "manual"
+        },
+        {
+          "from": "active",
+          "to": "held",
+          "timestamp": "2026-10-04T22:44:39.080Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：被 retrieval_eval-v3 取代，按版本收敛原则退出 active",
+          "actor": "manual"
         }
       ],
       "createdAt": "2026-08-10T12:29:32.207Z",
-      "updatedAt": "2026-08-10T12:29:32.207Z",
+      "updatedAt": "2026-10-04T22:44:39.080Z",
       "bundleManifest": {
         "bundleId": "99dd5ba6e0fae5e463e0902866f5a2f5966df5199704fb3a00c91600c6c62ecf",
         "modelVersion": "gemini-3.1-pro-preview",
@@ -309,28 +337,420 @@
       "rejectedReason": "Phase 8 Stage P 真实 replay（2026-08-10）：mustVerify 覆盖率 0.134（A=0.983），sourceRef 完整率 0.083（A=0.880），9 个场景空结果/超时/错误。根因：Gemini 专属 prompt 过度强调'证据充分即输出 <done>'，导致模型在检索验证前过早终止。prematureDoneRate=1.0（9/9 场景过早终止）。3 批次全部 FAIL，方向一致。",
       "evalManifestId": "phase8-stage-p-real-replay",
       "evalReportPath": "reports/phase8-prompt-native/real/prompt-ab-comparison.json"
+    },
+    {
+      "versionId": "novelos_agentic-v3",
+      "slot": "novelos_agentic",
+      "version": 3,
+      "label": "NovelOS Agentic 系统 Prompt（Gemini 3.8 Flash 生产基线）",
+      "modelRoute": "narrator_primary",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "cf223954ef726e6b",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "5921c62d4c8ffaf9bd9be44ac9833c020fef8b8ba4878b0be8079cfeec822290",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "novelos_agentic",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "cf223954ef726e6bd795665677f75bb01c38c8241e3dc1f3a633b9f27024dd1b",
+        "userPromptRendererHash": "d86f83d580b77138b343f603c0afe1a22b5777cae25b291fb23bbf78aa5b664c",
+        "chapterContractRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "d006e4fe65e889132dbcd1b29719d1662af2927cb76190403ca576db47729a02",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "a65fed516bcf1eeab7b2d54c8853b77f784ebe747714d53a63002ff5d42d9476",
+        "terminationProtocolHash": "dd94eadd4c9ba0e11ffad3f3df3a5dcb125b984d2ff75694026a241b2bef84a0",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 2048,
+        "status": "active"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-10-04T22:44:39.072Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-10-04T22:44:39.072Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：基线回放验证",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-10-04T22:44:39.072Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-10-04T22:44:39.070Z",
+      "updatedAt": "2026-10-04T22:44:39.072Z"
+    },
+    {
+      "versionId": "style_optimizer-v2",
+      "slot": "style_optimizer",
+      "version": 2,
+      "label": "作者风格优化系统 Prompt（Gemini 3.8 Flash 生产基线）",
+      "modelRoute": "narrator_primary",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "93c2a1c784eb38c7",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "9ed2f8f796dfb3cd4386923b78699e05c460ff65363cd7f98647356141805456",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "v2_amplified_gemini31",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "cf223954ef726e6bd795665677f75bb01c38c8241e3dc1f3a633b9f27024dd1b",
+        "userPromptRendererHash": "d86f83d580b77138b343f603c0afe1a22b5777cae25b291fb23bbf78aa5b664c",
+        "chapterContractRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "d006e4fe65e889132dbcd1b29719d1662af2927cb76190403ca576db47729a02",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "a65fed516bcf1eeab7b2d54c8853b77f784ebe747714d53a63002ff5d42d9476",
+        "terminationProtocolHash": "dd94eadd4c9ba0e11ffad3f3df3a5dcb125b984d2ff75694026a241b2bef84a0",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 8192,
+        "status": "active"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-10-04T22:44:39.074Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-10-04T22:44:39.074Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：基线回放验证",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-10-04T22:44:39.074Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-10-04T22:44:39.074Z",
+      "updatedAt": "2026-10-04T22:44:39.074Z"
+    },
+    {
+      "versionId": "writer_adapter-v2",
+      "slot": "writer_adapter",
+      "version": 2,
+      "label": "Writer Adapter 系统 Prompt（Gemini 3.8 Flash 生产基线）",
+      "modelRoute": "narrator_primary",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "85fcaf8de7e357ce",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "33013cae6f6d75917332a0bc90903f78b479ddd25cf11ef1afee324371a8fe10",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "v2_rawstage2_gemini31",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "cf223954ef726e6bd795665677f75bb01c38c8241e3dc1f3a633b9f27024dd1b",
+        "userPromptRendererHash": "d86f83d580b77138b343f603c0afe1a22b5777cae25b291fb23bbf78aa5b664c",
+        "chapterContractRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "d006e4fe65e889132dbcd1b29719d1662af2927cb76190403ca576db47729a02",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "a65fed516bcf1eeab7b2d54c8853b77f784ebe747714d53a63002ff5d42d9476",
+        "terminationProtocolHash": "dd94eadd4c9ba0e11ffad3f3df3a5dcb125b984d2ff75694026a241b2bef84a0",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 8192,
+        "status": "active"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-10-04T22:44:39.077Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-10-04T22:44:39.077Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：基线回放验证",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-10-04T22:44:39.077Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-10-04T22:44:39.077Z",
+      "updatedAt": "2026-10-04T22:44:39.077Z"
+    },
+    {
+      "versionId": "retrieval_eval-v3",
+      "slot": "retrieval_eval",
+      "version": 3,
+      "label": "检索决策 Prompt（Gemini 3.8 Flash 评测基线）",
+      "modelRoute": "narrator_primary",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "17e9500271e5f840",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "ec672a9bc341d89a69dff60b089ee7013fcadfe9af927e5254d18820abd1935b",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "narrator_primary",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "cf223954ef726e6bd795665677f75bb01c38c8241e3dc1f3a633b9f27024dd1b",
+        "userPromptRendererHash": "d86f83d580b77138b343f603c0afe1a22b5777cae25b291fb23bbf78aa5b664c",
+        "chapterContractRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "d006e4fe65e889132dbcd1b29719d1662af2927cb76190403ca576db47729a02",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "a65fed516bcf1eeab7b2d54c8853b77f784ebe747714d53a63002ff5d42d9476",
+        "terminationProtocolHash": "dd94eadd4c9ba0e11ffad3f3df3a5dcb125b984d2ff75694026a241b2bef84a0",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 2048,
+        "status": "active"
+      },
+      "status": "active",
+      "statusHistory": [
+        {
+          "from": "draft",
+          "to": "eval",
+          "timestamp": "2026-10-04T22:44:39.080Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：进入评测",
+          "actor": "manual"
+        },
+        {
+          "from": "eval",
+          "to": "canary",
+          "timestamp": "2026-10-04T22:44:39.080Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：基线回放验证",
+          "actor": "manual"
+        },
+        {
+          "from": "canary",
+          "to": "active",
+          "timestamp": "2026-10-04T22:44:39.080Z",
+          "reason": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 基线重捕获：按当前生产身份 gemini-3.8-flash 重新采集：确认为生产基线",
+          "actor": "manual"
+        }
+      ],
+      "createdAt": "2026-10-04T22:44:39.080Z",
+      "updatedAt": "2026-10-04T22:44:39.080Z"
+    },
+    {
+      "versionId": "novelos_agentic-v4",
+      "slot": "novelos_agentic",
+      "version": 4,
+      "label": "novelos_agentic 基线（gemini-3.8-flash / v2_rawstage2_gemini31，采集待评测）",
+      "modelRoute": "v2_rawstage2_gemini31",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "cf223954ef726e6b",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "af99a316373c78044ba385ec2ca4e70a75ce81fa8ff1bd788f29e7c0faf2e27a",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "v2_rawstage2_gemini31",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "cf223954ef726e6bd795665677f75bb01c38c8241e3dc1f3a633b9f27024dd1b",
+        "userPromptRendererHash": "d86f83d580b77138b343f603c0afe1a22b5777cae25b291fb23bbf78aa5b664c",
+        "chapterContractRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "d006e4fe65e889132dbcd1b29719d1662af2927cb76190403ca576db47729a02",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "a65fed516bcf1eeab7b2d54c8853b77f784ebe747714d53a63002ff5d42d9476",
+        "terminationProtocolHash": "dd94eadd4c9ba0e11ffad3f3df3a5dcb125b984d2ff75694026a241b2bef84a0",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 16384,
+        "status": "draft"
+      },
+      "status": "draft",
+      "statusHistory": [],
+      "createdAt": "2026-10-05T04:36:17.405Z",
+      "updatedAt": "2026-10-05T04:36:17.405Z"
+    },
+    {
+      "versionId": "style_optimizer-v3",
+      "slot": "style_optimizer",
+      "version": 3,
+      "label": "style_optimizer 基线（gemini-3.8-flash / v2_amplified_gemini31，采集待评测）",
+      "modelRoute": "v2_amplified_gemini31",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "93c2a1c784eb38c7",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "317e1a81aeacb6bacd473c8ead58c0a5d04af8d85f136554c1370fa9343f667d",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "v2_amplified_gemini31",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "93c2a1c784eb38c7a1444e8a6714c2221ef7b4d1203354e659f2480d77d03f4b",
+        "userPromptRendererHash": "e39b1724cb69b29c79441921e840378f46e94b61e7cd788b978635faa4ea18c5",
+        "chapterContractRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "e39b1724cb69b29c79441921e840378f46e94b61e7cd788b978635faa4ea18c5",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "e39b1724cb69b29c79441921e840378f46e94b61e7cd788b978635faa4ea18c5",
+        "terminationProtocolHash": "e39b1724cb69b29c79441921e840378f46e94b61e7cd788b978635faa4ea18c5",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.6,
+        "maxTokens": 16384,
+        "status": "draft"
+      },
+      "status": "draft",
+      "statusHistory": [],
+      "createdAt": "2026-10-05T04:36:17.409Z",
+      "updatedAt": "2026-10-05T04:36:17.409Z"
+    },
+    {
+      "versionId": "writer_adapter-v3",
+      "slot": "writer_adapter",
+      "version": 3,
+      "label": "writer_adapter 基线（gemini-3.8-flash / v2_rawstage2_gemini31，采集待评测）",
+      "modelRoute": "v2_rawstage2_gemini31",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "85fcaf8de7e357ce",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "dba1c60abeb82cd60517a0e694630532c7027d92d11a04606ce8377f705369ab",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "v2_rawstage2_gemini31",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "85fcaf8de7e357cebc6fd5509ba94137314429e77458f2bc6b3ba498bb80cd34",
+        "userPromptRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "chapterContractRendererHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "terminationProtocolHash": "11ca01a830c95bbd8c05f44e5e30206614e1f3cc4e6dbb23cc4e7a4573707dc0",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": 0.72,
+        "maxTokens": 16384,
+        "status": "draft"
+      },
+      "status": "draft",
+      "statusHistory": [],
+      "createdAt": "2026-10-05T04:36:17.413Z",
+      "updatedAt": "2026-10-05T04:36:17.413Z"
+    },
+    {
+      "versionId": "retrieval_eval-v4",
+      "slot": "retrieval_eval",
+      "version": 4,
+      "label": "retrieval_eval 基线（gemini-3.8-flash / narrator_primary，采集待评测）",
+      "modelRoute": "narrator_primary",
+      "writerProfile": "gemini_writer_v2",
+      "hashes": {
+        "promptHash": "17e9500271e5f840",
+        "toolSchemaHash": "1a6dddf02234e8bd",
+        "contextHash": "231f6970cf8d110e",
+        "budgetHash": "5e66798af7a5163a"
+      },
+      "bundleManifest": {
+        "bundleId": "ad0be1f598d3dc119fc01f23694f00dd8033c58db45bcf4176ac5f072198dbce",
+        "modelVersion": "gemini-3.8-flash",
+        "provider": "gemini",
+        "route": "narrator_primary",
+        "profileId": "gemini_writer_v2",
+        "systemPromptHash": "17e9500271e5f840578bc29e879108737eeac557e09eade0344b07d027d547cd",
+        "userPromptRendererHash": "f5fb4786ca073a47bc6197258e97896c23a3e35c9fceceb2ddf5c9bbb3de9cf1",
+        "chapterContractRendererHash": "f5fb4786ca073a47bc6197258e97896c23a3e35c9fceceb2ddf5c9bbb3de9cf1",
+        "toolSchemaHash": "1a6dddf02234e8bd84a31aebdfd42e3ef327ea0839205b183419ef79ef817cd3",
+        "toolProtocolHash": "f5fb4786ca073a47bc6197258e97896c23a3e35c9fceceb2ddf5c9bbb3de9cf1",
+        "contextCompilerHash": "231f6970cf8d110e20f8cbc8f75baa43be526f2a704b9adec5263a7718392b22",
+        "outputParserHash": "f5fb4786ca073a47bc6197258e97896c23a3e35c9fceceb2ddf5c9bbb3de9cf1",
+        "terminationProtocolHash": "f5fb4786ca073a47bc6197258e97896c23a3e35c9fceceb2ddf5c9bbb3de9cf1",
+        "providerCapabilityHash": "6d66ade04aba33eb05ddebecc4aa142fce40cd38f6b1fb85429fdc8810bf9a97",
+        "budgetHash": "5e66798af7a5163acfa625dd23f17ee9331d66103dd56753824f3f1e71ef77d8",
+        "temperature": null,
+        "maxTokens": null,
+        "status": "draft"
+      },
+      "status": "draft",
+      "statusHistory": [],
+      "createdAt": "2026-10-05T04:36:17.418Z",
+      "updatedAt": "2026-10-05T04:36:17.418Z"
     }
   ],
   "productionPointers": [
     {
       "slot": "novelos_agentic",
-      "activeVersionId": "novelos_agentic-v1",
-      "pinnedAt": "2026-08-10T12:29:32.541Z"
+      "activeVersionId": "novelos_agentic-v3",
+      "pinnedAt": "2026-10-04T22:44:39.072Z"
     },
     {
       "slot": "style_optimizer",
-      "activeVersionId": "style_optimizer-v1",
-      "pinnedAt": "2026-08-10T12:29:32.541Z"
+      "activeVersionId": "style_optimizer-v2",
+      "pinnedAt": "2026-10-04T22:44:39.075Z"
     },
     {
       "slot": "writer_adapter",
-      "activeVersionId": "writer_adapter-v1",
-      "pinnedAt": "2026-08-10T12:29:32.541Z"
+      "activeVersionId": "writer_adapter-v2",
+      "pinnedAt": "2026-10-04T22:44:39.077Z"
     },
     {
       "slot": "retrieval_eval",
-      "activeVersionId": "retrieval_eval-v1",
-      "pinnedAt": "2026-08-10T12:29:32.541Z"
+      "activeVersionId": "retrieval_eval-v3",
+      "pinnedAt": "2026-10-04T22:44:39.080Z"
     }
   ]
 }

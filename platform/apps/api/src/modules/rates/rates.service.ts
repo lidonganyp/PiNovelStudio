@@ -9,11 +9,10 @@ import { env } from '../../config/env';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { ProviderCredential, RateSnapshot } from './rates.types';
 
-/** 将正文路由映射到同一模型的费率。 */
-const MODEL_RATE_ALIASES: Record<string, string[]> = {
-  v2_rawstage2_gpt6astra: ['gpt-6-astra'],
-  v2_amplified_gpt6astra: ['gpt-6-astra'],
-};
+// P1-3：已删除 MODEL_RATE_ALIASES（v2_rawstage2_gemini31 → gemini-3.8-flash 的
+// 旧模型静默兜底）。bootstrap 现按当前部署模型（BOOTSTRAP_GEMINI_MODEL）直接
+// 以路由 key 建费率行；查询只认 modelKey 本身，缺当前费率时明确 404 阻断，
+// 不静默沿用旧模型费率。
 
 @Injectable()
 export class RatesService {
@@ -26,26 +25,20 @@ export class RatesService {
     modelKey: string,
     at: Date = new Date(),
   ): Promise<Prisma.ModelRateGetPayload<{ include: { provider: true } }>> {
-    const keys = [modelKey, ...(MODEL_RATE_ALIASES[modelKey] ?? [])];
-    for (const key of keys) {
-      const rate = await this.prisma.modelRate.findFirst({
-        where: {
-          modelKey: key,
-          enabled: true,
-          effectiveFrom: { lte: at },
-          provider: { is: { enabled: true } },
-        },
-        orderBy: { effectiveFrom: 'desc' },
-        include: { provider: true },
-      });
-      if (rate) {
-        if (key !== modelKey) {
-          this.logger.log(`using rate alias ${key} for ${modelKey}`);
-        }
-        return rate;
-      }
+    const rate = await this.prisma.modelRate.findFirst({
+      where: {
+        modelKey,
+        enabled: true,
+        effectiveFrom: { lte: at },
+        provider: { is: { enabled: true } },
+      },
+      orderBy: { effectiveFrom: 'desc' },
+      include: { provider: true },
+    });
+    if (!rate) {
+      throw new NotFoundException(`未找到模型 ${modelKey} 的生效费率`);
     }
-    throw new NotFoundException(`未找到模型 ${modelKey} 的生效费率`);
+    return rate;
   }
 
   /** 构造结算用费率快照（单价以分的字符串落库）。 */

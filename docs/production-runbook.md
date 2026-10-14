@@ -1,6 +1,6 @@
 # 生产运行手册
 
-**核对日期**：2026-09-08
+**核对日期**：2026-10-05
 
 ## 1. 发布前检查
 
@@ -26,8 +26,10 @@ node --import ./tests/setup-test-env.mjs --test tests/dependency-boundary.test.m
 
 ```powershell
 npm run evolution:status --workspace novel-studio
-npm run evolution:health --workspace novel-studio -- --all
+npm run evolution:health --workspace novel-studio -- --all --workspace <workspace-absolute-path>
 ```
+
+`evolution:health` 必须提供 `--workspace <path>`（指向具体小说 workspace 目录，如 `D:\CODE\PiNovelStudio\workspaces\xinmo`），或设置 `PINOVEL_WORKSPACE_PATH`；只传 `--all` 会因缺少 workspace 路径直接退出。
 
 从 `evolution:status` 读取当前 production release ID 后执行：
 
@@ -64,9 +66,11 @@ novel_generate_chapter --workspaceId xinmo --chapterId ch18 --chapterNumber 18
 node .pi/extensions/novel-studio/scripts/production-generate-chapter.mjs xinmo ch18 18 --project-root=D:\CODE\PiNovelStudio
 ```
 
-省略 `writerModel` 或传 `--writer-model=gpt6astra` 使用默认 gpt-6-astra；只有用户明确选择时才传 `--writer-model=claude`。正文使用 `GPT_API_KEY` / `GPT_BASE_URL`，`GPT_WRITER_MODEL` 默认 gpt-6-astra；`GPT_MODEL` 仅控制其他 GPT 节点。不要在生产入口传 `modelTestRoute`、`boundedBestOf3`、`qualityExperiment` 或 mock 字段。
+省略 `writerModel` 或传 `--writer-model=gemini31` 使用默认 Gemini 写路由（`v2_rawstage2_gemini31` / `v2_amplified_gemini31`，profile `gemini_writer_v2`）；只有用户明确选择时才传 `--writer-model=claude`。正文模型与端点由仓库根目录 `.env` 唯一决定：`GEMINI_MODEL`（当前 `gemini-4-argon`）、`GOOGLE_GEMINI_BASE_URL`、`GEMINI_API_KEY`；`gemini31` 只是稳定路由标识。改模型/端点只需修改 `.env`，生效方式：**重启进程 / 重新加载扩展**——新进程启动时自动读取一次 `.env`；已在运行的进程不会自动重读文件，运行中的任务已在任务开始时解析一次并冻结模型、地址与密钥（WRITER-ENV-RUN-FREEZE-2，AsyncLocalStorage 任务级快照，并发任务互不影响），修改 `.env` 对当前任务无效，重启后的新任务才使用新值；同一进程内如需不重启立即生效，可由脚本显式调用 `reloadProjectEnv()`。从 `.env` 删除变量后重载会清除旧值残留（缺配置 fail-closed，不静默沿用旧模型）。单渠道无互备：失败仅同渠道有界重试，耗尽即阻断。`GPT_API_KEY` / `GPT_MODEL` 仅控制结构化规划/门禁节点（gpt-5.5）。不要在生产入口传 `modelTestRoute`、`boundedBestOf3`、`qualityExperiment` 或 mock 字段。
 
-当前 GPT 端点禁用 `/chat/completions`；`providers.gpt.request_options.api=responses` 指定 `/responses` 传输，保留 NovelOS 的 ReAct 文本编排。JSON 输出通过 `text.format` 请求；空文、拒绝、未完成和截断响应均阻断。使用相同 GPT 端点的审批传输沿用此配置，模型身份仍读取其独立配置。
+容器部署（platform compose）不从镜像读取 `.env`：`GEMINI_MODEL` / `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY` 必须从部署统一入口（环境变量或 `platform/.env`）注入，缺失任一变量时 compose 启动即报错（fail-closed）；api-bootstrap 的密钥/地址/模型同样从这三个统一变量派生。
+
+历史记录：v4.34.0 曾将生产正文切换为 gpt-6-astra（`GPT_WRITER_MODEL`），v4.35.0（GEMINI38-FLASH-PRODUCTION-RESTORE-1）已按版本收敛原则复原为 Gemini 3.8 Flash 并物理删除 gpt6astra 写路由，不保留并行回退。gpt provider 的 `/responses` 传输仅用于结构化节点；评测 judge 路由（`v2_opportunity_judge` / `v2_literary_judge`，gpt-5.6-sol）走 `/chat/completions` SSE，生产不调用。
 
 ## 4. 成功判定
 
@@ -90,7 +94,7 @@ node .pi/extensions/novel-studio/scripts/production-generate-chapter.mjs xinmo c
 | `severity=recoverable` 且 `gate=model_timeout` | 工具层按预算自动重试一次；仍失败则人工稍后重试 |
 | Agentic 验证、风格优化、Story Preservation、FinalFactRecheck、Completeness 失败 | 视为阻断，不交付初稿；修复输入或重新生成 |
 | 原子保存/状态提交失败 | 检查 trace；系统应回滚章节文件，不要手工拼接正文和状态 |
-| GPT 线路鉴权、配额或网络失败 | 本次运行阻断，不静默切换其他模型；确认 API 后重新发起运行 |
+| Gemini 线路鉴权、配额或网络失败 | 仅同渠道（`GOOGLE_GEMINI_BASE_URL`）有界重试；重试耗尽则本次运行阻断，不静默切换其他模型或渠道；确认 API/配额后重新发起运行 |
 | `stage=g6_release_gate` / 指纹不匹配 | 停止生成；回到干净发布基线重新 capture/verify/审批，不设置开发旁路冒充生产 |
 
 ## 6. 生产与评测的边界

@@ -35,7 +35,7 @@ export async function callOpenAIResponses(
   apiKey: string,
   model: string,
   messages: Array<{ role: string; content: string }>,
-  options?: { max_tokens?: number; jsonMode?: boolean; timeoutMs?: number },
+  options?: { max_tokens?: number; temperature?: number; jsonMode?: boolean; timeoutMs?: number },
 ): Promise<GLMResponse> {
   const timeoutMs = options?.timeoutMs ?? getModelRequestTimeoutMs();
   const controller = new AbortController();
@@ -47,6 +47,8 @@ export async function callOpenAIResponses(
       : messages,
     max_output_tokens: options?.max_tokens ?? 16384,
     store: false,
+    // Responses API 同样支持 temperature；不透传会静默丢弃调用方配置的采样参数。
+    ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
     ...(options?.jsonMode ? { text: { format: { type: "json_object" } } } : {}),
   };
   try {

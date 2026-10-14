@@ -1,16 +1,37 @@
 /**
  * Phase 5 统一编排与单主链路切换测试（计划 §Phase 5 + §10.1）
  *
- * 覆盖退出条件：
+ * ⚠️ 测试分类（审计 P2-2 更正）：本文件验证的是 **legacy raw/editorial/judge
+ * 隔离评测语义**，不是当前生产主链路（NovelOS Agentic → 作者风格整章优化 →
+ * 事实复检 → 状态提交）的行为。它在测试基建 PINOVEL_TEST_LEGACY_PRODUCTION_FLOW=1
+ * （tests/setup-test-env.mjs 默认设置）下运行，验证的降级链
+ * "editorial_fail/judge_fail → 交付 raw" 与当前生产语义
+ * "风格优化失败 → 结构化阻断（blocked，selectedSource=null）" 不同。
+ * fixture 加长（scene-lead-in）只是为过 2000 字完整性门槛，**不构成生产测试迁移**。
+ *
+ * 已存在的生产覆盖（统一主链路 agentic_style，勿在本文件重复）：
+ * - tests/production-agentic-style-flow.test.mjs（生产 agentic_style 流守护）
+ * - tests/phase5-unified-default-path.test.mjs（默认路径；显式 delete 旧流程开关）
+ * - tests/full-pipeline-preview-agentic.test.mjs / preview-agentic-no-side-effects.test.mjs
+ *   （真实 Agentic 路径；显式 delete 旧流程开关）
+ * - scripts/production-generate-chapter.mjs（生产验收调用器；显式清除
+ *   NOVEL_TEST_TOOLS + PINOVEL_TEST_LEGACY_PRODUCTION_FLOW）
+ *
+ * 仍需迁移的历史覆盖（本文件保留为隔离评测资产，迁移前不得删除）：
+ * - editorial 失败降级交付 raw 的编排行为 → 待以"风格优化失败 blocked"语义重写
+ * - judge 选择 editorial/raw 的候选比较 → 生产已不调用机器 judge（用户裁决），
+ *   历史语义仅保留于隔离评测
+ *
+ * 覆盖退出条件（legacy 语义，见上）：
  * 1. 所有章节走统一入口（无 whitelist gating）
  * 2. 非白名单 workspace 可用
- * 3. 编辑层失败仍返回 raw
+ * 3. 编辑层失败仍返回 raw（legacy 隔离评测语义）
  * 4. raw 失败结构化阻断（hard block）
  * 5. 无 silent legacy fallback（无 v2NotImplemented）
- * 6. 成功路径：raw → editorial → judge → select editorial
+ * 6. 成功路径：raw → editorial → judge → select editorial（legacy 隔离评测语义）
  * 7. 最终正文选定后状态提交 + 原子保存
  *
- * 降级链（计划 §Phase 5）：
+ * 降级链（legacy 隔离评测语义，计划 §Phase 5）：
  *   editorial_success → 交付 editorial
  *   editorial_fail/judge_fail → 交付 raw + warning
  *   raw_fail → hard_block（无 legacy 回退）
@@ -24,6 +45,7 @@ import { join } from "node:path";
 
 import { createUnifiedOrchestrator } from "../dist/v2/core/unified-orchestrator.js";
 import { buildJudgeEvidence } from "../dist/v2/core/unified-entry.js";
+import { SCENE_LEAD_IN_LINES } from "./scene-lead-in.mjs";
 
 // ============================================================================
 // 辅助：构造 intent / context / 候选正文
@@ -78,8 +100,11 @@ function makeContext(overrides = {}) {
   };
 }
 
-/** raw 正文：章末平淡无钩子（触发 chapter_end_pressure 机会） */
+/** raw 正文：章末平淡无钩子（触发 chapter_end_pressure 机会）。
+ * 前置 SCENE_LEAD_IN 场景铺垫使去空白字符数满足统一主链路 6.6 最终正文
+ * 完整性门禁默认 minWordCount=2000（不降低门禁）；弱结尾句保持在末尾。 */
 const RAW_TEXT_WEAK_END = [
+  ...SCENE_LEAD_IN_LINES,
   "林川推开门，走了进去。房间里很暗，他摸索着前进。",
   "他抓住苏婉的手臂，把她往水面拉。",
   "暗流拉扯着他的腿，他用力蹬水，把苏婉推到浅滩。",
@@ -87,8 +112,9 @@ const RAW_TEXT_WEAK_END = [
   "窗外的雨还在下，水面恢复了平静，他闭上眼睛，很快睡着了。",
 ].join("\n");
 
-/** editorial 正文：章末有钩子（含"？") */
+/** editorial 正文：章末有钩子（含"？"）。铺垫段零"？"，钩子 marker 只来自尾部。 */
 const EDITORIAL_TEXT_STRONG_HOOK = [
+  ...SCENE_LEAD_IN_LINES,
   "林川推开门，走了进去。房间里很暗，他摸索着前进。",
   "他抓住苏婉的手臂，把她往水面拉，暗流拉扯着他的腿。",
   "他把苏婉推到浅滩，又一次跳进水里去找老周。",

@@ -386,12 +386,21 @@ export function collectAuthorStyleGuidance(
   const referenceIds: string[] = [];
   const guidance: string[] = [];
 
+  // Style profiles are user supplied and older profiles often contain numeric
+  // ratios or checklist wording.  Those values are useful as offline metadata,
+  // but must never turn into prose controls in the production prompt.  Filter
+  // them at the consumption boundary so one stale line cannot hard-block the
+  // entire chapter with prompt_rejected.
+  const isMechanicalGuidance = (item: string): boolean =>
+    /对白比例|对话比例|dialogue\s*ratio|比例必须.*?\d+\s*%|\d+\s*%\s*对白|每段.*?\d+\s*字|段落长度必须|每段.*?字数|段落必须.*?\d+|每段不少于\d+|每段不超过\d+|必须按清单|逐条写|按以下清单逐条|必须依次完成以下事件清单/i.test(item);
+  const qualitativeOnly = (items: string[]): string[] => items.filter((item) => !isMechanicalGuidance(item));
+
   for (const reference of context.styleReferences.filter((entry) => entry.kind === "fingerprint")) {
     const payload = parseStyleReference(reference);
     if (!payload) continue;
     referenceIds.push(reference.id);
     const explicitGuidance = stringList(payload.editorialGuidance);
-    guidance.push(...explicitGuidance.map((item) => `[通用] ${item}`));
+    guidance.push(...qualitativeOnly(explicitGuidance).map((item) => `[通用] ${item}`));
     if (explicitGuidance.length === 0) {
       guidance.push(...collectLegacyQualitativeGuidance(payload));
     }
@@ -400,7 +409,7 @@ export function collectAuthorStyleGuidance(
     if (voices && typeof voices === "object" && !Array.isArray(voices)) {
       const voiceMap = voices as Record<string, unknown>;
       for (const character of relevantCharacters) {
-        guidance.push(...stringList(voiceMap[character]).map((item) => `[${character}] ${item}`));
+        guidance.push(...qualitativeOnly(stringList(voiceMap[character])).map((item) => `[${character}] ${item}`));
       }
     }
   }

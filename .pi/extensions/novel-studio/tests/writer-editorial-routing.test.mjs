@@ -7,19 +7,20 @@ import {
   resolveEditorialCandidateRoute,
 } from "../dist/v2/core/editorial-candidate-generator.js";
 
-test("default gpt writer profile keeps editorial generation on the gpt-6-astra route", () => {
-  assert.equal(resolveEditorialCandidateRoute("gpt_writer_v1"), "v2_amplified_gpt6astra");
+test("default Gemini writer profiles keep editorial generation on the Gemini route", () => {
+  // GEMINI38-FLASH-PRODUCTION-RESTORE-1：Gemini 3.8 Flash 复任生产主写；
+  // editorial 候选生成使用 v2_amplified_gemini31，与 raw 路由同 family。
+  assert.equal(resolveEditorialCandidateRoute("gemini_writer_v1"), "v2_amplified_gemini31");
+  assert.equal(resolveEditorialCandidateRoute("gemini_writer_v2"), "v2_amplified_gemini31");
 });
 
-test("explicit Claude and non-gpt writer profiles keep the isolated Claude editorial route", () => {
+test("explicit Claude and non-Gemini writer profiles keep the isolated Claude editorial route", () => {
   assert.equal(resolveEditorialCandidateRoute("claude_writer_v1"), "v2_amplified");
   assert.equal(resolveEditorialCandidateRoute("generic_writer_v1"), "v2_amplified");
 });
 
-test("retired Gemini writer profiles stay on the retained eval Gemini route (never Claude)", () => {
-  // GPT6-ASTRA-PRODUCTION-SWITCH-1：生产 Gemini 写路由已删除；gemini profile 仅出现在
-  // modelTestRoute=gemini31 等 lab 路径（实际调用被 lock wrapper 覆盖）。返回保留的
-  // eval 路由以维持 family 隔离，绝不静默切到 Claude。
-  assert.equal(resolveEditorialCandidateRoute("gemini_writer_v1"), "nb4_generate_gemini31");
-  assert.equal(resolveEditorialCandidateRoute("gemini_writer_v2"), "nb4_generate_gemini31");
+test("retired gpt-6-astra writer profile no longer maps to any production editorial route", () => {
+  // GPT6-ASTRA-PRODUCTION-SWITCH-1 的 gpt_writer_v1 生产分支已随 v4.35.0 删除；
+  // 剩余 gpt_writer_v1 profile（eval 路由 nb4_generate_gpt56 等）回落 Claude 隔离路由。
+  assert.equal(resolveEditorialCandidateRoute("gpt_writer_v1"), "v2_amplified");
 });

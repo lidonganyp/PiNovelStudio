@@ -18,8 +18,8 @@
  *
  * 授权边界（fail-closed）：
  *   - 真实模式必须显式 --require-auth 且 PINOVEL_BENCHMARK_COST_PROFILE=gemini_validation。
- *   - 强制 route=nb4_generate_gemini31（provider=gemini31, fallback=[]，GPT6-ASTRA-PRODUCTION-SWITCH-1
- *     后的 gemini eval 路由），不得改为 GPT/Claude/GLM。
+ *   - 强制 route=nb4_generate_gemini31（provider=gemini31, fallback=[]，隔离 eval 路由），
+ *     不得改为 GPT/Claude/GLM。
  *   - 未授权时真实模式拒绝启动（不会静默降级到 stub 或其他 provider）。
  *
  * 输出：

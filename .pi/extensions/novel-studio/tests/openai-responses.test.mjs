@@ -64,18 +64,22 @@ test('JSON mode survives Chinese prompt localization', async (context) => {
   await callOpenAIResponses('https://example.com/v1', 'test', 'gpt-6-astra', [{ role: 'user', content: '返回对象。' }], { jsonMode: true });
 });
 
-test('writer routes use Responses through the configured production client', async (context) => {
+test('structured GPT routes use Responses through the configured production client', async (context) => {
   context.mock.method(globalThis, 'fetch', async (url, init) => {
     assert.match(String(url), /\/responses$/);
-    assert.equal(JSON.parse(init.body).model, 'gpt-6-astra');
-    return Response.json(completed);
+    assert.equal(JSON.parse(init.body).model, 'gpt-5.5');
+    return Response.json({ ...completed, model: 'gpt-5.5' });
   });
   const previousKey = process.env.GPT_API_KEY;
+  const previousModel = process.env.GPT_MODEL;
+  process.env.GPT_MODEL = 'gpt-5.5';
   process.env.GPT_API_KEY = 'test';
   try {
-    const api = await createRoutedChatAPI('v2_amplified_gpt6astra');
+    const api = await createRoutedChatAPI('architect');
     assert.equal(await api.complete('检查接口。', '回复状态。'), '连接正常。');
   } finally {
+    if (previousModel === undefined) delete process.env.GPT_MODEL;
+    else process.env.GPT_MODEL = previousModel;
     if (previousKey === undefined) delete process.env.GPT_API_KEY;
     else process.env.GPT_API_KEY = previousKey;
   }

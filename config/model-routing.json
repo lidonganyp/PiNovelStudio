@@ -1,10 +1,15 @@
 {
   "_comment": "PiNovelStudio AI Model Routing",
-  "_version": "4.34.0",
-  "_updated": "2026-09-07",
-  "disabled_providers": ["qwen", "ernie"],
+  "_version": "4.36.0",
+  "_updated": "2026-10-14",
+  "disabled_providers": [
+    "qwen",
+    "ernie"
+  ],
   "_migration_notes": [
-    "v4.34.0 (GPT6-ASTRA-PRODUCTION-SWITCH-1): 用户直接指示，正式 novel_generate_chapter 主链正文模型从 Gemini 3.8 Flash 切换为 gpt-6-astra。新增 v2_rawstage2_gpt6astra / v2_amplified_gpt6astra 两条生产写路由（provider=gpt，shunfen6.win OpenAI 兼容端点，model_env=GPT_WRITER_MODEL 专用隔离，fallback=[]）；按版本收敛原则物理删除 v2_rawstage2_gemini31(_solov) / v2_amplified_gemini31(_solov) 四条旧生产写路由与 writerModel=gemini31 选项，不保留并行回退。gemini31 provider 及其 eval 路由（nb4_generate_gemini31 / v2_reader_experience_judge_gemini31 / modelTestRoute=gemini31）保留为隔离评测资产。gpt-6-astra 无互备渠道：传输失败即 hard block，不静默切换 Claude/Gemini/Doubao。Claude Opus 4.6 仍为显式 writerModel=claude 备选。本版本只是路由契约实现，不声称质量正收益；质量评价权归用户。",
+    "v4.36.0 (WRITER-ENV-UNIFY-1): 生产写模型与渠道收敛为单一 .env 配置入口。gemini31 provider 及全部写路由的 model/base_url 改为 ${GEMINI_MODEL}/${GOOGLE_GEMINI_BASE_URL} 占位符，由 utils/config.ts resolveRoutingEnvironment() 在加载时解析；gemini31 保持稳定路由标识，不再绑定具体模型版本。按版本收敛原则物理删除 v2_rawstage2_gemini31_solov / v2_amplified_gemini31_solov 两条 Solov 互备路由与 GEMINI_AIMAGICHUB_* / GEMINI_SOLOV_* 渠道变量；生产写只有单一 OpenAI 兼容渠道（GOOGLE_GEMINI_BASE_URL），请求失败仅同渠道有界重试，失败即阻断，不自动切换 Claude/GPT/Doubao/Solov。Claude Opus 4.6 仍为显式 writerModel=claude 备选。缺 GEMINI_MODEL / GOOGLE_GEMINI_BASE_URL 时启动即明确报错，不静默回退旧模型。运行身份（路由锁、能力声明、环境指纹、漂移检查）全部读取解析后的有效配置；环境指纹新增 generationBaseUrl 参与行为身份。本版本只是路由契约与配置解析实现，不声称质量正收益；质量评价权归用户。",
+    "v4.35.0 (GEMINI38-FLASH-PRODUCTION-RESTORE-1): 用户直接指示，正式 novel_generate_chapter 主链正文模型复原为 Gemini 3.8 Flash。恢复 v2_rawstage2_gemini31(_solov) / v2_amplified_gemini31(_solov) 四条生产写路由（provider=gemini31，Aimagichub 主渠道 + Solov 对等渠道，GEMINI_MODEL / GEMINI_SOLOV_MODEL 解析模型 ID，fallback=[]）与 writerModel=gemini31 默认选项；按版本收敛原则物理删除 v2_rawstage2_gpt6astra / v2_amplified_gpt6astra 两条生产写路由与 writerModel=gpt6astra 选项，不保留并行回退。Aimagichub 与 Solov 是同一 Gemini 3.8 Flash 身份的互备传输渠道，渠道恢复不切换 Claude/GPT/Doubao；两渠道均不可用才 hard block。Claude Opus 4.6 仍为显式 writerModel=claude 备选。gpt provider 继续服务结构化规划/门禁节点（gpt-5.5，Responses 传输不变），不再承担正文主写。本版本只是路由契约实现，不声称质量正收益；质量评价权归用户。",
+    "v4.34.0 (GPT6-ASTRA-PRODUCTION-SWITCH-1): 用户直接指示，正式 novel_generate_chapter 主链正文模型从 Gemini 3.8 Flash 切换为 gpt-6-astra。新增 v2_rawstage2_gpt6astra / v2_amplified_gpt6astra 两条生产写路由（provider=gpt，shunfen6.win OpenAI 兼容端点，model_env=GPT_WRITER_MODEL 专用隔离，fallback=[]）；按版本收敛原则物理删除 v2_rawstage2_gemini31(_solov) / v2_amplified_gemini31(_solov) 四条旧生产写路由与 writerModel=gemini31 选项，不保留并行回退。gemini31 provider 及其 eval 路由（nb4_generate_gemini31 / v2_reader_experience_judge_gemini31 / modelTestRoute=gemini31）保留为隔离评测资产。gpt-6-astra 无互备渠道：传输失败即 hard block，不静默切换 Claude/Gemini/Doubao。Claude Opus 4.6 仍为显式 writerModel=claude 备选。本版本只是路由契约实现，不声称质量正收益；质量评价权归用户。已被 v4.35.0 复原取代。",
     "v4.33.0 (GEMINI38-FLASH-PRODUCTION-SWITCH-1): 正式 novel_generate_chapter 主线路由从 Gemini 3.7 Flash 切换为 Gemini 3.8 Flash。保留 gemini31 provider/route 标识以兼容 trace 与既有协议；两个 Gemini-compatible endpoint 均通过 GEMINI_MODEL/GEMINI_AIMAGICHUB_MODEL 使用同一模型 ID，API 只按真实入口测速与稳定性结果选择主线路。",
     "v4.32.0 (GEMINI37-FLASH-PRODUCTION-SWITCH-1): 正式 novel_generate_chapter 主线路由从 Gemini 3.1 Pro 切换为 Gemini 3.7 Flash。保留 gemini31 provider/route 标识以兼容 trace 与既有协议；两个 Gemini-compatible endpoint 均通过 GEMINI_MODEL/GEMINI_AIMAGICHUB_MODEL 使用同一模型 ID，API 只按真实入口测速与稳定性结果选择主线路。",
     "v4.31.0 (AGENTIC-AUTHOR-STYLE-PRODUCTION-1): 正式 novel_generate_chapter 改为 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 状态提交/原子保存。生产不调用 opportunity judge、pairwise judge、reverse review 或 SelectionPolicy，不把 one-shot raw 作为交付稿；GPT judge 与旧 raw/editorial 选择链仅保留在隔离评测/回放。最终文学评价权归用户，用户修改稿与反馈作为后续学习信号。",
@@ -58,7 +63,7 @@
       ]
     },
     "gemini31": {
-      "model": "gemini-3.8-flash",
+      "model": "${GEMINI_MODEL}",
       "strengths": [
         "long-context synthesis",
         "scene continuity",
@@ -66,14 +71,15 @@
         "causal long-form prose"
       ],
       "assigned_nodes": [
-        "nb4_generate_gemini31",
-        "v2_reader_experience_judge_gemini31"
+        "stage2_narrator",
+        "narrator_primary",
+        "v2_rawstage2_gemini31",
+        "v2_amplified_gemini31"
       ],
-      "role": "GPT6-ASTRA-PRODUCTION-SWITCH-1 (v4.34.0): Gemini 3.8 Flash 不再担任生产正文主写；gemini31 provider 仅保留为隔离评测资产（NovelBench nb4 生成、匿名读者体验校准、modelTestRoute=gemini31 实验路由）。生产正文主写已切换为 gpt provider 上的 gpt-6-astra。"
+      "role": "Configured production writer: model and single OpenAI-compatible endpoint come from .env. Stable gemini31 route IDs do not encode a model version."
     },
     "gpt": {
       "model": "gpt-5.5",
-      "writer_model": "gpt-6-astra",
       "strengths": [
         "schema-following",
         "logic and dependency checks",
@@ -98,11 +104,9 @@
         "dependency_checker",
         "type_contract_engine",
         "drama_coach",
-        "brainhole_injector",
-        "v2_rawstage2_gpt6astra",
-        "v2_amplified_gpt6astra"
+        "brainhole_injector"
       ],
-      "role": "GPT6-ASTRA-PRODUCTION-SWITCH-1 (v4.34.0): gpt-6-astra 是生产正文主写（v2_rawstage2_gpt6astra 服务 NovelOS Agentic，v2_amplified_gpt6astra 执行作者风格整章优化），通过 shunfen6.win OpenAI 兼容端点接入，model_env=GPT_WRITER_MODEL 与结构化节点的 GPT_MODEL 隔离。gpt-5.5 仍是结构化规划/门禁节点的默认模型。Claude Opus 4.6 仍为显式 writerModel=claude 备选。"
+      "role": "GEMINI38-FLASH-PRODUCTION-RESTORE-1 (v4.35.0): gpt provider 回归结构化规划/门禁节点专用（gpt-5.5，shunfen6.win Responses 传输），不再承担生产正文主写；v2_rawstage2_gpt6astra / v2_amplified_gpt6astra 已按版本收敛原则物理删除。"
     },
     "deepseek": {
       "model": "deepseek-v4-flash",
@@ -183,42 +187,57 @@
     }
   },
   "model_strategy": {
-    "narrator_primary": "gpt-6-astra",
+    "narrator_primary": "${GEMINI_MODEL}",
     "explicit_writer_models": [
-      "gpt-6-astra",
+      "${GEMINI_MODEL}",
       "claude-opus-4-6"
     ],
     "writer_admission": {
-      "default_writer": "gpt6astra",
-      "explicit_writer_options": ["gpt6astra", "claude"],
+      "default_writer": "gemini31",
+      "explicit_writer_options": [
+        "gemini31",
+        "claude"
+      ],
       "machine_evidence_status": "diagnostic_only_until_human_alignment_passes",
-    "human_override": {
-        "status": "superseded",
-        "superseded_by": "GPT6-ASTRA-PRODUCTION-SWITCH-1 (v4.34.0): 用户直接指示将生产主写从 Gemini 3.8 Flash 切换为 gpt-6-astra；下列 gemini31-vs-claude46 人审记录保留为历史证据。",
+      "human_override": {
+        "status": "active",
         "source": "user_direct_human_review",
         "evidence_path": "reports/model-comparison/human-review/gemini31-vs-claude46-human-review-2026-07-20T07-53-43-068Z/judge-detail-reader-priority.json",
         "winner": "gemini31",
-        "decisive_dimensions": ["中文原生语感", "小说语感", "场景沉浸感"],
+        "decisive_dimensions": [
+          "中文原生语感",
+          "小说语感",
+          "场景沉浸感"
+        ],
         "machine_judge_alignment": "failed",
-      "policy": "human_preference_overrides_machine_default"
-    },
-    "scene_solution_admission": {
-      "status": "retired_from_production",
-      "strategy_id": "scene-solution-search-b",
-      "evidence_path": "reports/model-comparison/gemini-continuous-ceiling/gemini-limit-continuous-20260720/human-review/human-review-template.json",
-      "reviewed_chapters": [18, 19, 20],
-      "treatment": "shared ChapterSeed + pre-writing scene solution + Gemini raw",
-      "winner": "scene_solution",
-      "policy": "historical_evidence_only_no_global_extrapolation",
-      "machine_judge_role": "chapter_specific_quality_selection_only",
-      "raw_fallback_on": ["judge_unavailable", "evidence_invalid", "tie", "reverse_review_conflict"],
-      "excluded_paths": [
-        "explicit_claude",
-        "model_test_routes",
-        "quality_experiments",
-        "boundedBestOf3"
-      ]
-    },
+        "policy": "human_preference_overrides_machine_default"
+      },
+      "scene_solution_admission": {
+        "status": "retired_from_production",
+        "strategy_id": "scene-solution-search-b",
+        "evidence_path": "reports/model-comparison/gemini-continuous-ceiling/gemini-limit-continuous-20260720/human-review/human-review-template.json",
+        "reviewed_chapters": [
+          18,
+          19,
+          20
+        ],
+        "treatment": "shared ChapterSeed + pre-writing scene solution + Gemini raw",
+        "winner": "scene_solution",
+        "policy": "historical_evidence_only_no_global_extrapolation",
+        "machine_judge_role": "chapter_specific_quality_selection_only",
+        "raw_fallback_on": [
+          "judge_unavailable",
+          "evidence_invalid",
+          "tie",
+          "reverse_review_conflict"
+        ],
+        "excluded_paths": [
+          "explicit_claude",
+          "model_test_routes",
+          "quality_experiments",
+          "boundedBestOf3"
+        ]
+      },
       "automatic_dual_writer": {
         "enabled": false,
         "runtime_status": "not_wired"
@@ -258,9 +277,9 @@
         ]
       }
     },
-    "narrator_reason": "AGENTIC-AUTHOR-STYLE-PRODUCTION-1 + GPT6-ASTRA-PRODUCTION-SWITCH-1: 正式章节必须走全流程。gpt-6-astra 通过 v2_rawstage2_gpt6astra 服务 NovelOS Agentic，通过 v2_amplified_gpt6astra 执行作者风格整章优化；shunfen6.win 是唯一传输渠道，无互备渠道。传输失败即 hard block，不静默交付 one-shot raw，也不静默切换 Claude/Gemini/Doubao。Claude Opus 4.6 仅为显式 writerModel=claude 备选。",
+    "narrator_reason": "Production uses Agentic + mandatory author-style optimization with GEMINI_MODEL, GOOGLE_GEMINI_BASE_URL and GEMINI_API_KEY from .env. One OpenAI-compatible channel; no alternate-channel or cross-model fallback.",
     "narrator_backup": null,
-    "narrator_backup_reason": "gpt-6-astra 是默认正文主写，走 shunfen6.win 单一 OpenAI 兼容渠道，无互备渠道；传输失败即 hard block。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
+    "narrator_backup_reason": "Gemini 是默认正文主写（具体模型由 .env 的 GEMINI_MODEL 决定）。生产写只有单一 OpenAI 兼容渠道（GOOGLE_GEMINI_BASE_URL），请求失败仅同渠道有界重试后阻断，不切换渠道或模型。Claude 4.6 仅可显式选择，不作为静默 fallback；Doubao 仅作受限中文校准器。",
     "narrator_candidate": null,
     "narrator_testing": "doubao-seed-2-1-pro-260628",
     "chinese_naturalizer": "doubao-seed-2-1-pro-260628",
@@ -438,17 +457,21 @@
       }
     },
     "gemini31": {
-      "name": "Gemini 3.8 Flash (eval/lab only)",
-      "base_url": "https://aimagichub.xyz/v1",
+      "name": "Configured Gemini writer",
+      "base_url": "${GOOGLE_GEMINI_BASE_URL}",
       "api_key_env": "GEMINI_API_KEY",
-      "model": "gemini-3.8-flash",
+      "model": "${GEMINI_MODEL}",
       "protocol": "openai",
       "temperature": {
         "nb4_generate_gemini31": 0.72,
+        "v2_rawstage2_gemini31": 0.72,
+        "v2_amplified_gemini31": 0.6,
         "v2_reader_experience_judge_gemini31": 0.2
       },
       "max_tokens": {
         "nb4_generate_gemini31": 16384,
+        "v2_rawstage2_gemini31": 16384,
+        "v2_amplified_gemini31": 16384,
         "v2_reader_experience_judge_gemini31": 4096
       }
     },
@@ -490,7 +513,9 @@
       "api_key_env": "GPT_API_KEY",
       "model": "gpt-5.5",
       "protocol": "openai",
-      "request_options": { "api": "responses" },
+      "request_options": {
+        "api": "responses"
+      },
       "temperature": {
         "architect": 0.15,
         "chapter_outline_generator": 0.15,
@@ -518,9 +543,7 @@
         "v2_direct_gpt": 0.72,
         "v2_editorial_planner": 0.3,
         "reference_analyzer": 0.2,
-        "nb4_generate_gpt56": 0.72,
-        "v2_rawstage2_gpt6astra": 0.72,
-        "v2_amplified_gpt6astra": 0.6
+        "nb4_generate_gpt56": 0.72
       },
       "max_tokens": {
         "architect": 4096,
@@ -549,9 +572,7 @@
         "v2_direct_gpt": 8192,
         "v2_editorial_planner": 4096,
         "reference_analyzer": 16384,
-        "nb4_generate_gpt56": 8192,
-        "v2_rawstage2_gpt6astra": 16384,
-        "v2_amplified_gpt6astra": 16384
+        "nb4_generate_gpt56": 8192
       }
     },
     "gpt_backup": {
@@ -685,10 +706,12 @@
       "note": "v4.5.0: 迁移自 DeepSeek。世界观呈现规划属于结构化推理任务；GPT 5.5 在同类结构化节点已有稳定记录，统一质量链路。"
     },
     "stage2_narrator": {
-      "provider": "gpt",
-      "model": "gpt-6-astra",
-      "model_env": "GPT_WRITER_MODEL",
-      "note": "GPT6-ASTRA-PRODUCTION-SWITCH-1: Stage 2 / NovelOS Agentic production default is gpt-6-astra via the isolated gpt6astra raw/editorial routes and the gpt_writer_v1 prompt profile. Transport is the single shunfen6.win OpenAI-compatible endpoint; transport failure hard blocks instead of switching prose providers. Claude remains explicit-only and is never a silent prose fallback."
+      "provider": "gemini31",
+      "model": "${GEMINI_MODEL}",
+      "note": "Single OpenAI-compatible writer channel; model and endpoint resolve from .env. No channel or model fallback.",
+      "model_env": "GEMINI_MODEL",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY"
     },
     "stage3_skeleton": {
       "provider": "gpt",
@@ -773,11 +796,13 @@
       "note": "v4.5.0: 迁移自 DeepSeek。Stage 1.6 世界观呈现规划，统一质量链路。"
     },
     "narrator_primary": {
-      "provider": "gpt",
-      "model": "gpt-6-astra",
-      "model_env": "GPT_WRITER_MODEL",
+      "provider": "gemini31",
+      "model": "${GEMINI_MODEL}",
       "fallback": [],
-      "note": "GPT6-ASTRA-PRODUCTION-SWITCH-1: Production prose default switched from Gemini 3.8 Flash to gpt-6-astra by direct user instruction. Uses gpt6astra writer routes and the gpt_writer_v1 prompt profile; fallback=[] prevents silent replacement by Claude, Gemini, Doubao, or GLM."
+      "note": "GEMINI38-FLASH-PRODUCTION-RESTORE-1: Production prose default restored to Gemini 3.8 Flash by direct user instruction. Uses Gemini-specific routes and prompt profile; fallback=[] prevents silent replacement by Claude, GPT, Doubao, or GLM.",
+      "model_env": "GEMINI_MODEL",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY"
     },
     "narrator_testing": {
       "provider": "doubao",
@@ -1007,27 +1032,27 @@
       "fallback": [],
       "note": "GEMINI-DEFAULT-WRITER-1: Explicit writerModel=claude editorial route. It stays isolated from the Gemini default and from Doubao calibration; fallback=[] prevents silent provider changes."
     },
-    "v2_rawstage2_gpt6astra": {
-      "provider": "gpt",
-      "model": "gpt-6-astra",
-      "base_url_env": "GPT_BASE_URL",
-      "api_key_env": "GPT_API_KEY",
-      "model_env": "GPT_WRITER_MODEL",
+    "v2_rawstage2_gemini31": {
+      "provider": "gemini31",
+      "model": "${GEMINI_MODEL}",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "model_env": "GEMINI_MODEL",
       "fallback": [],
-      "note": "GPT6-ASTRA-PRODUCTION-SWITCH-1: Production NovelOS Agentic generation route on the shunfen6.win OpenAI-compatible endpoint. model_env=GPT_WRITER_MODEL isolates the writer model from the structured-node GPT_MODEL override. No peer transport channel exists; fallback=[] hard blocks on failure and never silently changes the prose provider."
+      "note": "Single OpenAI-compatible writer channel; model and endpoint resolve from .env. No channel or model fallback."
     },
-    "v2_amplified_gpt6astra": {
-      "provider": "gpt",
-      "model": "gpt-6-astra",
-      "base_url_env": "GPT_BASE_URL",
-      "api_key_env": "GPT_API_KEY",
-      "model_env": "GPT_WRITER_MODEL",
+    "v2_amplified_gemini31": {
+      "provider": "gemini31",
+      "model": "${GEMINI_MODEL}",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "model_env": "GEMINI_MODEL",
       "fallback": [],
-      "note": "GPT6-ASTRA-PRODUCTION-SWITCH-1: Required full-chapter author-style optimization after NovelOS Agentic. The optimized text is fact/story/completeness checked and then delivered for user evaluation; no GPT judge is called. fallback=[] hard blocks on failure."
+      "note": "GEMINI38-FLASH-PRODUCTION-RESTORE-1: Required full-chapter author-style optimization after NovelOS Agentic. The optimized text is fact/story/completeness checked and then delivered for user evaluation; no GPT judge is called."
     },
     "v2_reader_experience_judge_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.8-flash",
+      "model": "${GEMINI_MODEL}",
       "base_url_env": "GOOGLE_GEMINI_BASE_URL",
       "api_key_env": "GEMINI_API_KEY",
       "model_env": "GEMINI_MODEL",
@@ -1161,10 +1186,10 @@
     },
     "nb4_generate_gemini31": {
       "provider": "gemini31",
-      "model": "gemini-3.8-flash",
-      "base_url_env": "GEMINI31_BASE_URL",
-      "api_key_env": "GEMINI31_API_KEY",
-      "model_env": "GEMINI31_MODEL",
+      "model": "${GEMINI_MODEL}",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "model_env": "GEMINI_MODEL",
       "fallback": [],
       "lab_testing": true,
       "note": "Isolated chapter comparison route for Gemini 3.8 Flash."
@@ -1264,7 +1289,7 @@
       }
     },
     "models": [
-      "gemini-3.8-flash",
+      "${GEMINI_MODEL}",
       "claude-opus-4-6"
     ],
     "n_candidates": {

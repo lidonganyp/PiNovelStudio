@@ -625,8 +625,6 @@ export function evaluateReplayCliSuccess(
     }
     for (const route of Object.keys(routes)) {
       const allowed =
-        route === "v2_rawstage2_gpt6astra" ||
-        route === "v2_amplified_gpt6astra" ||
         route === "v2_rawstage2_gemini31" ||
         route === "v2_amplified_gemini31" ||
         route === "v2_rawstage2" ||

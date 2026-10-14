@@ -59,6 +59,7 @@ import {
   DEFAULT_RELEASE_FINGERPRINT_SPEC,
 } from "../dist-test/v2/governance/environment-fingerprint.js";
 import { captureDefaultBehaviorSnapshot } from "../dist-test/v2/governance/behavior-snapshot.js";
+import { getGeminiWriterModel } from "../dist/utils/config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXT_ROOT = resolve(__dirname, "..");
@@ -651,7 +652,7 @@ test("captureDefaultEnvironmentFingerprint: 实际 model-routing 内容变化必
   }
 });
 
-test("captureDefaultEnvironmentFingerprint: 使用当前 GPT 主写生产元数据", () => {
+test("captureDefaultEnvironmentFingerprint: 使用当前 .env GEMINI_MODEL 主写生产元数据", () => {
   const projectRoot = makeTempRoot();
   try {
     const configDir = join(projectRoot, "config");
@@ -659,7 +660,8 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 GPT 主写生产元数�
     writeFileSync(join(configDir, "model-routing.json"), '{"_version":"test"}\n', "utf-8");
 
     const expectedFingerprint = collectDefaultEnvironmentFingerprint(projectRoot);
-    assert.equal(expectedFingerprint.generationModel, "gpt-6-astra");
+    // WRITER-ENV-UNIFY-1：生产主写身份由 .env GEMINI_MODEL 决定（getGeminiWriterModel）。
+    assert.equal(expectedFingerprint.generationModel, getGeminiWriterModel());
     assert.equal(DEFAULT_RELEASE_FINGERPRINT_SPEC.modelRoutingPath, "config/model-routing.json");
     assert.ok(
       DEFAULT_RELEASE_FINGERPRINT_SPEC.envSwitchNames.includes("PINOVEL_EVAL_REPLAY_TRANSPORT"),
@@ -668,7 +670,7 @@ test("captureDefaultEnvironmentFingerprint: 使用当前 GPT 主写生产元数�
     assert.equal(
       captureDefaultEnvironmentFingerprint(projectRoot),
       computeFingerprintHash(expectedFingerprint),
-      "默认生产指纹必须绑定实际路由文件与 gpt-6-astra 主写元数据",
+      "默认生产指纹必须绑定实际路由文件与 .env GEMINI_MODEL 主写元数据",
     );
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -680,7 +682,13 @@ test("evolution CLI: capture 与生产门禁使用同一当前路由真相源", 
   const specSource = readFileSync(join(EXT_ROOT, "v2", "governance", "environment-fingerprint.ts"), "utf-8");
   assert.match(cliSource, /collectDefaultEnvironmentFingerprint/);
   assert.match(specSource, /modelRoutingPath:\s*["']config\/model-routing\.json["']/);
-  assert.match(specSource, /generationModel:\s*["']gpt-6-astra["']/);
+  // WRITER-ENV-UNIFY-1：generationModel 通过 getter 动态读取 .env（getGeminiWriterModel），
+  // 不得再硬编码具体模型版本。
+  assert.match(specSource, /get generationModel\(\)[^\n]*getGeminiWriterModel/);
+  assert.doesNotMatch(
+    specSource,
+    /generationModel:\s*["']gemini-3\.8-flash["']/,
+  );
   assert.doesNotMatch(
     specSource,
     /modelRoutingPath:\s*["']\.pi\/extensions\/novel-studio\/config\/model-routing\.json["']/,

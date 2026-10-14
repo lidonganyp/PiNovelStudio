@@ -9,8 +9,9 @@ export interface ProductionBootstrapConfig {
   adminEmail: string;
   adminPassword: string;
   aesMasterKey: string;
-  gptApiKey: string;
-  gptApiBaseUrl: string;
+  geminiModel: string;
+  geminiApiKey: string;
+  geminiApiBaseUrl: string;
   inputPricePerMillionFen: bigint;
   outputPricePerMillionFen: bigint;
 }
@@ -42,31 +43,33 @@ export function resolveProductionBootstrapConfig(
   });
   const aesMasterKey = requireValue(env, 'AES_MASTER_KEY');
   parseAesMasterKey(aesMasterKey);
-  const gptApiBaseUrl =
-    env.BOOTSTRAP_GPT_API_BASE_URL?.trim() ||
-    'https://shunfen6.win/v1';
-  let parsedGptUrl: URL;
+  // 统一 writer 渠道（P1-1/P1-3）：模型、地址、密钥全部来自部署统一入口派生的
+  // 必填变量；不再有 aimagichub 默认地址，也不再把身份绑定到固定的 Gemini 3.8。
+  const geminiModel = requireValue(env, 'BOOTSTRAP_GEMINI_MODEL');
+  const geminiApiBaseUrl = requireValue(env, 'BOOTSTRAP_GEMINI_API_BASE_URL');
+  let parsedGeminiUrl: URL;
   try {
-    parsedGptUrl = new URL(gptApiBaseUrl);
+    parsedGeminiUrl = new URL(geminiApiBaseUrl);
   } catch {
-    throw new Error('BOOTSTRAP_GPT_API_BASE_URL must be a valid HTTPS URL');
+    throw new Error('BOOTSTRAP_GEMINI_API_BASE_URL must be a valid HTTPS URL');
   }
-  if (parsedGptUrl.protocol !== 'https:') {
-    throw new Error('BOOTSTRAP_GPT_API_BASE_URL must be a valid HTTPS URL');
+  if (parsedGeminiUrl.protocol !== 'https:') {
+    throw new Error('BOOTSTRAP_GEMINI_API_BASE_URL must be a valid HTTPS URL');
   }
   return {
     adminEmail,
     adminPassword,
     aesMasterKey,
-    gptApiKey: requireValue(env, 'BOOTSTRAP_GPT_API_KEY'),
-    gptApiBaseUrl,
+    geminiModel,
+    geminiApiKey: requireValue(env, 'BOOTSTRAP_GEMINI_API_KEY'),
+    geminiApiBaseUrl,
     inputPricePerMillionFen: parsePositiveFen(
       env,
-      'BOOTSTRAP_GPT_INPUT_PRICE_PER_MILLION_FEN',
+      'BOOTSTRAP_GEMINI_INPUT_PRICE_PER_MILLION_FEN',
     ),
     outputPricePerMillionFen: parsePositiveFen(
       env,
-      'BOOTSTRAP_GPT_OUTPUT_PRICE_PER_MILLION_FEN',
+      'BOOTSTRAP_GEMINI_OUTPUT_PRICE_PER_MILLION_FEN',
     ),
   };
 }

@@ -17,7 +17,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test, before, after, beforeEach, afterEach } from "node:test";
-import { resolveRhythmAdapter, loadModelRoutingSync } from "../dist/utils/config.js";
+import { resolveRhythmAdapter, loadModelRoutingSync, getGeminiWriterModel } from "../dist/utils/config.js";
 
 describe("GEMINI-DEFAULT-WRITER-1 Gemini primary routing and rhythm adapter override", () => {
   const savedAdapter = process.env.PINOVEL_RHYTHM_ADAPTER;
@@ -44,18 +44,18 @@ describe("GEMINI-DEFAULT-WRITER-1 Gemini primary routing and rhythm adapter over
     delete process.env.PINOVEL_RHYTHM_ADAPTER;
   });
 
-  test("生产 config 使用 gpt-6-astra 主路由（无 env override 时）", () => {
+  test("生产 config 使用 .env GEMINI_MODEL 解析的主路由（无 env override 时）", () => {
     const routing = loadModelRoutingSync();
-    // gpt-6-astra 负责默认正文，Claude 4.6 继续负责 style_shaper。
-    assert.equal(routing.model_strategy.narrator_primary, "gpt-6-astra");
+    // WRITER-ENV-UNIFY-1：正文身份由 .env GEMINI_MODEL 决定，Claude 4.6 继续负责 style_shaper。
+    assert.equal(routing.model_strategy.narrator_primary, getGeminiWriterModel());
     assert.equal(routing.model_strategy.narrator_backup, null);
     assert.equal(routing.model_strategy.style_shaper, "claude-opus-4-6");
-    assert.equal(routing.stage_routing.stage2_narrator.provider, "gpt");
-    assert.equal(routing.stage_routing.stage2_narrator.model, "gpt-6-astra");
+    assert.equal(routing.stage_routing.stage2_narrator.provider, "gemini31");
+    assert.equal(routing.stage_routing.stage2_narrator.model, getGeminiWriterModel());
     assert.equal(routing.stage_routing.stage5_style_shaper.provider, "claude");
     assert.equal(routing.stage_routing.stage5_style_shaper.model, "claude-opus-4-6");
-    assert.equal(routing.agent_routing.narrator_primary.provider, "gpt");
-    assert.equal(routing.agent_routing.narrator_primary.model, "gpt-6-astra");
+    assert.equal(routing.agent_routing.narrator_primary.provider, "gemini31");
+    assert.equal(routing.agent_routing.narrator_primary.model, getGeminiWriterModel());
     assert.deepEqual(routing.agent_routing.narrator_primary.fallback, []);
     assert.equal(routing.agent_routing.narrator_backup, undefined);
     assert.equal(routing.agent_routing.narrator_testing_claude.provider, "claude");
@@ -100,7 +100,7 @@ describe("GEMINI-DEFAULT-WRITER-1 Gemini primary routing and rhythm adapter over
     // best_of_n_config.models 是休眠候选目录（历史口径）；
     // Doubao 仍不在正文模型集合中，只保留为受限中文校准器。
     assert.deepEqual(routing.best_of_n_config.models, [
-      "gemini-3.8-flash",
+      getGeminiWriterModel(),
       "claude-opus-4-6",
     ]);
   });

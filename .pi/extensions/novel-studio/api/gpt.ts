@@ -84,6 +84,7 @@ export class GPTAPI {
     if (this.api === "responses") {
       return callOpenAIResponses(this.baseUrl, this.apiKey, options?.model || this.model, localizeLlmMessages(messages), {
         max_tokens: options?.max_tokens ?? this.defaultMaxTokens,
+        temperature: options?.temperature ?? this.defaultTemperature,
         jsonMode: options?.response_format?.type === "json_object",
       });
     }

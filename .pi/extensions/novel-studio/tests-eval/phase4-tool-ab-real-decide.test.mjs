@@ -470,6 +470,7 @@ describe("PHASE4-TOOL-AB-REAL-DECIDE-9：temperature/seed 写入真实请求体"
   const originalFetch = globalThis.fetch;
   const origEnv = {
     GLM_API_KEY: process.env.GLM_API_KEY,
+    GLM_MODEL: process.env.GLM_MODEL,
     PINOVEL_DISABLE_FALLBACK: process.env.PINOVEL_DISABLE_FALLBACK,
     PINOVEL_MODEL_MAX_RETRIES: process.env.PINOVEL_MODEL_MAX_RETRIES,
     PINOVEL_PROJECT_ROOT: process.env.PINOVEL_PROJECT_ROOT,
@@ -513,6 +514,10 @@ describe("PHASE4-TOOL-AB-REAL-DECIDE-9：temperature/seed 写入真实请求体"
 
   it("createLegacyModelGenerateFn 把 temperature/seed 写入请求体（GLM OpenAI 兼容协议）", async () => {
     process.env.GLM_API_KEY = "test-glm-key";
+    // 固定模型环境：显式设为 model-routing 配置值，阻断外部污染（项目 .env 的
+    // GLM_MODEL=glm-5.3 会经 loadProjectDotEnv 注入并覆盖配置模型，shell 环境同理；
+    // 显式非空值使 .env 只填缺失 key 的逻辑不生效）
+    process.env.GLM_MODEL = "glm-5.2";
     process.env.PINOVEL_DISABLE_FALLBACK = "1";
     process.env.PINOVEL_MODEL_MAX_RETRIES = "0";
     process.env.PINOVEL_PROJECT_ROOT = join(EXTENSION_ROOT, "..", "..", "..", "..");
@@ -574,6 +579,40 @@ describe("PHASE4-TOOL-AB-REAL-DECIDE-9：temperature/seed 写入真实请求体"
       // 未传时：请求体不带 seed（seedApplied=false）；temperature 由 provider 配置默认落下
       assert.equal(Object.hasOwn(body, "seed"), false, "未传 seed 时请求体不应含 seed 字段");
       assert.equal(out.seedApplied, false, "未传 seed 时 seedApplied 应为 false");
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  it("GLM_MODEL 环境变量覆盖路由模型（独立覆盖能力验证）", async () => {
+    process.env.GLM_API_KEY = "test-glm-key";
+    // 显式设置覆盖值：验证 utils/config 的 GLM_MODEL 覆盖能力本身（不被其他用例的
+    // 环境固定所删除）；生产默认模型仍由 model-routing.json 决定
+    process.env.GLM_MODEL = "glm-test-override-model";
+    process.env.PINOVEL_DISABLE_FALLBACK = "1";
+    process.env.PINOVEL_MODEL_MAX_RETRIES = "0";
+    process.env.PINOVEL_PROJECT_ROOT = join(EXTENSION_ROOT, "..", "..", "..", "..");
+    const calls = [];
+    mockFetchCalls(calls);
+
+    try {
+      const adapter = await import(
+        `file://${join(EXTENSION_ROOT, "dist-eval", "v2", "adapters", "legacy-model-route-adapter.js")}`
+      );
+      const modelFn = adapter.createLegacyModelGenerateFn();
+      await modelFn({
+        route: "narrator_testing_glm",
+        systemPrompt: "SYS",
+        userPrompt: "USER",
+        kind: "tool_ab_real_decision",
+        maxTokens: 2048,
+      });
+
+      const body = calls[0].body;
+      assert.equal(
+        body.model, "glm-test-override-model",
+        "GLM_MODEL 覆盖应写入请求体 model（覆盖能力保留）",
+      );
     } finally {
       restoreEnv();
     }

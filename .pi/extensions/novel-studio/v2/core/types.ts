@@ -537,7 +537,7 @@ export interface V2Input {
   /** 工具层 model_timeout 重试序号（0=首次，1=第一次重试） */
   _modelTimeoutRetryAttempt?: number;
   /** Production-eligible prose writer. Undefined uses the configured Gemini default. */
-  writerModel?: "claude" | "gpt6astra";
+  writerModel?: "claude" | "gemini31";
   modelTestRoute?: string;
   /**
    * @deprecated 历史短路径开关，被 fullPipelinePreview 取代；入口 normalize 为 fullPipelinePreview。

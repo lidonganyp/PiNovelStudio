@@ -22,6 +22,7 @@
  * - registerProviderDefault：保留为明确标记的历史兼容查询，不能参与生产路由决策。
  */
 
+import { getGeminiWriterModel } from "../../utils/config.js";
 import type { ProtocolKind } from "./model-turn.js";
 
 // ============================================================================
@@ -159,6 +160,17 @@ export class CapabilityRegistry {
   }
 
   /**
+   * 移除一条 endpoint 级声明。
+   *
+   * WRITER-ENV-UNIFY-1：模型切换（.env GEMINI_MODEL 变更后重载）时，
+   * initializeDefaultCapabilities 会以新 model 身份重新注册生产声明；
+   * 旧 model 的同 endpoint 条目必须显式移除，防止旧声明累积。
+   */
+  unregister(key: CapabilityKey): boolean {
+    return this.entries.delete(this.keyToString(key));
+  }
+
+  /**
    * 注册 provider 级默认能力（历史兼容）。
    *
    * PROTOCOL-LAYER-2：provider 级默认仅用于历史兼容查询（通过 lookup 方法），
@@ -291,6 +303,18 @@ export class CapabilityRegistry {
 export const defaultCapabilityRegistry = new CapabilityRegistry();
 
 /**
+ * 当前 registry 中已声明的 Gemini 生产 model 身份。
+ *
+ * WRITER-ENV-UNIFY-1：生产写模型由 .env GEMINI_MODEL 决定（版本无关）。
+ * initializeDefaultCapabilities 可被重复调用（adapter-registry 的动态 getter
+ * 每次访问 model 都会触发）：
+ * - 同 model：幂等跳过，不重复注册；
+ * - 换 model：先移除旧 model 的生产声明再注册新 model，禁止旧声明累积，
+ *   新模型也不自动继承旧模型身份下的任何能力评价。
+ */
+let geminiProductionModelDeclared: string | null = null;
+
+/**
  * 初始化默认 capability 声明。
  *
  * 当前生产链路为 text-only ReAct，所有 provider 的 nativeFunctionCalling 均为 false。
@@ -308,43 +332,41 @@ export function initializeDefaultCapabilities(): void {
   }
 
   // ---- Endpoint 级声明：ReAct（生产默认）----
-  // gpt-6-astra OpenAI-compatible endpoint（GPT6-ASTRA-PRODUCTION-SWITCH-1：当前生产写路径）
-  defaultCapabilityRegistry.register({
-    key: {
-      provider: "gpt",
-      endpoint: "openai-compat",
-      model: "gpt-6-astra",
-      protocol: "react-text",
-      adapterVersion: "react-text-v1",
-    },
-    capability: createEndpointCapability({
-      nativeSystemInstruction: true,
-      usageMetrics: true,
-      finishReason: true,
-    }),
-    source: "responses-endpoint-probe",
-    declaredAt: "2026-09-08",
-    notes: "GPT6-ASTRA-PRODUCTION-SWITCH-1：ReAct 文本协议通过 shunfen6.win Responses API 传输。真实端点已验证文本、工具调用和 usage；不代表完整章节已通过生产验收。证据：reports/xinmo-ch21-gpt6astra-test/endpoint-probe.json",
-  });
-
-  // Gemini OpenAI-compatible endpoint（eval/lab：modelTestRoute=gemini31 等）
-  defaultCapabilityRegistry.register({
-    key: {
+  // Gemini OpenAI-compatible endpoint（当前生产写路径）
+  // 模型身份读取当前有效配置；换模时替换声明，旧 model 条目不残留。
+  const geminiProductionModel = getGeminiWriterModel();
+  if (
+    geminiProductionModelDeclared !== null &&
+    geminiProductionModelDeclared !== geminiProductionModel
+  ) {
+    defaultCapabilityRegistry.unregister({
       provider: "gemini",
       endpoint: "openai-compat",
-      model: "gemini-3.1-pro",
+      model: geminiProductionModelDeclared,
       protocol: "react-text",
       adapterVersion: "react-text-v1",
-    },
-    capability: createEndpointCapability({
-      nativeSystemInstruction: true,
-      usageMetrics: true,
-      finishReason: true,
-    }),
-    source: "manual-verified",
-    declaredAt: "2026-08-12",
-    notes: "eval/lab ReAct 路径（modelTestRoute=gemini31 / nb4_generate_gemini31）；GPT6-ASTRA-PRODUCTION-SWITCH-1 后不再是我生产写路径",
-  });
+    });
+  }
+  if (geminiProductionModelDeclared !== geminiProductionModel) {
+    defaultCapabilityRegistry.register({
+      key: {
+        provider: "gemini",
+        endpoint: "openai-compat",
+        model: geminiProductionModel,
+        protocol: "react-text",
+        adapterVersion: "react-text-v1",
+      },
+      capability: createEndpointCapability({
+        nativeSystemInstruction: true,
+        usageMetrics: true,
+        finishReason: true,
+      }),
+      source: "manual-verified",
+      declaredAt: "2026-08-12",
+      notes: "生产默认 ReAct 路径：gemini_writer_v2 → openai-compat endpoint（模型与渠道读取 .env，使用 OpenAI 兼容协议）",
+    });
+    geminiProductionModelDeclared = geminiProductionModel;
+  }
 
   // Claude endpoint（显式 writerModel=claude 路径）
   defaultCapabilityRegistry.register({

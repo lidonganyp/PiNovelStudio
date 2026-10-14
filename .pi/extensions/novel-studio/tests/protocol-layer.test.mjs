@@ -27,6 +27,7 @@ import {
   createEndpointCapability,
   emptyEndpointCapability,
 } from "../dist/novelos/protocol/capability-registry.js";
+import { getGeminiWriterModel } from "../dist/utils/config.js";
 import {
   createReactTextAdapter,
 } from "../dist/novelos/protocol/adapters/react-text-adapter.js";
@@ -404,8 +405,9 @@ test("CapabilityRegistry · hasEndpointEntry 准确反映 endpoint 级注册状�
 test("CapabilityRegistry · 默认 registry 生产 route 全部命中 endpoint 级（lookupStrict）", () => {
   // 验证所有生产 route 的 capabilityKey 都在 endpoint 级注册
   // 这是 PROTOCOL-LAYER-2 的核心约束：生产 route 不依赖 provider 级回退
+  // WRITER-ENV-UNIFY-1：Gemini 生产身份由 .env GEMINI_MODEL 解析（getGeminiWriterModel）。
   const productionKeys = [
-    { provider: "gemini", endpoint: "openai-compat", model: "gemini-3.1-pro", protocol: "react-text", adapterVersion: "react-text-v1" },
+    { provider: "gemini", endpoint: "openai-compat", model: getGeminiWriterModel(), protocol: "react-text", adapterVersion: "react-text-v1" },
     { provider: "claude", endpoint: "anthropic-native", model: "claude-opus-4-6", protocol: "react-text", adapterVersion: "react-text-v1" },
   ];
 

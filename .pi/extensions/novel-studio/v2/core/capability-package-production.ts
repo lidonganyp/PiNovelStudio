@@ -4,6 +4,7 @@
  * Not a second generator.
  */
 
+import { getGeminiWriterModel } from "../../utils/config.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -48,7 +49,7 @@ export function resolveRouteCapabilityKey(routing: {
     return {
       provider: "gemini",
       endpoint: "openai-compat",
-      model: routing.model || "gemini-3.8-flash",
+      model: routing.model || getGeminiWriterModel(),
       protocol: "react-text",
       adapterVersion: "react-text-v1",
     };

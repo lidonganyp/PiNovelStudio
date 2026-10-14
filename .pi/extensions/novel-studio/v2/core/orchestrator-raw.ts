@@ -6,6 +6,7 @@
  * buildIntentSummary（章卡结构化摘要）。三者均为纯函数，无实例状态依赖。
  */
 
+import { getGeminiWriterModel } from "../../utils/config.js";
 import {
   RAW_ROUTE,
   DEFAULT_RAW_TIMEOUT_MS,
@@ -348,9 +349,9 @@ export function buildRawPrompt(input: UnifiedOrchestratorInput): { systemPrompt:
   }
   const promptAdapter = adaptWriterPrompt({
     profile: input.rawPromptProfile ?? resolveWriterPromptProfile({
-      route: "v2_rawstage2_gpt6astra",
-      provider: "gpt",
-      model: "gpt-6-astra",
+      route: "v2_rawstage2_gemini31",
+      provider: "gemini31",
+      model: getGeminiWriterModel(),
     }),
     chapterNumber: input.chapterNumber,
     contract: chapterContract,

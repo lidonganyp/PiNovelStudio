@@ -6,7 +6,7 @@
  *
  * Usage:
  *   node scripts/production-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber>
- *        [--writer-model=gpt6astra|claude] [--project-root=<isolatedRoot>]
+ *        [--writer-model=gemini31|claude] [--project-root=<isolatedRoot>]
  *
  * V2_FORCE_STUB=1 is allowed for isolated deterministic runs. It is not
  * production submit evidence.
@@ -72,21 +72,29 @@ if (positional.includes("mock") || positional.includes("true")) {
 }
 
 const writerModel = flags["writer-model"] ?? flags.writerModel;
-if (writerModel && writerModel !== "gpt6astra" && writerModel !== "claude") {
-  reject(`writerModel=${writerModel} is not allowed; use omitted/gpt6astra/claude`);
+if (writerModel && writerModel !== "gemini31") {
+  reject(`writerModel=${writerModel} is not allowed; production writing uses the configured GEMINI_MODEL`);
 }
 
 const workspaceId = positional[0];
 const chapterId = positional[1];
 const chapterNumber = Number(positional[2]);
 if (!workspaceId || !chapterId || !Number.isFinite(chapterNumber) || chapterNumber < 1) {
-  reject("usage: node production-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber> [--writer-model=gpt6astra|claude] [--project-root=<path>]");
+  reject("usage: node production-generate-chapter.mjs <workspaceId> <chapterId> <chapterNumber> [--writer-model=gemini31] [--project-root=<path>]");
 }
 
 const projectRoot = flags["project-root"]
   ? resolve(flags["project-root"])
   : DEFAULT_PROJECT_ROOT;
 process.env.PROJECT_ROOT = projectRoot;
+
+// 生产验收显式清除旧流程开关（审计 P2-2）：这两个环境变量组合会把
+// unified-entry 的 productionFlow 切回 legacy raw/editorial/judge 隔离评测流
+// （v2/core/unified-entry.ts 的 PINOVEL_TEST_LEGACY_PRODUCTION_FLOW 条件）。
+// 测试基建（tests/setup-test-env.mjs）默认设置它们；生产调用器必须自我净化，
+// 不得继承调用方（测试套件/IDE）环境中的测试开关。
+delete process.env.NOVEL_TEST_TOOLS;
+delete process.env.PINOVEL_TEST_LEGACY_PRODUCTION_FLOW;
 
 const extPath = resolve(EXTENSION_ROOT, "dist", "index.js");
 if (!existsSync(extPath)) {
@@ -115,12 +123,12 @@ const params = {
   chapterId: String(chapterId),
   chapterNumber,
 };
-if (writerModel === "claude" || writerModel === "gpt6astra") {
+if (writerModel === "gemini31") {
   params.writerModel = writerModel;
 }
 
 console.log(
-  `[production-generate-chapter] workspace=${workspaceId} chapter=${chapterId} writerModel=${writerModel ?? "default-gpt6astra"} projectRoot=${projectRoot}`,
+  `[production-generate-chapter] workspace=${workspaceId} chapter=${chapterId} writerModel=${writerModel ?? process.env.GEMINI_MODEL ?? "configured Gemini"} projectRoot=${projectRoot}`,
 );
 
 const result = await generateChapterTool.execute(

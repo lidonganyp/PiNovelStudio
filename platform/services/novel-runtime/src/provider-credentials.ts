@@ -155,7 +155,15 @@ export function createProviderCredentialsClient(
           continue;
         }
         // env 模式：容器已注入的直连密钥优先。platform 模式：以后台配置为准。
-        if (process.env[mapping.key] && config.providerCredentialsSource !== "platform") {
+        // WRITER-ENV-UNIFY：默认 writer（gemini 渠道）三变量必须保持同一来源——
+        // 统一入口（compose required / 容器 env）已注入 GEMINI_API_KEY 时不得被
+        // 平台 DB 凭证覆盖，避免"统一地址 + DB 密钥"混合鉴权；地址注入本就是
+        // env 优先（下方 !process.env 判断），此处密钥对齐同一策略。
+        const isUnifiedWriterMapping = mapping.key === "GEMINI_API_KEY";
+        if (
+          process.env[mapping.key] &&
+          (config.providerCredentialsSource !== "platform" || isUnifiedWriterMapping)
+        ) {
           skipped.push(mapping.key);
           continue;
         }

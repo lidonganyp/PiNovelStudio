@@ -198,6 +198,7 @@ export class RoutedChatAPI {
     if (this.config.requestOptions?.api === "responses") {
       return callOpenAIResponses(this.config.baseUrl, this.apiKey, model, messages, {
         max_tokens: options?.max_tokens ?? this.config.maxTokens,
+        temperature: options?.temperature ?? this.config.temperature,
         jsonMode: options?.jsonMode || options?.response_format?.type === "json_object",
       });
     }

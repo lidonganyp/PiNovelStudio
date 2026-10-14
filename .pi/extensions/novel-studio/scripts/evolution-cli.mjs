@@ -284,7 +284,7 @@ function resolveModelVersion() {
   } catch {
     // 配置缺失或损坏时回退，不阻断 capture
   }
-  return "gpt6astra";
+  return "gemini31";
 }
 
 const DEFAULT_EVAL_PROTOCOL_VERSION = "2026-08-01";
@@ -2790,7 +2790,7 @@ eval-capture 选项:
   --replay-mode <m>            stub | recorded | synthetic | dev_real_model | production_like（默认 stub）
   --chapter-id <id>            默认 chapter-NNN
   --chapter-title <t>          默认 chapterId
-  --model-route <r>            默认 v2_rawstage2_gpt6astra
+  --model-route <r>            默认 v2_rawstage2_gemini31
   --provider <p>               默认 gpt
 
 health 选项:

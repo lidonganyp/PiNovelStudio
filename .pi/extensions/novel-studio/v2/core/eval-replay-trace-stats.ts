@@ -49,12 +49,16 @@ export interface ProductionLikeRouteExpectation {
   allowedRequestedRoutes: string[];
 }
 
+/** GEMINI38-FLASH-PRODUCTION-RESTORE-1 后的默认生产写预期（单一配置渠道）。 */
 const GEMINI31_PRODUCTION_EXPECTATION: ProductionLikeRouteExpectation = {
   allowedProviders: ["gemini31"],
-  allowedRequestedRoutes: ["v2_rawstage2_gemini31", "v2_amplified_gemini31"],
+  allowedRequestedRoutes: [
+    "v2_rawstage2_gemini31",
+    "v2_amplified_gemini31",
+  ],
 };
 
-/** GPT6-ASTRA-PRODUCTION-SWITCH-1 后的默认生产写预期；旧 Gemini 预期仅用于解析历史 trace。 */
+/** 仅用于解析历史 trace：GPT6-ASTRA-PRODUCTION-SWITCH-1 时期的生产写预期，路由已随 v4.35.0 删除。 */
 const GPT6ASTRA_PRODUCTION_EXPECTATION: ProductionLikeRouteExpectation = {
   allowedProviders: ["gpt"],
   allowedRequestedRoutes: ["v2_rawstage2_gpt6astra", "v2_amplified_gpt6astra"],

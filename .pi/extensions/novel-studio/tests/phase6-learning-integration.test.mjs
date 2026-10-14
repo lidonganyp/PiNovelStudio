@@ -1,7 +1,23 @@
 /**
  * Phase 6 在线学习接入统一编排器测试（P1-7，计划 §Phase 6）
  *
- * 验证退出条件：
+ * ⚠️ 测试分类（审计 P2-2 更正）：本文件验证的是学习组件在 **legacy
+ * raw/editorial/judge 隔离评测语义**下的接线（与 phase5-unified-orchestrator.test.mjs
+ * 同一语义环境，PINOVEL_TEST_LEGACY_PRODUCTION_FLOW=1 测试基建）。
+ * 其中"裁判后记录策略胜负 / editorial 与 raw 胜出记录 win/loss evidence"依赖
+ * 机器 judge 候选选择——生产主链路已不调用机器 judge（文学评价权归用户），
+ * 该语义仅保留于隔离评测。fixture 加长不构成生产测试迁移。
+ *
+ * 已存在的生产覆盖（统一主链路，勿在本文件重复）：
+ * - tests/production-agentic-style-flow.test.mjs（生产 agentic_style 流守护）
+ * - tests/phase5-unified-default-path.test.mjs（默认路径）
+ * - scripts/production-generate-chapter.mjs（生产验收调用器；显式清除旧流程开关）
+ *
+ * 仍需迁移的历史覆盖（本文件保留为隔离评测资产，迁移前不得删除）：
+ * - Thompson Sampling 过滤 hypotheses 的接线行为 → 生产侧学习组件接线
+ *   需以统一主链路（Agentic → 风格优化）语义重新验证
+ *
+ * 验证退出条件（legacy 隔离评测语义）：
  * 1. 传入 policyStore/strategySelector/outcomeRecorder 时，编排器用 Thompson Sampling
  *    过滤 hypotheses（Stage 3.5），并在裁判后记录策略胜负（Stage 6.1）
  * 2. 策略信誉库在 editorial 胜出时记录 win evidence（alpha 增加）
@@ -29,6 +45,7 @@ import {
 import { createContextualStrategySelector } from "../dist/v2/learning/contextual-strategy-selector.js";
 import { createStrategyOutcomeRecorder } from "../dist/v2/learning/strategy-outcome-recorder.js";
 import { TEST_STYLE_REFERENCES } from "./test-style-fingerprint.mjs";
+import { SCENE_LEAD_IN_LINES } from "./scene-lead-in.mjs";
 
 // ============================================================================
 // 辅助：复用 phase5 的 intent/context/stub 模式
@@ -72,8 +89,12 @@ function makeContext(overrides = {}) {
   };
 }
 
-/** raw 正文：章末平淡无钩子（触发 chapter_end_pressure 机会） */
+/** raw 正文：章末平淡无钩子（触发 chapter_end_pressure 机会）。
+ * 前置 SCENE_LEAD_IN 场景铺垫使去空白字符数满足统一主链路 6.6 最终正文
+ * 完整性门禁默认 minWordCount=2000（不降低门禁）；弱结尾句保持在末尾，
+ * 且 "很快睡着了。" 全文唯一（下方 rawWithHook 变体依赖唯一 replace）。 */
 const RAW_TEXT_WEAK_END = [
+  ...SCENE_LEAD_IN_LINES,
   "林川推开门，走了进去。房间里很暗，他摸索着前进。",
   "他抓住苏婉的手臂，把她往水面拉。",
   "暗流拉扯着他的腿，他用力蹬水，把苏婉推到浅滩。",
@@ -81,8 +102,9 @@ const RAW_TEXT_WEAK_END = [
   "窗外的雨还在下，水面恢复了平静，他闭上眼睛，很快睡着了。",
 ].join("\n");
 
-/** editorial 正文：章末有钩子（含"？") */
+/** editorial 正文：章末有钩子（含"？"）。铺垫段零"？"，钩子 marker 只来自尾部。 */
 const EDITORIAL_TEXT_STRONG_HOOK = [
+  ...SCENE_LEAD_IN_LINES,
   "林川推开门，走了进去。房间里很暗，他摸索着前进。",
   "他抓住苏婉的手臂，把她往水面拉，暗流拉扯着他的腿。",
   "他把苏婉推到浅滩，又一次跳进水里去找老周。",

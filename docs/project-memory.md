@@ -1,10 +1,16 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-09-08
+**快照日期**：2026-09-11
 **代码基线**：工作树主链路仍是 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写“当前唯一 active_prod”，一律以本节为准。
 
-## 现行发布状态（2026-09-08，唯一当前声明）
+## 当前模型配置（2026-09-11）
+
+按用户指示，`config/model-routing.json` v4.35.0 将 `novel_generate_chapter` 默认正文模型恢复为 Gemini 3.8 Flash（`gemini-3.8-flash`）。Agentic 初稿与作者风格整章优化使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`；Aimagichub / Solov 为同模型互备渠道，不跨模型 fallback。旧 GPT 正文路由与 `writerModel=gpt6astra` 已移除；GPT 继续负责结构化节点，Claude 仅供显式选择。平台计费、首次部署模板与 runtime 凭证检查同步回 Gemini。
+
+这是本地代码和配置恢复，未执行真实付费章节生成或生产发布晋级。下文 GPT 切换与发布指针记录是历史状态，不能作为此次恢复已经上线的证据。
+
+## 历史发布状态（2026-09-08）
 
 ### gpt-6-astra 主线路由切换（2026-09-08）
 
@@ -363,9 +369,9 @@ Phase 5 受控生产接入实现（"guided facade vs 9 工具" 的受控对照�
 
 ## 当前模型职责
 
-`config/model-routing.json` v4.31.0 是唯一运行时真相源：
+`config/model-routing.json` v4.36.0 是唯一运行时真相源：
 
-- Gemini 3.1 Pro Preview：NovelOS Agentic 与作者风格整章优化主写；未传 `writerModel` 时分别使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`。Aimagichub 与 Solov 是同一 Gemini 身份的互备渠道；两个渠道均失败时才 hard block，不静默切换 Claude 或其他正文模型。
+- 生产写模型（WRITER-ENV-UNIFY-1）：NovelOS Agentic 与作者风格整章优化的模型与端点由仓库根目录 `.env` 唯一决定（`GEMINI_MODEL` / `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY`，当前 gemini-4-argon @ aimagichub.xyz）；未传 `writerModel` 时使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`，`gemini31` 只是稳定路由标识。单渠道无互备（Solov 已删除）：失败仅同渠道有界重试，耗尽即 hard block，不静默切换 Claude 或其他正文模型；缺 `GEMINI_MODEL` / `GOOGLE_GEMINI_BASE_URL` 启动即报错。
 - Claude Opus 4.6：通过显式 `writerModel=claude` 使用独立 raw/editorial 路由；继续负责正式 StyleShaper、Stage 8 final gate 与 character_agent，不是 Gemini 的自动 fallback。
 - 生产决策：不再让 AI judge 替用户决定文学质量。GPT judge、opportunity judge、reverse review 仅保留在隔离评测与回放，不进入 `novel_generate_chapter`。
 - `AUTHORITATIVE-CONTENT-FREE-EXPRESSION-1`：第 18-20 章的一次序列偏好仅保留为历史实验，不再外推为全局生产策略。固定写前场景解法与 `boundedBestOf3` 已退出生产；普通 raw 是默认基线，候选必须逐章与 raw 比较。

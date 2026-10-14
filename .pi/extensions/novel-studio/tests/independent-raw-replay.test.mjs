@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 
 const evalDist = join(process.cwd(), "dist-eval", "eval", "independent-raw-replay.js");
 const runnerDist = join(process.cwd(), "dist-eval", "eval", "full-pipeline-replay-runner.js");
@@ -35,25 +36,46 @@ test("independent raw：eval-only + stub generate 写出 result 与 raw_direct t
   process.env.PINOVEL_EVAL_ONLY = "1";
   const root = mkdtempSync(join(tmpdir(), "independent-raw-"));
   try {
+    const workspace = join(root, "workspaces", "eval-raw");
+    mkdirSync(join(workspace, "characters"), { recursive: true });
+    mkdirSync(join(workspace, "series"), { recursive: true });
+    writeFileSync(join(workspace, "config.json"), JSON.stringify({ novelName: "输入消费测试", genre: "都市", styleOverrides: { forbidden: "不应注入的风格规则" } }));
+    writeFileSync(join(workspace, "characters", "person.md"), "# 测试角色\n角色基础资料标记");
+    writeFileSync(join(workspace, "series", "outline.md"), "作者整体方向标记");
+    const requests = [];
     const { runIndependentRawReplay } = await import(`file://${evalDist}`);
     const out = await runIndependentRawReplay({
       workspaceId: "eval-raw",
       chapterId: "chapter-001",
       chapterNumber: 1,
       projectRoot: root,
-      modelGenerate: async () => ({
+      modelGenerate: async (request) => {
+        requests.push(request);
+        return ({
         text: "裸写正文",
         finishReason: "stop",
         route: "v2_rawstage2_gemini31",
         requestedRoute: "v2_rawstage2_gemini31",
         provider: "gemini31",
-      }),
+        });
+      },
     });
     assert.ok(existsSync(out.resultPath));
     assert.ok(existsSync(out.tracePath));
     const trace = JSON.parse(readFileSync(out.tracePath, "utf-8"));
     assert.equal(trace.matrixArm, "raw_direct");
     assert.equal(trace.evalMode, "B0");
+    assert.equal(requests.length, 1);
+    assert.match(requests[0].userPrompt, /输入消费测试/);
+    assert.match(requests[0].userPrompt, /角色基础资料标记/);
+    assert.match(requests[0].userPrompt, /作者整体方向标记/);
+    assert.doesNotMatch(requests[0].userPrompt, /不应注入的风格规则/);
+    assert.doesNotMatch(requests[0].route, /amplified|judge|agentic/);
+    const evidence = trace.gates[0].evidence;
+    assert.equal(evidence.inputConsumption[0].consumed, true);
+    assert.equal(evidence.inputConsumption[0].userPromptSha256, createHash("sha256").update(requests[0].userPrompt).digest("hex"));
+    assert.deepEqual(evidence.inputSources.map((source) => source.path), ["config.json", "characters/person.md", "series/outline.md"]);
+    assert.equal(existsSync(join(workspace, "narrative-state-store.json")), false);
   } finally {
     if (prev === undefined) delete process.env.PINOVEL_EVAL_ONLY;
     else process.env.PINOVEL_EVAL_ONLY = prev;
@@ -61,7 +83,31 @@ test("independent raw：eval-only + stub generate 写出 result 与 raw_direct t
   }
 });
 
-test("evalMode=B0 + writerModel=gpt6astra 请求 v2_rawstage2_gpt6astra", async () => {
+test("B0 最小资料加载：缺失输入阻断；前章可读但不读取本章或未来正文", async () => {
+  const { buildIndependentRawInput } = await import(`file://${evalDist}`);
+  const root = mkdtempSync(join(tmpdir(), "independent-raw-input-"));
+  const input = { projectRoot: root, workspaceId: "sample", chapterId: "2", chapterNumber: 2 };
+  try {
+    assert.throws(() => buildIndependentRawInput(input), /缺少作品类型或角色/);
+    const workspace = join(root, "workspaces", "sample");
+    mkdirSync(join(workspace, "characters"), { recursive: true });
+    mkdirSync(join(workspace, "chapters"), { recursive: true });
+    writeFileSync(join(workspace, "config.json"), JSON.stringify({ genre: "都市" }));
+    writeFileSync(join(workspace, "characters", "person.md"), "# 测试角色");
+    assert.throws(() => buildIndependentRawInput(input), /缺少前章/);
+    writeFileSync(join(workspace, "chapters", "1.md"), "已接受前章输入标记");
+    writeFileSync(join(workspace, "chapters", "2.md"), "当前答案泄漏标记");
+    writeFileSync(join(workspace, "chapters", "3.md"), "未来答案泄漏标记");
+    const loaded = buildIndependentRawInput(input);
+    assert.match(loaded.prefix, /已接受前章输入标记/);
+    assert.doesNotMatch(loaded.prefix, /答案泄漏标记/);
+    assert.equal(loaded.sources.at(-1).sha256, createHash("sha256").update("已接受前章输入标记").digest("hex"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("evalMode=B0 + writerModel=gemini31 请求 v2_rawstage2_gemini31", async () => {
   const prev = process.env.PINOVEL_EVAL_ONLY;
   process.env.PINOVEL_EVAL_ONLY = "1";
   const requested = [];
@@ -73,7 +119,7 @@ test("evalMode=B0 + writerModel=gpt6astra 请求 v2_rawstage2_gpt6astra", async 
       chapterId: "chapter-001",
       chapterNumber: 1,
       projectRoot: root,
-      writerModel: "gpt6astra",
+      writerModel: "gemini31",
       evalMode: "B0",
       evalPrefix: "independent-raw",
       evalIntent: {
@@ -104,7 +150,7 @@ test("evalMode=B0 + writerModel=gpt6astra 请求 v2_rawstage2_gpt6astra", async 
       evalPromptProfile: "generic_writer_v1",
     });
     assert.ok(
-      requested.includes("v2_rawstage2_gpt6astra"),
+      requested.includes("v2_rawstage2_gemini31"),
       `routes=${JSON.stringify(requested)}`,
     );
     assert.equal(requested.includes("v2_rawstage2"), false, `未锁路由仍请求 v2_rawstage2：${JSON.stringify(requested)}`);

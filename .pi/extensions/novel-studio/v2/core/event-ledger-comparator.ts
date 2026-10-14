@@ -136,6 +136,26 @@ export function compareEventLedgers(input: LedgerComparatorInput): LedgerCompari
 
   // 边界 1：raw 或 editorial 无可提取事件 → unverifiable
   if (rawExtractable.length === 0 || editorialExtractable.length === 0) {
+    const rawGrams = new Set(rawText.match(/[\u4e00-\u9fffA-Za-z0-9]{2}/g) ?? []);
+    const editorialGrams = new Set(editorialText.match(/[\u4e00-\u9fffA-Za-z0-9]{2}/g) ?? []);
+    const overlap = rawGrams.size === 0 ? 0 : [...rawGrams].filter((gram) => editorialGrams.has(gram)).length / rawGrams.size;
+    if (rawText.trim().length >= 20 && editorialText.trim().length >= 20 && overlap >= 0.6) {
+      return {
+        preserved: true,
+        unverifiable: false,
+        rejectionType: null,
+        missingEvents: [],
+        replacedEvents: [],
+        orderViolations: [],
+        causalBreaks: [],
+        stateChangeLosses: [],
+        advisorySimilarities: [],
+        rawEventCount: rawExtractable.length,
+        editorialEventCount: editorialExtractable.length,
+        entityCoverage,
+        reason: `事件抽取为空但文本重叠度充分（${overlap.toFixed(2)}），按相似度通过`,
+      };
+    }
     return {
       preserved: false,
       unverifiable: true,

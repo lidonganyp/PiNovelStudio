@@ -7,8 +7,9 @@ const config: ProductionBootstrapConfig = {
   adminEmail: 'admin@example.com',
   adminPassword: 'a-secure-bootstrap-password-123',
   aesMasterKey: 'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd',
-  gptApiKey: 'gpt-key',
-  gptApiBaseUrl: 'https://shunfen6.win/v1',
+  geminiModel: 'gemini-4-argon',
+  geminiApiKey: 'gemini-key',
+  geminiApiBaseUrl: 'https://aimagichub.xyz/v1',
   inputPricePerMillionFen: 120n,
   outputPricePerMillionFen: 480n,
 };
@@ -61,14 +62,20 @@ function makeDb(): BootstrapDatabase & { users: unknown[]; providers: unknown[];
 }
 
 describe('production bootstrap state', () => {
-  it('creates admin, encrypted GPT provider, and both production route rates', async () => {
+  it('creates admin, encrypted Gemini provider, and both production route rates', async () => {
     const db = makeDb();
     await bootstrapProductionState(db, config);
     expect(db.users).toHaveLength(1);
     expect(db.providers).toHaveLength(1);
     expect(db.rates).toHaveLength(2);
-    expect(db.providers[0]).toMatchObject({ providerKey: 'gpt', enabled: true });
-    expect((db.providers[0] as { apiKeyEncrypted: string }).apiKeyEncrypted).not.toContain('gpt-key');
+    // P1-1/P1-3：provider 名称与费率 displayName 从部署注入的当前模型动态派生
+    expect(db.providers[0]).toMatchObject({ providerKey: 'gemini', name: 'gemini-4-argon', enabled: true });
+    expect((db.providers[0] as { apiKeyEncrypted: string }).apiKeyEncrypted).not.toContain('gemini-key');
+    const rateRows = db.rates as Array<{ modelKey: string; displayName: string }>;
+    expect(rateRows.find((row) => row.modelKey === 'v2_rawstage2_gemini31')?.displayName)
+      .toBe('gemini-4-argon — NovelOS Agentic');
+    expect(rateRows.find((row) => row.modelKey === 'v2_amplified_gemini31')?.displayName)
+      .toBe('gemini-4-argon — Author Style Optimizer');
   });
 
   it('is idempotent when the same state already exists', async () => {
@@ -80,6 +87,46 @@ describe('production bootstrap state', () => {
     expect(db.providers).toHaveLength(1);
     expect(db.rates).toHaveLength(2);
     expect(db.providers[0]).toEqual(provider);
+  });
+
+  it('updates provider name and appends model-scoped rate rows when only the model changes', async () => {
+    const db = makeDb();
+    await bootstrapProductionState(db, config);
+    // 仅换模型：渠道地址、密钥与价格全部不变（模型升级部署场景）
+    const upgraded: ProductionBootstrapConfig = { ...config, geminiModel: 'gemini-5-argon' };
+    await bootstrapProductionState(db, upgraded);
+
+    // provider 名称必须随当前部署模型更新（旧缺陷：地址/密钥相同时提前返回，名称仍是旧模型）
+    expect(db.providers).toHaveLength(1);
+    expect(db.providers[0]).toMatchObject({
+      providerKey: 'gemini',
+      name: 'gemini-5-argon',
+      apiBaseUrl: config.geminiApiBaseUrl,
+      enabled: true,
+    });
+
+    // 两条新模型费率追加；旧模型费率行保留（历史账单快照不可变）
+    const rateRows = db.rates as Array<{ modelKey: string; displayName: string }>;
+    expect(rateRows).toHaveLength(4);
+    const rawRows = rateRows
+      .filter((row) => row.modelKey === 'v2_rawstage2_gemini31')
+      .map((row) => row.displayName)
+      .sort();
+    expect(rawRows).toEqual([
+      'gemini-4-argon — NovelOS Agentic',
+      'gemini-5-argon — NovelOS Agentic',
+    ]);
+    expect(rateRows.find((row) => row.modelKey === 'v2_amplified_gemini31' && row.displayName.includes('gemini-5-argon')))
+      .toMatchObject({ displayName: 'gemini-5-argon — Author Style Optimizer' });
+
+    // 升级后以新模型再次 bootstrap：幂等，不再追加费率行
+    // （先回拨旧模型行时间戳，避免与同毫秒创建的新行排序不稳定）
+    for (const row of db.rates as Array<{ displayName: string; effectiveFrom: Date }>) {
+      if (row.displayName.includes('gemini-4-argon')) row.effectiveFrom = new Date(Date.now() - 60_000);
+    }
+    await bootstrapProductionState(db, upgraded);
+    expect(db.providers).toHaveLength(1);
+    expect(db.rates).toHaveLength(4);
   });
 
   it('does not treat a future rate as the currently effective production rate', async () => {

@@ -128,21 +128,24 @@ test("non-Claude OpenAI-compatible routes retain configured sampling parameters"
       url: String(url),
       body: JSON.parse(String(init?.body ?? "{}")),
     });
+    // gpt provider 已切换 Responses 传输（providers.gpt.request_options.api=responses），
+    // mock 返回 Responses API 格式响应。
     return {
       ok: true,
       status: 200,
       statusText: "OK",
       text: async () => "",
       json: async () => ({
-        id: "chatcmpl-test",
-        choices: [
+        id: "resp-test",
+        status: "completed",
+        output: [
           {
-            index: 0,
-            message: { role: "assistant", content: "{}" },
-            finish_reason: "stop",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "{}" }],
           },
         ],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       }),
     };
   };
@@ -156,8 +159,11 @@ test("non-Claude OpenAI-compatible routes retain configured sampling parameters"
 
   assert.equal(result.usedProvider, "gpt");
   assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/responses$/);
+  // Responses 传输保留采样参数：temperature 原样透传，max_tokens 映射为 max_output_tokens。
   assert.equal(calls[0].body.temperature, 0.2);
-  assert.equal(calls[0].body.max_tokens, 64);
+  assert.equal(calls[0].body.max_output_tokens, 64);
+  assert.equal(result.response.choices[0].message.content, "{}");
 });
 
 test("RoutedChatAPI honors Anthropic Bearer authentication from provider options", async () => {

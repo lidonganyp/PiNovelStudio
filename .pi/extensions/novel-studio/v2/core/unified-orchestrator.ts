@@ -1220,9 +1220,9 @@ export class UnifiedOrchestrator {
     const STAGE_MESSAGES: Record<string, string> = {
       stage1_novelosAgentic: "NovelOS Agentic 生成初稿中（最耗时，约 5-15 分钟）",
       stage2_agenticFactGuard: "Agentic 事实守门检查中",
-      stage3_authorStyleOptimization: "作者风格整章优化中（约 5-15 分钟）",
+      stage3_authorStyleOptimization: "作者风格整章优化中（通常 5-15 分钟，超时会自动重试一次）",
       stage4_storyPreservation: "故事保持性检查中",
-      stage4a_authorStyleRetryUnverifiable: "作者风格优化重试中（事实不可验证）",
+      stage4a_authorStyleRetryUnverifiable: "作者风格优化重试中（事实不可验证，已缩减指导）",
       stage4a_authorStyleRetryDrift: "作者风格优化重试中（漂移修正）",
       // 注：两条 stage4b 重试路径故意不映射中文——acceptance-probes 测试用其 stage 名作源码
       // 锚点扫描 retry 代码块，映射会引入提前出现的位置干扰测试。这两阶段 fallback 到 stage 名。

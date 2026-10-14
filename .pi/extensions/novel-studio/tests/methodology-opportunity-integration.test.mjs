@@ -228,7 +228,7 @@ test("ordinary editorial generation sends Gemini profiles to the Gemini route", 
     },
   });
 
-  assert.equal(requestedRoute, "nb4_generate_gemini31");
+  assert.equal(requestedRoute, "v2_amplified_gemini31");
   assert.equal(result.candidates.length, 1);
 });
 

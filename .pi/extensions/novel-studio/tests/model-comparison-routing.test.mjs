@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { resolveModelTestRouteLock } from "../dist/v2/core/unified-entry.js";
 import { registerTools } from "../dist/tools/register-tools.js";
+import { getGeminiWriterModel } from "../dist/utils/config.js";
 
 const routing = JSON.parse(readFileSync(resolve(process.cwd(), "../../../config/model-routing.json"), "utf8"));
 
@@ -56,12 +57,14 @@ test("grok45 comparison locks generation to Grok 4.5", () => {
   });
 });
 
-test("gemini31 comparison locks generation to Gemini 3.8 Flash", () => {
+test("gemini31 comparison locks generation to the .env-configured writer model", () => {
+  // WRITER-ENV-UNIFY-1：gemini31 只是稳定路由标识；
+  // 实际生成模型由 .env GEMINI_MODEL 解析（与其他 comparison 路由的固定模型不同）。
   assert.deepEqual(resolveModelTestRouteLock("gemini31"), {
     generateRoute: "nb4_generate_gemini31",
     judgeRoute: "v2_opportunity_judge",
     provider: "gemini31",
-    model: "gemini-3.8-flash",
+    model: getGeminiWriterModel(),
   });
 });
 
@@ -91,7 +94,7 @@ test("long-form comparison routes receive explicit model-specific output budgets
   assert.equal(routing.providers.gemini31.max_tokens.nb4_generate_gemini31, 16384);
 });
 
-test("new comparison routes use isolated model env overrides", () => {
+test("new comparison routes use isolated model env overrides (gemini31 unified to .env writer config)", () => {
   assert.deepEqual(routing.agent_routing.nb4_generate_claude48, {
     provider: "claude",
     model: "claude-opus-4-8",
@@ -122,12 +125,14 @@ test("new comparison routes use isolated model env overrides", () => {
     lab_testing: true,
     note: "Isolated chapter comparison route for Grok 4.5.",
   });
+  // WRITER-ENV-UNIFY-1：gemini31 不再用独立 GEMINI31_* env，
+  // 与生产写路由统一读取 .env GEMINI_MODEL / GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY。
   assert.deepEqual(routing.agent_routing.nb4_generate_gemini31, {
     provider: "gemini31",
-    model: "gemini-3.8-flash",
-    base_url_env: "GEMINI31_BASE_URL",
-    api_key_env: "GEMINI31_API_KEY",
-    model_env: "GEMINI31_MODEL",
+    model: "${GEMINI_MODEL}",
+    base_url_env: "GOOGLE_GEMINI_BASE_URL",
+    api_key_env: "GEMINI_API_KEY",
+    model_env: "GEMINI_MODEL",
     fallback: [],
     lab_testing: true,
     note: "Isolated chapter comparison route for Gemini 3.8 Flash.",

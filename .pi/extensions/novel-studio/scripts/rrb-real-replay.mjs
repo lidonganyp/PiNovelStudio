@@ -1,7 +1,7 @@
 /**
  * RRB-REAL-REPLAY — REASONING-REPAIR-BOUNDARY-1 Wave 5（RRB-6.2 / RRB-6.4）
  *
- * 真实 API（默认 Gemini 3.1 经 solov 代理）驱动完整 novel_generate_chapter replay，
+ * 真实 API（默认 .env GEMINI_MODEL 指定的 Gemini 模型）驱动完整 novel_generate_chapter replay，
  * 逐样本核对 RRB-6.4 验收字段：
  *   - candidate lineage（candidate.id 内嵌 text hash 前缀 + sourceCandidateId + agentLineageIndex）
  *   - text/diff hash（candidate.id hash 前缀 + contextHash）

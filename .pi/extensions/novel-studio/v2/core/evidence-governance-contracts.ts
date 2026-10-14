@@ -418,9 +418,9 @@ export const CEG_PRODUCTION_A_BASELINE = {
     "query_pattern_memory",
     "query_voice_evidence",
   ],
-  writerRouteDefault: "v2_rawstage2_gpt6astra",
-  styleRouteDefault: "v2_amplified_gpt6astra",
-  productionRendererProfile: "gpt_writer_v1",
+  writerRouteDefault: "v2_rawstage2_gemini31",
+  styleRouteDefault: "v2_amplified_gemini31",
+  productionRendererProfile: "gemini_writer_v2",
   layeredRendererProfile: "gemini_writer_v2_layered",
 } as const;
 

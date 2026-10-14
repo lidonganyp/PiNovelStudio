@@ -44,7 +44,8 @@ PiNovelStudio 的目标架构收敛为**单一生成主链路**。真相源为 [
 ### 当前项目记忆（2026-07-20）
 
 - 跨会话快照见 [docs/project-memory.md](docs/project-memory.md)。它记录当前代码基线、已完成清理、脏工作树保护、模型路由状态与授权边界。
-- 当前路由基线为 `config/model-routing.json` v4.34.0：gpt-6-astra 负责 NovelOS Agentic 生成与作者风格整章优化，默认端点为 shunfen6.win，使用 GPT_API_KEY / GPT_BASE_URL 与独立 GPT_WRITER_MODEL。正文无跨模型 fallback。普通 one-shot raw 与 Gemini 仅保留为隔离评测资产。生产不调用文学裁判，用户反馈是唯一文学评价来源；Claude 仅在显式 `writerModel=claude` 时使用。
+- 当前路由基线为 `config/model-routing.json` v4.36.0（WRITER-ENV-UNIFY-1）：生产写模型与端点由仓库根目录 `.env` 唯一决定（GEMINI_MODEL / GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY），NovelOS Agentic 生成与作者风格整章优化均使用该身份；`gemini31` 只是稳定路由标识，不再绑定具体模型版本。单一渠道，无 Solov 或其他互备；失败仅同渠道有界重试，耗尽即阻断。缺 GEMINI_MODEL / GOOGLE_GEMINI_BASE_URL 时启动即明确报错，不静默回退旧模型。正文无跨模型 fallback。普通 one-shot raw 仅保留为隔离评测资产。生产不调用文学裁判，用户反馈是唯一文学评价来源；Claude 仅在显式 `writerModel=claude` 时使用。
+- **WRITER-ENV 复查整改（2026-10-14）**：① 旧 `SUB2API_INTERNAL_LLM_*` 覆写分支已在扩展侧物理删除（config.ts / fallback-manager.ts），残留环境变量不再能劫持统一 writer 渠道；② 统一入口每次任务开始时解析一次 writer transport 并冻结（WRITER-ENV-RUN-FREEZE-1），运行中修改 `.env` 不影响当前任务，`.env` 删除变量后重载清除旧值残留（WRITER-ENV-RELOAD-1）；③ platform 容器部署（compose）不从镜像读取 `.env`，GEMINI_MODEL / GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY 必须从部署统一入口 required 注入，api-bootstrap 的密钥/地址/模型从这三个变量派生（BOOTSTRAP_GEMINI_MODEL 等），平台计费（rates.service）不再用旧模型别名静默兜底——费率行直接以路由 key 建立，缺当前费率明确 404 阻断。
 - 7.75GB `corpus/` 已从仓库删除，生产路径对原始语料零依赖。离线数据重建必须显式使用外部语料，不得继续把“仓库内置 100+ 部全文”写成当前事实。
 - `cd15cd2` 删除 4 个 craft 文件后 `030420f`（P0 阻断项修复）已恢复并纳入版本控制，`npm run build` / `build:prod` 通过，clean checkout 完整。
 - 当前工作树包含用户正在进行的代理审批代码、staged 测试修改、未跟踪 RED 测试与模型验证输出；未经明确指示不得恢复、删除、暂存或覆盖。现有 stash 也不得擅自 `pop/drop`。
@@ -237,14 +238,14 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
 | 任务类型 | 推荐模型 | 原因 |
 |---------|---------|------|
 | 规划/分析 | PI 默认模型 | 结构化推理 |
-| Agentic 初稿 + 作者风格整章优化 | gpt-6-astra | 未传 `writerModel` 或传 `gpt6astra` 时，使用 `v2_rawstage2_gpt6astra` / `v2_amplified_gpt6astra`，`fallback=[]` |
+| Agentic 初稿 + 作者风格整章优化 | `.env GEMINI_MODEL` 决定（当前 gemini-4-argon） | 未传 `writerModel` 或传 `gemini31` 时，使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31`，`fallback=[]`；`gemini31` 为稳定路由标识 |
 | 显式备选正文模型 | Claude Opus 4.6 | `writerModel=claude` 时使用 `v2_rawstage2` / `v2_amplified` 与 `claude_writer_v1`；`fallback=[]`，不作为默认模型的自动备援 |
 | 中文校准候选(评测兼容) | Doubao Seed 2.1 Pro | `v2_chinese_calibration` 仅保留给隔离评测/历史局部校准，不进入正式生产主链路 |
 | 文学裁判(评测兼容) | gpt-5.6-sol | `v2_opportunity_judge` / `v2_literary_judge` 仅保留隔离评测和回放，不在 `novel_generate_chapter` 生产路径调用 |
 | 本地质量扫描 | local diagnostics | 只提供 span、事实、结构与风险证据；不得按风格、AI 腔、对白或段落指标阻断/改写/选 winner |
 | 开发验证(GLM) | GLM 5.2 | MODEL-ROUTING-CLAUDE46-1D：GLM 仅作开发验证，只允许显式 `modelTestRoute=glm` / NovelBench lab route；不得进入生产默认或 fallback。`narrator_testing_glm` / `style_shaper_testing_glm` / `chinese_naturalizer_glm` 显式 `fallback=[]` + lab_testing 标注 |
 
-> **路由真相源**：`config/model-routing.json` v4.34.0 为路由唯一真相源，本表与之同步；不一致时以 `model-routing.json` 为准。
+> **路由真相源**：`config/model-routing.json` v4.36.0 为路由唯一真相源，本表与之同步；不一致时以 `model-routing.json` 为准。
 
 ## 生产规则
 
@@ -297,8 +298,8 @@ python scripts/contrastive-distill.py --generate-samples --output data/contrasti
    - ❌ 禁止直接调用 `novel_critic` 替代质量审查
    - ❌ 禁止在未通过 `novel_generate_chapter` 的情况下输出"第X章"内容
 
-4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.34.0）：
-   - `v2_rawstage2_gpt6astra` / `v2_amplified_gpt6astra` → gpt-6-astra；默认 `writerModel`，使用 `gpt_writer_v1`；失败后不静默切换其他正文模型
+4. **统一主链路模型路由**（唯一真相源为 `config/model-routing.json` v4.36.0）：
+   - `v2_rawstage2_gemini31` / `v2_amplified_gemini31` → `.env GEMINI_MODEL` 解析的模型（当前 gemini-4-argon）；默认 `writerModel`，使用 `gemini_writer_v2`；失败仅同渠道有界重试（`GOOGLE_GEMINI_BASE_URL` 单渠道），耗尽即阻断，不静默切换其他正文模型；缺配置启动即报错
    - 默认生产路径 → NovelOS Agentic 检索/验证生成初稿，再由同一 writer family 消费作者风格档案做整章优化；初稿不得直接交付
    - `v2_rawstage2` / `v2_amplified` → Claude Opus 4.6；仅由显式 `writerModel=claude` 选择，使用 `claude_writer_v1`，route-level `fallback=[]`，不作为默认模型的自动备援
    - `boundedBestOf3` → 历史评测兼容字段；固定场景多候选已退出生产，旧证据不限制当前或未来模型能力
