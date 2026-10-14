@@ -419,7 +419,7 @@
 
 ---
 
-**生成时间**: 2026-08-26T11:15:37.777Z
+**生成时间**: 2026-10-14T22:57:17.650Z
 **脚本**: `scripts/ending-pressure-real-1/run-verification.mjs`
 **模式**: stub
-**Git HEAD（仅基准提交，不代表脏工作树快照）**: 66969142c8ebf199a4a5ded0bb45ce34aa11247a
+**Git HEAD（仅基准提交，不代表脏工作树快照）**: c32813995d34295e5ce724b16b41eff2488fafe6
