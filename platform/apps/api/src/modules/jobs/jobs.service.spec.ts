@@ -63,8 +63,9 @@ function makeService(runtimeResult: unknown) {
     }),
   };
   const runtime = { invoke: vi.fn().mockResolvedValue(runtimeResult) };
-  const service = new JobsService(prisma as never, billing as never, rates as never, runtime as never);
-  return { service, prisma, billing, runtime, rates };
+  const errorReports = { recordServerError: vi.fn().mockResolvedValue(null) };
+  const service = new JobsService(prisma as never, billing as never, rates as never, runtime as never, errorReports as never);
+  return { service, prisma, billing, runtime, rates, errorReports };
 }
 
 const input = {
@@ -232,8 +233,8 @@ describe('JobsService HTTP generation delivery contract', () => {
     }
   });
 
-  it('maps a missing HTTP model rate to service unavailable instead of HTTP 404', async () => {
-    const { service, prisma, rates } = makeService({ status: 'ok', result: {} });
+  it('returns an actionable non-retryable failure when a required writer rate is missing', async () => {
+    const { service, prisma, rates, billing, runtime, errorReports } = makeService({ status: 'ok', result: {} });
     const previous = env.NOVEL_RUNTIME_MODE;
     (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = 'http';
     prisma.novelChapter.findFirst = vi.fn().mockResolvedValue({
@@ -245,8 +246,24 @@ describe('JobsService HTTP generation delivery contract', () => {
     try {
       await expect(service.submitChapterGeneration(1, 2, 3)).rejects.toMatchObject({
         status: 503,
+        envelope: {
+          stage: 'jobs.submit',
+          gate: 'billing_configuration',
+          code: 'generation_billing_unavailable',
+          recoverable: false,
+          reason: '生成服务的计费配置尚未就绪，请联系管理员补全后再生成。',
+          userActionRequired: ['请联系管理员检查生成服务的生效费率与渠道配置'],
+        },
       });
       expect(prisma.novelGenerationJob.create).not.toHaveBeenCalled();
+      expect(billing.createHold).not.toHaveBeenCalled();
+      expect(runtime.invoke).not.toHaveBeenCalled();
+      expect(errorReports.recordServerError).toHaveBeenCalledWith(expect.objectContaining({
+        projectId: 2,
+        chapterId: 3,
+        code: 'generation_billing_unavailable',
+        diagnostic: expect.objectContaining({ cause: expect.stringContaining('v2_rawstage2_gemini31') }),
+      }));
     } finally {
       (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
     }

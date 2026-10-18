@@ -1,7 +1,8 @@
 /**
  * 小说助手生成管家 e2e：缺资料走确认，不返回技术错误；确认后才提交统一生成。
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import {
   FastifyAdapter,
@@ -14,6 +15,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { env } from '../src/config/env';
 import { encryptSecret } from '../src/common/crypto/aes-gcm';
 import { FIXTURE_CHAPTER_ONE, FIXTURE_STORY_OUTLINE } from '../src/modules/context/fixtures';
+import { JobsService } from '../src/modules/jobs/jobs.service';
 
 const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const password = 'Password123';
@@ -137,6 +139,7 @@ describe('助手生成管家 e2e', () => {
         select: { id: true },
       });
       const userIds = users.map((item) => item.id);
+      await raw.novelErrorReport.deleteMany({ where: { userId: { in: userIds } } });
       await raw.novelGenerationCall.deleteMany({ where: { userId: { in: userIds } } });
       await raw.novelBalanceHold.deleteMany({ where: { userId: { in: userIds } } });
       await raw.novelAssistantMessage.deleteMany({ where: { userId: { in: userIds } } });
@@ -303,7 +306,7 @@ describe('助手生成管家 e2e', () => {
     expect(stolen.statusCode).toBe(404);
   });
 
-  it('第一章确认后直接提交生成任务，不重复返回同一份缺口方案', async () => {
+  it('计费配置失败保留已确认资料，配置恢复后同一方案可重试且只提交一次', async () => {
     const created = await app.inject({
       method: 'POST',
       url: '/api/projects',
@@ -355,6 +358,42 @@ describe('助手生成管家 e2e', () => {
     expect(steward.missing).not.toContain('伏笔/承诺');
 
     const confirmedFields = steward.proposals.filter((row) => row.value.trim()).map((row) => row.field);
+    const submission = {
+      method: 'POST' as const,
+      url: `/api/projects/${firstProjectId}/assistant/messages`,
+      headers: { authorization: `Bearer ${tokenA}`, accept: 'text/event-stream' },
+      payload: {
+        content: '采用并继续生成',
+        stewardAction: 'apply_and_generate',
+        proposalId: steward.proposalId,
+        sourceVersion: steward.sourceVersion,
+        confirmedFields,
+      },
+    };
+    const estimate = vi.spyOn(app.get(JobsService) as unknown as {
+      estimateMaxCharge(): Promise<bigint>;
+    }, 'estimateMaxCharge').mockRejectedValueOnce(
+      new NotFoundException('未找到模型 v2_rawstage2_gemini31 的生效费率'),
+    );
+    try {
+      const blocked = await app.inject(submission);
+      expect(blocked.statusCode).toBe(503);
+      expect(blocked.json().failure).toMatchObject({
+        code: 'generation_billing_unavailable',
+        gate: 'billing_configuration',
+        recoverable: false,
+        reason: '生成服务的计费配置尚未就绪，请联系管理员补全后再生成。',
+      });
+      expect(blocked.body).not.toMatch(/Provider|gemini|操作失败，请稍后重试/u);
+      await expect(prisma.novelGenerationJob.count({ where: { projectId: firstProjectId } })).resolves.toBe(0);
+      const seed = await prisma.novelChapterSeed.findFirst({ where: { projectId: firstProjectId } });
+      expect(seed?.intent.trim()).toBeTruthy();
+      await expect(prisma.novelErrorReport.count({
+        where: { projectId: firstProjectId, code: 'generation_billing_unavailable' },
+      })).resolves.toBe(1);
+    } finally {
+      estimate.mockRestore();
+    }
     const confirmed = await app.inject({
       method: 'POST',
       url: `/api/projects/${firstProjectId}/assistant/messages`,

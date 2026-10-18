@@ -127,6 +127,46 @@ test('敏感错误信息（api_key/stack/provider）不得透出给用户', () =
   expect(userFacingFailure('余额不足')).toBe('余额不足');
 });
 
+test('采用并生成的计费配置阻断保留处理指引，恢复后可使用原方案重试', async () => {
+  const savedFetch = globalThis.fetch;
+  const requests: unknown[] = [];
+  const failure = {
+    stage: 'jobs.submit', gate: 'billing_configuration', code: 'generation_billing_unavailable',
+    severity: 'preflight', reason: '生成服务的计费配置尚未就绪，请联系管理员补全后再生成。',
+    recoverable: false, userActionRequired: ['请联系管理员检查生成服务的生效费率与渠道配置'],
+  };
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return requests.length === 1
+      ? sseResponse([], { status: 503, body: JSON.stringify({ failure, message: failure.reason }) })
+      : sseResponse([DONE_EVENT]);
+  }) as typeof fetch;
+  const chat = useAssistantChat({ projectId: 252 });
+  const message = {
+    id: 1201, role: 'assistant', content: '确认方案',
+    steward: {
+      status: 'confirmation_required' as const, reply: '确认方案', chapterNumber: 21,
+      proposalId: 'proposal-21', sourceVersion: 'before-seed-save', proposalStatus: 'pending' as const,
+      proposals: [{ field: 'chapter_seed', value: '{"intent":"推进调查","endingGoal":"取得线索"}', source: ['chapter:20'], requiresConfirmation: true }],
+      missing: ['章节种子'],
+    },
+  };
+  try {
+    await chat.sendSteward(message, 'apply_and_generate');
+    expect(chat.panelError.value).toEqual(failure);
+    expect(chat.messages.value.at(-1)?.status).toBe('failed');
+    expect(chat.messages.value.at(-1)?.failure?.recoverable).toBe(false);
+    await chat.send(true);
+    expect(chat.panelError.value).toBeNull();
+    expect(chat.messages.value.at(-1)?.status).toBe('success');
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[0]).toMatchObject({ stewardAction: 'apply_and_generate', proposalId: 'proposal-21' });
+  } finally {
+    await restoreFetch(savedFetch);
+  }
+});
+
 test('reducer：delta 累积内容，done 用服务器消息替换本地流式占位', async () => {
   const savedFetch = globalThis.fetch;
   const trackedJobs: string[] = [];
@@ -306,6 +346,8 @@ test('reducer：章节请求失败后可继续生成，并显式使用 append �
   const savedFetch = globalThis.fetch;
   const bodies: string[] = [];
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    // Diagnostics use fetch too; only chapter requests count as retries.
+    if (String(_url).endsWith('/client-errors')) return new Response('{}');
     bodies.push(String(init?.body));
     return sseResponse(
       bodies.length === 1

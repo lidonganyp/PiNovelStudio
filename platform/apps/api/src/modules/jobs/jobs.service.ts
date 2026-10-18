@@ -370,9 +370,28 @@ export class JobsService implements OnModuleInit {
       maxCharge = await this.estimateMaxCharge();
     } catch (error: unknown) {
       if (error instanceof NotFoundException && error.message.includes('生效费率')) {
-        throw new ServiceUnavailableException(
-          '生成模型未配置：请在管理后台为生成模型启用 Provider 与生效费率',
-        );
+        const failure = makeFailure({
+          stage: 'jobs.submit',
+          gate: 'billing_configuration',
+          code: FAILURE_CODES.generationBillingUnavailable,
+          severity: 'preflight',
+          reason: '生成服务的计费配置尚未就绪，请联系管理员补全后再生成。',
+          recoverable: false,
+          userActionRequired: ['请联系管理员检查生成服务的生效费率与渠道配置'],
+        });
+        this.logger.error(`generation billing configuration unavailable: ${error.message}`);
+        await this.recordServerErrorSafely({
+          userId,
+          projectId,
+          chapterId,
+          code: failure.code,
+          stage: failure.stage,
+          gate: failure.gate,
+          severity: failure.severity,
+          message: failure.reason,
+          diagnostic: { cause: error.message, requiredModels: this.requiredBillingModels() },
+        });
+        throw new FailureHttpException(failure);
       }
       throw error;
     }

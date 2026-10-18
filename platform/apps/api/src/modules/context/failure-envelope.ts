@@ -17,6 +17,7 @@ export const FAILURE_CODES = {
   generationUnconfirmed: 'generation_unconfirmed',
   missingChapterNumber: 'missing_chapter_number',
   jobSubmitFailed: 'job_submit_failed',
+  generationBillingUnavailable: 'generation_billing_unavailable',
   runtimePreflightFailed: 'runtime_preflight_failed',
   stateStoreHashMismatch: 'state_store_hash_mismatch',
   environmentFingerprintMismatch: 'environment_fingerprint_mismatch',
@@ -85,6 +86,7 @@ export function sanitizeEvidence(evidence: unknown): unknown {
 }
 
 export function httpStatusForFailure(envelope: FailureEnvelope): number {
+  if (envelope.code === FAILURE_CODES.generationBillingUnavailable) return HttpStatus.SERVICE_UNAVAILABLE;
   if (envelope.code === FAILURE_CODES.illegalAction) return HttpStatus.BAD_REQUEST;
   if (envelope.code === FAILURE_CODES.missingChapterNumber) return HttpStatus.BAD_REQUEST;
   if (envelope.code === FAILURE_CODES.generationUnconfirmed) return HttpStatus.BAD_REQUEST;
