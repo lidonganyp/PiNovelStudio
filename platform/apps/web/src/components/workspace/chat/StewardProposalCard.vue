@@ -33,13 +33,13 @@ function statusText(steward: StewardView): string {
       <details v-for="row in steward.proposals" :key="row.field" class="proposal-row">
         <summary>
           <span class="field">{{ materialProposalLabel(row.field) }}</span>
-          <span v-if="row.requiresConfirmation" class="confirm-mark">需确认</span>
+          <span v-if="row.requiresConfirmation && steward.proposalStatus !== 'applied' && !steward.generationJobId" class="confirm-mark">需确认</span>
           <span class="source">{{ row.source.length ? `来源：${row.source.join('、')}` : '待补' }}</span>
         </summary>
         <pre class="proposal-value">{{ row.value || '（空，需补充）' }}</pre>
       </details>
     </div>
-    <div v-if="steward.missing?.length" class="missing">仍缺：{{ steward.missing.join('、') }}</div>
+    <div v-if="steward.missing?.length && steward.proposalStatus !== 'applied' && !steward.generationJobId" class="missing">仍缺：{{ steward.missing.join('、') }}</div>
     <div v-if="pending" class="steward-actions">
       <button type="button" class="primary" @click="emit('steward', 'apply_and_generate')">采用并生成</button>
       <button type="button" @click="emit('revise')">修改方案</button>

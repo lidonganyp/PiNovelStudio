@@ -27,6 +27,26 @@ import {
 } from './fixtures';
 
 describe('ContextCompiler', () => {
+  it('excludes target and future chapters from the historical catalog and keyword retrieval', () => {
+    const compiled = compileProjectContext({
+      characters: FIXTURE_CHARACTERS,
+      chapterSeed: { ...FIXTURE_CHAPTER_TWO_SEED, chapterNumber: 2 },
+      storyOutline: { content: '未来计划：作者仍可在第五章兑现承诺。' },
+      chapterCatalog: [
+        { chapterNumber: 1, title: 'accepted-past', content: 'shared-query past-evidence' },
+        { chapterNumber: 2, title: 'old-target', content: 'shared-query old-target-evidence' },
+        { chapterNumber: 3, title: 'old-future', content: 'shared-query old-future-evidence' },
+      ],
+      historicalQueries: ['shared-query'],
+    });
+    expect(compiled.bookBrief).toContain('accepted-past');
+    expect(compiled.bookBrief).toContain('第五章兑现承诺');
+    expect(compiled.bookBrief).not.toContain('old-target');
+    expect(compiled.bookBrief).not.toContain('old-future');
+    expect(compiled.selectedEvidenceSpans.map((span) => span.chapterNumber)).toEqual([1]);
+    expect(compiled.manifest.retrievalCoverage?.historicalChaptersConsidered).toBe(1);
+  });
+
   it('binds a manually accepted chapter to its final-text hash without storing prose', () => {
     const result = ensureChapterFinalTextCommit(
       JSON.stringify({

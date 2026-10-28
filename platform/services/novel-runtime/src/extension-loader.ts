@@ -17,6 +17,8 @@
  */
 
 import { pathToFileURL } from "node:url";
+import { dirname, join } from 'node:path';
+import type { TransportHookRunner } from './transport-accounting.js';
 import { existsSync } from "node:fs";
 import { createPiExtensionApiStub, type PiExtensionApiStub, type PiTool } from "./pi-extension-api-stub.js";
 import {
@@ -36,6 +38,7 @@ export class ExtensionLoadError extends Error {
 }
 
 export interface LoadedTools {
+  runWithTransportHooks?: TransportHookRunner;
   /** 通过白名单的 6 个工具，按工具名索引 */
   byName: Map<string, PiTool>;
   /** 白名单过滤结果（含 dropped / forbidden 信息，用于审计） */
@@ -170,10 +173,15 @@ export async function loadNovelStudioExtension(
     byName.set(tool.name, tool);
   }
 
+  const { runWithModelTransportHooks } = await import(pathToFileURL(join(dirname(distPath), 'api/request-timeout.js')).href);
+  if (typeof runWithModelTransportHooks !== 'function') {
+    throw new ExtensionLoadError('FAIL_CLOSED: model transport budget hooks are missing; rebuild the extension.', 'LOAD_FAILED');
+  }
   return {
     byName,
     filterResult,
     distPath,
+    runWithTransportHooks: runWithModelTransportHooks as TransportHookRunner,
   };
 }
 

@@ -38,9 +38,7 @@ function makeRoutedChatConfig(overrides) {
 }
 
 function makeChatResponse(model = "test-model") {
-  return {
-    ok: true,
-    json: async () => ({
+  return Response.json({
       model,
       choices: [
         {
@@ -49,11 +47,7 @@ function makeChatResponse(model = "test-model") {
           finish_reason: "stop",
         },
       ],
-    }),
-    text: async () => "",
-    status: 200,
-    statusText: "OK",
-  };
+    });
 }
 
 describe("model routing runtime alignment", () => {

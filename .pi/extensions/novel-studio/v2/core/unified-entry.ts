@@ -276,6 +276,7 @@ export type {
   GovernanceReports,
 } from "./routing-governance-runtime.js";
 import { compileContextSafety, createConstraintManifest } from "./context-safety.js";
+import { buildVerifiedDraftBinding } from './verified-draft-checkpoint.js';
 import { compileProductionContextPackage } from "./context-package-production.js";
 import type { ContextPackage } from "./trust/context-package.js";
 // EVOLUTION-RELEASE-GOVERNANCE-G6：生产入口发行治理门禁
@@ -2623,6 +2624,11 @@ export async function runUnifiedPipeline(
     projectRoot,
     executionReleaseId: releaseGateResult.releaseId,
     productionFlow,
+    verifiedDraftBinding: evalMode === undefined && !input.fullPipelinePreview ? buildVerifiedDraftBinding({
+      workspaceId, chapterId, chapterNumber, context: contextSafety.workingContext, intent: contextSafety.workingIntent,
+      targetWordCount, continuationMode: input.continuationMode, currentChapterDraft: input.currentChapterDraft,
+      writer: frozenWriterRunConfig ? { provider: frozenWriterRunConfig.provider, model: frozenWriterRunConfig.model, baseUrl: frozenWriterRunConfig.baseUrl } : writerRouteLock,
+    }, projectRoot) : undefined,
     toolMode,
     // AUDIT-1 Phase 3 续：模型回合 + 工具细事件写入同一 AuditEventStore
     auditSink: auditSession,

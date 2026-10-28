@@ -4,6 +4,9 @@
  * Model calls must fail with actionable evidence instead of waiting forever.
  */
 
+import { createHash, randomUUID } from 'node:crypto';
+import { currentModelTransport } from './transport-scope.js';
+export { runWithModelTransportHooks } from './transport-scope.js';
 const DEFAULT_MODEL_REQUEST_TIMEOUT_MS = 300_000;
 
 export interface RequestTimeoutOptions {
@@ -41,19 +44,49 @@ export async function fetchWithTimeout(
   const timeoutMs = options.timeoutMs ?? getModelRequestTimeoutMs();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
+  const scope = currentModelTransport();
+  const signals = [controller.signal, init.signal, scope.hooks?.signal].filter((s): s is AbortSignal => Boolean(s));
+  const signal = AbortSignal.any(signals);
+  let callId: string | undefined;
+  let accounted = false;
+  let reserved = false;
   try {
+    if (scope.hooks) {
+      const body = typeof init.body === 'string' ? init.body : '';
+      const request = JSON.parse(body) as Record<string, unknown>;
+      const outputTokenLimit = Number(request.max_tokens ?? request.max_completion_tokens ?? request.max_output_tokens);
+      if (!scope.route || !Number.isSafeInteger(outputTokenLimit) || outputTokenLimit <= 0) throw new Error('model transport requires an explicit route and output limit');
+      signal.throwIfAborted();
+      callId = randomUUID();
+      await scope.hooks.reserve({ callId, route: scope.route, model: String(request.model),
+        requestHash: createHash('sha256').update(`${url}\n${body}`).digest('hex'),
+          inputTokenLimit: Buffer.byteLength(body, 'utf8') + 8192, outputTokenLimit, recovery: scope.recovery });
+      reserved = true;
+    }
+    signal.throwIfAborted();
     // Race the aborting fetch against a caller-side deadline. Some Node/proxy
     // paths ignore AbortSignal and would otherwise wait for Cloudflare 524.
-    return await withTimeout(
-      fetch(url, {
+    return await withTimeout((async () => {
+      const response = await fetch(url, {
         ...init,
-        signal: controller.signal,
-      }),
+        signal,
+      });
+      // Keep the same deadline through SSE/JSON body consumption. Backend
+      // parsers still receive an ordinary Response with the original bytes.
+      const body = await response.arrayBuffer();
+      if (scope.hooks && callId) {
+        const usage = readTransportUsage(new TextDecoder().decode(body));
+        await scope.hooks.settle({ callId, ...usage, status: response.status });
+        accounted = true;
+        if (response.ok && !usage) throw new Error('provider returned no authoritative token usage');
+      }
+      return new Response(response.body === null ? null : body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    })(),
       timeoutMs,
       options.label,
     );
   } catch (error) {
+    if (scope.hooks && callId && reserved && !accounted) await scope.hooks.settle({ callId, status: 0 });
     const message = error instanceof Error ? error.message : String(error);
     if (controller.signal.aborted || message.includes("timed out after")) {
       throw new Error(`${options.label} timed out after ${timeoutMs}ms`, {
@@ -62,8 +95,30 @@ export async function fetchWithTimeout(
     }
     throw error;
   } finally {
+    controller.abort();
     clearTimeout(timeoutId);
   }
+}
+
+function readTransportUsage(body: string): { tokensIn: number; tokensOut: number } | undefined {
+  let tokensIn: number | undefined; let tokensOut: number | undefined;
+  const values: unknown[] = [];
+  try { values.push(JSON.parse(body)); } catch {
+    for (const line of body.split(/\r?\n/)) {
+      if (line.startsWith('data:')) { try { values.push(JSON.parse(line.slice(5).trim())); } catch { /* SSE sentinel or non-data event */ } }
+    }
+  }
+  for (const value of values) {
+    const row = value as { usage?: Record<string, unknown>; message?: { usage?: Record<string, unknown> }; response?: { usage?: Record<string, unknown> } };
+    const usage = row?.usage ?? row?.message?.usage ?? row?.response?.usage;
+    if (!usage) continue;
+    const input = usage.prompt_tokens ?? usage.input_tokens;
+    const output = usage.completion_tokens ?? usage.output_tokens;
+    if (typeof input === 'number') tokensIn = input;
+    if (typeof output === 'number') tokensOut = output;
+  }
+  return Number.isSafeInteger(tokensIn) && Number.isSafeInteger(tokensOut) && tokensIn! >= 0 && tokensOut! >= 0
+    ? { tokensIn: tokensIn!, tokensOut: tokensOut! } : undefined;
 }
 
 /**

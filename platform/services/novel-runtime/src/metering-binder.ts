@@ -26,6 +26,12 @@ import type * as pino from "pino";
 import type { BillingClient, BillingSettleRequest, BillingSettleResponse } from "./billing-client.js";
 import type { PricingTable } from "./pricing-table.js";
 import { estimateActualCharge } from "./pricing-table.js";
+import type { TransportAccounting } from './transport-accounting.js';
+
+/** Unknown supplier usage is recoverable only within the original reserved budget. */
+export class UsageReconciliationRequired extends Error {
+  constructor() { super('模型用量尚未核实，当前任务未交付；已保存可恢复进度，后续恢复仍受原预算限制'); }
+}
 
 /** PiNovelStage → internal_stage 映射（与 platform-api 计费阶段对齐） */
 const PI_NOVEL_STAGE_TO_INTERNAL_STAGE: Record<string, string> = {
@@ -128,6 +134,7 @@ export interface MeteringBinderInstance {
     input: unknown,
     jobCtx: { jobId: string; userId: string; projectId: string },
     signal?: AbortSignal,
+    transportAccounting?: TransportAccounting,
   ): Promise<{ result: unknown; metering: MeteringResult }>;
 }
 
@@ -151,15 +158,22 @@ export function createMeteringBinder(deps: MeteringBinderDeps): MeteringBinderIn
       input: unknown,
       jobCtx: { jobId: string; userId: string; projectId: string },
       signal?: AbortSignal,
+      transportAccounting?: TransportAccounting,
     ): Promise<{ result: unknown; metering: MeteringResult }> {
       const metering = emptyMeteringResult();
 
       // ── 1. 调用 PiNovelStudio 工具 ──
-      // 注意：此处不预检 maxCharge——PiNovelStudio 内部已有 SOFT/HARD 模型调用预算门控
-      // （unified-orchestrator.ts Step 1d），超限会自动 deliverRaw 退出。
-      // metering 是事后结算，不参与运行时阻断。
+      // Production chapter calls use trusted transport hooks to reserve cost
+      // before every HTTP attempt; no raw draft may bypass mandatory stages.
       let result: unknown;
       result = await tool.invoke?.(input, signal);
+      if (transportAccounting) {
+        const observed = transportAccounting.summary();
+        if (observed.settleErrors.length && (result as PiNovelInvokeResult | undefined)?.status === 'ok') {
+            throw new UsageReconciliationRequired();
+        }
+        return { result, metering: observed };
+      }
 
       // ── 2. 提取 modelCalls ──
       const piResult = result as PiNovelInvokeResult | undefined;

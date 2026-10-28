@@ -148,6 +148,34 @@ function makeInput(projectRoot, overrides = {}) {
   };
 }
 
+test('a verified draft survives style failure and is invalidated by changed author materials', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'pinovel-verified-draft-'));
+  let draftCalls = 0;
+  let failStyle = true;
+  const source = { async generate() { draftCalls++; return makeAgenticResult(COMPLETE_DRAFT, draftCalls); } };
+  const generate = async (input) => {
+    if (failStyle) throw new Error('fixture style unavailable');
+    return { text: COMPLETE_DRAFT, model: 'gemini-recovery-test', route: input.route, durationMs: 1, finishReason: 'stop' };
+  };
+  try {
+    const run = (binding) => createUnifiedOrchestrator().orchestrate(makeInput(projectRoot, {
+      verifiedDraftBinding: binding, agenticCandidateSource: source, modelGenerate: generate,
+    }));
+    const failed = await run('materials-model-A');
+    assert.equal(failed.status, 'blocked');
+    assert.equal(draftCalls, 1);
+    failStyle = false;
+    const recovered = await run('materials-model-A');
+    assert.equal(recovered.status, 'ok', JSON.stringify(recovered.failureEnvelope));
+    assert.equal(draftCalls, 1);
+    assert.equal(recovered.stageResults.verifiedDraftCheckpoint.reused, true);
+    const changed = await run('materials-model-B');
+    assert.equal(changed.status, 'ok', JSON.stringify(changed.failureEnvelope));
+    assert.equal(draftCalls, 2);
+    assert.equal(changed.stageResults.verifiedDraftCheckpoint.reused, false);
+  } finally { rmSync(projectRoot, { recursive: true, force: true }); }
+});
+
 test("production recovery continues an undersized Agentic draft before style optimization", async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-length-recovery-"));
   const agenticInputs = [];
@@ -229,6 +257,54 @@ test("append mode accepts a suffix-only style result and prepends the protected 
   }
 });
 
+test("append mode preserves CRLF author text through optimization and final save", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-continuation-newlines-"));
+  const protectedDraft = FIRST_DRAFT.replace(/\n/g, "\r\n");
+  const expected = protectedDraft + COMPLETE_DRAFT.slice(FIRST_DRAFT.length);
+  try {
+    const result = await createUnifiedOrchestrator().orchestrate(makeInput(projectRoot, {
+      continuationMode: "append",
+      currentChapterDraft: protectedDraft,
+      agenticCandidateSource: { async generate() { return makeAgenticResult(COMPLETE_DRAFT, 1); } },
+      modelGenerate: async () => ({
+        text: COMPLETE_DRAFT,
+        model: "gemini-recovery-test",
+        durationMs: 1,
+        finishReason: "stop",
+      }),
+    }));
+    assert.equal(result.status, "ok", JSON.stringify(result.failureEnvelope));
+    assert.equal(result.text, expected);
+    assert.equal(readFileSync(result.chapterFilePath, "utf8"), expected);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("append mode blocks after repeated prefix rewrites without delivering an unoptimized draft", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-prefix-retry-exhausted-"));
+  let styleCalls = 0;
+  try {
+    const result = await createUnifiedOrchestrator().orchestrate(makeInput(projectRoot, {
+      continuationMode: "append",
+      currentChapterDraft: FIRST_DRAFT,
+      agenticCandidateSource: { async generate() { return makeAgenticResult(COMPLETE_DRAFT, 1); } },
+      modelGenerate: async () => {
+        styleCalls += 1;
+        return { text: `X${COMPLETE_DRAFT.slice(1)}`, model: "test", durationMs: 1 };
+      },
+    }));
+    assert.equal(styleCalls, 2);
+    assert.equal(result.status, "blocked");
+    assert.equal(result.selectedSource, null);
+    assert.ok(!result.chapterFilePath);
+    assert.equal(result.stageResults.authorStyleOptimizationRetry.retryFailureKind, "continuation_prefix_mismatch");
+    assert.equal(result.stageResults.authorStyleOptimizationRetry.succeeded, false);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test("append mode retries a rewritten prefix and succeeds with the strict suffix-only recovery contract", async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-continuation-prefix-recovery-"));
   const suffix = COMPLETE_DRAFT.slice(FIRST_DRAFT.length).trim();
@@ -269,7 +345,7 @@ test("append mode retries a rewritten prefix and succeeds with the strict suffix
   }
 });
 
-test("production recovery rejects a complete author-style echo and preserves the Agentic candidate", async () => {
+test("repeated author-style echo blocks without relabeling the Agentic draft as optimized", async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-author-style-echo-recovery-"));
   const echoedRewrite = "\n\n这是风格模型追加的整章改写段落，不能与原始章节同时保留。".repeat(80);
   const echoedChapter = `${COMPLETE_DRAFT}${echoedRewrite}`;
@@ -294,12 +370,14 @@ test("production recovery rejects a complete author-style echo and preserves the
       },
     }));
 
-    assert.equal(result.status, "ok", JSON.stringify(result.failureEnvelope));
+    assert.equal(result.status, "blocked", JSON.stringify(result.failureEnvelope));
     assert.equal(stylePrompts.length, 2);
     assert.match(stylePrompts[1], /COMPLETE CHAPTER ECHO RECOVERY/);
-    assert.equal(result.text, COMPLETE_DRAFT);
-    assert.equal(result.stageResults.finalFactRecheck.ok, true);
-    assert.equal(result.stageResults.authorStyleOptimizationNoopRecovery.reason, "complete_chapter_echo");
+    assert.equal(result.selectedSource, null);
+    assert.ok(!result.chapterFilePath, "failed optimization must not save a chapter");
+    assert.equal(result.stageResults.authorStyleOptimizationRetry.succeeded, false);
+    assert.equal(result.stageResults.authorStyleOptimizationRetry.retryFailureKind, "complete_chapter_echo");
+    assert.equal(result.stageResults.authorStyleOptimizationNoopRecovery, undefined);
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }
@@ -454,13 +532,16 @@ test("production recovery expands the Agentic source when the styled chapter is 
   }
 });
 
-test("production recovery feeds non-duplicate final FactGuard findings back into style optimization", async () => {
+for (const continuationMode of ["replace", "append"]) {
+test(`${continuationMode} recovery feeds final FactGuard findings back into style optimization`, async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-final-fact-recovery-"));
   const pollutedStyle = `${COMPLETE_DRAFT}\n\n李一凡突然突破到二级，气息随之暴涨。`;
   const stylePrompts = [];
 
   try {
     const result = await createUnifiedOrchestrator().orchestrate(makeInput(projectRoot, {
+      continuationMode,
+      ...(continuationMode === "append" ? { currentChapterDraft: FIRST_DRAFT } : {}),
       ontologyLevels: ["一级"],
       agenticCandidateSource: {
         async generate() {
@@ -469,8 +550,9 @@ test("production recovery feeds non-duplicate final FactGuard findings back into
       },
       modelGenerate: async (input) => {
         stylePrompts.push(input.userPrompt);
+        const text = stylePrompts.length === 1 ? pollutedStyle : COMPLETE_DRAFT;
         return {
-          text: stylePrompts.length === 1 ? pollutedStyle : COMPLETE_DRAFT,
+          text: continuationMode === "append" ? text.slice(FIRST_DRAFT.length).trim() : text,
           model: "gemini-recovery-test",
           route: input.route,
           durationMs: 1,
@@ -491,13 +573,15 @@ test("production recovery feeds non-duplicate final FactGuard findings back into
   }
 });
 
-test("production recovery regenerates a complete styled chapter after truncation", async () => {
+test(`${continuationMode} recovery regenerates styled content after truncation`, async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "pinovel-final-completeness-recovery-"));
   const truncatedStyle = `${COMPLETE_DRAFT}\n\n李一凡望向门外，那里只剩下`;
   const stylePrompts = [];
 
   try {
     const result = await createUnifiedOrchestrator().orchestrate(makeInput(projectRoot, {
+      continuationMode,
+      ...(continuationMode === "append" ? { currentChapterDraft: FIRST_DRAFT } : {}),
       agenticCandidateSource: {
         async generate() {
           return makeAgenticResult(COMPLETE_DRAFT, 1);
@@ -505,8 +589,9 @@ test("production recovery regenerates a complete styled chapter after truncation
       },
       modelGenerate: async (input) => {
         stylePrompts.push(input.userPrompt);
+        const text = stylePrompts.length === 1 ? truncatedStyle : COMPLETE_DRAFT;
         return {
-          text: stylePrompts.length === 1 ? truncatedStyle : COMPLETE_DRAFT,
+          text: continuationMode === "append" ? text.slice(FIRST_DRAFT.length).trim() : text,
           model: "gemini-recovery-test",
           route: input.route,
           durationMs: 1,
@@ -525,3 +610,4 @@ test("production recovery regenerates a complete styled chapter after truncation
     rmSync(projectRoot, { recursive: true, force: true });
   }
 });
+}

@@ -91,7 +91,7 @@ const envSchema = z
     .min(32, 'NOVEL_TASK_TOKEN_HMAC_KEY must be at least 32 characters'),
   NOVEL_RUNTIME_MODE: z.enum(['stub', 'http']).default('stub'),
   NOVEL_RUNTIME_BASE_URL: z.string().default('http://127.0.0.1:3100'),
-  NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),
+  NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(2_700_000),
   /** Exact model-route keys that runtime may settle for a production chapter. */
   NOVEL_BILLING_REQUIRED_MODELS: z.string().default(''),
   PLANNER_MODE: z.enum(['stub', 'http', 'disabled']).default('stub'),

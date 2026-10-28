@@ -45,7 +45,7 @@ export function hasContinuationPrefixMismatch(existing: string, generated: strin
   const prefix = normalizeContinuationText(existing);
   const result = normalizeContinuationText(generated);
   if (!prefix || !result) return false;
-  if (result === prefix || result.startsWith(`${prefix}\n`)) return false;
+  if (result.startsWith(prefix)) return false;
   // A complete prefix may only appear at byte zero. A leading label or an
   // echoed prefix must be retried instead of being silently sliced/merged.
   if (result.indexOf(prefix) > 0) return true;
@@ -101,8 +101,12 @@ export function mergeChapterContinuation(existing: string, generated: string): s
   if (!prefix) return result;
   if (!result) return prefix;
 
-  if (result === prefix || result.startsWith(`${prefix}\n`)) {
-    return result;
+  const comparablePrefix = normalizeContinuationText(prefix);
+  const comparableResult = normalizeContinuationText(result);
+  if (comparableResult.startsWith(comparablePrefix)) {
+    // Compare normalized transport text, but always retain the author's bytes.
+    // Otherwise LF/CRLF differences silently prepend a second complete prefix.
+    return prefix + comparableResult.slice(comparablePrefix.length);
   }
   const embeddedPrefix = result.indexOf(prefix);
   if (embeddedPrefix >= 0 && embeddedPrefix < 80) {

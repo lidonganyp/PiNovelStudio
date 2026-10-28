@@ -106,7 +106,7 @@ export class BillingService {
   }
 
   /** 逐调用结算：费率快照计费，jobId+callId 幂等，超预占 402。 */
-  async settleCall(input: SettleCallInput): Promise<SettleCallResult> {
+  async settleCall(input: SettleCallInput, admittedRate?: Awaited<ReturnType<RatesService['buildRateSnapshot']>>, admittedTx?: Prisma.TransactionClient): Promise<SettleCallResult> {
     if (!input.jobId.trim() || !input.callId.trim()) {
       throw new BadRequestException('jobId 与 callId 不能为空');
     }
@@ -115,7 +115,7 @@ export class BillingService {
 
     let snapshot;
     try {
-      snapshot = await this.rates.buildRateSnapshot(input.model);
+      snapshot = admittedRate ?? await this.rates.buildRateSnapshot(input.model);
     } catch (error: unknown) {
       // A retry may race with the original settlement and a subsequent rate
       // retirement. The persisted call snapshot remains authoritative.
@@ -137,7 +137,7 @@ export class BillingService {
     };
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const settle = async (tx: Prisma.TransactionClient): Promise<SettleCallResult> => {
         const existing = await tx.novelGenerationCall.findUnique({
           where: {
             jobId_callId: { jobId: input.jobId, callId: input.callId },
@@ -209,7 +209,8 @@ export class BillingService {
           },
         });
         return this.toSettleResult(created, updatedHold, false);
-      });
+      };
+      return admittedTx ? await settle(admittedTx) : await this.prisma.$transaction((tx) => settle(tx as unknown as Prisma.TransactionClient));
     } catch (error: unknown) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -275,7 +276,7 @@ export class BillingService {
 
   /**
    * 任务收尾。成功 → settled；失败 → released。
-   * 未结算额度从未从 balance 扣除，释放 hold 即回到可用余额；已扣费用不动。
+   * 失败且未交付的章节追加冲正，原调用流水仍用于供应商成本审计。
    */
   async finalizeHold(input: FinalizeHoldInput): Promise<HoldView> {
     return this.prisma.$transaction((tx) =>
@@ -304,13 +305,28 @@ export class BillingService {
       throw new NotFoundException('预占不存在');
     }
     if (hold.status !== HOLD_ACTIVE) {
-      return this.toHoldView(hold, { alreadyFinalized: true });
+      const refund = await tx.novelGenerationRefund.findUnique({ where: { jobId: input.jobId } });
+      return this.toHoldView({ ...hold, settledAmount: hold.settledAmount - (refund ? refund.fromReal + refund.fromBonus : 0n) }, { alreadyFinalized: true });
+    }
+    let refunded = 0n;
+    if (input.outcome === 'failure' && hold.settledAmount > 0n) {
+      const job = await tx.novelGenerationJob.findUnique({ where: { jobId: input.jobId } });
+      if (job?.jobType === 'chapter_generation' && job.status !== 'succeeded') {
+        await tx.$executeRaw`SELECT id FROM users WHERE id = ${hold.userId} FOR UPDATE`;
+        const sums = await tx.novelGenerationCall.aggregate({ where: { jobId: input.jobId }, _sum: { chargeFromReal: true, chargeFromBonus: true } });
+        const fromReal = sums._sum.chargeFromReal ?? 0n;
+        const fromBonus = sums._sum.chargeFromBonus ?? 0n;
+        if (fromReal + fromBonus !== hold.settledAmount) throw new ConflictException('章节费用归因不一致，已暂停收尾等待对账');
+        await tx.novelGenerationRefund.create({ data: { jobId: input.jobId, userId: hold.userId, fromReal, fromBonus, reason: 'chapter_not_delivered' } });
+        await tx.user.update({ where: { id: hold.userId }, data: { balance: { increment: fromReal }, bonusBalance: { increment: fromBonus } } });
+        refunded = fromReal + fromBonus;
+      }
     }
     const updated = await tx.novelBalanceHold.update({
       where: { id: hold.id },
       data: { status: targetStatus, finalizedAt: new Date() },
     });
-    return this.toHoldView(updated, { alreadyFinalized: false });
+    return this.toHoldView({ ...updated, settledAmount: updated.settledAmount - refunded }, { alreadyFinalized: false });
   }
 
   /** 管理员调账：作用于赠送余额（虚拟收入），只追加流水，负数不得使赠送余额 < 0。 */

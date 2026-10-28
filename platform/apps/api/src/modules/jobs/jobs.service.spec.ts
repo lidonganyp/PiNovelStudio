@@ -80,6 +80,88 @@ const input = {
 };
 
 describe('JobsService HTTP generation delivery contract', () => {
+  it('sends only earlier chapter prose on an explicit rewrite, preserving future author plans', async () => {
+    const { service, prisma, runtime } = makeService({ status: 'ok', result: { status: 'blocked' } });
+    const documents = await prisma.novelDocument.findMany();
+    prisma.novelDocument.findMany.mockResolvedValue([...documents, {
+      id: 5, documentType: 'story_outline', title: 'plan', updatedAt: new Date(),
+      content: 'future-author-plan: a deliberate future outline remains available',
+    }]);
+    prisma.novelChapter.findFirst.mockImplementation(async (args: { where: { chapterNumber?: number } }) => (
+      args.where.chapterNumber === 1 ? { chapterNumber: 1, content: 'accepted-past' }
+        : { chapterNumber: 2, content: 'old-target-text', version: 1 }
+    ) as never);
+    Object.assign(prisma.novelChapter, { findMany: vi.fn().mockResolvedValue([
+      { chapterNumber: 1, title: 'past', content: 'accepted-past' },
+      { chapterNumber: 2, title: 'old-target-title', content: 'old-target-text' },
+      { chapterNumber: 3, title: 'old-future-title', content: 'old-future-text' },
+    ]) });
+    await (service as unknown as { runHttpGeneration(value: unknown): Promise<void> }).runHttpGeneration({
+      ...input, chapterNumber: 2, continuationMode: 'replace', continuationDraft: 'old-target-text',
+    });
+    expect(runtime.invoke).toHaveBeenCalledOnce();
+    const payload = JSON.stringify(runtime.invoke.mock.calls[0][2]);
+    expect(payload).toContain('accepted-past');
+    expect(payload).toContain('future-author-plan');
+    expect(payload).not.toContain('old-target');
+    expect(payload).not.toContain('old-future');
+  });
+
+  describe('materials changed during the model call', () => {
+    const cases = ['character', 'new_character', 'outline', 'style', 'state', 'previous_chapter', 'project', 'deleted_style'] as const;
+
+    it.each(cases)('keeps the accepted chapter and state when %s changes', async (changed) => {
+      const { service, prisma, runtime, billing } = makeService({
+        status: 'ok',
+        result: { status: 'ok', text: 'runtime-result' },
+        metering: { modelCallCount: 1 },
+      });
+      let characters: Array<{ name: string; motivation: string }> = await prisma.novelCharacter.findMany();
+      let documents: Array<{ id: number; documentType: string; title: string; content: string; updatedAt: Date }> = await prisma.novelDocument.findMany();
+      let project: { genre: string; subGenres: string[]; worldKeyTerms: string[] } = await prisma.novelProject.findFirst();
+      let previous = 'accepted-previous-chapter';
+      prisma.novelCharacter.findMany.mockImplementation(async () => characters);
+      prisma.novelDocument.findMany.mockImplementation(async () => documents);
+      prisma.novelProject.findFirst.mockImplementation(async () => project);
+      prisma.novelChapter.findFirst.mockImplementation(async () => ({ content: previous, chapterNumber: 1 }) as never);
+      const tx = {
+        ...prisma,
+        novelChapter: {
+          ...prisma.novelChapter,
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          findUniqueOrThrow: vi.fn().mockResolvedValue({ version: 2, title: 'chapter', content: 'runtime-result', wordCount: 1 }),
+        },
+        novelChapterVersion: { create: vi.fn() },
+        novelChapterSeed: { ...prisma.novelChapterSeed, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+        novelProject: { ...prisma.novelProject, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      };
+      prisma.$transaction.mockImplementation(async (callback) => callback(tx));
+      runtime.invoke.mockImplementation(async () => {
+        if (changed === 'character') characters = characters.map((row) => ({ ...row, motivation: 'updated-by-author' }));
+        if (changed === 'new_character') characters = [...characters, { ...characters[0], name: 'new-character' }];
+        if (changed === 'outline') documents = [...documents, { id: 5, documentType: 'story_outline', title: 'outline', content: '# 全书大纲\n新的剧情方向与人物承诺', updatedAt: new Date() }];
+        if (changed === 'style') documents = documents.map((row) => row.documentType === 'style_profile' ? { ...row, content: '{"voice":"温暖"}' } : row);
+        if (changed === 'state') documents = documents.map((row) => row.documentType === 'narrative_state' ? { ...row, content: '{"canon":[{"id":"new-fact","fact":"author-updated-fact"}]}' } : row);
+        if (changed === 'previous_chapter') previous = 'author-updated-previous-chapter';
+        if (changed === 'project') project = { ...project, genre: 'mystery' };
+        if (changed === 'deleted_style') documents = documents.filter((row) => row.documentType !== 'style_profile');
+        return { status: 'ok', result: { status: 'ok', text: 'runtime-result' }, metering: { modelCallCount: 1 } };
+      });
+
+      await (service as unknown as { runHttpGeneration(value: typeof input): Promise<void> }).runHttpGeneration({ ...input, chapterNumber: 2 });
+
+      expect(tx.novelChapter.updateMany).not.toHaveBeenCalled();
+      expect(tx.novelChapterVersion.create).not.toHaveBeenCalled();
+      expect(billing.finalizeHoldInTransaction).not.toHaveBeenCalled();
+      expect(runtime.invoke).toHaveBeenCalledTimes(1);
+      expect(prisma.novelGenerationJob.update).toHaveBeenLastCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ status: 'failed', failure: expect.objectContaining({
+          code: 'generation_materials_changed', gate: 'material_snapshot', recoverable: false,
+        }) }),
+      }));
+    });
+  });
+
   it('does not let a delayed pending callback roll a running job back', async () => {
     const { service, prisma } = makeService({ status: 'ok', result: {} });
     prisma.novelGenerationJob.findUnique = vi.fn().mockResolvedValue({
@@ -351,11 +433,13 @@ describe('JobsService HTTP generation delivery contract', () => {
         continuationMode: 'append',
         targetWordCount: { min: 2500, max: 2500 },
       }));
-      expect(runHttpGeneration).toHaveBeenCalledWith(expect.objectContaining({
-        continuationMode: 'append',
-        continuationDraft: '第十七章已有正文。',
-        targetWordCount: { min: 2500, max: 2500 },
-      }));
+      expect(prisma.novelGenerationJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+        execution: expect.objectContaining({ version: 1, input: expect.objectContaining({
+          continuationMode: 'append', continuationDraft: '第十七章已有正文。',
+          targetWordCount: { min: 2500, max: 2500 }, runtimeWorkspaceInput: { workspaceDocuments: [], projectConfig: {} },
+        }) }),
+      }) }));
+      expect(runHttpGeneration).not.toHaveBeenCalled();
     } finally {
       (env as { NOVEL_RUNTIME_MODE: string }).NOVEL_RUNTIME_MODE = previous;
     }
@@ -1047,7 +1131,9 @@ describe('JobsService HTTP generation delivery contract', () => {
       metering: { modelCallCount: 1 },
     });
     const tx = {
+      ...prisma,
       novelChapter: {
+        ...prisma.novelChapter,
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: vi.fn().mockResolvedValue({
           version: 2,
@@ -1058,10 +1144,12 @@ describe('JobsService HTTP generation delivery contract', () => {
       },
       novelChapterVersion: { create: vi.fn().mockResolvedValue({}) },
       novelChapterSeed: {
+        ...prisma.novelChapterSeed,
         update: vi.fn().mockResolvedValue({}),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       novelProject: {
+        ...prisma.novelProject,
         update: vi.fn().mockResolvedValue({}),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -1078,6 +1166,7 @@ describe('JobsService HTTP generation delivery contract', () => {
       jobId: 'job-1',
       outcome: 'success',
     });
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'Serializable' });
   });
 
   it('rejects a non-empty runtime chapter when no model call was metered', async () => {
@@ -1129,16 +1218,18 @@ describe('JobsService HTTP generation delivery contract', () => {
       metering: { modelCallCount: 1 },
     });
     prisma.$transaction = vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      ...prisma,
       novelChapter: {
+        ...prisma.novelChapter,
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: vi.fn().mockResolvedValue({
           version: 2, title: '第1章', content: '可交付正文', wordCount: 5,
         }),
       },
       novelChapterVersion: { create: vi.fn() },
-      novelChapterSeed: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
-      novelProject: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
-      novelDocument: { findFirst: vi.fn() },
+      novelChapterSeed: { ...prisma.novelChapterSeed, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      novelProject: { ...prisma.novelProject, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      novelDocument: { ...prisma.novelDocument, findFirst: vi.fn() },
       novelDocumentVersion: { create: vi.fn() },
       novelGenerationJob: { update: vi.fn() },
     }));

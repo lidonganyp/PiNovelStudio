@@ -67,6 +67,38 @@ describe('saveConfirmedAuthorMaterials', () => {
 });
 
 describe('applyAssistantArtifacts', () => {
+  it('increments the character revision when chat updates an existing profile', async () => {
+    const prisma = makePrisma();
+    prisma.novelCharacter.findMany.mockResolvedValue([{ id: 12, name: '沈砚' }] as never);
+    await applyAssistantArtifacts({
+      prisma: prisma as never, jobs: { submitChapterGeneration: vi.fn() } as never,
+      userId: 1, projectId: 128, action: 'plan_story_outline', userContent: '修改沈砚的身份',
+      envelope: { reply: '已修改角色', characters: [{ name: '沈砚', roleType: 'protagonist', description: '调查记者' }] },
+    });
+    expect(prisma.novelCharacter.update).toHaveBeenCalledWith({
+      where: { id: 12 },
+      data: expect.objectContaining({ identity: '调查记者', version: { increment: 1 } }),
+    });
+  });
+
+  it('removes obsolete seed constraints when the author explicitly clears them', async () => {
+    const prisma = makePrisma();
+    prisma.novelChapter.findFirst.mockResolvedValue({
+      id: 4, content: '已有正文', title: '第二章',
+      seed: { id: 7, intent: '旧意图', endingGoal: '旧结尾', mustInclude: '旧事件', forbiddenFacts: '旧禁令', characterMotives: '旧动机', promises: '旧伏笔' },
+    } as never);
+    await applyAssistantArtifacts({
+      prisma: prisma as never, jobs: { submitChapterGeneration: vi.fn() } as never,
+      userId: 1, projectId: 128, action: 'plan_chapter', chapterNumber: 2, userContent: '更新第二章种子，删除旧限制',
+      envelope: { reply: '已更新', chapterSeed: { chapterNumber: 2, intent: '新意图', endingGoal: '新结尾', mustInclude: '', forbiddenFacts: '', characterMotives: '', promises: '' } },
+    });
+    expect(prisma.novelChapterSeed.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: expect.objectContaining({ intent: '新意图', endingGoal: '新结尾', mustInclude: '', forbiddenFacts: '', characterMotives: '', promises: '' }),
+    });
+    expect(prisma.novelChapter.update).not.toHaveBeenCalled();
+  });
+
   it('plan_story_outline saves the book outline and never submits generation', async () => {
     const prisma = makePrisma();
     const jobs = {

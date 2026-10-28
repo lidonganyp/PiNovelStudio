@@ -6,11 +6,12 @@ import { RatesModule } from '../rates/rates.module';
 import { BillingController } from './billing.controller';
 import { BillingQueryService } from './billing-query.service';
 import { BillingService } from './billing.service';
+import { TransportBudgetService } from './transport-budget.service';
 
 @Module({
   imports: [RatesModule],
   controllers: [BillingController],
-  providers: [BillingService, BillingQueryService],
-  exports: [BillingService],
+  providers: [BillingService, BillingQueryService, TransportBudgetService],
+  exports: [BillingService, TransportBudgetService],
 })
 export class BillingModule {}

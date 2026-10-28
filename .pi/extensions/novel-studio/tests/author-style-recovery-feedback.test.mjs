@@ -35,6 +35,58 @@ function makeInput(recoveryFeedback) {
   };
 }
 
+for (const recoveryKind of [undefined, "fact_guard", "completeness"]) {
+  test(`append style output contract stays suffix-only during ${recoveryKind ?? "initial optimization"}`, async () => {
+    const prefix = "作者已确认的前缀。";
+    const input = {
+      ...makeInput(recoveryKind ? {
+        kind: recoveryKind,
+        previousEditorialText: "未通过的优化稿。",
+        findings: [{ code: "test_failure", message: "需要定向修复" }],
+      } : undefined),
+      continuationMode: "append",
+      currentChapterDraft: prefix,
+      sourceCandidate: { id: "append-source", text: `${prefix}\n\n${AGENTIC_RAW}` },
+      context: { styleReferences: [{
+        id: "style",
+        kind: "fingerprint",
+        content: JSON.stringify({ editorialGuidance: ["保持表达自然。"] }),
+      }] },
+    };
+    let request;
+    await createAuthorStyleOptimizer().optimize({
+      ...input,
+      modelGenerate: async (value) => {
+        request = value;
+        return { text: AGENTIC_RAW, model: "test" };
+      },
+    });
+    assert.ok(request);
+    assert.match(request.userPrompt.split("\n\n").at(-1), /只改表达，不改事件、动作和因果。.*只输出.*新正文后缀/);
+    for (const prompt of [request.systemPrompt, request.userPrompt]) {
+      assert.doesNotMatch(prompt, /只输出优化后的完整章节正文|请优化第 17 章完整正文|生成修复后的完整章节正文|从正文第一段开始写到完整章末/);
+    }
+    assert.match(request.userPrompt, /主程序|host/i);
+  });
+}
+
+test("replace style final instruction retains the factual boundary and complete output contract", () => {
+  const prompt = buildAuthorStyleUserPrompt(makeInput(), { referenceIds: [], guidance: [] });
+  assert.match(prompt.split("\n\n").at(-1), /只改表达，不改事件、动作和因果。.*只输出优化后的完整正文/);
+});
+
+test("append style source excludes the protected prefix when the provider normalizes line endings", () => {
+  const prompt = buildAuthorStyleUserPrompt({
+    ...makeInput(),
+    continuationMode: "append",
+    currentChapterDraft: "作者第一段。\r\n作者第二段。",
+    sourceCandidate: { id: "append-source", text: `作者第一段。\n作者第二段。\n\n${AGENTIC_RAW}` },
+  }, { referenceIds: [], guidance: [] });
+  const source = prompt.split("【NovelOS Agentic 初稿（仅供表达优化）】")[1].split("【作者风格档案")[0];
+  assert.doesNotMatch(source, /作者第一段|作者第二段/);
+  assert.match(source, /叶尘/);
+});
+
 test("author_style 工作包白名单允许结构化恢复反馈", () => {
   assert.ok(getInputFieldWhitelist("author_style").includes("recoveryFeedback"));
 });

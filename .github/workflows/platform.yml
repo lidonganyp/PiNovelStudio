@@ -1,0 +1,85 @@
+name: Platform verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: platform_dev
+          POSTGRES_DB: platform
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://platform:platform_dev@127.0.0.1:15432/platform?schema=public
+      NODE_ENV: test
+      GEMINI_MODEL: fixture-ci
+      GOOGLE_GEMINI_BASE_URL: https://fixture.invalid/v1
+      GEMINI_API_KEY: fixture-not-a-real-key
+      NOVEL_STUDIO_DIST_PATH: ${{ github.workspace }}/.pi/extensions/novel-studio/dist/index.js
+      NOVEL_STUDIO_PROJECT_ROOT: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: platform/pnpm-lock.yaml
+      - name: Install both dependency closures
+        run: |
+          npm ci
+          pnpm --dir platform install --frozen-lockfile
+          cp platform/.env.example platform/.env
+      - name: Build the unified extension
+        run: npm run build
+      - name: Generate database client and deploy migrations
+        working-directory: platform/apps/api
+        run: |
+          pnpm exec prisma generate
+          pnpm exec prisma migrate deploy
+      - name: Check API and database transactions
+        working-directory: platform/apps/api
+        run: |
+          pnpm typecheck
+          pnpm build
+          pnpm test
+      - name: Check runtime and durable HTTP recovery
+        working-directory: platform/services/novel-runtime
+        run: |
+          pnpm typecheck
+          pnpm build
+          pnpm test
+      - name: Check web build and browser recovery journeys
+        working-directory: platform/apps/web
+        run: |
+          pnpm typecheck
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+          pnpm dev --host 127.0.0.1 > /tmp/platform-web.log 2>&1 &
+          for attempt in $(seq 1 30); do curl --fail --silent http://localhost:5173/login > /dev/null && break; sleep 1; done
+          pnpm exec playwright test e2e/assistant-chat.spec.ts e2e/assistant-failure-card.spec.ts e2e/revision-recovery.spec.ts --workers=1
+      - name: Retain browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-browser-failures
+          path: platform/apps/web/test-results

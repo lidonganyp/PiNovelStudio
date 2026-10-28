@@ -29,6 +29,8 @@ export interface BillingRecord {
   tokensIn: number;
   tokensOut: number;
   actualCharge: string;
+  providerCharge?: string;
+  refunded?: boolean;
   createdAt: string;
 }
 

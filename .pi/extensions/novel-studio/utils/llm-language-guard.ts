@@ -67,7 +67,6 @@ const TERM_TRANSLATIONS: Readonly<Record<string, string>> = {
 export function containsEnglishLetters(text: string): boolean {
   return /[A-Za-z]/.test(text);
 }
-
 /** 把模型可见文本转换为无英文字母的中文视图。 */
 export function localizeLlmText(text: string): string {
   return text.replace(LATIN_TOKEN, (token) => {
@@ -164,4 +163,10 @@ function findUniqueIndex(text: string, search: string): number {
   const first = text.indexOf(search);
   if (first < 0) return -1;
   return text.indexOf(search, first + 1) < 0 ? first : -1;
+}
+/** Reject explicit writing-analysis protocol blocks; ordinary foreign language prose remains valid. */
+export function assertChapterProseOutput(text: string): void {
+  const markers = /(?:^|\n)\s*(?:<\/?(?:think|analysis)>|\[(?:analysis|thinking)\]|#{1,6}\s*(?:analysis|thinking(?: process)?|writing plan|润色计划|写作分析)\s*(?:[:：]|$)|(?:润色计划|写作分析|思考过程|写作思路)\s*[:：])/im;
+  const selfPlanning = /^\s*(?:okay[,!.]?\s*)?(?:let['’]s\s+(?:plan|analy[sz]e|think through)\b|(?:i|we)\s+(?:need to|will|must)\s+(?:write|rewrite|polish|generate)\s+(?:this|the|a)\s+(?:chapter|story|prose|text)\b)/i;
+  if (markers.test(text) || selfPlanning.test(text)) throw new Error('chapter_output_contract: 模型将写作分析混入正文，必须仅返回正文后重试；未删除或交付污染文本');
 }

@@ -21,6 +21,7 @@
 import { request } from "undici";
 import type { NovelRuntimeConfig } from "./config.js";
 import { internalAuthHeaders, stableStringify } from "./internal-hmac.js";
+import type { TransportReservation, TransportSettlement } from './transport-accounting.js';
 
 /** 逐调用结算请求（SettleCallDto 契约，字段白名单外字段不上报） */
 export interface BillingSettleRequest {
@@ -76,6 +77,7 @@ export class BillingClientError extends Error {
       | "SETTLE_FAILED"
       | "FINALIZE_FAILED"
       | "BUDGET_EXHAUSTED"
+      | "TRANSPORT_ADMISSION_DENIED"
       | "INVALID_RESPONSE"
       | "TIMEOUT",
     public readonly statusCode: number = 500,
@@ -86,6 +88,8 @@ export class BillingClientError extends Error {
 }
 
 export interface BillingClient {
+  reserveTransport?(input: TransportReservation & { jobId: string }): Promise<{ maximumFen: string }>;
+  settleTransport?(input: TransportSettlement & { jobId: string }): Promise<{ actualChargeFen: string; unknownUsage: boolean }>;
   /**
    * 上报单次模型调用的计费结算。
    * - 幂等：相同 (jobId, callId) 重复上报返回 alreadySettled=true，不重复扣费。
@@ -216,6 +220,21 @@ export function createBillingClient(
   }
 
   return {
+    async reserveTransport(input) {
+      const path = '/internal/billing/transports/reserve';
+      const response = await signedPost(path, input, 'SETTLE_FAILED');
+      if (response.statusCode === 409 || response.statusCode === 402) throw new BillingClientError('本次生成的费用、时间或恢复次数授权不足，已停止后续调用；未知用量仍按最大费用占用授权预算。', 'BUDGET_EXHAUSTED', response.statusCode);
+      if (response.statusCode >= 400 && response.statusCode < 500) throw new BillingClientError('模型调用未通过授权检查，已停止后续调用', 'TRANSPORT_ADMISSION_DENIED', response.statusCode);
+      if (response.statusCode >= 400) throw httpError(path, response.statusCode, response.body, 'SETTLE_FAILED');
+      return { maximumFen: String(requiredNum(response.body, 'maximumFen', path)) };
+    },
+    async settleTransport(input) {
+      const path = '/internal/billing/transports/settle';
+      const response = await signedPost(path, input, 'SETTLE_FAILED');
+      if (response.statusCode >= 400) throw httpError(path, response.statusCode, response.body, 'SETTLE_FAILED');
+      if (typeof response.body.unknownUsage !== 'boolean') throw new BillingClientError('transport settlement omitted usage status', 'INVALID_RESPONSE');
+      return { actualChargeFen: String(requiredNum(response.body, 'actualChargeFen', path)), unknownUsage: response.body.unknownUsage };
+    },
     async settle(req: BillingSettleRequest): Promise<BillingSettleResponse> {
       const path = "/internal/billing/settlements";
       const { statusCode, body } = await signedPost(path, req, "SETTLE_FAILED");

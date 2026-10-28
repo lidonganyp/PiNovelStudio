@@ -17,6 +17,10 @@
  */
 
 import { Router } from "express";
+import { createHash } from 'node:crypto';
+import { InvocationReceipts } from '../../invocation-receipts.js';
+import { VerifiedDraftCache } from '../../verified-draft-cache.js';
+import { createTransportAccounting } from '../../transport-accounting.js';
 import type { Request, Response, NextFunction } from "express";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,6 +29,7 @@ import { z } from "zod";
 import type { LoadedTools } from "../../extension-loader.js";
 import { isAllowedTool } from "../../tool-whitelist.js";
 import type { BillingClient } from "../../billing-client.js";
+import { BillingClientError } from '../../billing-client.js';
 import type { MeteringBinderInstance } from "../../metering-binder.js";
 import type { WorkspaceManager } from "../../workspace-manager.js";
 import type { NovelRuntimeConfig } from "../../config.js";
@@ -148,6 +153,8 @@ export function createInvokeRouter(
 ): Router {
   const router = Router();
   const logger = deps.logger;
+  const receipts = new InvocationReceipts(join(deps.config.tempWorkspaceRoot, '..', 'novel-invocation-receipts'));
+  const draftCache = new VerifiedDraftCache(join(deps.config.tempWorkspaceRoot, '..', 'novel-verified-drafts'));
 
   router.post("/invoke", async (req: Request, res: Response, next: NextFunction) => {
     // 临时 workspace 物化与清理状态
@@ -155,6 +162,16 @@ export function createInvokeRouter(
     // 失败归档路径：非空表示临时 workspace 已 rename 到持久归档目录
     //（traces/ 等失败证据保留），finally 不得再 cleanup。
     let archivedWorkspacePath: string | undefined;
+    let invokeTimer: ReturnType<typeof setTimeout> | undefined;
+    let checkpoint: ReturnType<VerifiedDraftCache['bind']> | undefined;
+    let transportAdmissionFailure: BillingClientError | undefined;
+    const archiveWorkspace = (jobId: string): string | undefined => {
+      // Cache/storage errors must not skip refund or failure receipt handling.
+      try { checkpoint?.persist(); } catch (error: unknown) {
+        logger?.error({ jobId, err: error instanceof Error ? error.message : String(error) }, 'verified draft persistence failed');
+      }
+      return deps.workspaceManager.archiveWorkspace?.(jobId);
+    };
 
     try {
       const parseResult = INVOKE_BODY_SCHEMA.safeParse(req.body);
@@ -206,6 +223,25 @@ export function createInvokeRouter(
         userId: taskToken?.payload.userId ?? "",
         projectId: taskToken?.payload.projectId ?? "",
       };
+      const durable = req.header('x-novel-durable-invoke') === '1';
+      if (durable) {
+        if (!jobCtx.jobId) throw new Error('durable invocation requires a verified job identity');
+        const fingerprint = createHash('sha256').update(JSON.stringify({ ...jobCtx, toolName, input })).digest('hex');
+        const admitted = receipts.begin(jobCtx.jobId, fingerprint);
+        if (admitted.state === 'completed') { res.status(admitted.status).json(admitted.body); return; }
+        if (admitted.state === 'running') { res.status(409).json({ code: 'INVOCATION_RUNNING', status: 'pending' }); return; }
+        if (admitted.state === 'interrupted') {
+          res.status(422).json({ status: 'error', failureEnvelope: {
+            code: 'generation_runtime_interrupted', stage: 'runtime.invoke', gate: 'runtime_interrupted', severity: 'recoverable',
+            reason: '运行时重启中断了本章，已阻止重复派发；请从失败章节继续', recoverable: true,
+          } }); return;
+        }
+        const sendJson = res.json.bind(res);
+        res.json = (body: unknown): Response => {
+          receipts.complete(jobCtx.jobId, fingerprint, res.statusCode, body);
+          return sendJson(body);
+        };
+      }
 
       // 默认 projectRoot（仅用于非生成类工具；容器内默认来自 config）
       let inputWithMeta: Record<string, unknown> = {
@@ -266,6 +302,11 @@ export function createInvokeRouter(
             : undefined,
         });
         materializedJobId = jobCtx.jobId;
+        if (toolName === 'novel_generate_chapter') {
+          const { contextManifest: _observations, ...writerMaterials } = input;
+          checkpoint = draftCache.bind({ userId: jobCtx.userId, projectId: jobCtx.projectId }, String(input.chapterId), materialized.tempProjectRoot, workspaceId, writerMaterials);
+          checkpoint.restore();
+        }
 
         // 用 temp root 覆盖全局 _projectRoot
         inputWithMeta = {
@@ -287,16 +328,43 @@ export function createInvokeRouter(
       const abortOnDisconnect = (): void => {
         if (!res.writableEnded) abortController.abort();
       };
-      req.once("aborted", abortOnDisconnect);
-      res.once("close", abortOnDisconnect);
+      if (!durable) {
+        req.once("aborted", abortOnDisconnect);
+        res.once("close", abortOnDisconnect);
+      }
+      const requestedDeadline = Number(req.header('x-novel-deadline-at'));
+      const remainingMs = Number.isFinite(requestedDeadline) && requestedDeadline > 0
+        ? Math.min(deps.config.invokeRequestTimeoutMs, Math.max(1, requestedDeadline - Date.now()))
+        : deps.config.invokeRequestTimeoutMs;
+      invokeTimer = setTimeout(() => abortController.abort(), remainingMs);
+      invokeTimer.unref();
 
       // 经 meteringBinder 包装 invoke，事后结算
-      const { result, metering } = await deps.meteringBinder.invokeWithMetering(
+      const transportAccounting = toolName === 'novel_generate_chapter' && loadedTools.runWithTransportHooks
+        ? createTransportAccounting(deps.billingClient, jobCtx.jobId, taskToken.payload.maxCharge, abortController.signal) : undefined;
+      if (transportAccounting) {
+        const reserve = transportAccounting.hooks.reserve;
+        transportAccounting.hooks.reserve = async (request): Promise<void> => {
+          if (transportAdmissionFailure) throw transportAdmissionFailure;
+          // Persist the verified draft before the first style HTTP request so
+          // a runtime crash during optimization does not lose completed work.
+          checkpoint?.persist();
+          try { await reserve(request); } catch (error: unknown) {
+            if (error instanceof BillingClientError && ['BUDGET_EXHAUSTED', 'TRANSPORT_ADMISSION_DENIED'].includes(error.code)) transportAdmissionFailure = error;
+            throw error;
+          }
+        };
+      }
+      const invoke = () => deps.meteringBinder.invokeWithMetering(
         tool,
         inputWithMeta,
         jobCtx,
         abortController.signal,
+        transportAccounting,
       );
+      const { result, metering } = transportAccounting && loadedTools.runWithTransportHooks
+        ? await loadedTools.runWithTransportHooks(transportAccounting.hooks, invoke) : await invoke();
+      if (transportAdmissionFailure) throw transportAdmissionFailure;
       assertInvokeNotAborted(abortController.signal);
       let resultForCaller = result;
 
@@ -342,7 +410,7 @@ export function createInvokeRouter(
               }
             }
             // 失败证据归档：narrative state 损坏属于交付失败，保留 traces
-            archivedWorkspacePath = deps.workspaceManager.archiveWorkspace?.(jobCtx.jobId);
+            archivedWorkspacePath = archiveWorkspace(jobCtx.jobId);
             res.status(422).json({
               code: "NARRATIVE_STATE_INVALID",
               message: error instanceof Error ? error.message : "narrative state snapshot is invalid",
@@ -383,7 +451,7 @@ export function createInvokeRouter(
             : "error";
         // 失败证据归档：章节不可交付时保留 traces/（verification 证据、
         // recoveryAttempts、trajectory 等），供 platform-api 与用户诊断。
-        archivedWorkspacePath = deps.workspaceManager.archiveWorkspace?.(jobCtx.jobId);
+        archivedWorkspacePath = archiveWorkspace(jobCtx.jobId);
         res.status(422).json({
           code: "CHAPTER_NOT_DELIVERABLE",
           message: describeUndeliverableChapter(resultForCaller, metering.modelCallCount),
@@ -430,7 +498,7 @@ export function createInvokeRouter(
       // 失败证据归档：异常路径同样保留 traces/，并把归档路径附加到 err
       // 上，供下游错误中间件透传给 platform-api。
       if (failedJobId) {
-        archivedWorkspacePath = deps.workspaceManager.archiveWorkspace?.(failedJobId);
+        archivedWorkspacePath = archiveWorkspace(failedJobId);
         if (archivedWorkspacePath && err instanceof Error) {
           (err as Error & { traceArchivePath?: string }).traceArchivePath = archivedWorkspacePath;
         }
@@ -454,6 +522,7 @@ export function createInvokeRouter(
       }
       next(err);
     } finally {
+      if (invokeTimer) clearTimeout(invokeTimer);
       // 清理临时 workspace
       // 成功：result 已含章节正文，platform-api 据此 SaveChapter；删除 temp 目录
       // 失败：已归档（traces 保留）时跳过删除；归档失败才回退删除
@@ -461,6 +530,7 @@ export function createInvokeRouter(
         try {
           // 已归档（traces 保留在 archiveRoot）时跳过 cleanup；未归档时才删除
           if (!archivedWorkspacePath) {
+            checkpoint?.persist();
             deps.workspaceManager.cleanupWorkspace(materializedJobId);
           }
         } catch {

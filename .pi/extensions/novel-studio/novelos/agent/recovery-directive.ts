@@ -25,7 +25,7 @@ const MAX_MESSAGE_LENGTH = 800;
 const MAX_EVIDENCE_REF_LENGTH = 300;
 
 /** Render only the allowlisted recovery fields into the first draft prompt. */
-export function renderRecoveryDirective(directive: RecoveryDirective): string {
+export function renderRecoveryDirective(directive: RecoveryDirective, append = false): string {
   const label = directive.kind === "fact_guard" ? "FactGuard" : "Narrative Verifier";
   const findings = directive.findings
     .slice(0, MAX_RECOVERY_FINDINGS)
@@ -43,8 +43,12 @@ export function renderRecoveryDirective(directive: RecoveryDirective): string {
 
   return [
     `【候选恢复任务：${label}】`,
-    "修复上一候选并输出完整新候选。必须保留未被问题证据指向的有效情节、事实与作者内容契约。",
-    "只输出修复后的完整章节正文；不得只输出补丁、差异说明、修改清单或解释。",
+    append
+      ? "修复上一候选的新增部分，作者前缀是只读上下文。必须保留未被问题证据指向的有效情节、事实与作者内容契约。"
+      : "修复上一候选并输出完整新候选。必须保留未被问题证据指向的有效情节、事实与作者内容契约。",
+    append
+      ? "只输出新增后缀正文；不得复制作者前缀，也不得只输出补丁、差异说明、修改清单或解释。"
+      : "只输出修复后的完整章节正文；不得只输出补丁、差异说明、修改清单或解释。",
     "待修复问题：",
     ...(findings.length > 0 ? findings : ["1. [unspecified] 修复上一候选中的验证失败"]),
     "",

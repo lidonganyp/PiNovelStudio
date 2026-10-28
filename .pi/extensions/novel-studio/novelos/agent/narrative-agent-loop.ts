@@ -29,6 +29,7 @@
  */
 
 import type { NovelOSRuntime } from "../runtime/runtime.js";
+import { assertChapterProseOutput } from '../../utils/llm-language-guard.js';
 import type { BudgetPolicy } from "../runtime/budget-policy.js";
 import type { TrajectoryStore } from "../trajectory/trajectory-store.js";
 import type { NarrativeToolRegistry } from "./narrative-tool-registry.js";
@@ -460,12 +461,12 @@ export class NarrativeAgentLoop {
         "【已有本章正文（作者前缀）】",
         input.currentChapterDraft.trimEnd(),
         "",
-        "以上正文必须原样保留。请从其末尾继续写作；如输出完整本章正文，必须包含该前缀，不得从头重写。",
+        "以上正文是只读上下文，由主程序原样保留。请从其末尾继续写作，只输出新增后缀正文，不要复制、改写或重述作者前缀。",
         "",
       );
     }
     if (input.recoveryDirective) {
-      promptParts.push(renderRecoveryDirective(input.recoveryDirective), "");
+      promptParts.push(renderRecoveryDirective(input.recoveryDirective, input.continuationMode === "append"), "");
     }
     promptParts.push(
       input.chapterIntent,
@@ -513,6 +514,9 @@ export class NarrativeAgentLoop {
     if (coverageRetryPrompt) {
       promptParts.push("", coverageRetryPrompt);
     }
+    if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
+      promptParts.push("", "最终输出边界：只输出新增后缀正文；作者前缀由主程序保留并拼接，不要重新输出章节开头。");
+    }
     const userPrompt = promptParts.join("\n");
 
     await this.runtime.prompt(userPrompt);
@@ -544,6 +548,7 @@ export class NarrativeAgentLoop {
     const hasToolCallBlock = contentArr.some(
       (c: { type?: string }) => c.type === "toolCall",
     );
+    if (!hasToolCallBlock) assertChapterProseOutput(draftText);
 
     // 扫描所有 toolResult 消息提取 sourceRefs + evidenceFacts
     const sourceRefs: string[] = [];

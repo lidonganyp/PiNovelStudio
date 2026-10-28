@@ -27,6 +27,7 @@ import DocumentPanel from '../../components/workspace/DocumentPanel.vue';
 import VersionPanel from '../../components/workspace/VersionPanel.vue';
 import AssistantWorkspace from '../../components/workspace/chat/AssistantWorkspace.vue';
 import GenerationPanel from '../../components/workspace/GenerationPanel.vue';
+import RevisionPanel from '../../components/workspace/RevisionPanel.vue';
 import FeedbackPanel from '../../components/workspace/FeedbackPanel.vue';
 
 const route = useRoute();
@@ -251,6 +252,7 @@ defineExpose({ loadChapters, patchChapter });
         @dblclick="resetRightWidth"
       />
       <aside class="right-pane" :style="{ width: rightWidth + 'px' }">
+        <RevisionPanel :project-id="projectId" :chapters="chapters" @progress="loadChapters" />
         <GenerationPanel
           :project-id="projectId"
           :chapter="activeChapter"

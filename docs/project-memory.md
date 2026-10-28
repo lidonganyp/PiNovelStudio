@@ -1,10 +1,20 @@
 # PiNovelStudio 项目记忆
 
-**快照日期**：2026-09-11
+**快照日期**：2026-10-27
 **代码基线**：工作树主链路仍是 NovelOS Agentic → 作者风格整章优化 → 事实复检 → 原子保存；旧裁判链仅保留隔离评测。
 **用途**：供 Codex、Claude Code 与维护者跨会话快速恢复当前事实。架构细节仍以 `top-tier-chinese-novel-system-development-plan.md` 为准。下文旧节若写“当前唯一 active_prod”，一律以本节为准。
 
-## 当前模型配置（2026-09-11）
+## 当前本地内测基线（2026-10-27）
+
+默认 writer 身份唯一来自根 `.env` 的 GEMINI_MODEL / GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY；本轮真实验证 `gemini-4-argon`，稳定路由标识 `gemini31`，单渠道有界恢复，无自动换模型或备用端点。下文多渠道描述属于历史。
+
+已接入持久顺序重写、执行租约/回执、跨任务验证初稿恢复、逐 HTTP 最大费用准入、未交付退款及明确预算/超时诊断。本地已应用 durable_revisions、failed_chapter_refunds 迁移。默认 revision：45 分钟/章、200 分/章、2000 分/轮、25 HTTP/章、6 恢复 HTTP、7 任务尝试；手工稿与资料确认绑定版本，风格优化必经。
+
+隔离作品 587 三章顺序重写成功；后续自然请求失败后自动复用初稿，只调用风格优化并成功保存。原作品 252 未修改。该次已知调用费 28 分、退款 20 分、作者净收费 8 分；未知 usage 保留最大授权记录。测试账户剩余赠额通过审计调账撤销。证据见 `docs/debugging/project-optimization-review-20261026.md` 第 7 节、`reports/final-generation-acceptance-20261027.json`。
+
+仅本地工作树/开发常驻服务更新，未提交、推送、部署或改变发布指针。用户脏改动与 stash 保留。上游故障、语义影响范围精化、反馈策略晋级不能宣称已消除或完成。
+
+## 历史模型配置（2026-09-11）
 
 按用户指示，`config/model-routing.json` v4.35.0 将 `novel_generate_chapter` 默认正文模型恢复为 Gemini 3.8 Flash（`gemini-3.8-flash`）。Agentic 初稿与作者风格整章优化使用 `v2_rawstage2_gemini31` / `v2_amplified_gemini31` 和 `gemini_writer_v2`；Aimagichub / Solov 为同模型互备渠道，不跨模型 fallback。旧 GPT 正文路由与 `writerModel=gpt6astra` 已移除；GPT 继续负责结构化节点，Claude 仅供显式选择。平台计费、首次部署模板与 runtime 凭证检查同步回 Gemini。
 

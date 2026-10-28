@@ -1,6 +1,6 @@
 /** Responses transport for text-based orchestration, with bounded body consumption. */
 import type { GLMResponse } from "./glm.js";
-import { getModelRequestTimeoutMs, withTimeout } from "./request-timeout.js";
+import { fetchWithTimeout, getModelRequestTimeoutMs, withTimeout } from "./request-timeout.js";
 import { getProviderDefaultConfig } from "../utils/config.js";
 
 export function usesConfiguredResponsesEndpoint(baseUrl: string): boolean {
@@ -53,12 +53,12 @@ export async function callOpenAIResponses(
   };
   try {
     const payload = await withTimeout((async (): Promise<ResponsesPayload> => {
-      const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/responses`, {
+      const response = await fetchWithTimeout(`${baseUrl.replace(/\/+$/, "")}/responses`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify(request),
         signal: controller.signal,
-      });
+      }, { label: `Responses:${model}`, timeoutMs });
       if (!response.ok) {
         throw new Error(`Responses API error (${response.status}): ${(await response.text()).slice(0, 200)}`);
       }

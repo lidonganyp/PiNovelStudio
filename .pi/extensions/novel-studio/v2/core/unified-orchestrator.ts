@@ -32,6 +32,7 @@ import type {
   ConstitutionSnapshot,
 } from "./types.js";
 import { captureGenerationBaseline } from "./commit-stale-guard.js";
+import { loadVerifiedDraft, saveVerifiedDraft, verifiedDraftPath } from './verified-draft-checkpoint.js';
 import type { ChapterIntent } from "./chapter-intent-builder.js";
 import type { ModelGenerateFn, ModelGenerateInput } from "../adapters/legacy-model-route-adapter.js";
 import { createEditorialOpportunityJudge } from "./editorial-opportunity-judge.js";
@@ -317,6 +318,7 @@ import {
 } from "./agent-collaboration-fail-closed.js";
 import { buildAgentLineageIndex } from "./agent-lineage-index.js";
 import { getModelRequestTimeoutMs } from "../../api/request-timeout.js";
+import { runWithTransportRecovery } from '../../api/transport-scope.js';
 
 // ============================================================================
 // 类型与常量（行为保持重构 Step 1：已抽出到 orchestrator-types.ts）
@@ -434,24 +436,6 @@ function preserveContinuationStyleResult(
       id: `${result.candidate.id}:continuation:${hashText(text).slice(0, 16)}`,
       text,
     },
-  };
-}
-
-/**
- * A style model can still return a rewritten prefix after the bounded retry.
- * In append mode the Agentic candidate already contains the protected author
- * text and has passed its own generation gates, so retaining it as a marked
- * no-op editorial candidate is safer than duplicating or corrupting prose.
- * Story preservation, fact recheck, completeness, and final save gates still
- * run normally on this candidate.
- */
-function createContinuationStyleNoopCandidate(sourceCandidate: Candidate): Candidate {
-  return {
-    ...sourceCandidate,
-    id: `${sourceCandidate.id}:author-style-noop:${hashText(sourceCandidate.text).slice(0, 16)}`,
-    kind: "editorial_amplified",
-    sourceCandidateId: sourceCandidate.id,
-    editorialStrategy: "style_native",
   };
 }
 
@@ -1022,7 +1006,8 @@ export class UnifiedOrchestrator {
           timeoutMs: resolvedTimeoutMs,
         };
         try {
-          const output = await fn(genInput);
+          const output = await runWithTransportRecovery(isRecoveryCall || (ledgerStage === 'styleOptimization'
+            && modelCallLog.some((call) => /style|amplif/i.test(call.kind))), () => fn(genInput));
           const durationMs = output.durationMs ?? Date.now() - start;
           const ledgerTokens =
             output.tokenUsage && output.tokenUsage !== "unknown"
@@ -1450,7 +1435,10 @@ export class UnifiedOrchestrator {
 
       let agenticResult: AgenticRawSourceResult;
       try {
-        agenticResult = await timeAsync("stage1_novelosAgentic", () =>
+        const checkpoint = input.verifiedDraftBinding && !input.fullPipelinePreview
+          ? loadVerifiedDraft(verifiedDraftPath(projectRoot, workspaceId, chapterId), input.verifiedDraftBinding) : undefined;
+        stageResults.verifiedDraftCheckpoint = { reused: Boolean(checkpoint), binding: input.verifiedDraftBinding ?? null };
+        agenticResult = checkpoint ?? await timeAsync("stage1_novelosAgentic", () =>
           input.agenticCandidateSource!.generate({
             workspaceId,
             chapterId,
@@ -2125,6 +2113,10 @@ export class UnifiedOrchestrator {
         );
       }
 
+      if (input.verifiedDraftBinding && !input.fullPipelinePreview) {
+        saveVerifiedDraft(verifiedDraftPath(projectRoot, workspaceId, chapterId), input.verifiedDraftBinding,
+          { ...agenticResult, candidate: agenticCandidate });
+      }
       // Phase 4B：作者风格优化策略选择（Thompson Sampling）
       // 在 optimize 调用前选择 0-2 个策略，合并参数后传入。
       // 策略信誉按 modelVersion 隔离；新模型版本无历史经验时使用弱先验 Beta(1,1)。
@@ -2295,6 +2287,7 @@ export class UnifiedOrchestrator {
         && (
           styleResult.failureKind === "empty_result" ||
           styleResult.failureKind === "model_timeout" ||
+          styleResult.failureKind === "output_contract" ||
           styleResult.failureKind === "continuation_prefix_mismatch" ||
           styleResult.failureKind === "complete_chapter_echo"
         );
@@ -2306,9 +2299,10 @@ export class UnifiedOrchestrator {
           : styleResult.failureKind === "complete_chapter_echo"
             ? { ...styleOptimizationInput, completeChapterEchoRecovery: true }
             : styleOptimizationInput;
-        const retryResult = await timeAsync("stage3_authorStyleOptimizationRetry", () =>
+        let retryResult = await timeAsync("stage3_authorStyleOptimizationRetry", () =>
           createAuthorStyleOptimizer().optimize(retryInput),
         );
+        retryResult = preserveContinuationStyleResult(retryResult, input, agenticCandidate.text);
         stageResults.authorStyleOptimizationRetry = {
           attempted: true,
           scope: "author_style_stage",
@@ -2321,54 +2315,8 @@ export class UnifiedOrchestrator {
           candidateId: retryResult.candidate?.id ?? null,
         };
         styleResult = retryResult;
-        styleResult = preserveContinuationStyleResult(styleResult, input, agenticCandidate.text);
       }
-      let initialStyledCandidate = styleResult.candidate;
-      if (
-        !initialStyledCandidate
-        && input.continuationMode === "append"
-        && styleResult.failureKind === "continuation_prefix_mismatch"
-      ) {
-        // The retry still violated the byte-preserved prefix contract. Keep a
-        // safe no-op candidate and let the ordinary hard fact/story gates make
-        // the final decision; do not manufacture a duplicated chapter.
-        initialStyledCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
-        styleResult = {
-          ...styleResult,
-          candidate: initialStyledCandidate,
-          failureKind: null,
-          failureReason: null,
-        };
-        stageResults.authorStyleOptimizationNoopRecovery = {
-          reason: "continuation_prefix_mismatch",
-          candidateId: initialStyledCandidate.id,
-          sourceCandidateId: agenticCandidate.id,
-          retryAttempted: transientStyleFailure,
-          disposition: "preserve_agentic_candidate_for_normal_gates",
-        };
-      }
-      if (
-        !initialStyledCandidate
-        && styleResult.failureKind === "complete_chapter_echo"
-      ) {
-        // A second echo is never eligible for downstream gates. The Agentic
-        // candidate already passed its generation/fact gates, so retain it as
-        // an explicit no-op editorial result and continue normal validation.
-        initialStyledCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
-        styleResult = {
-          ...styleResult,
-          candidate: initialStyledCandidate,
-          failureKind: null,
-          failureReason: null,
-        };
-        stageResults.authorStyleOptimizationNoopRecovery = {
-          reason: "complete_chapter_echo",
-          candidateId: initialStyledCandidate.id,
-          sourceCandidateId: agenticCandidate.id,
-          retryAttempted: transientStyleFailure,
-          disposition: "preserve_agentic_candidate_for_normal_gates",
-        };
-      }
+      const initialStyledCandidate = styleResult.candidate;
       if (!initialStyledCandidate) {
         // P0-1 修复（Phase 1 整改）：风格优化未产出候选 → 不再回退 raw 初稿。
         // 按失败归因分类处理：
@@ -2586,23 +2534,7 @@ export class UnifiedOrchestrator {
           firstPreservationUnverifiable: true,
           firstPreservationReason: preservation.reason,
         };
-        let retryCandidate = retryStyleResult.candidate;
-        if (!retryCandidate && retryStyleResult.failureKind === "complete_chapter_echo") {
-          retryCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
-          retryStyleResult = {
-            ...retryStyleResult,
-            candidate: retryCandidate,
-            failureKind: null,
-            failureReason: null,
-          };
-          stageResults.authorStyleOptimizationNoopRecovery = {
-            reason: "complete_chapter_echo",
-            candidateId: retryCandidate.id,
-            sourceCandidateId: agenticCandidate.id,
-            retryAttempted: true,
-            disposition: "preserve_agentic_candidate_for_normal_gates",
-          };
-        }
+        const retryCandidate = retryStyleResult.candidate;
         if (retryCandidate) {
           const retryPreservation = timeSync("stage4b_retryStoryPreservation", () =>
             checkEditorialStoryPreservation({
@@ -2752,23 +2684,7 @@ export class UnifiedOrchestrator {
           retryWithReducedGuidance: driftRetryStyleResult.retryWithReducedGuidance,
           firstDriftReason: preservation.reason,
         };
-        let driftRetryCandidate = driftRetryStyleResult.candidate;
-        if (!driftRetryCandidate && driftRetryStyleResult.failureKind === "complete_chapter_echo") {
-          driftRetryCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
-          driftRetryStyleResult = {
-            ...driftRetryStyleResult,
-            candidate: driftRetryCandidate,
-            failureKind: null,
-            failureReason: null,
-          };
-          stageResults.authorStyleOptimizationNoopRecovery = {
-            reason: "complete_chapter_echo",
-            candidateId: driftRetryCandidate.id,
-            sourceCandidateId: agenticCandidate.id,
-            retryAttempted: true,
-            disposition: "preserve_agentic_candidate_for_normal_gates",
-          };
-        }
+        const driftRetryCandidate = driftRetryStyleResult.candidate;
         if (driftRetryCandidate) {
           const driftRetryPreservation = timeSync("stage4b_retryStoryPreservationDrift", () =>
             checkEditorialStoryPreservation({
@@ -3085,23 +3001,7 @@ export class UnifiedOrchestrator {
           }),
         );
         recoveredStyleResult = preserveContinuationStyleResult(recoveredStyleResult, input, agenticCandidate.text);
-        let recoveredCandidate = recoveredStyleResult.candidate;
-        if (!recoveredCandidate && recoveredStyleResult.failureKind === "complete_chapter_echo") {
-          recoveredCandidate = createContinuationStyleNoopCandidate(agenticCandidate);
-          recoveredStyleResult = {
-            ...recoveredStyleResult,
-            candidate: recoveredCandidate,
-            failureKind: null,
-            failureReason: null,
-          };
-          stageResults.authorStyleOptimizationNoopRecovery = {
-            reason: "complete_chapter_echo",
-            candidateId: recoveredCandidate.id,
-            sourceCandidateId: agenticCandidate.id,
-            retryAttempted: true,
-            disposition: "preserve_agentic_candidate_for_normal_gates",
-          };
-        }
+        const recoveredCandidate = recoveredStyleResult.candidate;
         if (!recoveredCandidate) {
           finalRecoveryAttempts.push({
             attempt,

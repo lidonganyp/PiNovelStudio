@@ -19,6 +19,7 @@ import type {
 import type { WriterPromptProfile } from "./model-prompt-adapter.js";
 import type { AuthorStyleStrategyParams } from "../learning/author-style-strategy-registry.js";
 import { hashText } from "./candidate-revision-store.js";
+import { assertChapterProseOutput } from '../../utils/llm-language-guard.js';
 
 export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编辑。你的唯一任务是改表达，不是改故事。
 
@@ -165,7 +166,8 @@ export interface AuthorStyleOptimizationResult {
    * - model_timeout：模型调用超时/中断 → 编排器在作者风格阶段内重试一次。
    * - model_error：其他模型错误（非超时） → 不伪装成超时，直接 hard block。
    *
-   * orchestrator 据此分类：只有 empty_result/model_timeout 会复用同一 Agentic 候选做
+   * - output_contract：显式思考/写作分析混入正文 → 同阶段有界重试，禁止删除片段后交付。
+   * orchestrator 据此分类：empty_result/model_timeout/output_contract 会复用同一 Agentic 候选做
    * 一次 in-stage retry；重试耗尽及其他失败均以 gate=style_optimization 阻断。
    */
   failureKind:
@@ -174,6 +176,7 @@ export interface AuthorStyleOptimizationResult {
     | "empty_result"
     | "model_timeout"
     | "model_error"
+    | "output_contract"
     | "continuation_prefix_mismatch"
     | "complete_chapter_echo"
     | null;
@@ -193,8 +196,9 @@ export interface AuthorStyleOptimizationResult {
  * 超时类（含 "timeout"/"timed out"/"超时"/"aborted"/"ETIMEDOUT"）→ model_timeout；
  * 其他 → model_error。timeout 允许编排器做一次阶段内重试；model_error 直接阻断。
  */
-function classifyModelFailure(error: unknown): "model_timeout" | "model_error" {
+function classifyModelFailure(error: unknown): "model_timeout" | "model_error" | "output_contract" {
   const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith('chapter_output_contract:')) return 'output_contract';
   const lower = message.toLowerCase();
   if (
     lower.includes("timeout")
@@ -217,7 +221,10 @@ function boundedPromptField(value: string, maxChars: number): string {
   return value.trim().slice(0, maxChars);
 }
 
-function buildRecoveryFeedbackBlock(feedback: AuthorStyleRecoveryFeedback): string {
+function buildRecoveryFeedbackBlock(
+  feedback: AuthorStyleRecoveryFeedback,
+  appendOnly: boolean,
+): string {
   const findings = feedback.findings
     .slice(0, MAX_RECOVERY_FINDINGS)
     .map((finding, index) => {
@@ -242,7 +249,9 @@ function buildRecoveryFeedbackBlock(feedback: AuthorStyleRecoveryFeedback): stri
     return "【完整性复检恢复（重试）】\n"
       + "上一轮作者风格优化稿不完整，可能发生输出截断或悬空结尾，不能交付。\n"
       + `${findingList}\n`
-      + "上一稿只用于定位截断位置，不是续写底稿。必须基于后文的【NovelOS Agentic 初稿】重新生成修复后的完整章节正文，从正文第一段开始写到完整章末；不得只续写尾部或只补写结尾。\n"
+      + (appendOnly
+        ? "上一稿只用于定位截断位置，不是续写底稿。必须基于后文的 Agentic 新增后缀，从该后缀第一段重新优化到完整章末；不得只补写截断位置后的文字。只输出修复后的完整新后缀，主程序会拼接受保护前缀；不得输出或改写前缀。\n"
+        : "上一稿只用于定位截断位置，不是续写底稿。必须基于后文的【NovelOS Agentic 初稿】重新生成修复后的完整章节正文，从正文第一段开始写到完整章末；不得只续写尾部或只补写结尾。\n")
       + "只输出章节正文，不得输出补丁、解释、复检报告、修改清单或 Markdown 标题。\n"
       + `【上一轮未通过的作者风格优化稿（仅诊断）】\n${previousDraft}`;
   }
@@ -250,7 +259,9 @@ function buildRecoveryFeedbackBlock(feedback: AuthorStyleRecoveryFeedback): stri
   return "【最终事实复检恢复（重试）】\n"
     + "上一轮作者风格优化稿存在以下事实问题，不能交付。\n"
     + `${findingList}\n`
-    + "上一稿只用于定位事实问题，不构成任何新事实授权。必须基于后文的【NovelOS Agentic 初稿】作为事实底稿，移除未授权内容并生成修复后的完整章节正文；不得只输出局部补丁。\n"
+    + (appendOnly
+      ? "上一稿只用于定位事实问题，不构成任何新事实授权。必须基于后文的 Agentic 新增后缀作为事实底稿，移除未授权内容，只输出修复后的完整新后缀；不得只输出局部补丁。主程序会拼接受保护前缀，不得输出或改写前缀。\n"
+      : "上一稿只用于定位事实问题，不构成任何新事实授权。必须基于后文的【NovelOS Agentic 初稿】作为事实底稿，移除未授权内容并生成修复后的完整章节正文；不得只输出局部补丁。\n")
     + "只输出章节正文，不得输出补丁、解释、复检报告、修改清单或 Markdown 标题。\n"
     + `【上一轮未通过的作者风格优化稿（仅诊断）】\n${previousDraft}`;
 }
@@ -504,12 +515,14 @@ export function buildAuthorStyleUserPrompt(
     );
   }
   if (input.recoveryFeedback) {
-    parts.push(buildRecoveryFeedbackBlock(input.recoveryFeedback));
+    parts.push(buildRecoveryFeedbackBlock(input.recoveryFeedback, input.continuationMode === "append"));
   }
   if (input.chineseAiLanguageGuidanceBlock) {
     parts.push(input.chineseAiLanguageGuidanceBlock);
   }
-  parts.push(`请优化第 ${input.chapterNumber} 章完整正文。`);
+  parts.push(input.continuationMode === "append"
+    ? `请优化第 ${input.chapterNumber} 章的新增后缀。受保护前缀仅供理解上下文，主程序会自动拼接；不要输出前缀。`
+    : `请优化第 ${input.chapterNumber} 章完整正文。`);
   const contractLines: string[] = [];
   const eventSummaries = input.intent.authorEventSummaries ?? [];
   const mustInclude = input.intent.authorMustInclude ?? [];
@@ -575,9 +588,9 @@ export function buildAuthorStyleUserPrompt(
   parts.push(
     "只改表达，不改事件、动作和因果。" +
     "主体、动作、对象、结果、事件顺序必须与初稿一致。" +
-    input.continuationMode === "append"
+    (input.continuationMode === "append"
       ? "续写模式下只输出从受保护前缀末尾开始的新正文后缀；不要输出章节标题、受保护前缀或任何非正文说明。"
-      : "只输出优化后的完整正文，从正文第一段直接开始；严禁输出构思、计划、大纲、逐段润色说明或任何非正文内容。",
+      : "只输出优化后的完整正文，从正文第一段直接开始；严禁输出构思、计划、大纲、逐段润色说明或任何非正文内容。"),
   );
   return parts.join("\n\n");
 }
@@ -588,8 +601,8 @@ export function buildAuthorStyleUserPrompt(
  * prefix and makes the output contract mechanically enforceable.
  */
 function getStyleSourceText(input: AuthorStyleOptimizationInput): string {
-  const source = input.sourceCandidate.text.trim();
-  const prefix = input.currentChapterDraft?.trim() ?? "";
+  const source = input.sourceCandidate.text.replace(/\r\n?/g, "\n").trim();
+  const prefix = input.currentChapterDraft?.replace(/\r\n?/g, "\n").trim() ?? "";
   if (input.continuationMode !== "append" || !prefix) return source;
   if (source === prefix) return "";
   if (source.startsWith(`${prefix}\n`)) return source.slice(prefix.length).trim();
@@ -642,7 +655,10 @@ export class AuthorStyleOptimizer {
     const modelInput: ModelGenerateInput = {
       route,
       systemPrompt: input.continuationMode === "append"
-        ? STYLE_SYSTEM_PROMPT
+        ? STYLE_SYSTEM_PROMPT.replace(
+          "只输出优化后的完整章节正文，从正文第一段直接开始。",
+          "只输出优化后的完整新增后缀，从后缀第一段直接开始；不得输出受保护前缀。",
+        )
           + "\nAPPEND MODE RULE: when the user prompt contains CONTINUATION MODE, output only the new suffix and never rewrite the protected prefix."
         : STYLE_SYSTEM_PROMPT,
       userPrompt,
@@ -653,6 +669,7 @@ export class AuthorStyleOptimizer {
 
     try {
       const output = await input.modelGenerate(modelInput);
+      assertChapterProseOutput(output.text ?? '');
       if (!output.text?.trim()) {
         return {
           candidate: null,

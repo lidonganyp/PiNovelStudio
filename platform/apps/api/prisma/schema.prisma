@@ -28,6 +28,7 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   holds            NovelBalanceHold[]
+  generationRefunds NovelGenerationRefund[]
   adjustments      NovelBillingAdjustment[] @relation("AdjustmentUser")
   adminAdjustments NovelBillingAdjustment[] @relation("AdjustmentAdmin")
   projects         NovelProject[]
@@ -129,6 +130,20 @@ model NovelGenerationCall {
   @@unique([jobId, callId])
   @@index([userId, createdAt])
   @@map("novel_generation_call")
+}
+
+// Append-only reversal: call usage remains immutable for supplier-cost audit.
+model NovelGenerationRefund {
+  id Int @id @default(autoincrement())
+  jobId String @unique @map("job_id")
+  userId Int @map("user_id")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromReal BigInt @map("from_real")
+  fromBonus BigInt @map("from_bonus")
+  reason String
+  createdAt DateTime @default(now()) @map("created_at")
+  @@index([userId, createdAt])
+  @@map("novel_generation_refunds")
 }
 
 model NovelBillingAdjustment {
@@ -402,12 +417,38 @@ model NovelGenerationJob {
   progressStage   String    @default("checking_materials") @map("progress_stage")
   failureMessage  String?   @map("failure_message")
   failure         Json?
+  revisionId      String?   @map("revision_id")
+  execution       Json?
+  leaseOwner      String?   @map("lease_owner")
+  leaseUntil      DateTime? @map("lease_until")
   startedAt       DateTime  @default(now()) @map("started_at")
   completedAt     DateTime? @map("completed_at")
 
   @@index([userId, status])
   @@index([projectId, chapterId])
+  @@index([revisionId])
   @@map("novel_generation_jobs")
+}
+
+/// One author confirmation authorizes only this frozen range and budget.
+model NovelRevision {
+  id          String    @id @default(uuid())
+  userId      Int       @map("user_id")
+  projectId   Int       @map("project_id")
+  status      String    @default("awaiting_confirmation")
+  version     Int       @default(1)
+  inputHash   String    @map("input_hash")
+  plan        Json
+  pauseCode   String?   @map("pause_code")
+  pauseReason String?   @map("pause_reason")
+  leaseOwner  String?   @map("lease_owner")
+  leaseUntil  DateTime? @map("lease_until")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId, projectId, createdAt])
+  @@index([status, leaseUntil])
+  @@map("novel_revisions")
 }
 
 /// Structured, bounded diagnostics for generation failures and browser-side

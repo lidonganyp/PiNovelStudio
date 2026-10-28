@@ -59,6 +59,8 @@ async function main(): Promise<void> {
             settledFen: fen(row.settledFen),
             settledFromRealFen: fen(row.settledFromRealFen),
             settledFromBonusFen: fen(row.settledFromBonusFen),
+            refundedFromRealFen: fen(row.refundedFromRealFen),
+            refundedFromBonusFen: fen(row.refundedFromBonusFen),
             reservedFen: fen(row.reservedFen),
             balanceFen: fen(row.balanceFen),
             bonusBalanceFen: fen(row.bonusBalanceFen),

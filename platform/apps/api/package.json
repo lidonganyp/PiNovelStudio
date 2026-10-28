@@ -39,6 +39,7 @@
     "prisma": "^6.19.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "undici": "^6.28.0",
     "wechatpay-node-v3": "^2.2.1",
     "zod": "^4.1.11"
   },

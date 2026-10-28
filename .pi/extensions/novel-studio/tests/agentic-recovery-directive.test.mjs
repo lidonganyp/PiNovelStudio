@@ -44,6 +44,24 @@ function makeLoop(NarrativeAgentLoop) {
 }
 
 describe("Agentic recoveryDirective", () => {
+  for (const recover of [false, true]) {
+    it(`requests only the new suffix for append${recover ? ' recovery' : ''}`, async () => {
+      const { NarrativeAgentLoop } = await importDist("novelos/agent/narrative-agent-loop.js");
+      const { loop, prompts } = makeLoop(NarrativeAgentLoop);
+      await loop.run({
+        chapterIntent: "承接已有正文。", seedContext: "seed", context: {},
+        continuationMode: "append", currentChapterDraft: "作者第一段。\r\n作者第二段。",
+        ...(recover ? { recoveryDirective: {
+          kind: "fact_guard", previousCandidateText: "上一候选。",
+          findings: [{ code: "prefix_mismatch", message: "前缀已改写" }],
+        } } : {}),
+      });
+      assert.match(prompts[0], /只输出新增后缀正文/);
+      assert.doesNotMatch(prompts[0], /如输出完整本章正文|只输出修复后的完整章节正文/);
+      assert.match(prompts[0], /作者第一段。\r\n作者第二段。/);
+    });
+  }
+
   it("is shared by AgenticRawSourceInput and AgentLoopInput and forwarded to the loop", () => {
     const source = readFileSync(
       join(EXT_ROOT, "novelos", "agent", "agentic-raw-candidate-source.ts"),

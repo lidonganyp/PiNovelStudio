@@ -14,6 +14,13 @@ import { before, describe, test } from "node:test";
 
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..", "..");
 
+test('budget and authorization denial do not consume transport retry loops', async () => {
+  const { classifyError } = await import('../dist/api/fallback-manager.js');
+  assert.equal(classifyError(Object.assign(new Error('budget denied'),{code:'BUDGET_EXHAUSTED'})), 'permanent');
+  assert.equal(classifyError(Object.assign(new Error('authorization denied'),{code:'TRANSPORT_ADMISSION_DENIED'})), 'permanent');
+  assert.equal(classifyError(new Error('temporary network failure')), 'transient');
+});
+
 function extractMethod(source, methodName) {
   const pattern = new RegExp(`(?:^|\\n)\\s*(?:async\\s+)?${methodName}\\s*\\(`, "m");
   const match = pattern.exec(source);
@@ -29,7 +36,11 @@ function extractMethod(source, methodName) {
     if (char === "}") {
       depth -= 1;
       if (depth === 0) {
-        return source.slice(match.index, index + 1);
+        const method = source.slice(match.index, index + 1);
+        // Public methods now attach the trusted HTTP accounting route before
+        // forwarding to the unchanged dispatch implementation.
+        return method.includes(`this.${methodName}Internal(`)
+          ? `${method}\n${extractMethod(source, `${methodName}Internal`)}` : method;
       }
     }
   }

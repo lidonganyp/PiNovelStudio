@@ -7,7 +7,7 @@ import {
   prepareGenerationSteward,
   reviseGenerationSteward,
 } from './generation-steward';
-import { compileProjectContextSnapshot } from './project-context-reader';
+import { compileProjectContextSnapshot, loadOwnedProjectContext } from './project-context-reader';
 import { classifyMaterialReadiness } from './material-readiness';
 
 function makePrisma(stored: { content?: string; currentVersion?: number } = {}) {
@@ -48,6 +48,22 @@ function makePrisma(stored: { content?: string; currentVersion?: number } = {}) 
 }
 
 describe('generation steward', () => {
+  it.each(['cancel', 'save_draft'] as const)('does not change an applied proposal through a stale %s action', async (action) => {
+    const prisma = makePrisma({ content: JSON.stringify({
+      id: 'prop-applied', projectId: 128, chapterNumber: 2, sourceVersion: 'abc',
+      status: 'applied', proposals: [], missing: ['章节种子'], generationJobId: 'job-existing',
+    }) });
+    const jobs = { submitChapterGeneration: vi.fn() };
+    const result = await confirmGenerationSteward({
+      prisma: prisma as never, jobs: jobs as never, userId: 1, projectId: 128,
+      action, proposalId: 'prop-applied', sourceVersion: 'abc',
+    });
+    expect(result).toMatchObject({ proposalStatus: 'applied', generationJobId: 'job-existing', missing: [] });
+    expect(result.reply).not.toMatch(/不会产生费用|未提交生成任务/);
+    expect(prisma.novelDocument.update).not.toHaveBeenCalled();
+    expect(jobs.submitChapterGeneration).not.toHaveBeenCalled();
+  });
+
   it('does not treat ordinary missing materials as a technical failure', () => {
     const snapshot = compileProjectContextSnapshot({
       userId: 1,
@@ -556,7 +572,7 @@ describe('generation steward', () => {
     expect(result.reply).not.toContain('runtime_preflight_failed');
   });
 
-  it('retries submit when confirmation already wrote materials even if the version stamp drifted', async () => {
+  it.each(['saved', 'edited', 'missing'] as const)('only resumes confirmed material revisions (checkpoint: %s)', async (checkpoint) => {
     const project = {
       id: 128, userId: 1, title: '铜哨', description: '都市重生', genre: '都市重生',
       subGenres: [], worldKeyTerms: [], version: 4, deletedAt: null,
@@ -570,6 +586,7 @@ describe('generation steward', () => {
       proposals: [],
       missing: [],
       createdAt: new Date().toISOString(),
+      confirmedSourceVersion: undefined as string | undefined,
     };
     const prisma = makePrisma({ content: JSON.stringify(proposal) });
     prisma.novelProject.findFirst.mockResolvedValue(project);
@@ -592,13 +609,26 @@ describe('generation steward', () => {
       seed: { intent: '追查铜哨', mustInclude: '', forbiddenFacts: '', characterMotives: '', promises: '', endingGoal: '留下新压力', version: 1 },
     }]);
     prisma.novelChapter.findFirst.mockResolvedValue({ id: 44, seed: { intent: '追查铜哨', endingGoal: '留下新压力' } });
+    if (checkpoint !== 'missing') {
+      proposal.confirmedSourceVersion = (await loadOwnedProjectContext(prisma as never, 1, 128, 2)).sourceVersion;
+      prisma.novelDocument.findFirst.mockResolvedValue({ id: 9, currentVersion: 2, content: JSON.stringify(proposal) });
+    }
+    if (checkpoint === 'edited') {
+      const characters = await prisma.novelCharacter.findMany();
+      prisma.novelCharacter.findMany.mockResolvedValue(characters.map((row: { version: number }) => ({ ...row, version: row.version + 1 })));
+    }
     const jobs = { submitChapterGeneration: vi.fn().mockResolvedValue({ jobId: 'job-retry' }) };
-    const result = await confirmGenerationSteward({
+    const result = confirmGenerationSteward({
       prisma: prisma as never, jobs: jobs as never, userId: 1, projectId: 128,
       action: 'apply_and_generate', proposalId: 'prop-retry', sourceVersion: 'old-version',
     });
-    expect(result.generationJobId).toBe('job-retry');
-    expect(jobs.submitChapterGeneration).toHaveBeenCalledTimes(1);
+    if (checkpoint === 'saved') {
+      await expect(result).resolves.toMatchObject({ generationJobId: 'job-retry' });
+      expect(jobs.submitChapterGeneration).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(result).rejects.toMatchObject({ envelope: { gate: 'proposal_version', recoverable: false } });
+      expect(jobs.submitChapterGeneration).not.toHaveBeenCalled();
+    }
   });
 
   it('rejects confirmation when the project version changed', async () => {
@@ -688,5 +718,32 @@ describe('generation steward', () => {
     expect(prisma.novelDocument.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ content: expect.stringContaining('new world') }),
     }));
+  });
+
+  it.each([false, true])('invalidates the saved submission checkpoint when revising a proposal (new edits: %s)', async (changed) => {
+    const project = { id: 128, userId: 1, title: '铜哨', description: '', genre: '悬疑', subGenres: [], worldKeyTerms: [], version: 1 };
+    const confirmedSourceVersion = compileProjectContextSnapshot({ userId: 1, project, documents: [], characters: [], outlineNodes: [], chapters: [] }).sourceVersion;
+    const prisma = makePrisma({ content: JSON.stringify({
+      id: 'prop-resume', projectId: 128, chapterNumber: 1, sourceVersion: 'original', confirmedSourceVersion,
+      status: 'pending', missing: [], proposals: [{ field: 'chapter_seed', value: 'old seed', source: [], requiresConfirmation: false }],
+    }) });
+    prisma.novelProject.findFirst.mockResolvedValue({ ...project, version: changed ? 2 : 1 });
+    prisma.novelDocument.findMany.mockResolvedValue([]);
+    prisma.novelCharacter.findMany.mockResolvedValue([]);
+    prisma.novelOutlineNode.findMany.mockResolvedValue([]);
+    prisma.novelChapter.findMany.mockResolvedValue([]);
+    const result = reviseGenerationSteward({
+      prisma: prisma as never, userId: 1, projectId: 128, proposalId: 'prop-resume', sourceVersion: 'original',
+      edits: [{ field: 'chapter_seed', value: 'new seed' }],
+    });
+    if (changed) {
+      await expect(result).rejects.toMatchObject({ envelope: { gate: 'proposal_version' } });
+      expect(prisma.novelDocument.update).not.toHaveBeenCalled();
+    } else {
+      await expect(result).resolves.toMatchObject({ sourceVersion: confirmedSourceVersion });
+      const stored = JSON.parse(prisma.novelDocument.update.mock.calls[0]![0].data.content);
+      expect(stored.confirmedSourceVersion).toBeUndefined();
+      expect(stored.proposals[0].value).toBe('new seed');
+    }
   });
 });

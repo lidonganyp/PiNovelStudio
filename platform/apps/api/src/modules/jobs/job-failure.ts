@@ -51,19 +51,35 @@ export function runtimeInvokeFailure(
       const reason = typeof raw.reason === 'string' && raw.reason.trim()
         ? raw.reason.trim()
         : '运行时预检或生成失败';
-      const code = codeFromRuntimeFailure(raw, reason, value.status);
+      // Classify before redaction removes transport details and model names.
+      // Only model stages qualify; quoted API text in story/fact diagnostics
+      // must not turn a content failure into a service-availability failure.
+      const budgetExhausted = raw.code === 'generation_budget_exhausted' || raw.gate === 'budget_exhausted';
+      const modelTimeout = /agentic_generation|style_optimization/.test(String(raw.stage ?? ''))
+        && /timed?\s*out|timeout|超时|aborted/i.test(reason);
+      const modelUnavailable = /agentic_generation|style_optimization/.test(String(raw.stage ?? ''))
+        && /API call failed\s*\((?:502|503|504)\)/i.test(reason);
+      const code = raw.code === 'generation_usage_unknown' ? 'generation_usage_unknown' : budgetExhausted ? 'generation_budget_exhausted' : modelTimeout ? 'generation_model_timeout' : modelUnavailable
+        ? FAILURE_CODES.generationModelUnavailable
+        : codeFromRuntimeFailure(raw, reason, value.status);
       return new JobFailureError(makeFailure({
         stage: typeof raw.stage === 'string' ? raw.stage : stageForCode(code),
         gate: typeof raw.gate === 'string' ? raw.gate : 'runtime',
         code,
-        severity: severityForCode(code),
-        reason,
-        recoverable: isNonRecoverablePreflightCode(code) ? false : true,
-        retryPlan: isNonRecoverablePreflightCode(code) ? undefined : 'retry_same_stage',
+        severity: modelTimeout || code === 'generation_usage_unknown' ? 'recoverable' : severityForCode(code),
+        reason: budgetExhausted ? '本次生成的费用、时间或恢复次数授权已不足，已停止后续调用。未交付正文，失败免单；未决模型用量仍计入本次授权预算。'
+          : modelTimeout ? '模型服务未在本次等待时间内完成，自动恢复后仍未成功。原正文已保留，请稍后重试。' : modelUnavailable
+          ? '当前模型服务暂时不可用，本次自动重试后仍未恢复。未保存新正文，请稍后再试。'
+          : reason,
+        recoverable: budgetExhausted || isNonRecoverablePreflightCode(code) ? false : raw.recoverable !== false,
+        retryPlan: budgetExhausted ? undefined : modelUnavailable ? 'retry_later'
+          : isNonRecoverablePreflightCode(code) ? undefined : 'retry_same_stage',
         evidence: raw.evidence,
-        userActionRequired: Array.isArray(raw.userActionRequired)
-          ? raw.userActionRequired.filter((item): item is string => typeof item === 'string')
-          : undefined,
+        userActionRequired: modelUnavailable
+          ? ['稍后重试；若持续失败，请联系管理员检查模型服务状态']
+          : Array.isArray(raw.userActionRequired)
+            ? raw.userActionRequired.filter((item): item is string => typeof item === 'string')
+            : undefined,
         fixInstructions: Array.isArray(raw.fixInstructions)
           ? raw.fixInstructions.filter((item): item is string => typeof item === 'string')
           : undefined,
@@ -237,6 +253,7 @@ function stageForCode(code: string): string {
 }
 
 function severityForCode(code: string): FailureEnvelope['severity'] {
+  if (code === FAILURE_CODES.generationModelUnavailable) return 'recoverable';
   if (code === FAILURE_CODES.environmentFingerprintMismatch) return 'preflight';
   if (code === FAILURE_CODES.stateStoreHashMismatch) return 'preflight';
   if (code === FAILURE_CODES.runtimePreflightFailed) return 'preflight';

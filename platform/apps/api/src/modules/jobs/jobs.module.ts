@@ -8,11 +8,13 @@ import { RatesModule } from '../rates/rates.module';
 import { JobsController } from './jobs.controller';
 import { JobsService } from './jobs.service';
 import { RuntimeClient } from './runtime.client';
+import { RevisionsService } from './revisions.service';
+import { RevisionsController } from './revisions.controller';
 
 @Module({
   imports: [BillingModule, RatesModule, ErrorReportsModule],
-  controllers: [JobsController],
-  providers: [JobsService, RuntimeClient],
+  controllers: [JobsController, RevisionsController],
+  providers: [JobsService, RuntimeClient, RevisionsService],
   exports: [JobsService],
 })
 export class JobsModule {}

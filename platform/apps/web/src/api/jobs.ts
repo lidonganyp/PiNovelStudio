@@ -62,6 +62,10 @@ export function getJob(jobId: string): Promise<NovelJob> {
   return http.get(`/jobs/${jobId}`).then((r) => r.data);
 }
 
+export function retryGeneration(jobId: string): Promise<NovelJob> {
+  return http.post(`/jobs/${jobId}/retry`).then((r) => r.data);
+}
+
 export function getJobCalls(jobId: string): Promise<JobCall[]> {
   return http.get(`/jobs/${jobId}/calls`).then((r) => r.data);
 }

@@ -41,6 +41,20 @@ test("continuation prefix comparison ignores provider line-ending normalization"
   assert.equal(hasContinuationPrefixMismatch(existing, generated), false);
 });
 
+test("full style output with normalized newlines merges once and preserves the author's original bytes", () => {
+  const prefix = "作者第一段。\r\n作者第二段。";
+  const output = "作者第一段。\n作者第二段。\n\n新增正文。";
+  assert.equal(mergeChapterContinuation(prefix, output), `${prefix}\n\n新增正文。`);
+  assert.equal(hasContinuationPrefixMismatch(prefix, output), false);
+});
+
+test("an exact full prefix followed immediately by new text is not a rewritten prefix", () => {
+  const prefix = "作者已经写好的前缀，所有文字必须保留。";
+  const output = `${prefix}新增正文。`;
+  assert.equal(hasContinuationPrefixMismatch(prefix, output), false);
+  assert.equal(mergeChapterContinuation(prefix, output), output);
+});
+
 test("continuation prefix comparison rejects a near-identical rewritten opening", () => {
   const existing = "雨水顺着旧仓库的铁皮檐滴落下来。李一凡站在门外，没有立刻进去。";
   const rewritten = `X${existing.slice(1)}\n\n新的续写内容。`;

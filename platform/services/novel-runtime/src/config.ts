@@ -168,7 +168,7 @@ export function loadConfig(): NovelRuntimeConfig {
     novelTaskTokenHmacKey: requireEnv("NOVEL_TASK_TOKEN_HMAC_KEY"),
     providerCredentialsSource,
     llmRequestTimeoutMs: optionalIntEnv("PINOVEL_MODEL_REQUEST_TIMEOUT_MS", 300000),
-    invokeRequestTimeoutMs: optionalIntEnv("NOVEL_RUNTIME_REQUEST_TIMEOUT_MS", 900000),
+    invokeRequestTimeoutMs: optionalIntEnv("NOVEL_RUNTIME_REQUEST_TIMEOUT_MS", 2700000),
     novelStudioDistPath: optionalEnv(
       "NOVEL_STUDIO_DIST_PATH",
       // 默认指向容器内镜像固化的 PiNovelStudio 编译产物（§8.2）

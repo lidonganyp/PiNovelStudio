@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
 import { JOB_STAGES, isTerminalStatus } from '../../api/jobs';
 import { fenToYuan } from '../../api/billing';
-import { submitGeneration } from '../../api/chapters';
+import { retryGeneration } from '../../api/jobs';
 import type { Chapter } from '../../api/chapters';
 import { useJobPolling } from '../../composables/useJobPolling';
 
@@ -29,7 +29,7 @@ const recovering = ref(false);
 emit('register-track', (jobId: string) => track(jobId));
 
 const visible = computed(() => job.value !== null);
-const recoveryLabel = computed(() => props.chapter?.content.trim() ? '继续生成' : '重新生成');
+const recoveryLabel = computed(() => '重试原任务');
 
 const statusMeta = computed((): { text: string; type: 'primary' | 'success' | 'danger' | 'warning' | 'info' } => {
   switch (String(job.value?.status)) {
@@ -73,10 +73,10 @@ const tokensTotal = computed(() =>
 
 /** 对同一章节重新提交生成（失败重试）。 */
 async function retry(): Promise<void> {
-  if (!props.chapter || recovering.value) return;
+  if (!job.value || recovering.value) return;
   recovering.value = true;
   try {
-    const next = await submitGeneration(props.projectId, props.chapter.id);
+    const next = await retryGeneration(job.value.jobId);
     track(next.jobId);
     ElMessage.success(`${recoveryLabel.value}任务已提交`);
   } catch {
@@ -137,7 +137,8 @@ watch(
     <div class="charge-row">
       <span>预占上限 ¥{{ fenToYuan(job.maxCharge) }}</span>
       <span>已结算 ¥{{ fenToYuan(job.settledAmount) }}</span>
-      <span v-if="calls.length">明细合计 ¥{{ totalChargeYuan }}（{{ tokensTotal }} tokens / {{ calls.length }} 次调用）</span>
+      <span v-if="calls.length">模型调用成本 ¥{{ totalChargeYuan }}（{{ tokensTotal }} tokens / {{ calls.length }} 次调用）</span>
+      <span v-if="job.status === 'failed'">本章未交付，失败免单</span>
     </div>
 
     <!-- 失败呈现 -->

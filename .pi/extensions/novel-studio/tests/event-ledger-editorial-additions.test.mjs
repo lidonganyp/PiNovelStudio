@@ -25,6 +25,27 @@ import assert from "node:assert/strict";
 import {
   checkEditorialStoryPreservation,
 } from "../dist/v2/core/editorial-story-preservation-gate.js";
+import { extractEvents } from "../dist/v2/core/event-extractor.js";
+import { detectEditorialOnlyEvents } from "../dist/v2/core/event-ledger-helpers.js";
+
+for (const sentence of ["李一凡没有继续攻击。", "李一凡却并未有任何攻击动作。"]) {
+  test(`negated action is not evidence of a new completed event: ${sentence}`, () => {
+    const rawText = "李一凡站在碎石边，后背绷紧。";
+    const knownEntities = ["李一凡", "野兽"];
+    const raw = extractEvents(rawText, knownEntities);
+    const editorial = extractEvents(`${rawText}${sentence}`, knownEntities);
+    const findings = detectEditorialOnlyEvents(editorial.events, new Set(), raw.events, new Set(knownEntities), rawText);
+    assert.equal(findings.length, 0);
+  });
+}
+
+test("changing an actual attack to a negated attack still blocks", () => {
+  const report = checkEditorialStoryPreservation({
+    rawText: "李一凡攻击野兽。", editorialText: "李一凡没有攻击野兽。",
+    knownEntities: ["李一凡", "野兽"], entityCoverage: "full_entities",
+  });
+  assert.equal(report.preserved, false);
+});
 
 // ============================================================================
 // 用例 1：最小夹具 — editorial 引入 raw 中不存在的实体事件

@@ -29,6 +29,7 @@ export class AdminService {
   ) {}
 
   async overview(): Promise<unknown> {
+    const paidCalls = await this.unrefundedCalls();
     const today = lastUtcDays(1);
     const week = lastUtcDays(7);
     const [
@@ -48,7 +49,7 @@ export class AdminService {
         _sum: { amount: true },
       }),
       this.prisma.novelGenerationCall.aggregate({
-        where: { createdAt: { gte: today.start, lt: today.end } },
+        where: { ...paidCalls, createdAt: { gte: today.start, lt: today.end } },
         _sum: { actualCharge: true },
       }),
       this.remainingQuota(),
@@ -96,7 +97,7 @@ export class AdminService {
     ]);
     const spent = await this.prisma.novelGenerationCall.groupBy({
       by: ['userId'],
-      where: { userId: { in: rows.map((row) => row.id) } },
+      where: { ...await this.unrefundedCalls(), userId: { in: rows.map((row) => row.id) } },
       _sum: { actualCharge: true },
     });
     const spentMap = new Map(
@@ -139,7 +140,7 @@ export class AdminService {
         take: 20,
       }),
       this.prisma.novelGenerationCall.aggregate({
-        where: { userId: id },
+        where: { ...await this.unrefundedCalls(), userId: id },
         _sum: { actualCharge: true, chargeFromReal: true, chargeFromBonus: true },
       }),
     ]);
@@ -746,6 +747,7 @@ export class AdminService {
   }> {
     const paidAt = createdAtFilter(range);
     const createdAt = createdAtFilter(range);
+    const paidCalls = await this.unrefundedCalls();
     const [paid, adjustments, consume] = await Promise.all([
       this.prisma.paymentOrder.aggregate({
         where: {
@@ -764,6 +766,7 @@ export class AdminService {
       }),
       this.prisma.novelGenerationCall.aggregate({
         where: {
+          ...paidCalls,
           ...(userId ? { userId } : {}),
           ...(createdAt ? { createdAt } : {}),
         },
@@ -818,6 +821,7 @@ export class AdminService {
         SELECT date_trunc('day', created_at)
         FROM novel_generation_call
         WHERE ${generationCallWhereSql(range, { userId })}
+          AND job_id NOT IN (SELECT job_id FROM novel_generation_refunds)
       ) d
       LEFT JOIN (
         SELECT date_trunc('day', paid_at) AS day, SUM(amount) AS real_recharge
@@ -838,6 +842,7 @@ export class AdminService {
                SUM(charge_from_bonus) AS virtual_consume
         FROM novel_generation_call
         WHERE ${generationCallWhereSql(range, { userId })}
+          AND job_id NOT IN (SELECT job_id FROM novel_generation_refunds)
         GROUP BY 1
       ) c ON c.day = d.day
       ORDER BY d.day DESC
@@ -867,7 +872,7 @@ export class AdminService {
   > {
     const rows = await this.prisma.novelGenerationCall.groupBy({
       by: ['userId'],
-      where: generationCallWhere(range, {}),
+      where: { ...generationCallWhere(range, {}), ...await this.unrefundedCalls() },
       _sum: { actualCharge: true },
       _count: true,
       orderBy: { _sum: { actualCharge: 'desc' } },
@@ -893,7 +898,7 @@ export class AdminService {
   ): Promise<Array<{ model: string; consume: string; calls: number }>> {
     const rows = await this.prisma.novelGenerationCall.groupBy({
       by: ['model'],
-      where: generationCallWhere(range, {}),
+      where: { ...generationCallWhere(range, {}), ...await this.unrefundedCalls() },
       _sum: { actualCharge: true },
       _count: true,
       orderBy: { _sum: { actualCharge: 'desc' } },
@@ -904,6 +909,12 @@ export class AdminService {
       consume: fenToString(row._sum.actualCharge ?? 0n),
       calls: row._count,
     }));
+  }
+
+  /** Revenue/author spend excludes refunds; usage dashboards retain gross model consumption. */
+  private async unrefundedCalls(): Promise<Prisma.NovelGenerationCallWhereInput> {
+    const refunds = await this.prisma.novelGenerationRefund.findMany({ select: { jobId: true } });
+    return { jobId: { notIn: refunds.map((refund) => refund.jobId) } };
   }
 
   async listAuditLogs(

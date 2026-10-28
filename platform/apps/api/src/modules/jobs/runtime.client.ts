@@ -2,6 +2,7 @@
  * novel-runtime 调用口：http 模式 POST /v1/invoke；stub 模式由 JobsService 内联。
  */
 import { Injectable } from '@nestjs/common';
+import { request } from 'undici';
 import { env } from '../../config/env';
 import { JobFailureError, runtimeInvokeFailure } from './job-failure';
 
@@ -30,34 +31,53 @@ export class RuntimeClient {
     token: string,
     tool: string,
     input: Record<string, unknown>,
+    timeoutMs?: number,
+    durable = false,
+    refreshToken?: () => Promise<string>,
   ): Promise<RuntimeInvokeResult> {
+    const deadlineMs = timeoutMs === undefined ? this.requestTimeoutMs : Math.min(this.requestTimeoutMs, Math.max(1, timeoutMs));
     const url = `${env.NOVEL_RUNTIME_BASE_URL.replace(/\/$/, '')}/v1/invoke`;
-    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+    const deadlineAt = Date.now() + deadlineMs;
+    for (let attempt = 1; durable || attempt <= this.maxAttempts; attempt += 1) {
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) throw new Error(`runtime invoke timed out after ${deadlineMs}ms`);
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+      const timeout = setTimeout(() => controller.abort(), remainingMs);
       timeout.unref?.();
       try {
-        const response = await fetch(url, {
+        const requestToken = durable && attempt > 1 && refreshToken ? await refreshToken() : token;
+        // Native fetch has a separate 300s header deadline, shorter than a full
+        // Agentic + style run. Use the configured budget for every HTTP phase.
+        const response = await request(url, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            'x-novel-task-token': token,
+            'x-novel-task-token': requestToken,
+            ...(durable ? { 'x-novel-durable-invoke': '1', 'x-novel-deadline-at': String(deadlineAt) } : {}),
           },
           body: JSON.stringify({ tool, input }),
           signal: controller.signal,
+          headersTimeout: remainingMs,
+          bodyTimeout: remainingMs,
         });
-        const body = (await response.json()) as RuntimeInvokeResult & {
+        const body = (await response.body.json()) as RuntimeInvokeResult & {
           metering?: { modelCallCount?: number };
+          code?: string;
         };
-        if (!response.ok) {
+        if (durable && response.statusCode === 409 && body.code === 'INVOCATION_RUNNING') {
+          await waitFor(Math.min(1000, Math.max(0, deadlineAt - Date.now())));
+          continue;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
           throw runtimeInvokeFailure(body, body.metering?.modelCallCount);
         }
         return body;
       } catch (error: unknown) {
         if (controller.signal.aborted) {
-          throw new Error(`runtime invoke timed out after ${this.requestTimeoutMs}ms`);
+          throw new Error(`runtime invoke timed out after ${deadlineMs}ms`);
         }
-        if (attempt < this.maxAttempts && isRetryableConnectFailure(error)) {
+        if ((durable && !(error instanceof JobFailureError) && isRetryableNetworkFailure(error))
+          || (attempt < this.maxAttempts && isRetryableConnectFailure(error))) {
           await waitFor(this.retryDelayMs);
           continue;
         }
@@ -69,6 +89,12 @@ export class RuntimeClient {
     }
     throw new Error('runtime invoke failed without an attempt');
   }
+}
+
+function isRetryableNetworkFailure(error: unknown): boolean {
+  const cause = error instanceof Error && 'cause' in error ? error.cause : error;
+  const code = cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : '';
+  return /^(ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ECONNRESET|EPIPE|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)$/.test(code);
 }
 
 function waitFor(delayMs: number): Promise<void> {
@@ -83,7 +109,7 @@ function waitFor(delayMs: number): Promise<void> {
 function isRetryableConnectFailure(error: unknown): boolean {
   const cause = error instanceof Error && 'cause' in error
     ? (error as { cause?: unknown }).cause
-    : undefined;
+    : error;
   const code = cause && typeof cause === 'object' && 'code' in cause
     ? (cause as { code?: unknown }).code
     : undefined;

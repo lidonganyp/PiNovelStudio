@@ -142,15 +142,7 @@ function installFetchQueue(contents) {
   globalThis.fetch = async (url, options) => {
     const content = queue.shift();
     calls.push({ url: String(url), options });
-    return {
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify(makeMockGPTResponsesPayload(content ?? "")),
-      json: async () => makeMockGPTResponsesPayload(content ?? ""),
-      headers: {
-        get: (name) => name.toLowerCase() === "content-type" ? "application/json" : null,
-      },
-    };
+    return Response.json(makeMockGPTResponsesPayload(content ?? ""));
   };
 
   return {

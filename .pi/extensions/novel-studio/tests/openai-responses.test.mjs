@@ -50,7 +50,9 @@ test('Responses timeout includes stalled body consumption', async (context) => {
   let signal;
   context.mock.method(globalThis, 'fetch', async (_url, init) => {
     signal = init.signal;
-    return { ok: true, json: () => new Promise(() => {}) };
+    return new Response(new ReadableStream({ start(controller) {
+      init.signal.addEventListener('abort', () => controller.error(new Error('timed out')), { once: true });
+    } }));
   });
   await assert.rejects(callOpenAIResponses('https://example.com/v1', 'test', 'gpt-6-astra', [], { timeoutMs: 20 }), /timed out/);
   assert.equal(signal.aborted, true);

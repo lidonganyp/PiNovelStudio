@@ -14,8 +14,10 @@ export class BillingQueryService {
       where: { id: userId },
     });
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const refunds = await this.prisma.novelGenerationRefund.findMany({ where: { userId }, select: { jobId: true } });
+    const refundedJobIds = refunds.map((row) => row.jobId);
     const grouped = await this.prisma.novelGenerationCall.aggregate({
-      where: { userId, createdAt: { gte: since } },
+      where: { userId, createdAt: { gte: since }, jobId: { notIn: refundedJobIds } },
       _sum: { actualCharge: true },
     });
     const holds = await this.prisma.novelBalanceHold.findMany({
@@ -28,10 +30,11 @@ export class BillingQueryService {
     );
     const byDay = await this.prisma.$queryRaw<
       Array<{ day: Date; charge: bigint }>
-    >`SELECT date_trunc('day', created_at) AS day,
-             COALESCE(SUM(actual_charge), 0) AS charge
-      FROM novel_generation_call
-      WHERE user_id = ${userId} AND created_at >= ${since}
+    >`SELECT date_trunc('day', c.created_at) AS day,
+             COALESCE(SUM(c.actual_charge), 0) AS charge
+      FROM novel_generation_call c
+      LEFT JOIN novel_generation_refunds r ON r.job_id = c.job_id
+      WHERE c.user_id = ${userId} AND c.created_at >= ${since} AND r.id IS NULL
       GROUP BY 1
       ORDER BY 1 ASC`;
     const total = user.balance + user.bonusBalance;
@@ -63,6 +66,8 @@ export class BillingQueryService {
       jobs.map((job) => [job.jobId, job] as const),
     );
     const jobIds = jobs.map((job) => job.jobId);
+    const refunds = await this.prisma.novelGenerationRefund.findMany({ where: { userId, jobId: { in: jobIds } }, select: { jobId: true } });
+    const refunded = new Set(refunds.map((row) => row.jobId));
     const where = {
       userId,
       ...(projectId ? { jobId: { in: jobIds } } : {}),
@@ -88,7 +93,9 @@ export class BillingQueryService {
           internalStage: row.internalStage,
           tokensIn: row.tokensIn,
           tokensOut: row.tokensOut,
-          actualCharge: fenToString(row.actualCharge),
+          actualCharge: fenToString(refunded.has(row.jobId) ? 0n : row.actualCharge),
+          providerCharge: fenToString(row.actualCharge),
+          refunded: refunded.has(row.jobId),
           createdAt: row.createdAt.toISOString(),
         };
       }),

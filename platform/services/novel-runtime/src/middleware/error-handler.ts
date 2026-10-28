@@ -14,6 +14,7 @@ import { PricingTableError } from "../pricing-table.js";
 import { BillingClientError } from "../billing-client.js";
 import { ProviderCredentialsError } from "../provider-credentials.js";
 import { WorkspaceManagerError } from "../workspace-manager.js";
+import { UsageReconciliationRequired } from '../metering-binder.js';
 
 export interface AppError {
   code: string;
@@ -23,6 +24,7 @@ export interface AppError {
 
 /** 把任意错误归一化为 AppError（脱敏） */
 export function normalizeError(err: unknown): AppError {
+  if (err instanceof UsageReconciliationRequired) return {code:'USAGE_RECONCILIATION_REQUIRED',message:err.message,statusCode:422};
   if (err instanceof ConfigError) {
     return {
       code: err.code,
@@ -110,5 +112,13 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     message: appError.message,
     // 不暴露 requestId 之外的细节（requestId 由中间件注入 res.locals）
     requestId: res.locals.requestId ?? "unknown",
+    ...(err instanceof UsageReconciliationRequired ? {status:'blocked',failureEnvelope:{
+      code:'generation_usage_unknown',stage:'runtime.accounting',gate:'usage_unknown',severity:'recoverable',
+      reason:err.message,recoverable:true,retryPlan:'retry_same_stage',
+    }} : {}),
+    ...(err instanceof BillingClientError && err.code === 'BUDGET_EXHAUSTED' ? { status: 'blocked', failureEnvelope: {
+      code: 'generation_budget_exhausted', stage: 'runtime.budget', gate: 'budget_exhausted', severity: 'hard',
+      reason: err.message, recoverable: false, userActionRequired: ['检查本次授权预算和未决用量后，重新确认任务'],
+    } } : {}),
   });
 }

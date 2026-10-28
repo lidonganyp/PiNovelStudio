@@ -45,24 +45,14 @@ function makeAnthropicStreamResponse(text = "测试正文") {
     `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
   ];
 
-  return {
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    headers: new Headers({ "content-type": "text/event-stream" }),
-    body: new ReadableStream({
+  return new Response(new ReadableStream({
       start(controller) {
         for (const event of events) {
           controller.enqueue(encoder.encode(event));
         }
         controller.close();
       },
-    }),
-    text: async () => events.join(""),
-    json: async () => {
-      throw new Error("streaming response must not use response.json()");
-    },
-  };
+    }), { headers: { "content-type": "text/event-stream" } });
 }
 
 afterEach(() => {
@@ -130,12 +120,7 @@ test("non-Claude OpenAI-compatible routes retain configured sampling parameters"
     });
     // gpt provider 已切换 Responses 传输（providers.gpt.request_options.api=responses），
     // mock 返回 Responses API 格式响应。
-    return {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      text: async () => "",
-      json: async () => ({
+    return new Response(JSON.stringify({
         id: "resp-test",
         status: "completed",
         output: [
@@ -146,8 +131,7 @@ test("non-Claude OpenAI-compatible routes retain configured sampling parameters"
           },
         ],
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      }),
-    };
+      }), { headers: { 'content-type': 'application/json' } });
   };
 
   const manager = createAPIFallbackManager({ maxRetries: 0, baseDelayMs: 0 });

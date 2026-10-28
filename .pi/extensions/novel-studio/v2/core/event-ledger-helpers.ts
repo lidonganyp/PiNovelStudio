@@ -282,6 +282,9 @@ export function detectEditorialOnlyEvents(
     const rawEquivalentCount = rawExtractable.filter(sameEvent).length;
     const editorialEquivalentCount = editorialExtractable.filter(sameEvent).length;
     const isCriticalUnmatchedEvent =
+      // An absent action is not evidence that a new action happened. Actual
+      // raw -> negated editorial reversals remain checked by the forward pass.
+      !edEvent.negated &&
       isCriticalAction(edEvent.action) &&
       editorialEquivalentCount > rawEquivalentCount;
     // A single-character/entity-bound fallback subject can make a normal

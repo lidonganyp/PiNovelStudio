@@ -8,6 +8,8 @@ const SENSITIVE_RE =
   /stack|api[_-]?key|authorization|postgres|mongodb|ECONNREFUSED|aimagichub|openai|anthropic|solov|gemini|claude|\bglm\b|deepseek|qwen|doubao|ernie|provider|secret|token\s*[=:]|bearer\s+[a-z0-9.-]+|sk-[a-z0-9]+/i;
 
 export const FAILURE_CODES = {
+  generationHistoryUnavailable: 'generation_history_unavailable',
+  generationMaterialsChanged: 'generation_materials_changed',
   historyLoadFailed: 'history_load_failed',
   messageSaveFailed: 'message_save_failed',
   plannerFailed: 'planner_failed',
@@ -22,6 +24,7 @@ export const FAILURE_CODES = {
   stateStoreHashMismatch: 'state_store_hash_mismatch',
   environmentFingerprintMismatch: 'environment_fingerprint_mismatch',
   generationFailed: 'generation_failed',
+  generationModelUnavailable: 'generation_model_unavailable',
   narrativeStateCommitFailed: 'narrative_state_commit_failed',
   sseInterrupted: 'sse_interrupted',
   contextBudgetExceeded: 'context_budget_exceeded',

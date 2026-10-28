@@ -1,7 +1,7 @@
 /**
  * 生成任务：预检 + 预占 + 令牌签发 + http 调度（本地开发可 stub）+ 轮询。
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -9,9 +9,11 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  OnModuleDestroy,
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { countWords, requireOwnedProject } from '../../common/ownership';
 import { env, PRODUCTION_BILLING_MODEL_ROUTES } from '../../config/env';
@@ -40,6 +42,7 @@ import {
 } from '../context/context-compiler';
 import { ContextCompileError, FailureHttpException, FAILURE_CODES, makeFailure } from '../context/failure-envelope';
 import {
+  JobFailureError,
   jobFailureFromUnknown,
   readStoredFailure,
   runtimeInvokeFailure,
@@ -60,6 +63,37 @@ import {
 } from './chapter-continuation';
 import type { TargetWordRange } from '../context/types';
 import { ErrorReportsService } from '../error-reports/error-reports.service';
+import { GenerationHistoryResolver } from './generation-history';
+import { assertRevisionConsent } from './revision-materials';
+
+type RuntimeWorkspaceRequest = {
+  userId: number;
+  projectId: number;
+  chapterId: number;
+  chapterNumber: number;
+  continuationMode?: ContinuationMode;
+  targetWordCount?: TargetWordRange;
+};
+
+type GenerationContextDb = Pick<PrismaService,
+  'novelProject' | 'novelCharacter' | 'novelDocument' | 'novelChapter' | 'novelChapterSeed' | 'novelDocumentVersion'>;
+
+interface GenerationMaterialSnapshot {
+  request: RuntimeWorkspaceRequest;
+  fingerprint: string;
+}
+
+/** Hash the actual writer materials; observation timestamps/token totals are not author inputs. */
+export function fingerprintGenerationMaterials(value: Record<string, unknown>): string {
+  const { contextManifest: _observations, ...materials } = value;
+  const materialSourceHash = (_observations as { materialSourceHash?: string } | undefined)?.materialSourceHash;
+  const stable = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(stable);
+    if (entry && typeof entry === 'object') return Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)).map(([key, v]) => [key, stable(v)]));
+    return entry;
+  };
+  return createHash('sha256').update(JSON.stringify(stable({ ...materials, materialSourceHash }))).digest('hex');
+}
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -120,6 +154,18 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 // Stub runtime is a local/test transport and must not require a production
 // model rate or create a billable model-call record.
 const STUB_RUNTIME_HOLD_FEN = 50n;
+interface HttpGenerationInput {
+  revisionId?: string;
+  userId: number; projectId: number; chapterId: number; jobId: string; maxCharge: bigint;
+  chapterNumber: number; chapterVersion: number; seedVersion: number;
+  runtimeWorkspaceInput?: Record<string, unknown>; continuationMode?: ContinuationMode;
+  continuationDraft: string; targetWordCount?: TargetWordRange; timeoutMs?: number;
+  durable?: boolean;
+}
+interface StoredExecution {
+  version: 1; deadlineAt: number;
+  input: Omit<HttpGenerationInput, 'maxCharge'> & { maxCharge: string };
+}
 
 // Reserve against a full multi-stage chapter run, not a single small model
 // call. Actual billing still settles token usage call-by-call; this ceiling
@@ -132,8 +178,12 @@ const STUB_RUNTIME_HOLD_FEN = 50n;
 
 
 @Injectable()
-export class JobsService implements OnModuleInit {
+export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobsService.name);
+  private readonly workerId = randomUUID();
+  private dispatchTimer?: ReturnType<typeof setInterval>;
+  private readonly executions = new Set<Promise<void>>();
+  private dispatching = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -159,6 +209,7 @@ export class JobsService implements OnModuleInit {
     const interrupted = await this.prisma.novelGenerationJob.findMany({
       where: {
         status: { in: ['pending', 'running'] },
+        execution: { equals: Prisma.DbNull },
         // A rolling restart or a second API replica must not terminate a
         // still-running job. Only reclaim work that has outlived the full
         // runtime request timeout plus a small scheduling grace period.
@@ -242,6 +293,60 @@ export class JobsService implements OnModuleInit {
         throw error;
       }
     }
+    this.dispatchTimer = setInterval(() => { void this.dispatchStoredJobs().catch((error: unknown) => {
+      this.logger.error(`durable dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }); }, 1000);
+    this.dispatchTimer.unref();
+  }
+
+  onModuleDestroy(): void { if (this.dispatchTimer) clearInterval(this.dispatchTimer); }
+  /** Used by bounded integration tests to wait for already-claimed executions. */
+  async drain(): Promise<void> { await Promise.allSettled([...this.executions]); }
+
+  async dispatchStoredJobs(): Promise<void> {
+    if (this.dispatching) return;
+    this.dispatching = true;
+    try {
+      const rows = await this.prisma.novelGenerationJob.findMany({ where: {
+        status: { in: ['pending', 'running'] }, NOT: { execution: { equals: Prisma.DbNull } },
+        OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }],
+      }, orderBy: { startedAt: 'asc' }, take: 8 });
+      for (const row of rows) {
+        const stored = row.execution as unknown as StoredExecution;
+        if (!stored) continue;
+        if (stored.version !== 1 || !stored.input || !Number.isFinite(stored.deadlineAt)) {
+          await this.closeFailedGenerationIfHoldReleased(row.jobId, jobFailureFromUnknown(new Error('stored execution is invalid')));
+          continue;
+        }
+        const claimed = await this.prisma.novelGenerationJob.updateMany({ where: { jobId: row.jobId,
+          status: { in: ['pending', 'running'] }, OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }],
+        }, data: { leaseOwner: this.workerId, leaseUntil: new Date(Date.now() + 30_000) } });
+        if (claimed.count !== 1) continue;
+        const task = this.executeStored(row.jobId, stored);
+        this.executions.add(task);
+        void task.finally(() => { this.executions.delete(task); }).catch(() => undefined);
+      }
+    } finally { this.dispatching = false; }
+  }
+
+  private async executeStored(jobId: string, stored: StoredExecution): Promise<void> {
+    const heartbeat = setInterval(() => { void this.prisma.novelGenerationJob.updateMany({
+      where: { jobId, leaseOwner: this.workerId }, data: { leaseUntil: new Date(Date.now() + 30_000) },
+    }).catch((error: unknown) => this.logger.error(`job lease renewal failed: ${String(error)}`)); }, 10_000);
+    heartbeat.unref();
+    try {
+      const remainingMs = stored.deadlineAt - Date.now();
+      if (remainingMs <= 0) throw new Error('generation deadline exceeded before recovery');
+      const input: HttpGenerationInput = { ...stored.input, maxCharge: BigInt(stored.input.maxCharge), timeoutMs: remainingMs, durable: true };
+      // Also closes the process-death window between job insert and hold creation.
+      await this.billing.createHold({ userId: input.userId, jobId, amount: input.maxCharge });
+      await this.runHttpGeneration(input);
+    } catch (error: unknown) {
+      await this.closeFailedGenerationIfHoldReleased(jobId, jobFailureFromUnknown(error));
+    } finally {
+      clearInterval(heartbeat);
+      await this.prisma.novelGenerationJob.updateMany({ where: { jobId, leaseOwner: this.workerId }, data: { leaseOwner: null, leaseUntil: null } });
+    }
   }
 
   private recoveryGraceMs(): number {
@@ -302,15 +407,32 @@ export class JobsService implements OnModuleInit {
     options: {
       continuationMode?: ContinuationMode;
       targetWordCount?: TargetWordRange;
+      /** Internal revision dispatch only; these fields are never bound from HTTP bodies. */
+      jobId?: string;
+      revisionId?: string;
+      expectedChapterVersion?: number;
+      maxChargeFen?: number;
+      timeoutMs?: number;
     } = {},
   ): Promise<unknown> {
     await requireOwnedProject(this.prisma, userId, projectId);
+    if (options.jobId) {
+      const existing = await this.prisma.novelGenerationJob.findUnique({ where: { jobId: options.jobId } });
+      if (existing) {
+        if (existing.userId !== userId || existing.projectId !== projectId || existing.chapterId !== chapterId
+          || existing.revisionId !== options.revisionId) throw new ConflictException('任务标识与重写范围不匹配');
+        return this.getJob(userId, existing.jobId);
+      }
+    }
     const chapter = await this.prisma.novelChapter.findFirst({
       where: { id: chapterId, projectId, userId, deletedAt: null },
       include: { seed: true },
     });
     if (!chapter) {
       throw new NotFoundException('章节不存在');
+    }
+    if (options.expectedChapterVersion !== undefined && chapter.version !== options.expectedChapterVersion) {
+      throw new ConflictException('章节已修改，请重新确认重写范围');
     }
     const seed = chapter.seed;
     if (!seed || !seed.intent.trim() || !seed.endingGoal.trim()) {
@@ -365,6 +487,7 @@ export class JobsService implements OnModuleInit {
       }
     }
 
+    if (options.revisionId) await assertRevisionConsent(this.prisma as unknown as Prisma.TransactionClient, options.revisionId, userId, projectId);
     let maxCharge: bigint;
     try {
       maxCharge = await this.estimateMaxCharge();
@@ -395,7 +518,17 @@ export class JobsService implements OnModuleInit {
       }
       throw error;
     }
-    const jobId = randomUUID();
+    if (options.maxChargeFen !== undefined) {
+      if (!Number.isSafeInteger(options.maxChargeFen) || options.maxChargeFen <= 0) throw new BadRequestException('重写预算必须为正整数分');
+      maxCharge = maxCharge < BigInt(options.maxChargeFen) ? maxCharge : BigInt(options.maxChargeFen);
+    }
+    const jobId = options.jobId ?? randomUUID();
+    const execution: StoredExecution | undefined = env.NOVEL_RUNTIME_MODE === 'stub' ? undefined : {
+      version: 1, deadlineAt: Date.now() + Math.min(options.timeoutMs ?? env.NOVEL_RUNTIME_REQUEST_TIMEOUT_MS, env.NOVEL_RUNTIME_REQUEST_TIMEOUT_MS),
+      input: { userId, projectId, chapterId, jobId, revisionId: options.revisionId, maxCharge: maxCharge.toString(),
+        chapterNumber: chapter.chapterNumber, chapterVersion: chapter.version, seedVersion: seed.version,
+        continuationMode, continuationDraft: chapter.content, targetWordCount: options.targetWordCount, runtimeWorkspaceInput },
+    };
 
     try {
       await this.prisma.novelGenerationJob.create({
@@ -407,6 +540,8 @@ export class JobsService implements OnModuleInit {
           jobType: 'chapter_generation',
           status: 'running',
           maxCharge,
+          revisionId: options.revisionId,
+          execution: execution ? JSON.parse(JSON.stringify(execution)) as Prisma.InputJsonValue : undefined,
           progressStage: 'checking_materials',
         },
       });
@@ -484,23 +619,26 @@ export class JobsService implements OnModuleInit {
         targetWordCount: options.targetWordCount,
       });
     } else {
-      void this.runHttpGeneration({
-        userId,
-        projectId,
-        chapterId,
-        jobId,
-        maxCharge,
-        chapterNumber: chapter.chapterNumber,
-        chapterVersion: chapter.version,
-        seedVersion: seed.version,
-        runtimeWorkspaceInput,
-        continuationMode,
-        continuationDraft: chapter.content,
-        targetWordCount: options.targetWordCount,
-      });
+      await this.dispatchStoredJobs();
     }
 
     return this.getJob(userId, jobId);
+  }
+
+  /** A retry is bound to the failed chapter and its original continuation contract. */
+  async retryGeneration(userId: number, jobId: string): Promise<unknown> {
+    const job = await this.prisma.novelGenerationJob.findFirst({ where: { userId, jobId } });
+    if (!job || !job.chapterId) throw new NotFoundException('任务不存在');
+    if (!['failed', 'insufficient_balance'].includes(job.status)) throw new ConflictException('只能重试已结束的失败任务');
+    if (job.revisionId) throw new ConflictException('请在顺序重写面板继续，以保留预算和章节进度');
+    if ((job.failure as { recoverable?: boolean } | null)?.recoverable === false) throw new ConflictException(job.failureMessage ?? '请先修正资料');
+    const stored = job.execution as unknown as StoredExecution | null;
+    if (!stored?.input) throw new ConflictException('历史任务缺少重试契约，请在章节中明确选择续写或重写');
+    return this.submitChapterGeneration(userId, job.projectId, job.chapterId, {
+      continuationMode: stored.input.continuationMode,
+      targetWordCount: stored.input.targetWordCount,
+      expectedChapterVersion: stored.input.chapterVersion,
+    });
   }
 
   /** 任务详情（归属校验）。 */
@@ -683,6 +821,7 @@ export class JobsService implements OnModuleInit {
     continuationMode?: ContinuationMode;
     continuationDraft: string;
     targetWordCount?: TargetWordRange;
+    timeoutMs?: number;
   }): Promise<void> {
     try {
       await this.billing.updateJobProgress({
@@ -708,20 +847,7 @@ export class JobsService implements OnModuleInit {
     }
   }
 
-  private async runHttpGeneration(input: {
-    userId: number;
-    projectId: number;
-    chapterId: number;
-    jobId: string;
-    maxCharge: bigint;
-    chapterNumber: number;
-    chapterVersion: number;
-    seedVersion: number;
-    runtimeWorkspaceInput?: Record<string, unknown>;
-    continuationMode?: ContinuationMode;
-    continuationDraft: string;
-    targetWordCount?: TargetWordRange;
-  }): Promise<void> {
+  private async runHttpGeneration(input: HttpGenerationInput): Promise<void> {
     try {
       const token = await signTaskToken({
         userId: input.userId,
@@ -730,7 +856,18 @@ export class JobsService implements OnModuleInit {
         maxCharge: input.maxCharge,
       });
       const runtimeWorkspaceInput = input.runtimeWorkspaceInput ?? await this.buildRuntimeWorkspaceInput(input);
-      const invoked = await this.runtime.invoke(token, 'novel_generate_chapter', {
+      const materialSnapshot: GenerationMaterialSnapshot = {
+        request: {
+          userId: input.userId,
+          projectId: input.projectId,
+          chapterId: input.chapterId,
+          chapterNumber: input.chapterNumber,
+          continuationMode: input.continuationMode,
+          targetWordCount: input.targetWordCount,
+        },
+        fingerprint: fingerprintGenerationMaterials(runtimeWorkspaceInput),
+      };
+      const invokeInput = {
         chapterNumber: input.chapterNumber,
         chapterId: String(input.chapterId),
         workspaceId: `p${input.projectId}`,
@@ -746,7 +883,12 @@ export class JobsService implements OnModuleInit {
             }
           : {}),
         ...(input.targetWordCount ? { targetWordCount: input.targetWordCount } : {}),
-      });
+      };
+      const invoked = input.durable
+        ? await this.runtime.invoke(token, 'novel_generate_chapter', invokeInput, input.timeoutMs, true, () => signTaskToken(input))
+        : input.timeoutMs === undefined
+          ? await this.runtime.invoke(token, 'novel_generate_chapter', invokeInput)
+          : await this.runtime.invoke(token, 'novel_generate_chapter', invokeInput, input.timeoutMs);
       const result = invoked.result;
       const modelCallCount = invoked.metering?.modelCallCount;
       const runtimeInputTokens = invoked.metering?.inputTokens;
@@ -794,6 +936,8 @@ export class JobsService implements OnModuleInit {
           seedVersion: input.seedVersion,
           continuationMode: input.continuationMode,
           continuationDraft: input.continuationDraft,
+          materialSnapshot,
+          revisionId: input.revisionId,
         },
         text,
         (result as { runtimeState?: unknown }).runtimeState,
@@ -910,29 +1054,25 @@ export class JobsService implements OnModuleInit {
    * workspace input. Missing author genre/style/world/constitution must
    * block; the runtime never receives invented defaults.
    */
-  private async buildRuntimeWorkspaceInput(input: {
-    userId: number;
-    projectId: number;
-    chapterId: number;
-    chapterNumber: number;
-    continuationMode?: ContinuationMode;
-    targetWordCount?: TargetWordRange;
-  }): Promise<Record<string, unknown>> {
+  private async buildRuntimeWorkspaceInput(
+    input: RuntimeWorkspaceRequest,
+    database: GenerationContextDb = this.prisma,
+  ): Promise<Record<string, unknown>> {
     const [project, characters, documents, previousChapter, currentChapter] = await Promise.all([
-      this.prisma.novelProject.findFirst({
+      database.novelProject.findFirst({
         where: { id: input.projectId, userId: input.userId, deletedAt: null },
         select: { genre: true, subGenres: true, worldKeyTerms: true },
       }),
-      this.prisma.novelCharacter.findMany({
+      database.novelCharacter.findMany({
         where: { projectId: input.projectId, userId: input.userId, deletedAt: null },
         orderBy: { sortOrder: 'asc' },
       }),
-      this.prisma.novelDocument.findMany({
+      database.novelDocument.findMany({
         where: { projectId: input.projectId, userId: input.userId, deletedAt: null },
         orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
       }),
       input.chapterNumber > 1
-        ? this.prisma.novelChapter.findFirst({
+        ? database.novelChapter.findFirst({
             where: {
               projectId: input.projectId,
               userId: input.userId,
@@ -942,7 +1082,7 @@ export class JobsService implements OnModuleInit {
             select: { content: true, chapterNumber: true },
           })
         : Promise.resolve(null),
-      this.prisma.novelChapter.findFirst({
+      database.novelChapter.findFirst({
         where: {
           id: input.chapterId,
           projectId: input.projectId,
@@ -953,10 +1093,10 @@ export class JobsService implements OnModuleInit {
       }),
     ]);
 
-    // The runtime must receive a bounded catalog of every accepted chapter.
+    // Only chapters before the target are accepted history for this run.
     // Keep this optional for lightweight unit-test doubles; Prisma always has
     // findMany in the live API.
-    const chapterDelegate = this.prisma.novelChapter as unknown as {
+    const chapterDelegate = database.novelChapter as unknown as {
       findMany?: (args: unknown) => Promise<unknown>;
     };
     const chapterCatalog = typeof chapterDelegate.findMany === 'function'
@@ -965,6 +1105,7 @@ export class JobsService implements OnModuleInit {
             projectId: input.projectId,
             userId: input.userId,
             deletedAt: null,
+            chapterNumber: { lt: input.chapterNumber },
           },
           include: { seed: true },
           orderBy: { chapterNumber: 'asc' },
@@ -981,6 +1122,9 @@ export class JobsService implements OnModuleInit {
           } | null;
         }>
       : [];
+    // Enforce the boundary in memory as well as SQL, before either renderer
+    // or the shared context compiler can expose old target/future text.
+    const historicalChapters = chapterCatalog.filter((chapter) => chapter.chapterNumber < input.chapterNumber);
 
     if (input.chapterNumber > 1 && !previousChapter) {
       throw new ContextCompileError(makeFailure({
@@ -1001,6 +1145,21 @@ export class JobsService implements OnModuleInit {
     }
 
     const byType = new Map(documents.map((document) => [document.documentType, document]));
+    const stateDocument = byType.get('narrative_state');
+    const narrativeState = await new GenerationHistoryResolver().resolve({
+      chapterNumber: input.chapterNumber,
+      mode: input.continuationMode ?? (currentChapter?.content?.trim() ? 'append' : 'replace'),
+      workspaceId: `p${input.projectId}`,
+      state: stateDocument,
+      previousChapter: previousChapter ?? undefined,
+      historicalChapters,
+      loadVersions: async (beforeVersion) => stateDocument
+        ? database.novelDocumentVersion.findMany({
+            where: { documentId: stateDocument.id, versionNumber: { lt: beforeVersion } },
+            select: { content: true, versionNumber: true },
+            orderBy: { versionNumber: 'desc' }, take: 50,
+          }) : [],
+    });
 
     const characterContent = characters
       .map((character) => {
@@ -1023,7 +1182,7 @@ export class JobsService implements OnModuleInit {
       })
       .join('\n\n');
 
-    const seed = await this.prisma.novelChapterSeed.findUnique({
+    const seed = await database.novelChapterSeed.findUnique({
       where: { chapterId: input.chapterId },
       select: {
         intent: true,
@@ -1040,9 +1199,9 @@ export class JobsService implements OnModuleInit {
       storyOutline: byType.get('story_outline'),
       chapterSeed: { ...seed, chapterNumber: input.chapterNumber },
       characters,
-      narrativeState: byType.get('narrative_state'),
+      narrativeState,
       previousChapter: previousChapter ?? undefined,
-      chapterCatalog: chapterCatalog.map((row) => ({
+      chapterCatalog: historicalChapters.map((row) => ({
         chapterNumber: row.chapterNumber,
         title: row.title,
         status: row.status,
@@ -1096,7 +1255,7 @@ export class JobsService implements OnModuleInit {
       workspaceDocuments.push({ type: 'worldbuilding', content: worldbuilding });
     }
     if (compiled.usableStoryOutline) {
-      const catalog = renderChapterCatalog(chapterCatalog, input.chapterNumber);
+      const catalog = renderChapterCatalog(historicalChapters, input.chapterNumber);
       workspaceDocuments.push({
         type: 'story_outline',
         content: catalog
@@ -1160,7 +1319,16 @@ export class JobsService implements OnModuleInit {
         ? currentChapter?.content ?? ''
         : undefined,
       ...(input.targetWordCount ? { targetWordCount: input.targetWordCount } : {}),
-      contextManifest: compiled.manifest,
+      contextManifest: {
+        ...compiled.manifest,
+        // A restored past state must not hide concurrent edits to today's
+        // state. Keep the source identity in the commit fingerprint, while
+        // token observations remain excluded from equality checks.
+        materialSourceHash: createHash('sha256').update(JSON.stringify({
+          stateId: stateDocument?.id, stateVersion: stateDocument?.currentVersion,
+          stateContent: stateDocument?.content,
+        })).digest('hex'),
+      },
     };
     assertNoFullPreviousChapter(runtimeInput, previousChapter?.content);
     return runtimeInput;
@@ -1176,6 +1344,8 @@ export class JobsService implements OnModuleInit {
       seedVersion: number;
       continuationMode?: ContinuationMode;
       continuationDraft?: string;
+      materialSnapshot?: GenerationMaterialSnapshot;
+      revisionId?: string;
     },
     text: string,
     runtimeState?: unknown,
@@ -1185,6 +1355,33 @@ export class JobsService implements OnModuleInit {
       ? mergeChapterContinuation(input.continuationDraft ?? '', text)
       : text;
     await this.prisma.$transaction(async (tx) => {
+      if (input.revisionId) await assertRevisionConsent(tx as unknown as Prisma.TransactionClient, input.revisionId, input.userId, input.projectId);
+      if (input.materialSnapshot) {
+        let currentFingerprint: string | undefined;
+        try {
+          currentFingerprint = fingerprintGenerationMaterials(
+            await this.buildRuntimeWorkspaceInput(input.materialSnapshot.request, tx),
+          );
+        } catch (error: unknown) {
+          // Removing required author materials also invalidates the in-flight
+          // result. Database/transport errors retain their own failure cause.
+          if (!(error instanceof ContextCompileError) &&
+            !(error instanceof Error && /^runtime workspace (context is incomplete|chapter seed is missing)$/.test(error.message))) {
+            throw error;
+          }
+        }
+        if (currentFingerprint !== input.materialSnapshot.fingerprint) {
+          throw new JobFailureError(makeFailure({
+            stage: 'runtime.commit',
+            gate: 'material_snapshot',
+            code: FAILURE_CODES.generationMaterialsChanged,
+            severity: 'preflight',
+            reason: '生成期间创作资料已修改，本次结果未覆盖正文。请确认最新资料和重写范围后重新生成。',
+            recoverable: false,
+            userActionRequired: ['确认最新创作资料及受影响章节后重新生成'],
+          }));
+        }
+      }
       const write = await tx.novelChapter.updateMany({
         where: {
           id: input.chapterId,
@@ -1327,7 +1524,7 @@ export class JobsService implements OnModuleInit {
           },
         });
       }
-    });
+    }, { isolationLevel: 'Serializable' });
   }
 }
 

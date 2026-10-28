@@ -1,7 +1,7 @@
 /**
  * 账本恒等式（双余额账户口径，精确到分）：
- *   users.balance      == Σ充值(paid 支付订单) − Σcharge_from_real
- *   users.bonusBalance == Σ调账 − Σcharge_from_bonus
+ *   users.balance      == Σ充值(paid 支付订单) − Σcharge_from_real + Σ退款.from_real
+ *   users.bonusBalance == Σ调账 − Σcharge_from_bonus + Σ退款.from_bonus
  *   available          == balance + bonusBalance − Σ在途预占(amount − settled_amount)
  * 预占不扣余额，只冻结可用额度；结算逐调用按「先充值后赠送」归因扣款。
  * 说明：SQL 直改余额（如测试期直充）不在任何流水表留痕，账面自然不平，
@@ -16,6 +16,8 @@ export interface LedgerIdentity {
   settledFen: bigint;
   settledFromRealFen: bigint;
   settledFromBonusFen: bigint;
+  refundedFromRealFen: bigint;
+  refundedFromBonusFen: bigint;
   reservedFen: bigint;
   balanceFen: bigint;
   bonusBalanceFen: bigint;
@@ -29,6 +31,9 @@ export interface LedgerIdentity {
 }
 
 type LedgerDb = {
+  novelGenerationRefund: {
+    aggregate: (args: { where: { userId: number }; _sum: { fromReal: true; fromBonus: true } }) => Promise<{ _sum: { fromReal: bigint | null; fromBonus: bigint | null } }>;
+  };
   paymentOrder: {
     aggregate: (args: {
       where: { userId: number; status: string };
@@ -72,7 +77,7 @@ export async function computeLedgerIdentity(
   db: LedgerDb,
   userId: number,
 ): Promise<LedgerIdentity> {
-  const [paid, adjustments, settled, holds, user] = await Promise.all([
+  const [paid, adjustments, settled, holds, user, refunds] = await Promise.all([
     db.paymentOrder.aggregate({
       where: { userId, status: 'paid' },
       _sum: { amount: true },
@@ -93,6 +98,7 @@ export async function computeLedgerIdentity(
       where: { id: userId },
       select: { balance: true, bonusBalance: true },
     }),
+    db.novelGenerationRefund.aggregate({ where: { userId }, _sum: { fromReal: true, fromBonus: true } }),
   ]);
 
   const rechargeFen = paid._sum.amount ?? 0n;
@@ -104,8 +110,10 @@ export async function computeLedgerIdentity(
     (sum, hold) => sum + (hold.amount - hold.settledAmount),
     0n,
   );
-  const expectedBalanceFen = rechargeFen - settledFromRealFen;
-  const expectedBonusBalanceFen = adjustmentFen - settledFromBonusFen;
+  const refundedFromRealFen = refunds._sum.fromReal ?? 0n;
+  const refundedFromBonusFen = refunds._sum.fromBonus ?? 0n;
+  const expectedBalanceFen = rechargeFen - settledFromRealFen + refundedFromRealFen;
+  const expectedBonusBalanceFen = adjustmentFen - settledFromBonusFen + refundedFromBonusFen;
   const totalFen = user.balance + user.bonusBalance;
   const expectedTotalFen = expectedBalanceFen + expectedBonusBalanceFen;
   const availableFen = totalFen - reservedFen;
@@ -118,6 +126,8 @@ export async function computeLedgerIdentity(
     settledFen,
     settledFromRealFen,
     settledFromBonusFen,
+    refundedFromRealFen,
+    refundedFromBonusFen,
     reservedFen,
     balanceFen: user.balance,
     bonusBalanceFen: user.bonusBalance,

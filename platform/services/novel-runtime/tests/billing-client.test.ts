@@ -396,4 +396,11 @@ describe("platform 计费客户端", () => {
       },
     );
   });
+
+  test('transport admission rejection is terminal and never retries as a provider outage', async () => {
+    mockClient.intercept({method:'POST',path:'/internal/billing/transports/reserve'}).reply(409,{message:'budget exhausted'}).times(1);
+    const client=createBillingClient(config,{maxRetries:2,timeoutMs:2000});
+    await assert.rejects(()=>client.reserveTransport!({jobId:'job-1',callId:'denied',route:'v2_amplified_gemini31',model:'fixture',requestHash:'a'.repeat(64),inputTokenLimit:10,outputTokenLimit:10}),
+      (err: unknown)=>err instanceof BillingClientError&&err.code==='BUDGET_EXHAUSTED');
+  });
 });

@@ -1,19 +1,24 @@
+/** Regression coverage for long-running runtime HTTP budgets and safe retries. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { request } from 'undici';
 import { JobFailureError } from './job-failure';
 import { RuntimeClient } from './runtime.client';
+
+vi.mock('undici', () => ({ request: vi.fn() }));
 
 describe('RuntimeClient request boundary', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.resetAllMocks();
   });
 
   it('aborts a runtime request that exceeds the configured timeout', async () => {
-    const fetchMock = vi.fn((_url: string, init: RequestInit) =>
-      new Promise<Response>((_resolve, reject) => {
+    const fetchMock = vi.fn((_url: string, init: { signal?: AbortSignal }) =>
+      new Promise<never>((_resolve, reject) => {
         init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
       }),
     );
-    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(request).mockImplementation(fetchMock as never);
     const client = new RuntimeClient();
     (client as never as { requestTimeoutMs: number }).requestTimeoutMs = 10;
 
@@ -28,10 +33,7 @@ describe('RuntimeClient request boundary', () => {
         code: 'ECONNREFUSED',
       }),
     });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockRejectedValue(fetchFailed),
-    );
+    vi.mocked(request).mockRejectedValue(fetchFailed);
     const client = new RuntimeClient();
     await expect(client.invoke('task-token', 'novel_generate_chapter', {})).rejects.toThrow(
       /无法连接章节生成运行时/,
@@ -47,14 +49,16 @@ describe('RuntimeClient request boundary', () => {
     const fetchMock = vi.fn()
       .mockRejectedValueOnce(fetchFailed)
       .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          status: 'ok',
-          result: { status: 'ok', text: 'generated' },
-          metering: { modelCallCount: 1 },
-        }),
+        statusCode: 200,
+        body: {
+          json: async () => ({
+            status: 'ok',
+            result: { status: 'ok', text: 'generated' },
+            metering: { modelCallCount: 1 },
+          }),
+        },
       });
-    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(request).mockImplementation(fetchMock as never);
     const client = new RuntimeClient();
     (client as never as { retryDelayMs: number }).retryDelayMs = 0;
 
@@ -65,11 +69,9 @@ describe('RuntimeClient request boundary', () => {
   });
 
   it('keeps a 422 failureEnvelope instead of collapsing seed_readiness into generation_failed', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 422,
+    vi.mocked(request).mockResolvedValue({
+      statusCode: 422,
+      body: {
         json: async () => ({
           code: 'CHAPTER_NOT_DELIVERABLE',
           message: '【生成前预检】✗ 阻断（耗时 15ms）',
@@ -83,8 +85,8 @@ describe('RuntimeClient request boundary', () => {
             fixInstructions: ['补充前章承接'],
           },
         }),
-      }),
-    );
+      },
+    } as never);
     const client = new RuntimeClient();
     await expect(client.invoke('task-token', 'novel_generate_chapter', {})).rejects.toBeInstanceOf(
       JobFailureError,
@@ -101,5 +103,38 @@ describe('RuntimeClient request boundary', () => {
       expect(envelope.reason).toContain('seed_readiness');
       expect(envelope.fixInstructions).toEqual(['补充前章承接']);
     }
+  });
+
+  it('keeps long generation requests open for the configured header and body budget', async () => {
+    vi.mocked(request).mockResolvedValue({
+      statusCode: 200,
+      body: { json: async () => ({ status: 'ok', result: {} }) },
+    } as never);
+    const client = new RuntimeClient();
+    (client as never as { requestTimeoutMs: number }).requestTimeoutMs = 900_000;
+    await client.invoke('task-token', 'novel_generate_chapter', { chapterId: '1' });
+    expect(request).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headersTimeout: 900_000,
+      bodyTimeout: 900_000,
+      headers: expect.objectContaining({ 'x-novel-task-token': 'task-token' }),
+    }));
+  });
+
+  it('retries a direct connection refusal from the HTTP request client', async () => {
+    vi.mocked(request)
+      .mockRejectedValueOnce(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))
+      .mockResolvedValueOnce({
+        statusCode: 200, body: { json: async () => ({ status: 'ok', result: {} }) },
+      } as never);
+    const client = new RuntimeClient();
+    (client as never as { retryDelayMs: number }).retryDelayMs = 0;
+    await expect(client.invoke('task-token', 'novel_generate_chapter', {})).resolves.toMatchObject({ status: 'ok' });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not resubmit when a connection drops after dispatch', async () => {
+    vi.mocked(request).mockRejectedValue(Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }));
+    await expect(new RuntimeClient().invoke('task-token', 'novel_generate_chapter', {})).rejects.toThrow();
+    expect(request).toHaveBeenCalledOnce();
   });
 });

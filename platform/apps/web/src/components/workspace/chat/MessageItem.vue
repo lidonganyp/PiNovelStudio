@@ -97,7 +97,7 @@ async function onContentClick(event: MouseEvent): Promise<void> {
       <MessageActions
         v-if="!message.streaming && message.content"
         :can-delete="typeof message.id === 'number'"
-        :can-retry="(message.status === 'failed' || message.status === 'cancelled') && !canContinue"
+        :can-retry="(message.status === 'failed' || message.status === 'cancelled') && message.failure?.recoverable !== false && !canContinue"
         :can-resend="message.role === 'user'"
         @copy="emit('copy')"
         @retry="emit('retry')"

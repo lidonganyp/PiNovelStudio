@@ -87,6 +87,11 @@ export function useAssistantChat(options: AssistantChatOptions) {
         // 后端将落库结果持久化在 metadata.artifacts：刷新页面后大纲/种子/任务卡片据此恢复
         artifacts: message.metadata?.artifacts,
       }));
+      const latestProposals = new Map<string, StewardView>();
+      for (const message of messages.value) {
+        if (message.steward?.proposalId) latestProposals.set(message.steward.proposalId, message.steward);
+      }
+      for (const steward of latestProposals.values()) syncSteward(steward);
     } catch {
       historyError.value = '聊天历史加载失败，请刷新后重试。';
     } finally {
@@ -103,6 +108,14 @@ export function useAssistantChat(options: AssistantChatOptions) {
       if (element) element.scrollTop = element.scrollHeight;
       atBottom.value = true;
     });
+  }
+
+  /** A proposal has one current state even when several chat messages reference it. */
+  function syncSteward(steward: StewardView): void {
+    if (!steward.proposalId) return;
+    for (const message of messages.value) {
+      if (message.steward?.proposalId === steward.proposalId) message.steward = steward;
+    }
   }
 
   function handleEvent(assistantId: string, event: AssistantStreamEvent, listElement: HTMLElement | null): void {
@@ -134,6 +147,7 @@ export function useAssistantChat(options: AssistantChatOptions) {
       target.createdAt = event.message.createdAt;
       target.steward = event.steward;
       target.artifacts = event.artifacts;
+      if (event.steward) syncSteward(event.steward);
       target.contextManifest = event.contextManifest;
       if (event.generationJobId) options.trackJob?.(event.generationJobId);
       // 仅在资料真正落库（artifacts 非空）或提交生成任务时刷新工作台；
@@ -222,7 +236,7 @@ export function useAssistantChat(options: AssistantChatOptions) {
   }
 
   async function sendSteward(message: ChatMessage, action: 'apply_and_generate' | 'save_draft' | 'cancel', listElement: HTMLElement | null = null): Promise<void> {
-    if (!message.steward?.proposalId || sending.value) return;
+    if (!pendingSteward(message) || !message.steward?.proposalId || sending.value) return;
     const request = buildStewardRequest(message.steward, action);
     lastPayload.value = request;
     await send(true, request, listElement);

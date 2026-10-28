@@ -14,6 +14,7 @@ import {
 import { useAssistantChat } from '../src/composables/useAssistantChat';
 import { renderMarkdown } from '../src/components/workspace/chat/markdown';
 import { http } from '../src/api/http';
+import type { StewardView } from '../src/api/assistant';
 
 // Node 测试环境没有可用的 localStorage（sendMessageStream 会读取 token）。
 const storage = new Map<string, string>();
@@ -48,6 +49,42 @@ function sseResponse(chunks: string[], init?: { status?: number; body?: string }
 
 const DONE_EVENT =
   'data: {"type":"done","done":true,"message":{"id":42,"role":"assistant","content":"最终回复","createdAt":"2026-01-01T00:00:00.000Z"},"contextManifest":{"totalTokenBudget":16000,"totalTokensUsed":1200,"blocks":[]}}\n\n';
+
+test('方案成功后同步旧卡片，刷新历史也不能再次操作已提交方案', async () => {
+  const savedGet = http.get;
+  const savedFetch = globalThis.fetch;
+  const pending: StewardView = {
+    status: 'confirmation_required', reply: '确认方案', chapterNumber: 21,
+    proposalId: 'proposal-21', sourceVersion: 'v1', proposalStatus: 'pending',
+    proposals: [], missing: ['章节种子'],
+  };
+  const applied: StewardView = { ...pending, status: 'ready', proposalStatus: 'applied', generationJobId: 'job-21', missing: [] };
+  const older = { id: 1, role: 'assistant', content: '确认方案', metadata: { steward: pending } };
+  const newer = { id: 2, role: 'assistant', content: '已提交', metadata: { steward: applied } };
+  const chat = useAssistantChat({ projectId: 252 });
+  http.get = (async () => ({ data: [older] })) as typeof http.get;
+  let requestCount = 0;
+  globalThis.fetch = (async () => {
+    requestCount += 1;
+    return sseResponse([`data: ${JSON.stringify({ type: 'done', done: true, message: newer, steward: applied })}\n\n`]);
+  }) as typeof fetch;
+  try {
+    await chat.load();
+    expect(chat.pendingSteward(chat.messages.value[0]!)).toBe(true);
+    await chat.sendSteward(chat.messages.value[0]!, 'apply_and_generate');
+    expect(chat.messages.value[0]?.steward).toEqual(applied);
+    expect(chat.pendingSteward(chat.messages.value[0]!)).toBe(false);
+    await chat.sendSteward(chat.messages.value[0]!, 'cancel');
+    expect(requestCount).toBe(1);
+    http.get = (async () => ({ data: [older, newer] })) as typeof http.get;
+    await chat.load();
+    expect(chat.messages.value[0]?.steward).toEqual(applied);
+    expect(chat.pendingSteward(chat.messages.value[0]!)).toBe(false);
+  } finally {
+    http.get = savedGet;
+    await restoreFetch(savedFetch);
+  }
+});
 
 async function restoreFetch(saved: typeof fetch): Promise<void> {
   globalThis.fetch = saved;

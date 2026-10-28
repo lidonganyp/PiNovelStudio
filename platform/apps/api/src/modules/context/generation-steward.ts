@@ -61,6 +61,8 @@ interface StoredProposal {
   targetWordCount?: TargetWordRange;
   confirmedAt?: string;
   confirmedFields?: string[];
+  /** Revision after this proposal's own material writes, used for submission-only recovery. */
+  confirmedSourceVersion?: string;
   generationJobId?: string;
 }
 
@@ -166,6 +168,24 @@ export async function confirmGenerationSteward(input: {
   const proposal = await loadProposal(input.prisma, input.userId, input.projectId, input.proposalId);
   const continuationMode = input.continuationMode ?? proposal.continuationMode;
   const targetWordCount = input.targetWordCount ?? proposal.targetWordCount;
+  if (proposal.status === 'applied' && proposal.generationJobId) {
+    return {
+      status: 'ready',
+      reply: `该方案已确认过，沿用已提交的第${proposal.chapterNumber}章生成任务。`,
+      chapterNumber: proposal.chapterNumber,
+      proposalId: proposal.id,
+      sourceVersion: proposal.sourceVersion,
+      proposals: proposal.proposals,
+      missing: [],
+      generationJobId: proposal.generationJobId,
+      publicEntry: 'novel_generate_chapter',
+      proposalStatus: 'applied',
+      confirmedAt: proposal.confirmedAt,
+      confirmedFields: proposal.confirmedFields,
+      continuationMode,
+      targetWordCount,
+    };
+  }
   if (input.action === 'cancel') {
     await updateProposal(input.prisma, input.userId, input.projectId, {
       ...proposal,
@@ -202,27 +222,22 @@ export async function confirmGenerationSteward(input: {
       targetWordCount,
     };
   }
-  if (proposal.status === 'applied' && proposal.generationJobId) {
-    return {
-      status: 'ready',
-      reply: `该方案已确认过，沿用已提交的第${proposal.chapterNumber}章生成任务。`,
-      chapterNumber: proposal.chapterNumber,
-      proposalId: proposal.id,
-      sourceVersion: proposal.sourceVersion,
-      proposals: proposal.proposals,
-      missing: [],
-      generationJobId: proposal.generationJobId,
-      publicEntry: 'novel_generate_chapter',
-      proposalStatus: 'applied',
-      confirmedAt: proposal.confirmedAt,
-      confirmedFields: proposal.confirmedFields,
-      continuationMode,
-      targetWordCount,
-    };
-  }
   const snapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, proposal.chapterNumber);
   const versionMatches = snapshot.sourceVersion === input.sourceVersion
     && snapshot.sourceVersion === proposal.sourceVersion;
+  const resumesConfirmedMaterials = snapshot.sourceVersion === proposal.confirmedSourceVersion
+    && input.sourceVersion === proposal.sourceVersion;
+  if (!versionMatches && !resumesConfirmedMaterials) {
+    throw new FailureHttpException(makeFailure({
+      stage: 'assistant.artifact',
+      gate: 'proposal_version',
+      code: FAILURE_CODES.artifactSaveFailed,
+      severity: 'preflight',
+      reason: '项目资料在确认期间已变化，请重新发起章节生成，查看最新方案后再确认。',
+      recoverable: false,
+      userActionRequired: ['重新发起目标章节生成，按最新大纲和角色资料确认方案'],
+    }));
+  }
   const confirmed = new Set(
     input.confirmedFields
       ?? proposal.proposals.filter((row) => row.value.trim()).map((row) => row.field),
@@ -241,16 +256,6 @@ export async function confirmGenerationSteward(input: {
     after = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, proposal.chapterNumber);
   }
   const readiness = classifyMaterialReadiness(after, proposal.chapterNumber);
-  if (!versionMatches && readiness.status !== 'ready' && readiness.status !== 'auto_fill') {
-    throw new FailureHttpException(makeFailure({
-      stage: 'assistant.artifact',
-      gate: 'proposal_version',
-      code: FAILURE_CODES.artifactSaveFailed,
-      severity: 'preflight',
-      reason: '项目资料在确认期间已变化，请重新查看补齐方案后再确认。',
-      recoverable: false,
-    }));
-  }
   if (readiness.status === 'hard_blocked') {
     throw new FailureHttpException(makeFailure({
       stage: 'runtime.preflight',
@@ -320,6 +325,15 @@ export async function confirmGenerationSteward(input: {
     };
   }
   let generationJobId: string | undefined;
+  // Save the exact revision produced by our own writes before submission can
+  // fail. Readiness alone cannot distinguish a safe retry from new author edits.
+  const confirmedSnapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, proposal.chapterNumber);
+  const confirmedSourceVersion = confirmedSnapshot.sourceVersion;
+  await updateProposal(input.prisma, input.userId, input.projectId, {
+    ...proposal,
+    confirmedSourceVersion,
+    confirmedFields: [...confirmed],
+  });
   try {
     const job = await input.jobs.submitChapterGeneration(
       input.userId,
@@ -359,6 +373,7 @@ export async function confirmGenerationSteward(input: {
     status: 'applied',
     confirmedAt,
     confirmedFields: [...confirmed],
+    confirmedSourceVersion,
     generationJobId,
   });
   return {
@@ -510,13 +525,24 @@ export async function reviseGenerationSteward(input: {
   });
   const updated: StoredProposal = {
     ...proposal,
+    sourceVersion: proposal.confirmedSourceVersion ?? proposal.sourceVersion,
     status: 'pending',
     proposals,
     missing,
     confirmedAt: undefined,
     confirmedFields: undefined,
+    confirmedSourceVersion: undefined,
     generationJobId: undefined,
   };
+  if (proposal.confirmedSourceVersion) {
+    const snapshot = await loadOwnedProjectContext(input.prisma, input.userId, input.projectId, proposal.chapterNumber);
+    if (snapshot.sourceVersion !== proposal.confirmedSourceVersion) {
+      throw new FailureHttpException(makeFailure({
+        stage: 'assistant.artifact', gate: 'proposal_version', code: FAILURE_CODES.artifactSaveFailed,
+        severity: 'preflight', reason: '项目资料已经变化，请重新发起章节生成后修改最新方案。', recoverable: false,
+      }));
+    }
+  }
   await updateProposal(input.prisma, input.userId, input.projectId, updated);
   return {
     status: 'confirmation_required',
@@ -525,11 +551,11 @@ export async function reviseGenerationSteward(input: {
       missing,
       proposals,
       chapterNumber: proposal.chapterNumber,
-      sourceVersion: proposal.sourceVersion,
+      sourceVersion: updated.sourceVersion,
     }),
     chapterNumber: proposal.chapterNumber,
     proposalId: proposal.id,
-    sourceVersion: proposal.sourceVersion,
+    sourceVersion: updated.sourceVersion,
     proposals,
     missing,
     proposalStatus: 'pending',

@@ -16,6 +16,7 @@ import { env } from '../src/config/env';
 import { encryptSecret } from '../src/common/crypto/aes-gcm';
 import { FIXTURE_CHAPTER_ONE, FIXTURE_STORY_OUTLINE } from '../src/modules/context/fixtures';
 import { JobsService } from '../src/modules/jobs/jobs.service';
+import { applyAssistantArtifacts } from '../src/modules/assistant/assistant-artifacts';
 
 const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const password = 'Password123';
@@ -294,6 +295,60 @@ describe('助手生成管家 e2e', () => {
     });
     expect(jobs).toHaveLength(1);
     expect(jobs[0]?.jobType).toBe('chapter_generation');
+  });
+
+  it.each(['characters', 'outline'] as const)('资料保存后提交失败，再修改 %s 必须重新确认最新资料', async (changedMaterial) => {
+    const project = await prisma.novelProject.create({
+      data: { userId: userIdA, title: 'revision-probe', description: 'Investigate the old city', genre: '悬疑' },
+    });
+    for (const [documentType, content] of [
+      ['worldbuilding', '# World\nOld city'],
+      ['creative_constitution', '# Constitution\nPreserve confirmed facts'],
+    ]) {
+      await prisma.novelDocument.create({ data: { userId: userIdA, projectId: project.id, documentType: documentType!, title: documentType!, content: content! } });
+    }
+    await prisma.novelCharacter.create({
+      data: { userId: userIdA, projectId: project.id, name: 'Lin Mo', identity: 'investigator', goals: 'solve the case' },
+    });
+    const url = `/api/projects/${project.id}/assistant/messages`;
+    const headers = { authorization: `Bearer ${tokenA}` };
+    const prepared = await app.inject({ method: 'POST', url, headers, payload: { content: '生成第一章' } });
+    expect(prepared.statusCode).toBe(201);
+    const steward = prepared.json().steward as { proposalId: string; sourceVersion: string };
+    expect(steward.proposalId).toBeTruthy();
+    const payload = { content: '采用并生成', stewardAction: 'apply_and_generate', proposalId: steward.proposalId, sourceVersion: steward.sourceVersion };
+    const estimate = vi.spyOn(app.get(JobsService) as unknown as { estimateMaxCharge(): Promise<bigint> }, 'estimateMaxCharge')
+      .mockRejectedValueOnce(new NotFoundException('未找到模型 v2_rawstage2_gemini31 的生效费率'));
+    try {
+      const failed = await app.inject({ method: 'POST', url, headers, payload });
+      expect(failed.statusCode).toBe(503);
+    } finally {
+      estimate.mockRestore();
+    }
+    const chapter = await prisma.novelChapter.findFirstOrThrow({ where: { projectId: project.id, chapterNumber: 1 } });
+    const seedBefore = await prisma.novelChapterSeed.findUniqueOrThrow({ where: { chapterId: chapter.id } });
+    await applyAssistantArtifacts({
+      prisma, jobs: app.get(JobsService), userId: userIdA, projectId: project.id,
+      action: 'plan_story_outline', userContent: '修改资料',
+      envelope: changedMaterial === 'characters'
+        ? { reply: '更新角色', characters: [{ name: 'Lin Mo', roleType: 'protagonist', description: 'reporter investigating the old city' }] }
+        : { reply: '更新大纲', storyOutline: '# 故事大纲\n## 第一卷\n1. **第一章：新的调查方向**\n   调查记者追查新的线索。' },
+    });
+    const stale = await app.inject({ method: 'POST', url, headers, payload });
+    expect(stale.statusCode).toBe(422);
+    expect(stale.json().failure).toMatchObject({ gate: 'proposal_version', recoverable: false });
+    expect(await prisma.novelGenerationJob.count({ where: { projectId: project.id } })).toBe(0);
+    const seedAfter = await prisma.novelChapterSeed.findUniqueOrThrow({ where: { chapterId: chapter.id } });
+    expect(seedAfter.version).toBe(seedBefore.version);
+    expect(seedAfter.intent).toBe(seedBefore.intent);
+    // A new request compiles current materials; it must not be stuck behind the old proposal.
+    const fresh = await app.inject({ method: 'POST', url, headers, payload: { content: '重新生成第一章' } });
+    expect(fresh.statusCode).toBe(201);
+    expect(fresh.json().generationJobId).toBeTruthy();
+    await vi.waitFor(async () => {
+      const job = await prisma.novelGenerationJob.findUniqueOrThrow({ where: { jobId: fresh.json().generationJobId } });
+      expect(job.status).toBe('succeeded');
+    });
   });
 
   it('跨项目读取隔离：用户 B 不能读取用户 A 的助手资料', async () => {

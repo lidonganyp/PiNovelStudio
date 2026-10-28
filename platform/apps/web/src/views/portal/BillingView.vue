@@ -158,7 +158,7 @@ onBeforeUnmount(() => {
           <template #default="{ row }">{{ row.tokensIn }} / {{ row.tokensOut }}</template>
         </el-table-column>
         <el-table-column label="金额" width="100" align="right">
-          <template #default="{ row }">¥{{ fenToYuan(row.actualCharge) }}</template>
+          <template #default="{ row }">¥{{ fenToYuan(row.actualCharge) }}<span v-if="row.refunded">（失败免单）</span></template>
         </el-table-column>
       </el-table>
       <el-pagination

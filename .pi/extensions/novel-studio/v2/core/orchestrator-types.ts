@@ -124,6 +124,8 @@ export interface ModelCallEntry {
 }
 
 export interface UnifiedOrchestratorInput {
+  /** Computed by the production entry from author inputs and frozen writer identity. */
+  verifiedDraftBinding?: string;
   workspaceId: string;
   chapterId: string;
   chapterNumber: number;

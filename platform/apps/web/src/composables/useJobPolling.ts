@@ -37,6 +37,7 @@ export function useJobPolling(): UseJobPollingReturn {
   const loading = ref(false);
   const error = shallowRef<string | null>(null);
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let epoch = 0;
 
   function clearTimer(): void {
     if (timer !== null) {
@@ -46,6 +47,7 @@ export function useJobPolling(): UseJobPollingReturn {
   }
 
   async function poll(): Promise<void> {
+    const currentEpoch = epoch;
     const jobId = job.value?.jobId;
     if (!jobId) return;
     try {
@@ -53,10 +55,12 @@ export function useJobPolling(): UseJobPollingReturn {
         getJob(jobId),
         getJobCalls(jobId).catch(() => [] as JobCall[]),
       ]);
+      if (currentEpoch !== epoch) return;
       job.value = nextJob;
       calls.value = nextCalls;
       error.value = null;
     } catch (err: unknown) {
+      if (currentEpoch !== epoch) return;
       error.value = err instanceof Error ? err.message : '轮询失败';
     }
     if (
@@ -72,6 +76,7 @@ export function useJobPolling(): UseJobPollingReturn {
   }
 
   function track(jobId: string): void {
+    const currentEpoch = ++epoch;
     clearTimer();
     job.value = null;
     calls.value = [];
@@ -93,7 +98,7 @@ export function useJobPolling(): UseJobPollingReturn {
       completedAt: null,
     };
     void poll().finally(() => {
-      loading.value = false;
+      if (currentEpoch === epoch) loading.value = false;
     });
   }
 
@@ -104,6 +109,7 @@ export function useJobPolling(): UseJobPollingReturn {
   }
 
   function reset(): void {
+    epoch++;
     clearTimer();
     job.value = null;
     calls.value = [];
@@ -111,7 +117,7 @@ export function useJobPolling(): UseJobPollingReturn {
     loading.value = false;
   }
 
-  onBeforeUnmount(clearTimer);
+  onBeforeUnmount(() => { epoch++; clearTimer(); });
 
   return { job, calls, loading, error, track, refresh, reset };
 }

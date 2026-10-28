@@ -22,6 +22,7 @@ import type { ClaudeMessage } from "./claude.js";
 import type { GLMMessage, GLMResponse } from "./glm.js";
 import type { GPTMessage } from "./gpt.js";
 import { fetchWithTimeout } from "./request-timeout.js";
+import { runWithTransportRoute } from './transport-scope.js';
 import { parseAnthropicResponse } from "./anthropic-stream.js";
 import { parseOpenAIStream } from "./openai-stream.js";
 import { callOpenAIResponses } from "./openai-responses.js";
@@ -290,6 +291,7 @@ function getErrorCode(error: unknown): string | undefined {
 export function classifyError(error: unknown): "permanent" | "transient" | "timeout" {
   const errorMessage = getErrorMessage(error);
   const errorCode = getErrorCode(error);
+  if (errorCode === 'BUDGET_EXHAUSTED' || errorCode === 'TRANSPORT_ADMISSION_DENIED') return 'permanent';
   const matchesPermanentPattern = PERMANENT_ERROR_PATTERNS.some((re) =>
     re.test(errorMessage)
   );
@@ -502,6 +504,11 @@ export class APIFallbackManager {
   }
 
   async callWithFallback(
+    agentName: string, messages: GLMMessage[], callOptions?: ChatCallOptions,
+  ): Promise<FallbackResult> {
+    return runWithTransportRoute(agentName, () => this.callWithFallbackInternal(agentName, messages, callOptions));
+  }
+  private async callWithFallbackInternal(
     agentName: string,
     messages: GLMMessage[],
     callOptions?: ChatCallOptions
@@ -713,6 +720,11 @@ export class APIFallbackManager {
   }
 
   async callClaudeWithFallback(
+    agentName: string, messages: ClaudeMessage[], options?: { temperature?: number; max_tokens?: number; system?: string },
+  ): Promise<ClaudeFallbackResult> {
+    return runWithTransportRoute(agentName, () => this.callClaudeWithFallbackInternal(agentName, messages, options));
+  }
+  private async callClaudeWithFallbackInternal(
     agentName: string,
     messages: ClaudeMessage[],
     options?: {
@@ -909,6 +921,11 @@ export class APIFallbackManager {
   }
 
   async callGPTWithFallback(
+    agentName: string, messages: GPTMessage[], options?: { temperature?: number; max_tokens?: number; responseFormat?: { type: 'json_object' | 'text' } },
+  ): Promise<GPTFallbackResult> {
+    return runWithTransportRoute(agentName, () => this.callGPTWithFallbackInternal(agentName, messages, options));
+  }
+  private async callGPTWithFallbackInternal(
     agentName: string,
     messages: GPTMessage[],
     options?: {
@@ -1330,7 +1347,7 @@ export class APIFallbackManager {
         timeoutMs: options?.timeoutMs,
       });
     }
-    if (streamResponse) request.stream = true;
+    if (streamResponse) { request.stream = true; request.stream_options = { include_usage: true }; }
     const response = await fetchWithTimeout(
       joinUrl(baseUrl, "chat/completions"),
       {
@@ -1362,9 +1379,7 @@ export class APIFallbackManager {
       choices?: Array<{ message?: GLMMessage & { reasoning_content?: string } }>;
     };
     const message = result.choices?.[0]?.message;
-    if (message && (!message.content || message.content.trim() === "") && message.reasoning_content) {
-      message.content = message.reasoning_content;
-    }
+    // reasoning_content is never a substitute for a missing assistant answer.
 
     return result as GLMResponse;
   }

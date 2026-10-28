@@ -7,10 +7,11 @@ import { JobsModule } from '../jobs/jobs.module';
 import { RatesModule } from '../rates/rates.module';
 import { HmacGuard } from './hmac.guard';
 import { InternalController } from './internal.controller';
+import { TransportBudgetController } from './transport-budget.controller';
 
 @Module({
   imports: [BillingModule, RatesModule, JobsModule],
-  controllers: [InternalController],
+  controllers: [InternalController, TransportBudgetController],
   providers: [HmacGuard],
 })
 export class InternalModule {}

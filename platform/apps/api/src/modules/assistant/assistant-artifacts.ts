@@ -466,6 +466,7 @@ async function upsertCharacters(
           roleType: character.roleType,
           identity: character.description,
           personality: character.description,
+          version: { increment: 1 },
         },
       });
     } else {
@@ -532,10 +533,10 @@ async function ensureChapterWithSeed(
       where: { id: chapter.seed.id },
       data: {
         intent: nextIntent,
-        mustInclude: seed.mustInclude || chapter.seed.mustInclude,
-        forbiddenFacts: seed.forbiddenFacts || chapter.seed.forbiddenFacts,
-        characterMotives: seed.characterMotives || chapter.seed.characterMotives,
-        promises: seed.promises || chapter.seed.promises,
+        mustInclude: seed.mustInclude,
+        forbiddenFacts: seed.forbiddenFacts,
+        characterMotives: seed.characterMotives,
+        promises: seed.promises,
         endingGoal: nextEnding,
         status: nextIntent && nextEnding ? 'ready' : 'draft',
         version: { increment: 1 },

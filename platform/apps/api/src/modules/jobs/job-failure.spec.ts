@@ -3,6 +3,40 @@ import { ContextCompileError, FAILURE_CODES, makeFailure } from '../context/fail
 import { jobFailureFromUnknown, readStoredFailure, runtimeInvokeFailure } from './job-failure';
 
 describe('job failure envelope', () => {
+  it.each([502, 503, 504])('explains exhausted model HTTP %s failures without losing the cause during redaction', (status) => {
+    const failure = runtimeInvokeFailure({
+      status: 'blocked',
+      traceArchivePath: '/archive/isolated-test',
+      failureEnvelope: {
+        stage: 'novelos_agentic_generation',
+        gate: 'agentic_generation',
+        reason: `NovelOS Agentic 未产出初稿候选: All providers failed for gemini31. API call failed (${status}): Service temporarily unavailable`,
+      },
+    }, 5).envelope;
+    expect(failure.code).toBe('generation_model_unavailable');
+    expect(failure.stage).toBe('novelos_agentic_generation');
+    expect(failure.gate).toBe('agentic_generation');
+    expect(failure.reason).toContain('模型服务暂时不可用');
+    expect(failure.reason).not.toMatch(/provider|gemini|补全资料/i);
+    expect(failure.severity).toBe('recoverable');
+    expect(failure.retryPlan).toBe('retry_later');
+    expect(failure.traceArchivePath).toBe('/archive/isolated-test');
+  });
+
+  it('keeps style transport failures distinct from story-preservation failures', () => {
+    const transport = runtimeInvokeFailure({
+      status: 'blocked',
+      failureEnvelope: { stage: 'style_optimization_no_candidate', gate: 'style_optimization', reason: '模型优化失败: API call failed (503): gemini unavailable' },
+    }, 2).envelope;
+    expect(transport.code).toBe('generation_model_unavailable');
+    expect(transport.stage).toBe('style_optimization_no_candidate');
+    const story = runtimeInvokeFailure({
+      status: 'blocked',
+      failureEnvelope: { stage: 'story_preservation_drift_retry_failed', gate: 'story_preservation', reason: '关键事件改变。正文包含 API call failed (503) 字样。' },
+    }, 2).envelope;
+    expect(story.code).toBe('generation_failed');
+  });
+
   it('keeps compile hash mismatch structured', () => {
     const error = new ContextCompileError(makeFailure({
       stage: 'runtime.preflight',
@@ -84,5 +118,14 @@ describe('job failure envelope', () => {
     }, 'ignored');
     expect(stored?.code).toBe('state_store_hash_mismatch');
     expect(stored?.retryPlan).toBeUndefined();
+  });
+
+  it('reports model timeout before redacting model names and preserves a terminal budget denial', () => {
+    const timeout = runtimeInvokeFailure({status:'blocked',failureEnvelope:{stage:'novelos_agentic_generation',gate:'agentic_generation',reason:'OpenAI-compatible:gemini-4-argon timed out after 300000ms',recoverable:true}},2);
+    expect(timeout.envelope).toMatchObject({code:'generation_model_timeout',recoverable:true});
+    expect(timeout.envelope.reason).toContain('模型服务');
+    expect(timeout.envelope.reason).not.toContain('操作失败');
+    const budget = runtimeInvokeFailure({status:'blocked',failureEnvelope:{code:'generation_budget_exhausted',stage:'runtime.budget',gate:'budget_exhausted',reason:'budget denied',recoverable:false}},0);
+    expect(budget.envelope).toMatchObject({code:'generation_budget_exhausted',recoverable:false});
   });
 });

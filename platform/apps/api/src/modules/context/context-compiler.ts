@@ -216,6 +216,11 @@ export function ensureChapterFinalTextCommit(
 }
 
 export function compileProjectContext(input: CompileProjectContextInput): CompiledProjectContext {
+  const targetChapterNumber = input.chapterSeed?.chapterNumber;
+  // A target chapter's previous draft and later chapters are not historical
+  // evidence. Author future plans remain available via storyOutline/seed.
+  const historicalCatalog = (input.chapterCatalog ?? [])
+    .filter((chapter) => targetChapterNumber === undefined || chapter.chapterNumber < targetChapterNumber);
   const profile = getContextBudgetProfile(input.contextProfile);
   const profileName = profile.name;
   const mismatch = findStateHashMismatch(input.narrativeState?.content, input.previousChapter);
@@ -262,7 +267,7 @@ export function compileProjectContext(input: CompileProjectContextInput): Compil
       : 'story_outline_missing',
   });
 
-  const chapterCatalogText = (input.chapterCatalog ?? [])
+  const chapterCatalogText = historicalCatalog
     .slice()
     .sort((left, right) => left.chapterNumber - right.chapterNumber)
     .map((chapter) => {
@@ -282,7 +287,7 @@ export function compileProjectContext(input: CompileProjectContextInput): Compil
   const chapterCatalogClip = includeBlock(blocks, profileName, {
     name: 'chapterCatalog',
     sourceType: 'novel_chapters.catalog',
-    authorConfirmed: Boolean(input.chapterCatalog?.length),
+    authorConfirmed: historicalCatalog.length > 0,
     text: chapterCatalogText,
     omittedReason: 'chapter_catalog_missing',
   });
@@ -415,14 +420,13 @@ export function compileProjectContext(input: CompileProjectContextInput): Compil
   }
 
   const evidenceChapters = input.chapterCatalog?.length
-    ? input.chapterCatalog.map((chapter) => ({
+    ? historicalCatalog.map((chapter) => ({
         chapterNumber: chapter.chapterNumber,
         content: chapter.content,
       }))
     : input.previousChapter
       ? [{ chapterNumber: input.previousChapter.chapterNumber, content: input.previousChapter.content }]
       : [];
-  const targetChapterNumber = input.chapterSeed?.chapterNumber;
   const defaultRecentChapterCount = profileName === '512k'
     ? 15
     : profileName === '256k'
