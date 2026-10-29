@@ -19,6 +19,10 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: platform-postgres
+    # CentOS 7 老内核（3.10）与新版 seccomp 默认策略不兼容，导致容器内
+    # PostgreSQL 初始化写入被 EPERM 拦截；对该容器放宽 seccomp 过滤。
+    security_opt:
+      - seccomp:unconfined
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-platform}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}

@@ -32,7 +32,11 @@ async function bootstrap(): Promise<void> {
       fastifyStatic as unknown as Parameters<typeof fastify.register>[0],
       { root: webDist, wildcard: false },
     );
-    fastify.setNotFoundHandler((request, reply) => {
+    // NestJS 11 在 init 阶段无条件注册自身的 notFoundHandler，而 Fastify
+    // 对同一前缀仅允许设置一次；此处若再调 setNotFoundHandler 会在启动时
+    // 抛出 "Not found handler already set"。改用最低优先级通配路由实现
+    // 相同的 SPA 回退语义：/api 与 /internal 仍返回 JSON 404，其余回 index.html。
+    fastify.get('/*', (request, reply) => {
       const url = request.raw.url ?? '';
       if (url.startsWith('/api') || url.startsWith('/internal')) {
         return reply.status(404).send({ statusCode: 404, message: 'Not Found' });

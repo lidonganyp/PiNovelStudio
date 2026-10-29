@@ -33,6 +33,10 @@ FROM node:20-alpine
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=deploy /out ./
+# pnpm deploy 产物不含 prisma generate 生成的 .prisma/client（@prisma/client
+# 运行时必需）；在镜像内基于锁定的生产依赖树现场生成，否则 bootstrap 与 api
+# 启动即报 Cannot find module '.prisma/client/default'。
+RUN npx --no-install prisma generate --schema prisma/schema.prisma
 COPY --from=builder /build/apps/web/dist ./web
 ENV WEB_DIST_DIR=/app/web
 # prisma CLI is part of the lockfile-resolved production dependency tree;
