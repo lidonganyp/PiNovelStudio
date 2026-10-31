@@ -59,13 +59,20 @@ function runWithBudget(retrievalBudget) {
   };
 
   const session = { sessionId: "test-session" };
+  // 预算替身：runtime 的墙钟判定（runStartedAt / 运行级截止）会读取 getConfig().maxLatencyMs，
+  // 触发耗尽时调用 exhaust()。这里给足真实接口，避免替身缺字段导致 prompt 被阻断。
   const budget = {
     isExhausted: () => false,
     getSnapshot: () => ({ turns: 0, toolCalls: executedCount }),
+    getConfig: () => ({ maxLatencyMs: 900000 }),
+    exhaust() {},
     recordTurn() {},
     recordToolCall() {},
     recordTokens() {},
     recordModelCall() {},
+    recordLatency() {},
+    recordToolError() {},
+    recordToolSuccess() {},
   };
   const trajectory = new Proxy({}, { get: () => () => {} });
 

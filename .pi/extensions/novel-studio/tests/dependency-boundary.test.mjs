@@ -243,7 +243,7 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     );
   });
 
-  it("dist/ JS 文件数 <= 354（含传输计量与验证初稿恢复，防通配 include 退化为全量编译）", () => {
+  it("dist/ JS 文件数 <= 362（含传输计量、验证初稿恢复、外挂知识库、Agent Harness、专家接入与契约 provenance，防通配 include 退化为全量编译）", () => {
     const distCount = countJsFiles(DIST_DIR);
     assert.ok(distCount > 0, "dist/ JS 文件数应 > 0（需先 npm run build）");
     // 2026-08-12：自主性控制面 + 恢复控制面 + 用户反馈证据管道新增生产模块；阈值曾上调到 290。
@@ -295,9 +295,22 @@ describe("Step 2c P1：产物级 eval-only 隔离断言（防 tsconfig 退化）
     // validator-run-meter），CEG-3.5 动态工具信任把 v2/core/trust/*（tool-result-consumer /
     // tool-result-trust / trust-audit / authority-matrix 等）接入生产闭包，干净闭包 334 → ~351。
     // 阈值上调到 351。守卫仍是绊线：真正「退化」信号是旧通配 include 的全量树（~460），远高于此。
+    // 2026-10-29 EXTERNAL-KB-1：外挂蒸馏知识库（实验通道，PINOVEL_EXTERNAL_KB=1 门控、
+    // 默认关闭）经 unified-entry 接入生产闭包，合法新增 1 个生产模块。闭包 353 → 354。
+    // 阈值上调到 355。
+    // 2026-10-29 AGENT-HARNESS-1：Harness 五套件落地（tools/tool-input-validation 统一入参校验、
+    // utils/harness-logger 进程级 JSON lines 日志）为生产闭包合法新增 2 个模块。闭包 355 → 357。
+    // 阈值上调到 357。
+    // 2026-10-30 EXPERT-HOST-HANDOFF-1：专家群接入生产工具面（handlers/expert-handoff-handler +
+    // novelos/experts/{expert-registry,expert-dispatcher,chapter-contract-bridge}）经
+    // novel_workspace_manager 子操作接入生产闭包，合法新增 4 个模块。闭包 357 → 361。阈值上调到 361。
+    // 2026-10-31 CONTRACT-PROVENANCE-1：craft/chapter-contract-provenance 经
+    // workspace-preflight-checker / chapter-seed-builder / expert-handoff-handler 接入生产闭包
+    // （作者章纲契约的 commitStatus/hash/provenance 消费判定），合法新增 1 个模块。
+    // 闭包 361 → 362。阈值上调到 362。
     assert.ok(
-      distCount <= 354,
-      `dist/ JS 文件数（${distCount}）应 <= 354（352 + api/transport-scope.js + verified-draft-checkpoint.js；旧通配 include 接近全量 ~460）；超过说明 tsconfig.prod.json 退化为全量编译`,
+      distCount <= 362,
+      `dist/ JS 文件数（${distCount}）应 <= 362（353 + api/transport-scope.js + verified-draft-checkpoint.js + external-knowledge-base.js + tool-input-validation.js + harness-logger.js + expert-handoff-handler.js + chapter-contract-provenance.js + 3 个 novelos/experts 模块；旧通配 include 接近全量 ~460）；超过说明 tsconfig.prod.json 退化为全量编译`,
     );
   });
 });

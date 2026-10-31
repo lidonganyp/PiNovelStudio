@@ -21,7 +21,7 @@ import type {
 import { createNovelOSAgent } from "../adapters/pi-agent-core-adapter.js";
 import type { BudgetPolicy, BudgetSnapshot } from "./budget-policy.js";
 import type { NovelSession } from "../session/novel-session.js";
-import type { TrajectoryStore, TrajectoryFailureEnvelope } from "../trajectory/trajectory-store.js";
+import type { TrajectoryStore } from "../trajectory/trajectory-store.js";
 import {
   createModelAutonomyPolicy,
   type ModelAutonomyPolicy,
@@ -123,6 +123,12 @@ export interface NovelOSRuntimeOptions {
    * 工具 authorize/deny 在 beforeToolCall 写入；结果由 tool-metrics-tracer 写入。
    */
   auditSink?: import("../../v2/core/audit/audit-run-session.js").AuditEventSink;
+  /**
+   * 运行级墙钟来源（默认 Date.now）。
+   * 只用于预算的墙钟判定（runStartedAt / turn 耗时 / 运行级截止），
+   * 让测试可注入可控时钟；生产不传即使用真实时间。
+   */
+  now?: () => number;
 }
 
 /** NovelOS Runtime 实例 */
@@ -185,7 +191,11 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
     autonomyWorkspaceId,
     autonomyChapterId,
     workPackage,
+    now: nowOption,
   } = options;
+
+  // 预算墙钟来源：默认真实时间；测试注入可控时钟以避免依赖进程启动开销
+  const now = nowOption ?? Date.now;
 
   // AUTONOMY-P1：默认启用模型自主性策略；显式 null 关闭（仅测试）
   const autonomyPolicy =
@@ -366,7 +376,84 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
 
   // 构造默认 afterToolCall：仅在整体预算耗尽时返回 { terminate: true } 停止 loop。
   // 检索预算由 beforeToolCall 阻断处理，不再通过 terminate 终止（避免吞掉最终正文回合）。
+  // 错误次数退出：连续失败达到 maxConsecutiveToolErrors 时 budget 标记耗尽。
+  //
+  // R01：停止失败信封统一由 recordBudgetStop 生成，gate 取自真实耗尽原因，
+  // 不再把所有"工具失败且任一预算耗尽"都记成 tool_error_streak（会误归因）。
+  // 该函数幂等：同一次运行只写一条 envelope。
+  let budgetStopReported = false;
+  const classifyBudgetStopGate = (reason: string): string => {
+    if (/maxConsecutiveToolErrors/.test(reason)) return "tool_error_streak";
+    if (/maxTurns/.test(reason)) return "max_turns";
+    if (/maxToolCalls/.test(reason)) return "max_tool_calls";
+    if (/maxLatencyMs/.test(reason)) return "max_latency";
+    if (/maxTokensIn|maxTokensOut/.test(reason)) return "max_tokens";
+    return "budget_exhausted";
+  };
+  const recordBudgetStop = (reason: string, evidence?: Record<string, unknown>): void => {
+    if (budgetStopReported) return;
+    budgetStopReported = true;
+    const snapshot = budget.getSnapshot();
+    trajectory.recordFailure({
+      stage: "novelos_loop_budget",
+      severity: "recoverable",
+      failureClass: "recoverable",
+      recoveryAction: "checkpoint",
+      reason: `loop 预算耗尽并终止：${reason}`,
+      evidence: {
+        gate: classifyBudgetStopGate(reason),
+        budgetReason: reason,
+        consecutiveToolErrors: snapshot.consecutiveToolErrors,
+        toolCalls: snapshot.toolCalls,
+        turns: snapshot.turns,
+        latencyMs: snapshot.latencyMs,
+        modelCalls: snapshot.modelCalls,
+        ...(evidence ?? {}),
+      },
+      recoverable: true,
+      retryPlan: "checkpoint_or_blocked",
+    });
+  };
+
+  /**
+   * R01 运行级截止：真实模型调用前复核预算。
+   * - budget 已被计数器标记耗尽（turn/toolCall/token/连续失败）→ 停止；
+   * - 或整次运行的墙钟已超过 maxLatencyMs（运行级截止，与单请求超时分层）→ 标记耗尽并停止。
+   * 返回 stop=true 时 streamFn 不发起模型请求，loop 以 stopReason=error 收敛结束。
+   */
+  let runStartedAt: number | null = null;
+  const evaluateBudgetStop = (): { stop: boolean; reason?: string } => {
+    if (budget.isExhausted()) {
+      const reason = budget.getSnapshot().exhaustedReason ?? "budget exhausted";
+      recordBudgetStop(reason);
+      return { stop: true, reason };
+    }
+    if (runStartedAt !== null) {
+      const maxLatencyMs = budget.getConfig().maxLatencyMs;
+      const elapsed = now() - runStartedAt;
+      if (maxLatencyMs > 0 && elapsed >= maxLatencyMs) {
+        const reason = `maxLatencyMs wall-clock reached (${elapsed}ms >= ${maxLatencyMs}ms)`;
+        budget.exhaust(reason);
+        recordBudgetStop(reason);
+        return { stop: true, reason };
+      }
+    }
+    return { stop: false };
+  };
+
   const afterToolCall: AgentOptions["afterToolCall"] = async (ctx, signal) => {
+    const toolFailed = Boolean((ctx as { isError?: boolean }).isError);
+    if (toolFailed) {
+      budget.recordToolError();
+      if (budget.isExhausted()) {
+        recordBudgetStop(budget.getSnapshot().exhaustedReason ?? "budget exhausted", {
+          toolName: (ctx as { toolCall?: { name?: string } }).toolCall?.name ?? "unknown",
+        });
+      }
+    } else {
+      budget.recordToolSuccess();
+    }
+
     // PROMPT-INJECTION-TRUST：工具结果默认 reference，记录消费意图（资料）
     // 硬路径（canon/hard_gate）由编排器侧 consumeToolResult 再强制检查
     try {
@@ -446,16 +533,31 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
     beforeToolCall,
     afterToolCall,
     timeoutMs,
+    // R01：预算强制的唯一执行边界在真实模型调用前（见 createProjectStreamFn 注释）
+    beforeModelCall: evaluateBudgetStop,
   });
 
   // 内部订阅：trajectory 记录 + budget 追踪 + 检索调用计数
+  // turn 级墙钟耗时：turn_start 记时间戳，turn_end 累计到 budget.recordLatency，
+  // 让 maxLatencyMs（超时限制退出）真正生效（此前 recordLatency 无调用方）。
+  // R01：turn 计数改为在 turn_end 累计"已完成的回合"。若在 turn_start 计数，
+  // maxTurns 会在本轮模型调用之前就把预算标记耗尽，导致本轮的模型请求被边界闸门拦掉。
+  let turnStartedAt: number | null = null;
   agent.subscribe((event: AgentEvent) => {
     trajectory.recordToolEvent(event);
 
     switch (event.type) {
       case "turn_start":
+        turnStartedAt = now();
+        break;
+      case "turn_end": {
+        if (turnStartedAt !== null) {
+          budget.recordLatency(Math.max(0, now() - turnStartedAt));
+          turnStartedAt = null;
+        }
         budget.recordTurn();
         break;
+      }
       case "tool_execution_start": {
         budget.recordToolCall();
         break;
@@ -499,19 +601,12 @@ export function createNovelOSRuntime(options: NovelOSRuntimeOptions): NovelOSRun
         return;
       }
       if (budget.isExhausted()) {
-        const snapshot = budget.getSnapshot();
-        const envelope: TrajectoryFailureEnvelope = {
-          stage: "novelos_prompt",
-          severity: "recoverable",
-          failureClass: "recoverable",
-          recoveryAction: "checkpoint",
-          reason: `budget exhausted: ${snapshot.exhaustedReason ?? "unknown"}`,
-          recoverable: true,
-          retryPlan: "checkpoint_or_blocked",
-        };
-        trajectory.recordFailure(envelope);
+        const reason = budget.getSnapshot().exhaustedReason ?? "budget exhausted";
+        recordBudgetStop(reason);
         return;
       }
+      // R01：每轮 prompt 都是新的运行级墙钟窗口（maxLatencyMs 由模型调用边界复核）
+      runStartedAt = now();
       // 记录 user 消息到 trajectory
       trajectory.recordMessage({
         role: "user",

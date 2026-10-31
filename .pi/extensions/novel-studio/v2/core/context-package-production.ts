@@ -13,12 +13,14 @@ import {
 } from "./evidence-governance-contracts.js";
 import {
   compileConstraintManifestToContextPackage,
+  estimateTokens,
   type ConstraintManifest,
   type ConstraintManifestItem,
   type ContextSafetyResult,
 } from "./context-safety.js";
 import type { ContextPackage, ContextSlotItem } from "./trust/context-package.js";
 import type { ContentSlot, TrustClass } from "./trust/trust-types.js";
+import type { ExternalKnowledgeSelection } from "./external-knowledge-base.js";
 
 export interface ProductionFewshotExample {
   id: string;
@@ -26,7 +28,16 @@ export interface ProductionFewshotExample {
 }
 
 export interface ProductionContextPackageInput {
+  /**
+   * R03：附加参考项必须由调用方通过 `buildExtraReferenceItems` 生成，
+   * 并在 compileContextSafety 的 `extraItems` 中参与统一预算裁剪。
+   * 这里只按 safety.report.retained 编译，不再在裁剪之后追加任何条目。
+   */
   safety: ContextSafetyResult;
+  snapshotId?: string;
+}
+
+export interface ExtraReferenceInput {
   snapshotId?: string;
   characterNames?: string[];
   targetWordCount?: { min: number; max: number };
@@ -34,6 +45,7 @@ export interface ProductionContextPackageInput {
     examples?: ReadonlyArray<ProductionFewshotExample>;
     manifestApproved?: boolean;
   };
+  externalKnowledgeSelection?: ExternalKnowledgeSelection | null;
 }
 
 export interface ProductionContextPackageResult {
@@ -104,28 +116,39 @@ export function retainedManifestFromSafety(safety: ContextSafetyResult): Constra
   };
 }
 
-function extraReferenceItems(input: ProductionContextPackageInput): ConstraintManifestItem[] {
+/**
+ * R03：生成附加参考项（本章角色 / 字数软目标 / fewshot / 外部知识）。
+ *
+ * 这些条目必须由调用方传给 `compileContextSafety({ extraItems })`，
+ * 在统一安全裁剪前进入 manifest，按 P4/P3/P2 参与预算；
+ * 未入选条目会出现在 `safety.report.dropped`，可解释、可回放。
+ */
+export function buildExtraReferenceItems(
+  input: ExtraReferenceInput,
+): ConstraintManifestItem[] {
   const extras: ConstraintManifestItem[] = [];
   const snapshotRef = input.snapshotId ?? "snapshot:unknown";
   if ((input.characterNames ?? []).length > 0) {
+    const content = `本章角色：${(input.characterNames ?? []).join("、")}`;
     extras.push({
       id: "p2:chapter-characters",
       priority: "P2",
       kind: "chapter_characters",
-      content: `本章角色：${(input.characterNames ?? []).join("、")}`,
+      content,
       sourceRefs: [snapshotRef],
-      estimatedTokens: 16,
+      estimatedTokens: estimateTokens(content),
       origin: { area: "intent", field: "relevantCharacters" },
     });
   }
   if (input.targetWordCount) {
+    const content = `字数软目标：${input.targetWordCount.min}-${input.targetWordCount.max} 字（非硬性约束）`;
     extras.push({
       id: "p3:word-count-soft",
       priority: "P3",
       kind: "word_count_soft",
-      content: `字数软目标：${input.targetWordCount.min}-${input.targetWordCount.max} 字（非硬性约束）`,
+      content,
       sourceRefs: [snapshotRef],
-      estimatedTokens: 20,
+      estimatedTokens: estimateTokens(content),
       origin: { area: "intent", field: "chapterFunction" },
     });
   }
@@ -134,14 +157,34 @@ function extraReferenceItems(input: ProductionContextPackageInput): ConstraintMa
     for (const example of fewshot.examples!.slice(0, 3)) {
       const text = example.text.trim();
       if (!text) continue;
+      const content = text.slice(0, 520);
       extras.push({
         id: `p4:fewshot:${example.id}`,
         priority: "P4",
         kind: "style_advisory",
-        content: text.slice(0, 520),
+        content,
         sourceRefs: [example.id],
-        estimatedTokens: Math.ceil(Math.min(text.length, 520) / 2),
+        estimatedTokens: estimateTokens(content),
         origin: { area: "context", field: "styleReferences", key: example.id },
+      });
+    }
+  }
+  const external = input.externalKnowledgeSelection;
+  if (external) {
+    // EXTERNAL-KB-1：外挂蒸馏判断进入 P4 参考槽，与 fewshot 同权（无指令权、不覆盖硬约束）。
+    // 条数/字数兜底在此再做一次：选集已裁剪过，这里只防越界。
+    for (const item of external.items.slice(0, 3)) {
+      const text = item.content.trim();
+      if (!text) continue;
+      const content = text.slice(0, 520);
+      extras.push({
+        id: `p4:external:${item.id}`,
+        priority: "P4",
+        kind: "style_advisory",
+        content,
+        sourceRefs: [item.sourceRef],
+        estimatedTokens: estimateTokens(content),
+        origin: { area: "context", field: "externalKnowledge", key: item.id },
       });
     }
   }
@@ -160,11 +203,25 @@ export function compileProductionContextPackage(
     };
   }
   const manifest = retainedManifestFromSafety(input.safety);
-  const withExtras: ConstraintManifest = {
-    ...manifest,
-    items: [...manifest.items, ...extraReferenceItems(input)],
-  };
-  const compiled = compileConstraintManifestToContextPackage(withExtras);
+  const compiled = compileConstraintManifestToContextPackage(manifest);
+  if (compiled.ok && compiled.package) {
+    // R03：按实际最终消息估算包装开销（槽位标题 + 条目前缀）。
+    // 条目预算刚好用满时，渲染开销不得让模型输入无报告越界。
+    const rendered = renderContextPackage(compiled.package);
+    const contentChars = Object.values(compiled.package.slots)
+      .flatMap((slot) => slot.items.map((item) => item.content.length))
+      .reduce((sum, length) => sum + length, 0);
+    const overheadTokens = Math.ceil(Math.max(0, rendered.text.length - contentChars) / 2);
+    const estimatedMessageTokens = input.safety.report.estimatedRetainedTokens + overheadTokens;
+    if (estimatedMessageTokens > input.safety.report.inputBudgetTokens) {
+      return {
+        ok: false,
+        errors: [`context_package_overflow:${estimatedMessageTokens}>${input.safety.report.inputBudgetTokens}`],
+        contextPackageHash: null,
+        snapshotId: input.snapshotId ?? null,
+      };
+    }
+  }
   return {
     ok: compiled.ok && Boolean(compiled.package),
     package: compiled.package,

@@ -23,6 +23,7 @@ import ChapterEditor from '../../components/workspace/ChapterEditor.vue';
 import SeedEditor from '../../components/workspace/SeedEditor.vue';
 import CharacterPanel from '../../components/workspace/CharacterPanel.vue';
 import OutlinePanel from '../../components/workspace/OutlinePanel.vue';
+import ChapterContractPanel from '../../components/workspace/ChapterContractPanel.vue';
 import DocumentPanel from '../../components/workspace/DocumentPanel.vue';
 import VersionPanel from '../../components/workspace/VersionPanel.vue';
 import AssistantWorkspace from '../../components/workspace/chat/AssistantWorkspace.vue';
@@ -217,6 +218,16 @@ defineExpose({ loadChapters, patchChapter });
               :chapter="activeChapter"
               @updated="patchChapter"
               @generate="startGeneration"
+            />
+            <el-empty v-else description="先选择一个章节" />
+          </el-tab-pane>
+          <!-- 章节级：当前选中章节的章纲契约（作者审批） -->
+          <el-tab-pane label="章纲契约（本章）" name="contract" lazy>
+            <ChapterContractPanel
+              v-if="activeChapter"
+              :key="'contract-' + activeChapter.id"
+              :project-id="projectId"
+              :chapter-number="activeChapter.chapterNumber"
             />
             <el-empty v-else description="先选择一个章节" />
           </el-tab-pane>

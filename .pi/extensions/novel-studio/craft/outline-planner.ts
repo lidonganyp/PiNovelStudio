@@ -85,6 +85,137 @@ class StoryOutlinePlannerError extends Error {
   }
 }
 
+// ============================================================================
+// 生产 Prompt：固定五要素结构（【角色】【指令】【约束】【示例】【输出格式】）
+// ============================================================================
+
+/** 项目规定的五要素顺序；system 与 user 消息都必须按此顺序组织。 */
+export const OUTLINE_PROMPT_SECTIONS = ["角色", "指令", "约束", "示例", "输出格式"] as const;
+
+export interface OutlinePromptPair {
+  systemPrompt: string;
+  userPrompt: string;
+}
+
+export interface FullOutlinePromptParams {
+  idea: string;
+  totalChapters: number;
+  configSummary: string;
+}
+
+export function buildFullOutlinePrompts(params: FullOutlinePromptParams): OutlinePromptPair {
+  const { idea, totalChapters, configSummary } = params;
+
+  const systemPrompt = [
+    "【角色】你是 PiNovelStudio 的长篇网文总纲规划师，负责把作者创意扩展成可拆章的系列总纲，只输出策划文档。",
+    "【指令】先读懂作者创意与工作区配置，再规划全书核心卖点、主线、主要角色功能、卷/阶段推进，并逐章给出剧情目标；缺失信息按作者创意合理延展。",
+    "【约束】只输出策划内容；不得写章节正文、场景正文、对白或可直接发布的段落。作者在配置中声明的类型与读者承诺是唯一类型来源，不得用推断覆盖，也不得臆造未声明的世界观硬设定。",
+    "【示例】正例：“## 第1章：受托之日——主角被迫接下委托，冲突起于报酬与隐瞒，章末悬念：委托人为何隐瞒目标身份。”反例：直接写出一段人物对白与场景描写。",
+    "【输出格式】仅输出一份 Markdown 总纲正文，不附加分析、清单、解释或前后言。",
+  ].join("\n");
+
+  const userPrompt = [
+    "【角色】你是本作品的总纲规划师，本轮产出总纲文档，不是正文。",
+    [
+      "【指令】",
+      `1. 把作者创意扩展为 ${totalChapters} 章的完整小说总纲。`,
+      "2. 总纲包含：全书核心卖点、主线走向、主要角色功能、卷/阶段推进。",
+      "3. 逐章列出章节概要，标题使用 “## 第N章：标题” 的形式。",
+      "4. 每章概要覆盖剧情目标、冲突、转折、伏笔与情绪功能，并能被后续拆成事件级章纲。",
+      "",
+      "作者创意：",
+      idea || "（作者未提供创意）",
+      "",
+      "工作区配置（作者声明的类型、角色与读者承诺，以此为准）：",
+      configSummary || "（未提供配置摘要）",
+    ].join("\n"),
+    [
+      "【约束】",
+      "- 不写正文、不写对白、不写可直接发布的段落。",
+      "- 作者创意与工作区配置中已声明的类型、角色、读者承诺优先，不得改写或覆盖。",
+      `- 章节数量固定为 ${totalChapters} 章，不为凑数编造与主线无关的支线。`,
+    ].join("\n"),
+    [
+      "【示例】",
+      "- 正例：每章概要 = 剧情目标一句话 + 冲突一句话 + 转折一句话 + 章末悬念一句话。",
+      "- 反例：用整段小说正文、对白或场景描写代替概要。",
+    ].join("\n"),
+    [
+      "【输出格式】",
+      "只输出 Markdown 总纲：先给全书概览，再按 “## 第N章：标题” 逐章列出；最后一章之后不再追加任何内容。",
+    ].join("\n"),
+  ].join("\n");
+
+  return { systemPrompt, userPrompt };
+}
+
+export interface ChapterOutlinePromptParams {
+  chapterNumber: number;
+  eventCount: number;
+  chapterSection: string;
+  configSummary: string;
+}
+
+export function buildChapterOutlinePrompts(params: ChapterOutlinePromptParams): OutlinePromptPair {
+  const { chapterNumber, eventCount, chapterSection, configSummary } = params;
+
+  const systemPrompt = [
+    "【角色】你是 PiNovelStudio 的章节概要拆分器，负责把总纲中的单章段落拆成事件级显式章纲，只输出章纲。",
+    "【指令】先读单章总纲段落，再划分事件块：每个事件块给出类型、内容摘要、冲突等级、情绪弧、感知锚点、参与角色与伏笔，并标注字数目标。",
+    "【约束】不得写章节正文、场景正文、对白正文或可直接发布的段落；事件必须出自并服从单章总纲段落，不得虚构与该段落矛盾的事件或人物。",
+    "【示例】正例：“#### 事件1：初次冲突——类型：冲突；内容：主角在交付现场发现委托人隐瞒关键信息；冲突等级：3；情绪弧：警觉 -> 戒备。”反例：把事件写成一段带对白的场景正文。",
+    "【输出格式】仅输出一份章纲 Markdown，不附加分析、清单、解释或前后言。",
+  ].join("\n");
+
+  const userPrompt = [
+    "【角色】你是本章的概要拆分器，本轮产出章纲，不是正文。",
+    [
+      "【指令】",
+      `按第 ${chapterNumber} 章总纲段落规划事件块，事件编号从 1 连续编号。`,
+      `事件规模由单章总纲的实际内容决定；参考规模约 ${eventCount} 个，可按叙事需要增减。`,
+      "",
+      "单章总纲段落：",
+      chapterSection || "（未提供单章段落）",
+      "",
+      "工作区配置（作者声明的类型、角色与读者承诺，以此为准）：",
+      configSummary || "（未提供配置摘要）",
+    ].join("\n"),
+    [
+      "【约束】",
+      "- 不写正文、不写对白、不写场景描写。",
+      "- 每个事件的类型、冲突等级与情绪弧必须与该事件的实际功能一致，不堆砌并列事件。",
+      "- 事件数量与顺序服务于本章节奏，不为凑满固定数量而附加无关事件。",
+      "- 参与角色只能是配置与总纲段落中出现过的角色，不新增人物。",
+    ].join("\n"),
+    [
+      "【示例】",
+      "- 正例：事件标题 + 可定位的具体事件摘要（写清谁在何处因何做什么、结果如何）+ 冲突等级数字 + 情绪弧起点与终点。",
+      "- 反例：写成小说正文段落，或用“…”占位代替具体事件摘要。",
+    ].join("\n"),
+    [
+      "【输出格式】",
+      `# 第${chapterNumber}章：标题`,
+      "",
+      "## 本章功能",
+      "说明本章在整本书中承担的功能（一两句话即可，不强制句数）。",
+      "",
+      "#### 事件1：事件标题",
+      "- **类型**：开场/冲突/转折/揭秘/收束",
+      "- **内容**：具体事件摘要，只写摘要，不写正文。",
+      "- **冲突等级**：1-5 的数字",
+      "- **情绪弧**：起点 -> 终点",
+      "- **感知锚点**：可见/可听/可触的具体场景锚点",
+      "- **参与角色**：角色名列表",
+      "- **伏笔埋设**：本事件新增或推进的伏笔",
+      "- **字数目标**：数字",
+      "",
+      "按同一模板输出本章全部事件块，字段名与上面的模板保持一致，便于程序解析；事件数量以本章总纲的实际内容为准。",
+    ].join("\n"),
+  ].join("\n");
+
+  return { systemPrompt, userPrompt };
+}
+
 export class StoryOutlinePlanner {
   private readonly projectRoot: string;
 
@@ -343,29 +474,11 @@ export class StoryOutlinePlanner {
     const api = await createRoutedChatAPI("outline_planner");
     const configSummary = this.formatWorkspaceConfig(workspace.config);
 
-    const systemPrompt = [
-      "你是 PiNovelStudio 的长篇网文总纲规划师。",
-      "你的任务是把用户创意扩展为可拆章的总纲文档，只输出策划内容。",
-      "严禁写章节正文、成段小说正文或可直接发布的章节内容。",
-    ].join("\n");
-
-    const userPrompt = [
-      "# 任务",
-      `把用户创意扩展为 ${totalChapters} 章的完整小说总纲。`,
-      "",
-      "# 用户创意",
+    const { systemPrompt, userPrompt } = buildFullOutlinePrompts({
       idea,
-      "",
-      "# Workspace 配置",
+      totalChapters,
       configSummary,
-      "",
-      "# 输出要求",
-      "- 使用 Markdown。",
-      "- 必须包含全书核心卖点、主线、主要角色功能、卷/阶段推进。",
-      "- 必须逐章列出章节概要，章节标题使用 \"## 第1章：标题\"。",
-      "- 每章概要只写剧情目标、冲突、转折、伏笔和情绪功能；不要写正文。",
-      "- 每章至少 2 句，且能被后续拆成事件级章纲。",
-    ].join("\n");
+    });
 
     try {
       const response = await api.generate(systemPrompt, userPrompt, {
@@ -393,40 +506,12 @@ export class StoryOutlinePlanner {
     const api = await createRoutedChatAPI("chapter_outline_generator");
     const configSummary = this.formatWorkspaceConfig(workspace.config);
 
-    const systemPrompt = [
-      "你是 PiNovelStudio 的章节概要拆分器。",
-      "你的任务是把总纲中的单章段落拆成事件级显式章纲，只输出章纲。",
-      "严禁写章节正文、场景正文、对白正文或可直接发布的章节内容。",
-    ].join("\n");
-
-    const userPrompt = [
-      "# 任务",
-      `为第 ${chapterNumber} 章生成 ${eventCount} 个事件块的显式章纲。`,
-      "",
-      "# 单章总纲段落",
+    const { systemPrompt, userPrompt } = buildChapterOutlinePrompts({
+      chapterNumber,
+      eventCount,
       chapterSection,
-      "",
-      "# Workspace 配置",
       configSummary,
-      "",
-      "# 严格输出格式",
-      `# 第${chapterNumber}章：标题`,
-      "",
-      "## 本章功能",
-      "用 1-3 句说明本章在整本书中的功能。",
-      "",
-      "#### 事件1：事件标题",
-      "- **类型**：开场/冲突/转折/揭秘/收束",
-      "- **内容**：不少于30字的具体事件摘要，只写摘要，不写正文。",
-      "- **冲突等级**：1-5 的数字",
-      "- **情绪弧**：起点 -> 终点",
-      "- **感知锚点**：可见/可听/可触的具体场景锚点",
-      "- **参与角色**：角色名列表",
-      "- **伏笔埋设**：本事件新增或推进的伏笔",
-      "- **字数目标**：数字",
-      "",
-      `连续输出 ${eventCount} 个事件块，编号从 1 到 ${eventCount}。`,
-    ].join("\n");
+    });
 
     try {
       const response = await api.generate(systemPrompt, userPrompt, {

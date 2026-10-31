@@ -229,8 +229,8 @@ test("author-style prompt explicitly protects the continuation prefix", () => {
     },
     { referenceIds: [], guidance: [] },
   );
-  assert.match(prompt, /CONTINUATION MODE/);
-  assert.match(prompt, /exactly once/);
+  assert.match(prompt, /【续写模式】/);
+  assert.match(prompt, /只能出现一次/);
 });
 
 test("author-style append prompt includes the real prefix and can force suffix-only recovery", () => {
@@ -257,9 +257,9 @@ test("author-style append prompt includes the real prefix and can force suffix-o
     },
     { referenceIds: [], guidance: [] },
   );
-  assert.match(prompt, /EXACT AUTHOR PREFIX/);
+  assert.match(prompt, /【受保护作者前缀原文】/);
   assert.match(prompt, new RegExp(prefix));
-  assert.match(prompt, /CONTINUATION PREFIX RECOVERY/);
-  assert.match(prompt, /ONLY the new suffix/);
+  assert.match(prompt, /【续写前缀恢复】/);
+  assert.match(prompt, /只输出【受保护作者前缀结束】之后的新后缀/);
   assert.match(prompt, /从这里开始的新内容/);
 });

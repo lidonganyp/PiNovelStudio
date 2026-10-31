@@ -151,6 +151,83 @@ PiNovelStudio 是基于 PI (AI Coding Agent) 的顶尖网文级小说章节生�
 
 只通过 build/test 不能声称“小说质量已经提升”。必须同时具备真实 reference/candidate replay、规则晋级、下一轮生成 trace 中出现 active validated rule，以及人工抽检或盲测复核，才可以宣称质量闭环产生正收益。
 
+## Prompt 编写规范（五要素，强制）
+
+所有进入模型的生产 prompt（system prompt 以及编排器拼装给模型的 user 指令）必须按以下五个中文小标题组织，顺序固定：
+
+1. **【角色】**：模型在本轮扮演谁、负责产出什么。
+2. **【指令】**：要完成的任务与可直接执行的步骤；只给清晰目标、可靠资料与关键边界。
+3. **【约束】**：硬边界（事实、人物状态、连续性、禁止输出的内容）与软指导（风格倾向）。禁止机械配额（对白比例、段落长度、逐条清单式执行）。
+4. **【示例】**：抽象正例与反例，说明“该长什么样 / 不该长什么样”。内部 few-shot 范文可按场景对齐检索、单条有界（≤1 条 × ≤520 字）提交给模型；**外挂知识库只提交结构化 Craft Pattern Card（可迁移机制标签），不提交外部小说原文（含 ≤120 字短 span）**。所有参考资料只进【参考资料】槽（无指令权、不覆盖硬约束），禁止整库或整章全文注入。
+5. **【输出格式】**：唯一允许的输出形态（如“只输出第 N 章完整正文”），以及必须排除的内容（大纲、清单、分析、注释、思考过程）。
+
+补充规则：
+
+- 小标题固定为中文方括号形式【角色】【指令】【约束】【示例】【输出格式】，便于人工审计与测试断言；不要把英文标题混入生产 prompt。
+- 约束段不得把历史统计（段长百分位、对白比例等）写成配额；统计只能作为诊断证据，遵循本文“少约束生成，多约束选择”。
+- 修改生产 prompt 文本必然导致 `config/prompt-registry.json` 中 active 版本的 promptHash 漂移；新增内容只能先生成 draft 版本，晋级需要真实评测证据与人工授权，不得伪造证据。
+- 外挂知识库进入 P4 参考槽的唯一形态是**结构化 Craft Pattern Card**（`style_advisory`，`canAffectHardGate=false`）：由 `ChapterIntent` 派生结构化检索键，经硬过滤 + 结构化准入（≥2 独立维度且命中主维度）+ 结构化主排序后取 Top-K（生产默认 1 条），无合格候选返回空；**生产永久不注入外部小说原文（含 ≤120 字短 span）**，原文范文仅限隔离评测通道，不作为生产准入依据。入选依据必须写入 trace（`selectionMode` / `retrievalKey` / `structuredHitsById` / `marginGap` / `deliveredIds`），被丢弃条目写 `droppedIds` / `droppedByHardFilterIds` / `droppedByRelevanceIds` / `droppedByStructuredAdmissionIds`，不得静默注入。
+- 审计入口：`v2/core/prompt-constraint-audit.ts`（机械约束检测）+ 本节五要素人工核对。
+
+## 上下文管理执行规范（强制，2026-10-29）
+
+上下文只装"这一章必须正确的东西"，不装"可能有用的一堆东西"。以下五条为执行口径，实现位置即审计位置；新增上下文通道必须先说明命中哪一条、在哪被裁剪、如何证明未静默丢弃。
+
+1. **系统 prompt 与用户输入必塞**：`NOVELOS_SYSTEM_PROMPT` 恒为 system 消息（`novelos/agent/agentic-raw-candidate-source.ts`）；用户输入是编译后的 `ContextPackage` renderer 输出（`v2/core/context-package-production.ts`）。P0/P1 保护项不得因 token 预算静默丢弃，溢出按 `protected_context_overflow` fail-closed 阻断（`v2/core/context-safety.ts`）。窗口默认 `128000 / 8192 / 4096`，由 `PINOVEL_CONTEXT_WINDOW_TOKENS` / `PINOVEL_CONTEXT_OUTPUT_RESERVE_TOKENS` / `PINOVEL_CONTEXT_SAFETY_MARGIN_TOKENS` 控制。
+2. **工具结果按需塞、按字段裁**：是否检索由模型在 ReAct 内按不确定性自行判断，系统只设上限（`retrievalCallLimit` = mustVerify ? 4 : 2，`maxToolCalls` = 20）；单次结果必须有界（检索默认 10 条、列表 50 条）且带 `truncated` / `nextQueryHint`（`novelos/tools/narrative-tools.ts`）；`known` 只注摘要行（≤80 字/条、≤12 条），不注全文（`novelos/agent/evidence-plan.ts`）。
+3. **工具结果历史分层保留**：同一次运行内，最近 `TOOL_HISTORY_KEEP_FULL=6` 条 toolResult 保留全文，更早结果只保留首行摘要（≤200 字）并在回灌文本中显式声明省略条数；完整结果留存 trajectory（`novelos/adapters/pi-agent-core-adapter.ts:compactToolHistory`）。
+4. **跨章与对话历史只用压缩形态**：前章只注入尾部 ≤1200 字 + 连续性快照（openHooks / introducedCharacters / unresolvedTensions），从不注入前章全文；长期状态经 `retrieveNarrativeContext` 评分后只取工作集（`computeMaxItems` 24–48，必需伏笔走 `forcedRecallIds` 强制通道），被丢弃条目写入 `report.dropped`；平台助手对话只取最近 10 条、单条截断，更早轮次丢弃并写入 `manifest.historyCompaction` 声明省略条数。
+5. **RAG 排序取 Top-K，全库不入 prompt**：知识/证据按相关度 + 权威分层排序取 Top-K（fewshot ≤3×520 字；平台证据 span ≤3×400 字；工具检索默认 10 条），低于相关性阈值 10 的候选丢弃并记录；`data/` 下全量 fewshot、语料与 runtime rules 一律不得整库注入（runtime rules 只注入条数摘要行）。
+
+## Agent Harness 规范（五套件，强制，2026-10-29）
+
+Harness 是"模型能安全、可解释地调用工具并产出可复现结果"的运行支撑层。本项目的五套件能力分散在 `tools/`、`api/`、`craft/`、`novelos/trajectory/`、`v2/core/trust/`，本节是**唯一审计入口**；新增能力必须先在表中登记实现位置。
+
+**不引入 zod / ajv / OpenTelemetry / pino 等框架**：现有 typebox + `FailureEnvelope` + Trace 已覆盖核心价值，引入框架与"三构建目标隔离、离线可回放、零新增依赖"（当前仅 4 个依赖）直接冲突。
+
+| 套件 | 现有实现位置 | 最小硬要求 |
+|------|-------------|-----------|
+| 1 工具接入 | `tools/register-tools.ts`（6 个公开工具 + `inputSchema`）；`novelos/tools/`（叙事检索）；`novelos/adapters/tool-schema-injector.ts`（`allowedToolNames` 白名单）；`api/`（provider 封装） | 新增工具必须同时提供 `inputSchema` 并登记进白名单；未在 `allowedToolNames` 的工具 fail-closed，不进入模型可见面 |
+| 2 输入输出契约 | `tools/tool-input-validation.ts`（工具实参运行期校验，`wrapLegacyTool` 统一调用）；eval 侧输出 schema：`v2/core/editorial-opportunity-contract.ts`、`v2/core/chapter-proxy-approval-schema.ts` | 工具入口必须先过 `validateToolInput`；违反时返回 `status=input_contract_violation` 且**不执行 handler、不重试**；`inputSchema.required` 必须与该工具实际分支一致，**不得把只在部分分支必填的字段写成无条件 `required`**（如 `novel_generate_chapter` 的 `chapterId`/`chapterNumber` 只在非 `mode="batch"` 时必填，用 `allOf/if/then/else` 表达，校验器不解析条件、由 handler 兜底）；输出侧结构化契约解析失败只走 schema repair，不得据此重写正文 |
+| 3 错误处理 | `craft/failure-envelope.ts`、`craft/failure-envelope-reporter.ts`、`api/request-timeout.ts`、`api/fallback-manager.ts`、`craft/event-recovery-config.ts`、`tools/register-tools.ts`（`model_timeout` 单次重试） | 任何 Stage/Gate/工具失败必须产出 `FailureEnvelope`（stage/gate/severity/reason/evidence/recoverable/retryPlan）；模型调用必须有界超时（`PINOVEL_MODEL_REQUEST_TIMEOUT_MS`）；恢复预算耗尽即阻断，禁止无限重试 |
+| 4 护栏门禁 | 输入侧：`v2/learning/feedback-evidence-contracts.ts`（安全敏感请求拒绝）、`v2/core/trust/tool-result-trust.ts`（工具文本默认 `reference`、`canAffectHardGate=false`）、`v2/core/agent-input-whitelist.ts`（按角色字段/资源白名单）。输出侧：FactGuard / StoryPreservationGate / Completeness / `llm-language-guard` / `v2/core/prompt-constraint-audit.ts` | 未经验证的工具文本不得进入 CanonState 或硬门；`.env` / `chapters/` / `narrative-state-store.json` 不对创作代理开放；越过模型边界的文本必须经中文语言边界处理 |
+| 5 可观测 | `craft/quality-trace-recorder.ts`（workspace trace 权威）、`novelos/trajectory/trajectory-store.ts`（agent loop 事件流）、`novelos/trajectory/tool-metrics-tracer.ts`、`utils/harness-logger.ts`（JSON lines 运行日志） | 每章必须有 trace 落盘且可回放；**trace 是持久化权威，logger 是进程级运行日志，二者不互相替代**；logger 不得写入正文全文（`text/prose/draft` 等键强制长度摘要） |
+
+**已知缺口（非当前强制要求，新增需求时应先评估）**：
+
+- 无通用内容审核（敏感词 / 价值观）——文学与合规裁决权归用户，不得用机器审核替代 `关键约束 5`。
+- 无 Prometheus / OpenTelemetry 指标导出；指标口径先以 trace 离线聚合为准，不得声称已接入外部监控。
+- 工具面仅本地只读叙事检索，无外部网络 / 数据库连接器；新增外部数据源必须先过 `tool-schema-injector` 白名单与 trust 边界，且不得破坏可回放性。
+
+## Agentic Loop 规范（四环节 + 五种退出，强制，2026-10-30）
+
+本项目**不自建 agent 主循环**：ReAct 主循环委托 `@earendil-works/pi-agent-core` 的 `agentLoop`，`novelos/runtime/runtime.ts` 只做适配层与预算接线。所有自建循环（verify/patch 修复环、覆盖门重试环、批次章节环、工具层章节重试）也必须满足下列四环节与五种退出；新增循环必须先说明命中的四环节与至少一种退出证据。
+
+### 四环节
+
+| 环节 | 职责 | 实现位置 |
+|------|------|----------|
+| 感知 observe | 读取任务目标、已有产物、工具返回 | `novelos/agent/evidence-plan.ts`（`known` 摘要 / `mustVerify`）；`runtime.ts` 事件订阅 + `compactToolHistory` 分层回灌 |
+| 规划 plan | 基于当前状态决定下一步 | `narrative-agent-loop.ts`（`mustVerify` 决定检索；`RepairPlan` 决定 `revise/accept/stop`） |
+| 行动 act | 调用工具、生成正文、检索资料 | `novelos/tools/narrative-tools.ts`（只读叙事检索）；正文由模型经 `streamFn` 产出 |
+| 反思 reflect | 校验结果是否正确、是否更接近目标 | `novelos/agent/verifier.ts`（finding）+ `narrative-agent-loop.ts:verifyAndPatch`；`StopConditions.maxStagnantRounds=2`（finding 不减少即停） |
+
+### 五种退出机制
+
+| 机制 | 实现位置 | 硬要求 |
+|------|----------|--------|
+| 1 任务完成退出 | `narrative-agent-loop.ts`（`turn.stopReason === "stop"` 且正文非空 → `cleared`；空正文 → `model_error`） | 停止必须有可判定依据（正文非空 + verifier 清零）；不得把"模型说自己完成"当作唯一判据。**注意：本项目终态是正文，不是 schema 结构化结果层**，若新增结构化输出契约，解析失败只走 `retry_gate`，不得据此重写正文 |
+| 2 最大步数退出 | `novelos/runtime/budget-policy.ts`（`maxTurns=10` / `maxToolCalls=20`，env `PINOVEL_NOVELOS_MAX_TURNS` / `_MAX_TOOL_CALLS`）；`runtime.ts` 在 `afterToolCall` 返回 `{ terminate: true }` | 必须同时有 turn 与 toolCall 两档；终止后写 `FailureEnvelope`（`budget exhausted`），禁止静默停 |
+| 3 人工关卡退出 | `batch-generation-orchestrator.ts`（批次 `paused` + `resume`）；`novelos/security/permission-policy.ts`（`agent` 永远不持有 `final_commit`） | 关键动作（正式章节保存 / 长期状态提交）不得由创作代理自行完成；**当前没有"跑 N 步后暂停等人工确认"的流程内关卡**，需要时必须在 loop 内显式插入并写 checkpoint |
+| 4 超时限制退出 | `budget-policy.ts:maxLatencyMs`（默认 `900000`，env `PINOVEL_NOVELOS_MAX_LATENCY_MS`），由 `runtime.ts` 在 `turn_start`/`turn_end` 累计墙钟耗时；单请求另有 `PINOVEL_MODEL_REQUEST_TIMEOUT_MS`（默认 300000） | 累计值与单请求超时必须分层，`maxLatencyMs` 需明显大于单请求超时，否则正常整章生成会被误杀；`recordLatency()` 必须有真实调用方，禁止留死配置 |
+| 5 错误次数退出 | `budget-policy.ts:maxConsecutiveToolErrors`（默认 `3`，env `PINOVEL_NOVELOS_MAX_CONSECUTIVE_TOOL_ERRORS`）；`runtime.ts` 在 `afterToolCall` 依据 `isError` 调 `recordToolError()` / `recordToolSuccess()` | 只惩罚**连续**失败（成功即归零）；达到阈值 → 标记预算耗尽 + `terminate` + 写 `FailureEnvelope`（`evidence.gate="tool_error_streak"`）；禁止只靠 `maxToolCalls` 兜底 |
+
+### 现有差距（不得写成已实现）
+
+- 没有 loop 内的"N 步后暂停等人工确认"关卡；人工干预只在批次级 pause/resume 与权限矩阵，粒度不在 loop 内。
+- 终止判据是"正文非空 + verifier"，没有"输出符合结构化 schema 的最终结果"层；不要对外宣称已有 schema 终态退出。
+- 连续失败计数只覆盖**真正执行后抛错**的工具调用。`beforeToolCall` 阻断（自主性策略 `unknown_action` / 工作包越界 / 检索预算用尽）与工具名不存在、参数校验失败在 pi-agent-core 中都是 immediate result，**不会调用 `afterToolCall`**（`agent-loop.js:307-313/342-353`），因此不计入连续失败；这类"模型反复撞同一堵墙"只能靠 `maxTurns` / `maxToolCalls` 兜底。禁止把它描述成"所有失败都计数"。
+
 ## 代码规范
 
 ### TypeScript

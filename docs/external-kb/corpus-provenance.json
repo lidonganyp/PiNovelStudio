@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "description": "novelbag-v0 外部语料的来源清单与指纹。仅记录路径、字节数与 SHA-256，不保存任何原文内容；语料本身不在仓库内，也不得提交。",
+  "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+  "corpusRootNote": "本轮实际使用的本机语料绝对路径，仅用于审计定位；运行时不依赖该路径。",
+  "totals": {
+    "sceneFiles": 12,
+    "sceneExcerpts": 5418,
+    "works": [
+      "怪谈游戏设计师959",
+      "神秘复苏"
+    ]
+  },
+  "files": [
+    {
+      "sceneFile": "scenes/breakthrough.json",
+      "bytes": 393696,
+      "sha256": "adf0b163342490d9f2ce7a50fb65abe988c3aac217944d372f6c11644b430ef0",
+      "excerptCount": 294,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/cliffhanger.json",
+      "bytes": 1477163,
+      "sha256": "35a85cbb963088b50b8ba0445cba198af1caefdd150ee3cefbc67bd719a4e866",
+      "excerptCount": 1083,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/combat.json",
+      "bytes": 947490,
+      "sha256": "7414bab825a9ff46d4fbf845df24c79f06f9fdb2a655e24d37c623640f22d5e6",
+      "excerptCount": 717,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/daily_life.json",
+      "bytes": 1428419,
+      "sha256": "f1d67b4792f0f06b52dfab69d402a4ac020dcf6230806c064473915a1a58c9d4",
+      "excerptCount": 1040,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/face_slapping.json",
+      "bytes": 139384,
+      "sha256": "46b0d183d7e34dabb6e2f13b05946f2edbab1ee3f240d956e254e9f405edc1b0",
+      "excerptCount": 104,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/faction_conflict.json",
+      "bytes": 142512,
+      "sha256": "e00798564fe7eb9103d2e07d95c8bf931df8a22241b939d76dbe59e7b66a88bd",
+      "excerptCount": 103,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/foreshadow_reveal.json",
+      "bytes": 284603,
+      "sha256": "d889c8d220bb9532084376e64115ff58caa87ba898a7aaf5778abc15571027fd",
+      "excerptCount": 206,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/gamble.json",
+      "bytes": 279363,
+      "sha256": "03dde57bafe85b84144d05630940a4ebde6d4849eb5bb30db8a0b0542cd9038e",
+      "excerptCount": 210,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/romance.json",
+      "bytes": 468322,
+      "sha256": "2d76e8a62eaec0b02b896464df6f3c351dbe403e867164bc8dc88a5df1a55876",
+      "excerptCount": 341,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/sacrifice.json",
+      "bytes": 813537,
+      "sha256": "c79a094ff8b6b8a24f3d88a2b91fc01d189ae00fc1fef8bcbf15a93902a501dd",
+      "excerptCount": 598,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/team_gathering.json",
+      "bytes": 638201,
+      "sha256": "b35cdb56b11d448554fad3c8e238bbf1bb6f5941db1abca2b5ef87674b82a0a5",
+      "excerptCount": 472,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    },
+    {
+      "sceneFile": "scenes/world_setting.json",
+      "bytes": 338679,
+      "sha256": "973d3cc95290b797b6ae9c04485e0f4de1c881c7ced6102ae79b6b8d3a61df97",
+      "excerptCount": 250,
+      "works": [
+        "怪谈游戏设计师959",
+        "神秘复苏"
+      ]
+    }
+  ]
+}

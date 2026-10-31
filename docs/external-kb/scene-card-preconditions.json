@@ -1,0 +1,305 @@
+{
+  "schemaVersion": 1,
+  "description": "已冻结卡池（scene-cards-v2.json 19 张）的必要前提核对表，仅供离线验收使用，不进入运行池、不进入生产 prompt。每张卡列出机制成立所必需的前提（取自卡片自身 applicable_when / 机制描述），并给出可核对的概念组：required 每组至少命中一个词，contradiction 命中任一组即判「明确不成立」。本表不含章节编号、作品名、角色专名，也不改变任何检索阈值、topK、fallback。",
+  "frozenPoolSha256": "652e40150683fa87090025d327dfc1858040405e8fd82ba0728374c2e3818bce",
+  "frozenAssetPath": "docs/external-kb/scene-cards-v2.json",
+  "frozenAssetSha256": "9a12cf2f6ce082ea8bd1267f6a1edcb25cc0ba9d647e951cf40e1f0cd81e40fb",
+  "scopeNote": "scope=whole 表示在整份作者写前契约里找证据；scope=ending 表示只在章末字段（章末目标/章尾/结尾等）或契约末尾 20% 找证据，避免把中段物证当成章末落点。",
+  "cards": [
+    {
+      "cardId": "combat-partial-suppression-then-leak",
+      "preconditions": [
+        {
+          "id": "visible-advantage",
+          "statement": "主角刚取得一次可见优势",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["取得优势", "压制住", "压制性", "击退", "打退", "占上风", "占据上风", "反制", "掌控局面"]],
+          "contradiction": [["扑空", "逃亡", "逃跑", "逃去", "转身逃", "败退", "落空"]]
+        },
+        {
+          "id": "unhandled-secondary-threat",
+          "statement": "场上存在未处理的次要威胁",
+          "source": "applicable_when[1]",
+          "scope": "whole",
+          "required": [["隐患", "未处理", "次要威胁", "遗留", "后患"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "combat-role-brief-before-engagement",
+      "preconditions": [
+        {
+          "id": "team-needs-briefing",
+          "statement": "存在需要在交锋前分工的队伍",
+          "source": "applicable_when[0] + narrative_function",
+          "scope": "whole",
+          "required": [["队伍", "小队", "队友", "同伴", "三人", "众人"]],
+          "contradiction": [["单人", "独自", "一个人"]]
+        },
+        {
+          "id": "pre-engagement-phase",
+          "statement": "仍处于布置阶段，尚未正面交手",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["分工", "位置", "站位", "岗位", "顶替", "撤退方案"]],
+          "contradiction": [["已经开打", "正面交手", "混战"]]
+        }
+      ]
+    },
+    {
+      "cardId": "combat-shrink-domain-approach",
+      "preconditions": [
+        {
+          "id": "cannot-face-directly",
+          "statement": "对手无法正面对抗",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["无法正面", "不能正面", "无法对抗", "不可力敌", "实力远超", "打不过"]],
+          "contradiction": []
+        },
+        {
+          "id": "need-covert-approach",
+          "statement": "主角需要在不惊动对手的前提下接近",
+          "source": "applicable_when[1]",
+          "scope": "whole",
+          "required": [["接近", "靠近", "潜入", "潜行", "深入", "摸近"]],
+          "contradiction": [["正面交手", "已经开打"]]
+        }
+      ]
+    },
+    {
+      "cardId": "copy-end-hook",
+      "preconditions": [
+        {
+          "id": "ending-on-unverified-rule",
+          "statement": "章末落在未验证的新规则或未解线索上",
+          "source": "applicable_when[0]",
+          "scope": "ending",
+          "required": [["新规则", "未验证", "未解", "对不上", "疑点", "新线索"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "cost-escalating-tool",
+      "preconditions": [
+        {
+          "id": "durable-suppression-tool",
+          "statement": "主角持有需要长线消耗的压制型道具",
+          "source": "applicable_when[0] + narrative_function",
+          "scope": "whole",
+          "required": [["道具", "法器", "灯", "符", "装备", "工具", "器物"], ["损耗", "裂纹", "缺口", "余量", "消耗", "磨损"]],
+          "contradiction": [["一次性"]]
+        }
+      ]
+    },
+    {
+      "cardId": "cost-payoff-itemized-ledger",
+      "preconditions": [
+        {
+          "id": "just-broke-through",
+          "statement": "本章刚完成一次能力升级或突破",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["突破", "升级", "晋升", "进阶", "觉醒", "炼化"]],
+          "contradiction": [["纯日常", "日常过渡"]]
+        }
+      ]
+    },
+    {
+      "cardId": "fake-authority",
+      "preconditions": [
+        {
+          "id": "impostor-present",
+          "statement": "场上已有自称懂行的冒充者或可被误认的伪专家",
+          "source": "applicable_when[1]",
+          "scope": "whole",
+          "required": [["冒充", "假大师", "伪专家", "自称懂行", "装懂", "自封", "假行家", "冒牌"]],
+          "contradiction": [["没有冒充", "无冒充"]]
+        }
+      ]
+    },
+    {
+      "cardId": "info-asymmetry-tension",
+      "preconditions": [
+        {
+          "id": "asymmetric-knowledge",
+          "statement": "存在角色间信息不对等（有人知一半或知情不说）",
+          "source": "applicable_when[1] + rule",
+          "scope": "whole",
+          "required": [["信息差", "知一半", "知道一半", "隐瞒", "不说", "没告诉", "瞒"]],
+          "contradiction": [["信息完全公开", "所有人全知"]]
+        }
+      ]
+    },
+    {
+      "cardId": "info-reveal-archive-exception",
+      "preconditions": [
+        {
+          "id": "checkable-record-source",
+          "statement": "手上有可复核的记录来源（档案、监控、名单等）",
+          "source": "applicable_when[1]",
+          "scope": "whole",
+          "required": [["档案", "监控", "名单", "台账", "记录", "卷宗"], ["核对", "复核", "查清", "调查", "比对"]],
+          "contradiction": [["没有任何可核对记录", "无可核对"]]
+        }
+      ]
+    },
+    {
+      "cardId": "info-reveal-bystander-withheld-question",
+      "preconditions": [
+        {
+          "id": "lower-tier-bystander",
+          "statement": "场上有层级较低的旁观者",
+          "source": "applicable_when[1]",
+          "scope": "whole",
+          "required": [["旁观", "旁听", "随行", "跟在", "新人", "新来", "后辈", "跟班"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "info-reveal-trace-in-hand-close",
+      "preconditions": [
+        {
+          "id": "ending-on-checkable-trace",
+          "statement": "章末落点存在可检查的记录或物证",
+          "source": "applicable_when[1]",
+          "scope": "ending",
+          "required": [["物证", "纸条", "记录", "样本", "尸体", "残骸", "痕迹", "照片", "文件", "名单"]],
+          "contradiction": []
+        },
+        {
+          "id": "after-conflict",
+          "statement": "此前刚经历一次交锋或对抗",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["交锋", "对抗", "交手", "战斗", "围杀"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "physical-anomaly-horror",
+      "preconditions": [
+        {
+          "id": "checkable-physical-anomaly",
+          "statement": "现场存在可核对的物理反常",
+          "source": "applicable_when[1] + rule",
+          "scope": "whole",
+          "required": [["反常", "异常", "不对", "不符", "伤口", "痕迹", "错位", "扭曲"]],
+          "contradiction": [["轻喜剧", "日常线"]]
+        }
+      ]
+    },
+    {
+      "cardId": "protagonist-cold-deduction",
+      "preconditions": [
+        {
+          "id": "deduce-from-clues",
+          "statement": "主角需要从线索推断规则",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["线索", "推断", "推演", "判断", "推理", "分析"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "relationship-limited-alliance",
+      "preconditions": [
+        {
+          "id": "mutual-distrust",
+          "statement": "两方原本互不信任",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["互不信任", "不信任", "防备", "提防", "警惕", "猜忌"]],
+          "contradiction": []
+        },
+        {
+          "id": "shared-threat",
+          "statement": "共同威胁已同时波及双方",
+          "source": "applicable_when[1]",
+          "scope": "whole",
+          "required": [["共同威胁", "同时被", "也追", "波及双方", "两边"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "rule-copy-probe",
+      "preconditions": [
+        {
+          "id": "first-entry-unstated-rule",
+          "statement": "首次进入副本且规则尚未明示",
+          "source": "applicable_when[0] + applicable_when[1]",
+          "scope": "whole",
+          "required": [["首次", "第一次", "初次", "刚进", "新副本"], ["未明示", "未说明", "不知道规则", "规则未"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "rule-hidden-loophole",
+      "preconditions": [
+        {
+          "id": "rule-text-given",
+          "statement": "规则文本已给出可对照的条文",
+          "source": "applicable_when[0]",
+          "scope": "whole",
+          "required": [["规则原文", "规则条文", "规则文本", "规则第", "条文"]],
+          "contradiction": []
+        },
+        {
+          "id": "life-or-death-stake",
+          "statement": "主角面临生死攸关的局面",
+          "source": "applicable_when[1]",
+          "scope": "whole",
+          "required": [["死亡", "必死", "倒计时", "活不了", "清算", "致死", "性命"]],
+          "contradiction": []
+        }
+      ]
+    },
+    {
+      "cardId": "team-panic-chain",
+      "preconditions": [
+        {
+          "id": "team-casualty-or-panic",
+          "statement": "多人团队且已出现伤亡或恐慌",
+          "source": "applicable_when[0] + applicable_when[1]",
+          "scope": "whole",
+          "required": [["团队", "队伍", "同伴", "众人", "多人"], ["伤亡", "死亡", "恐慌", "崩溃", "失控", "不信"]],
+          "contradiction": [["单人", "独自", "只有两人", "两个人"]]
+        }
+      ]
+    },
+    {
+      "cardId": "team-pressure-discipline-list-close",
+      "preconditions": [
+        {
+          "id": "ending-team-discipline",
+          "statement": "章末存在需要纪律约束的团队处境",
+          "source": "applicable_when[0] + applicable_when[1]",
+          "scope": "ending",
+          "required": [["团队", "队伍", "同伴", "众人"], ["纪律", "守则", "条例", "禁令", "约定"]],
+          "contradiction": [["单人", "独自", "一个人"]]
+        }
+      ]
+    },
+    {
+      "cardId": "world-rule-via-consequence",
+      "preconditions": [
+        {
+          "id": "first-world-rule-reveal",
+          "statement": "首次交代世界规则，且不宜由旁白讲体系",
+          "source": "applicable_when[0] + applicable_when[1]",
+          "scope": "whole",
+          "required": [["首次", "第一次", "初期", "开篇"], ["规则", "后果", "查不到", "中断"]],
+          "contradiction": []
+        }
+      ]
+    }
+  ]
+}

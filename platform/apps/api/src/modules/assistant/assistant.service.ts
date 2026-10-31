@@ -648,7 +648,7 @@ export class AssistantService {
     action?: AssistantAction,
     chapterNumber?: number,
   ): Promise<{ messages: PlannerChatMessage[]; manifest: ContextManifest }> {
-    const [project, documents, characters, chapters, history, outlineNodes] = await Promise.all([
+    const [project, documents, characters, chapters, history, historyTotal, outlineNodes] = await Promise.all([
       this.prisma.novelProject.findFirst({
         where: { id: projectId, userId, deletedAt: null },
       }),
@@ -696,6 +696,9 @@ export class AssistantService {
         orderBy: { createdAt: 'desc' },
         take: 10,
         select: { role: true, content: true },
+      }),
+      this.prisma.novelAssistantMessage.count({
+        where: { projectId, userId, deletedAt: null },
       }),
       this.prisma.novelOutlineNode.findMany({
         where: { projectId, userId, deletedAt: null },
@@ -807,6 +810,19 @@ export class AssistantService {
       contextProfile: env.PINOVEL_CONTEXT_PROFILE,
       historicalQueries: action === 'query_project' ? [currentUserContent.slice(0, 120)] : [],
     });
+    const chronological = [...history].reverse();
+    if (chronological.length > 0) chronological.pop();
+    const prior: PlannerChatMessage[] = chronological.flatMap((row) => {
+      if (row.role !== 'user' && row.role !== 'assistant') return [];
+      // 单条历史截断，防超长消息撑爆规划模型上下文。
+      return [{ role: row.role, content: row.content.slice(0, MAX_HISTORY_MESSAGE_CHARS) }];
+    });
+    // G2：远轮历史只做丢弃，必须显式声明省略条数（不静默丢历史）。
+    const historyOmitted = Math.max(0, historyTotal - history.length);
+    compiled.manifest.historyCompaction = {
+      retained: prior.length,
+      omitted: historyOmitted,
+    };
     const system: PlannerChatMessage = {
       role: 'system',
       content: buildAssistantSystemPrompt({
@@ -816,19 +832,13 @@ export class AssistantService {
         workflowState: project?.workflowState ?? 'project_created',
         hasOutline: isUsableStoryOutline(outlineText),
         characterNames: characters.map((row) => row.name),
-         chapterCount: chapters.length,
+        chapterCount: chapters.length,
         nextChapterNumber: lastChapterNumber + 1,
         action,
         bookContext: compiled.bookBrief,
+        historyOmitted,
       }),
     };
-    const chronological = [...history].reverse();
-    if (chronological.length > 0) chronological.pop();
-    const prior: PlannerChatMessage[] = chronological.flatMap((row) => {
-      if (row.role !== 'user' && row.role !== 'assistant') return [];
-      // 单条历史截断，防超长消息撑爆规划模型上下文。
-      return [{ role: row.role, content: row.content.slice(0, MAX_HISTORY_MESSAGE_CHARS) }];
-    });
     return {
       messages: [system, ...prior, { role: 'user', content: currentUserContent }],
       manifest: compiled.manifest,

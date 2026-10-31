@@ -1,0 +1,397 @@
+{
+  "schemaVersion": 1,
+  "description": "外挂知识库旧版（第一阶段）10 张卡片：来源仅为旧版蒸馏记录中声明的作品与章节，未重新核验原始语料；作为可入库审计资产保留，provenanceStatus=unverified。本文件不含任何外部小说原文或摘录。",
+  "cards": [
+    {
+      "id": "rule-copy-probe",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "opening",
+      "emotion_target": [
+        "不安",
+        "好奇"
+      ],
+      "narrative_function": "建立规则并立即用低成本试探验证规则边界",
+      "style_tags": [
+        "规则副本",
+        "试探",
+        "验证"
+      ],
+      "scene_function": "boundary_test",
+      "beat": "test",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": "short_term_safety_for_information",
+      "cost_type": [
+        "rule_trigger_risk",
+        "time_loss"
+      ],
+      "state_delta": [
+        "knowledge_up",
+        "risk_up"
+      ],
+      "rule": "新规则出现后，可先让主角用代价可控的方式靠近规则边界，用可见后果把规则从“被说明”变成“被验证”，而不是先由角色口述全文。",
+      "anti_pattern": "直接由角色口述规则全文，随后才发生事件；或规则从未被验证就被当作常识使用。",
+      "applicable_when": [
+        "首次进入副本",
+        "规则未明示",
+        "读者需要立刻知道底线"
+      ],
+      "avoid_when": [
+        "规则已在上一章验证过",
+        "当下冲突是人物情感而非规则"
+      ],
+      "source": "怪谈游戏设计师959 第1-3章",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "rule-hidden-loophole",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "紧张",
+        "反爽"
+      ],
+      "narrative_function": "在规则文本里留语义缺口，让主角靠钻字眼获得优势",
+      "style_tags": [
+        "規則文本",
+        "歧义",
+        "钻空子"
+      ],
+      "scene_function": "rule_exploitation",
+      "beat": "reversal",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": "safety_for_advantage",
+      "cost_type": [
+        "exposure_risk",
+        "rule_trigger_risk"
+      ],
+      "state_delta": [
+        "position_up",
+        "risk_up",
+        "knowledge_up"
+      ],
+      "rule": "规则文本里可以存在语义缺口（措辞歧义或适用对象错位），让主角靠钻字眼获得非预期优势；缺口需要在后续叙述中被回溯交代，而不是悬空或让前文紧张感失效。",
+      "anti_pattern": "漏洞靠主角“突然想到”且无铺垫；或漏洞大到让前文所有紧张感失效。",
+      "applicable_when": [
+        "规则文本已给出完整条文",
+        "主角处于必死局面需要反转"
+      ],
+      "avoid_when": [
+        "规则本身还没交代清楚",
+        "本章主线是人物关系"
+      ],
+      "source": "神秘复苏 第41章",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "cost-escalating-tool",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "any",
+      "emotion_target": [
+        "压抑",
+        "紧迫"
+      ],
+      "narrative_function": "用可见损耗的压制型道具替代无限能力",
+      "style_tags": [
+        "消耗道具",
+        "代价递增"
+      ],
+      "scene_function": "cost_payment",
+      "beat": "escalation",
+      "pressure_type": "resource_scarcity",
+      "decision_tradeoff": "cost_for_power",
+      "cost_type": [
+        "resource_loss",
+        "physical_injury"
+      ],
+      "state_delta": [
+        "resource_down",
+        "threat_up"
+      ],
+      "rule": "压制型道具的损耗可见且会累积（如裂纹、缺口、余量），读者能据此估算主角还能支撑多久；损耗不是需要紧张时才临时提起的设定。",
+      "anti_pattern": "道具无副作用，主角靠它无敌；或损耗只在需要紧张时才被提起。",
+      "applicable_when": [
+        "主角需要长线对抗规则污染",
+        "能力体系需要代价约束"
+      ],
+      "avoid_when": [
+        "本章是纯日常过渡",
+        "道具是一次性且当场毁掉"
+      ],
+      "source": "神秘复苏 第41章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "fake-authority",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "疑惑",
+        "鄙视"
+      ],
+      "narrative_function": "以自称懂行的冒充者遮蔽真正的规则参与者",
+      "style_tags": [
+        "假大师",
+        "信息遮蔽"
+      ],
+      "scene_function": "info_asymmetry",
+      "beat": "reveal",
+      "pressure_type": "information_gap",
+      "decision_tradeoff": "information_advantage_for_risk",
+      "cost_type": [
+        "exposure_risk"
+      ],
+      "state_delta": [
+        "information_up",
+        "risk_up"
+      ],
+      "rule": "需要延后揭示真正懂规则的人时，可让场上自称懂行的冒充者承担误导，使读者对他的可信度产生怀疑，而真正的规则参与者保持低调；误导者的破绽需要与前文细节对得上，而不是凭空出现。",
+      "anti_pattern": "反派直接自报身份；或骗子被主角瞬间识破、毫无戏份价值。",
+      "applicable_when": [
+        "需要延后真凶揭示",
+        "场上已有自称懂行的冒充者或可被误认的伪专家"
+      ],
+      "avoid_when": [
+        "副本已进入高强度对抗",
+        "读者已明确知道真凶"
+      ],
+      "source": "神秘复苏 第42章",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "physical-anomaly-horror",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "any",
+      "emotion_target": [
+        "惊悚",
+        "不适"
+      ],
+      "narrative_function": "恐怖感由物理反常细节承担",
+      "style_tags": [
+        "物理反常",
+        "细节恐怖"
+      ],
+      "scene_function": "horror_anomaly",
+      "beat": "reveal",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": null,
+      "cost_type": [],
+      "state_delta": [
+        "threat_up",
+        "knowledge_up"
+      ],
+      "rule": "恐怖感由可验证的物理反常承担（如与常识不符的伤口或痕迹），细节可被读者核对，成因暂不解释。",
+      "anti_pattern": "靠“恐怖、阴森、毛骨悚然”等形容词与成段环境描写堆砌气氛。",
+      "applicable_when": [
+        "需要制造一次惊悚高点",
+        "现场留有物证"
+      ],
+      "avoid_when": [
+        "本章走轻喜剧或日常线",
+        "反常已被解释过"
+      ],
+      "source": "神秘复苏 第43章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "info-asymmetry-tension",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "紧张",
+        "猜疑"
+      ],
+      "narrative_function": "用角色间信息差制造压力，而非抬高敌人强度",
+      "style_tags": [
+        "信息差",
+        "猜疑链"
+      ],
+      "scene_function": "info_asymmetry",
+      "beat": "escalation",
+      "pressure_type": "information_gap",
+      "decision_tradeoff": "information_advantage_for_risk",
+      "cost_type": [
+        "relationship_damage"
+      ],
+      "state_delta": [
+        "risk_up",
+        "relationship_shift"
+      ],
+      "rule": "压力来自信息差：有人已知规则却不说、有人只知一半；读者的信息量介于场上最弱与最强的角色之间。",
+      "anti_pattern": "靠敌人越来越强来加压；或所有角色信息完全对等、只是情绪激动。",
+      "applicable_when": [
+        "多人困在同一副本",
+        "需要在不加战力的情况下加压"
+      ],
+      "avoid_when": [
+        "单人视角且无外援",
+        "规则已完全公开"
+      ],
+      "source": "神秘复苏 第42-43章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "protagonist-cold-deduction",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "冷静",
+        "悬念"
+      ],
+      "narrative_function": "推演段落的节奏控制",
+      "style_tags": [
+        "内心独白",
+        "短句推演"
+      ],
+      "scene_function": "deduction",
+      "beat": "reveal",
+      "pressure_type": "time_pressure",
+      "decision_tradeoff": null,
+      "cost_type": [
+        "time_loss"
+      ],
+      "state_delta": [
+        "knowledge_up"
+      ],
+      "rule": "主角推演时以连续自问推进变量，逐步收束成一个可执行判断，而不是把完整因果链复盘一遍；推演篇幅以不打断当前节奏为界。",
+      "anti_pattern": "大段“因为A所以B因此C”的完整逻辑复盘；或连续疑问过多变成碎碎念。",
+      "applicable_when": [
+        "主角需要从线索推断规则",
+        "章节中段需要降速喘口气"
+      ],
+      "avoid_when": [
+        "已在动作高潮",
+        "推断结果读者早已知道"
+      ],
+      "source": "神秘复苏 第41、43章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "copy-end-hook",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "ending",
+      "emotion_target": [
+        "期待",
+        "不安"
+      ],
+      "narrative_function": "章末以未验证的规则或未解线索收束",
+      "style_tags": [
+        "章末钩子",
+        "规则悬念"
+      ],
+      "scene_function": "hook_close",
+      "beat": "close",
+      "pressure_type": "time_pressure",
+      "decision_tradeoff": null,
+      "cost_type": [],
+      "state_delta": [
+        "risk_up",
+        "knowledge_up"
+      ],
+      "rule": "章末落点可保持在未验证的新规则或对不上的旧线索上，让钩子推进规则认知，而不是只以打斗中断或主角昏迷收束。",
+      "anti_pattern": "章末用敌人来袭、主角倒地等纯动作暂停收束，规则悬念原地不动。",
+      "applicable_when": [
+        "本章已给出新线索",
+        "下一章仍在本副本内"
+      ],
+      "avoid_when": [
+        "本章是副本收尾章",
+        "需要给读者一个完整情绪落地"
+      ],
+      "source": "怪谈游戏设计师959 前期章节",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "world-rule-via-consequence",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "opening",
+      "emotion_target": [
+        "不安",
+        "代入"
+      ],
+      "narrative_function": "用已发生的后果透露世界观规则",
+      "style_tags": [
+        "后果透露",
+        "反说明书"
+      ],
+      "scene_function": "world_reveal",
+      "beat": "setup",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": null,
+      "cost_type": [],
+      "state_delta": [
+        "knowledge_up",
+        "risk_up"
+      ],
+      "rule": "世界观规则可以主要经由已发生的后果显露（如通行中断、信息查不到），让角色自己核对矛盾，避免用旁白讲解体系分级。",
+      "anti_pattern": "用“这个世界分为X等Y级”之类的旁白直接说明；或让人物互相科普设定。",
+      "applicable_when": [
+        "首次交代世界规则",
+        "需要保持读者与主角同步无知"
+      ],
+      "avoid_when": [
+        "规则已被多次验证",
+        "本章需要快速推进剧情"
+      ],
+      "source": "怪谈游戏设计师959 第1章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "team-panic-chain",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "压抑",
+        "敬畏"
+      ],
+      "narrative_function": "团队恐慌的外溢路径设计",
+      "style_tags": [
+        "群像",
+        "恐慌外溢"
+      ],
+      "scene_function": "team_pressure",
+      "beat": "escalation",
+      "pressure_type": "relationship_conflict",
+      "decision_tradeoff": "individual_for_team",
+      "cost_type": [
+        "physical_injury",
+        "relationship_damage"
+      ],
+      "state_delta": [
+        "risk_up",
+        "relationship_shift"
+      ],
+      "rule": "团队恐慌应呈现出可追溯的外溢路径（谁先不信规则、如何扩散、代价落在谁身上），让读者对规则生敬畏，而不是对队友生愤怒。",
+      "anti_pattern": "队友无差别犯错分摊；或犯错者被主角一句话说服立刻恢复冷静。",
+      "applicable_when": [
+        "多人副本且需要制造伤亡",
+        "规则需要被反面验证"
+      ],
+      "avoid_when": [
+        "团队只有两人",
+        "本章重点是个体心理"
+      ],
+      "source": "怪谈游戏设计师959 副本群像",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    }
+  ]
+}

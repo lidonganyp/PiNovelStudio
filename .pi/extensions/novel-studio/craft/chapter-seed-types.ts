@@ -189,6 +189,12 @@ export const AuthorChapterContractSchema = Type.Object({
     motivation: Type.String(),
   }), { default: [] }),
   sourceIds: Type.Array(Type.String(), { default: [] }),
+  /**
+   * CRASH-RECOVERY-1：显式章纲 provenance 的消费判定状态（仅审计/诊断用）。
+   * unmanaged=作者手写无 provenance；committed；recovered=pending 已对账修复；
+   * pending/failed/mismatch/invalid=拒绝消费。
+   */
+  provenanceState: Type.Optional(Type.String()),
 });
 export type AuthorChapterContract = Static<typeof AuthorChapterContractSchema>;
 

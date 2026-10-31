@@ -228,9 +228,10 @@ describe("BATCH 集成：锁 / ChapterSeed 阻断 / state commit 失败 / 工具
     assert.ok(genProps.mode, "应含 mode 字段");
     assert.ok(genProps.action, "应含 action 字段");
     const genRequired = genSchema.required || [];
+    assert.ok(genRequired.includes("workspaceId"), "required 应包含 workspaceId");
     assert.ok(
-      genRequired.includes("workspaceId") && genRequired.includes("chapterId") && genRequired.includes("chapterNumber"),
-      "required 应保持单章兼容",
+      genProps.chapterId && genProps.chapterNumber,
+      "单章兼容字段 chapterId/chapterNumber 仍须声明（非 batch 分支由条件契约要求）",
     );
   });
 

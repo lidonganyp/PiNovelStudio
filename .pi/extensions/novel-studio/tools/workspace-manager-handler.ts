@@ -35,6 +35,10 @@ import type { FinalizationEntryResult } from "../v2/governance/chapter-proxy-app
 import type { IngestProxyApprovalFeedbackResult } from "../v2/governance/chapter-proxy-approval-feedback-ingestor.js";
 import type { ReleaseHealthReport } from "../v2/governance/release-health-aggregator.js";
 import type { ChapterProxyReviewResult } from "../v2/governance/chapter-proxy-approval-runner.js";
+import {
+  handleExpertHandoff,
+  type ExpertHandoffResult,
+} from "../handlers/expert-handoff-handler.js";
 
 /** proxy_finalization 支持的子操作 */
 const PROXY_FINALIZATION_ACTIONS = new Set([
@@ -125,6 +129,35 @@ export interface HandleWorkspaceManagerInput {
   sourceChapterIds?: string[];
   /** record_return_chapter 用：回流章触发原因 */
   reason?: string;
+  // ── 专家群接入 + 章节契约 handoff（action="list_experts"/"dispatch_expert"/"handoff_chapter_contract"） ──
+  /** dispatch_expert 必填：专家角色名（.pi/agents/<role>.md 的 name） */
+  expertRole?: string;
+  /** dispatch_expert 必填：任务目标 */
+  objective?: string;
+  /** dispatch_expert 可选：专家可读输入路径（越界/.env/chapters 一律拒绝） */
+  inputPaths?: string[];
+  /** dispatch_expert 可选：附加约束 */
+  constraints?: string[];
+  /** dispatch_expert 可选：期望产物 */
+  expect?: string;
+  /** dispatch_expert 执行方式：package（默认，宿主执行）/ execute（生产无授权执行器，fail-closed） */
+  executionMode?: "package" | "execute";
+  /** handoff_chapter_contract 必填：专家契约提案 Markdown */
+  proposalText?: string;
+  /** handoff_chapter_contract：preview（默认）/ commit（原子写入显式章纲） */
+  handoffMode?: "preview" | "commit";
+  /** handoff commit 必填：确认人（仅作审计标签，不构成授权） */
+  confirmedBy?: string;
+  /** handoff commit 必填：可信宿主审批层（issueChapterContractApproval）签发的一次性凭证 */
+  approvalReceipt?: string;
+  /** handoff commit：目标已存在且内容不同时需 true 才覆盖 */
+  overwrite?: boolean;
+  /** handoff 可选：已登记硬事实 ID（提供时禁止编造） */
+  knownFactIds?: string[];
+  /** handoff 可选：已确认 PROMISE ID（新书传空数组） */
+  knownPromiseIds?: string[];
+  /** 测试用：专家目录覆盖（生产不暴露） */
+  _agentsDir?: string;
   _projectRoot?: string;
   _commitAndSaveFn?: HandleChapterProxyFinalizationInput["_commitAndSaveFn"];
   /** 测试用：注入 chapterRegistry mock */
@@ -164,6 +197,9 @@ export interface HandleWorkspaceManagerResult {
   feedbackEntry?: ChapterAdvisoryResult["feedbackEntry"];
   /** record_return_chapter 写入的 provenance 条目 */
   provenanceEntry?: ChapterAdvisoryResult["provenanceEntry"];
+  // ── 专家群接入 + 章节契约 handoff 委托结果 ──
+  /** 专家子操作完整结果（list_experts / dispatch_expert / handoff_chapter_contract） */
+  expertHandoff?: ExpertHandoffResult;
 }
 
 export async function handleWorkspaceManager(
@@ -193,6 +229,17 @@ export async function handleWorkspaceManager(
       input.action === "record_return_chapter"
     ) {
       return await handleAdvisory(input);
+    }
+
+    // ── expert 子操作：专家发现 / 派发包 / 章节契约 handoff ──
+    // EXPERT-HOST-HANDOFF-1：通过现有 novel_workspace_manager 接入专家群，不注册第 7 个公开工具。
+    // dispatch 只产出宿主可执行任务包（零模型调用、零写入）；handoff commit 必须显式授权。
+    if (
+      input.action === "list_experts" ||
+      input.action === "dispatch_expert" ||
+      input.action === "handoff_chapter_contract"
+    ) {
+      return handleExpertSubOperation(input);
     }
 
     const manager = await createWorkspaceManager();
@@ -555,5 +602,47 @@ async function handleAdvisory(
     feedbackEntry: advisoryResult.feedbackEntry,
     provenanceEntry: advisoryResult.provenanceEntry,
     error: advisoryResult.error,
+  };
+}
+
+// ============================================================================
+// expert 子操作委托（EXPERT-HOST-HANDOFF-1）
+// ============================================================================
+
+/**
+ * 委托 expert-handoff-handler：
+ * - list_experts：发现 `.pi/agents/*.md` 专家资产（只读，registry 有 error 则 status=error）
+ * - dispatch_expert：校验角色/路径/预算后返回宿主可执行任务包；零模型调用、零写入
+ * - handoff_chapter_contract：preview（只校验/预览，不写盘、不签发凭证）/ commit（必须回传
+ *   可信宿主审批层签发的一次性凭证 + confirm 后原子写入 `series/ch{N}-outline-explicit.md` 并落 provenance）
+ */
+function handleExpertSubOperation(
+  input: HandleWorkspaceManagerInput,
+): HandleWorkspaceManagerResult {
+  const result = handleExpertHandoff({
+    action: input.action as "list_experts" | "dispatch_expert" | "handoff_chapter_contract",
+    workspaceId: input.workspaceId,
+    expertRole: input.expertRole,
+    objective: input.objective,
+    inputPaths: input.inputPaths,
+    constraints: input.constraints,
+    expect: input.expect,
+    executionMode: input.executionMode,
+    proposalText: input.proposalText,
+    handoffMode: input.handoffMode,
+    chapterNumber: input.chapterNumber,
+    confirmedBy: input.confirmedBy,
+    approvalReceipt: input.approvalReceipt,
+    confirm: input.confirm,
+    overwrite: input.overwrite,
+    knownFactIds: input.knownFactIds,
+    knownPromiseIds: input.knownPromiseIds,
+    _projectRoot: input._projectRoot,
+    _agentsDir: input._agentsDir,
+  });
+  return {
+    status: result.status,
+    error: result.error,
+    expertHandoff: result,
   };
 }

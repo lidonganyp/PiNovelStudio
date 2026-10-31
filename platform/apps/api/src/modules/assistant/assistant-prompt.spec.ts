@@ -1,28 +1,38 @@
+/**
+ * 上下文管理执行规范回归（AGENTS.md「上下文管理执行规范」第 4 条）：
+ * 对话历史只保留最近消息，更早轮次被丢弃时必须显式声明省略条数，不得静默丢历史。
+ */
+
 import { describe, expect, it } from 'vitest';
 import { buildAssistantSystemPrompt } from './assistant-prompt';
 
-describe('assistant prompt continuation', () => {
-  it('gives the planner a book working set instead of previous-chapter prose', () => {
-    const prompt = buildAssistantSystemPrompt({
-      title: '试书',
-      genre: '都市',
-      description: '',
-      workflowState: 'generated',
-      hasOutline: true,
-      characterNames: ['沈砚'],
-      chapterCount: 1,
-      nextChapterNumber: 2,
-      action: 'plan_chapter',
-      bookContext: '## 未结伏笔/承诺\n- 不要相信沈建国',
-    });
-    expect(prompt).toContain('全书工作集');
-    expect(prompt).toContain('不要相信沈建国');
-    expect(prompt).toContain('不要复述上一章已经发生的情节');
-    expect(prompt).not.toContain('上一章结尾原文');
-    expect(prompt).toContain('只产出指定章节种子');
-    expect(prompt).toContain('"chapterSeed"');
-    expect(prompt).not.toContain('[[CHAPTER_SEED_START]]');
-    expect(prompt).not.toContain('[[OUTLINE_START]]');
-    expect(prompt).not.toContain('[[GENERATE_CHAPTER');
+function baseContext(overrides: Record<string, unknown> = {}) {
+  return {
+    title: '测试书',
+    genre: '都市',
+    description: '简介',
+    workflowState: 'project_created',
+    hasOutline: false,
+    characterNames: [],
+    chapterCount: 0,
+    nextChapterNumber: 1,
+    ...overrides,
+  };
+}
+
+describe('buildAssistantSystemPrompt 历史压缩声明', () => {
+  it('未省略历史时不输出省略声明', () => {
+    const prompt = buildAssistantSystemPrompt(baseContext());
+    expect(prompt).not.toContain('已省略');
+  });
+
+  it('省略历史时显式声明条数', () => {
+    const prompt = buildAssistantSystemPrompt(baseContext({ historyOmitted: 12 }));
+    expect(prompt).toContain('更早的 12 条消息已省略');
+  });
+
+  it('historyOmitted 为 0 时等同未省略', () => {
+    const prompt = buildAssistantSystemPrompt(baseContext({ historyOmitted: 0 }));
+    expect(prompt).not.toContain('已省略');
   });
 });

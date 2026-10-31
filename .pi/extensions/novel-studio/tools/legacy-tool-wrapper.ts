@@ -4,6 +4,8 @@
 
 import { Type, type TSchema } from "@sinclair/typebox";
 import { getProjectRoot, resolveProjectRoot, setProjectRoot } from "../utils/config.js";
+import { logHarnessEvent } from "../utils/harness-logger.js";
+import { renderToolInputViolations, validateToolInput } from "./tool-input-validation.js";
 
 /**
  * Convert the extension's legacy JSON schema objects into TypeBox schemas.
@@ -63,6 +65,25 @@ export function wrapLegacyTool(raw: any): any {
     description: raw.description,
     parameters,
     async execute(toolCallId: string, params: any, _signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
+      const inputContract = validateToolInput(raw.inputSchema, params);
+      if (!inputContract.ok) {
+        logHarnessEvent("warn", "tool_input_contract_violation", {
+          stage: "tool",
+          tool: raw.name,
+          severity: "hard",
+          toolCallId,
+          violations: inputContract.violations,
+        });
+        return {
+          content: [{ type: "text" as const, text: renderToolInputViolations(raw.name, inputContract.violations) }],
+          isError: true,
+          details: {
+            status: "input_contract_violation",
+            toolName: raw.name,
+            violations: inputContract.violations,
+          },
+        };
+      }
       try {
         const callerProvidedRoot = typeof params?._projectRoot === "string";
         const trustedRootContext = ctx?.__novelRuntimeTrustedRoot === true;
@@ -106,6 +127,13 @@ export function wrapLegacyTool(raw: any): any {
           details: result,
         };
       } catch (error: any) {
+        logHarnessEvent("error", "tool_invocation_failed", {
+          stage: "tool",
+          tool: raw.name,
+          severity: "fatal",
+          toolCallId,
+          error: error?.message || String(error),
+        });
         return {
           content: [{ type: "text" as const, text: error?.message || String(error) }],
           isError: true,

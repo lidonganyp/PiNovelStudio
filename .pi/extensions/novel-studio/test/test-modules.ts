@@ -344,6 +344,8 @@ import "../v2/core/evidence-eligibility-gate.js";
 import "../v2/core/evidence-record-adapter.js";
 import "../v2/core/context-delivery-ledger.js";
 import "../v2/core/context-package-production.js";
+// EXTERNAL-KB-1：外挂蒸馏知识库（实验通道）单元/集成测试入口。
+import "../v2/core/external-knowledge-base.js";
 import "../v2/core/ceg-wave5-metrics.js";
 import "../v2/core/ceg-wave6-longform-fixture.js";
 
@@ -369,3 +371,12 @@ import "../v2/core/validator-run-meter.js";
 
 // Marker export to prevent tree-shaking from removing side-effect imports
 export const TEST_MODULES_LOADED = true;
+
+// EXPERT-GROUP-R10/R13/R14/R15/R18：项目内专家群注册表 / 最小派发器 / 章节契约桥 / 公开结果摘要。
+// 仅测试与离线检查消费，不注册公开工具、不进入 dist/ 生产闭包（保持 6 公开工具与唯一生成入口）。
+// 闭包仅 node 内建（crypto/fs/path），章节契约桥额外依赖 craft/explicit-outline-parser（已在 dist/）。
+import "../novelos/experts/expert-registry.js";
+import "../novelos/experts/expert-dispatcher.js";
+import "../novelos/experts/expert-result-summary.js";
+import "../novelos/experts/chapter-contract-bridge.js";
+import "../handlers/expert-handoff-handler.js";

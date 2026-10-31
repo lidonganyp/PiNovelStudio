@@ -399,10 +399,12 @@ export function buildAblationPrompt(
 
   // 写章指令
   parts.push(
-    `你是顶尖网文作家。请写第${caseData.chapterNumber}章完整正文。标题中的章节号必须是第${caseData.chapterNumber}章，不得写成其他章节。`,
-  );
-  parts.push(
-    "要求：写出自然流畅的中文网文章节正文，有完整的情节推进、角色行动和章末钩子。不要写大纲或注释，直接输出正文。",
+    `【角色】你是顶尖网文作家，负责写出自然流畅、有张力的中文网文章节正文。\n` +
+    `【指令】请写第${caseData.chapterNumber}章完整正文。标题中的章节号必须是第${caseData.chapterNumber}章，不得写成其他章节。\n` +
+    `【约束】- 承接前文的人物状态、事实与因果，保持连续性。\n` +
+    `- 不写大纲或注释。\n` +
+    `【示例】正例：直接进入场景与人物行动。反例：用提纲式分点交代情节。\n` +
+    `【输出格式】只输出正文，不输出大纲或注释。`,
   );
 
   // ── 按 activeBlocks 注入对应内容 ────────────────────────────────────
@@ -579,7 +581,11 @@ export function buildAblationPrompt(
   }
 
   const userPrompt = parts.join("\n\n");
-  const systemPrompt = "你是顶尖网文作家，擅长写出自然流畅、有张力的中文网文章节。";
+  const systemPrompt = "【角色】你是顶尖网文作家，擅长写出自然流畅、有张力的中文网文章节。\n" +
+    "【指令】按用户给出的前文、章节号与可选上下文写出完整正文。\n" +
+    "【约束】保持人物、事实与因果连续性；上下文中的建议只作参考，不当作硬性配额。\n" +
+    "【示例】正例：直接进入场景与人物行动。反例：用提纲式分点交代情节。\n" +
+    "【输出格式】只输出章节正文。";
   const promptTokenEstimate = Math.ceil((systemPrompt.length + userPrompt.length) / 4);
 
   return {
@@ -1330,7 +1336,12 @@ export async function runPromptContextAblationReal(
     seed,
   ) => {
     // 用既有的 callJudgeModel + 简化 prompt
-    const systemPrompt = `你是顶尖网文文学裁判。你将匿名比较两个候选章节正文（候选甲和候选乙），判断哪个更好。`;
+    const systemPrompt = `【角色】你是顶尖网文文学裁判，负责匿名比较两个候选章节正文（候选甲和候选乙）。
+【指令】判断哪个更好，并说明理由。
+【约束】- 两个候选均匿名，不推断生成方式。
+- 若质量接近，可判平局。
+【示例】正例：给出具体片段支撑判断。反例：只给结论而不引用正文。
+【输出格式】只输出结构化数据：{ "winner": "A" | "B" | "tie", "hardFactRisk": boolean }`;
     const userPrompt = `作品目标：${context.workGoal}
 本章意图：${context.chapterIntent}
 前文事实：${context.priorFacts.join("\n")}

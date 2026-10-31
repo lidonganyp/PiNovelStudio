@@ -21,21 +21,25 @@ import type { AuthorStyleStrategyParams } from "../learning/author-style-strateg
 import { hashText } from "./candidate-revision-store.js";
 import { assertChapterProseOutput } from '../../utils/llm-language-guard.js';
 
-export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编辑。你的唯一任务是改表达，不是改故事。
+export const STYLE_SYSTEM_PROMPT = `【角色】你是中文长篇小说的作者风格编辑，只负责表达层，不负责故事层。
 
-【只改表达】
-- 只调整措辞、句式、节奏、感官、语气和对白口吻。
-- 同义改写可以：走进≈走了进去，推开≈推门进去。
+【指令】
+- 通读初稿，保留其中有效的表达；只有确有收益时才调整措辞、句式、节奏、感官、语气和对白口吻。
+- 产出优化后的完整章节正文；没有逐句替换义务，不以替换多少衡量优化质量。
 - 初稿中的每一句话在优化稿中都必须有对应内容。
-- 每个事件、句子或段落在优化稿中只出现一次；严禁为了证明“已保留”而复制同一段落、动作或资源清单。
+- 风格档案只提供定性参考，历史统计不得转成正文配额。
 
-【不改事件、动作、因果】
+【约束】
+- 只改表达：不改事件、不改动作、不改因果。
 - 不改事件：谁对谁做了什么、对象、结果、地点转换，不得换成另一件事。
 - 不改动作：初稿动词不得换成另一类动作。交出≠看，拿起≠放下，离开≠走进，看不见≠看得见，进来≠出去，杀≠救。
 - 不改因果：先后顺序、原因与结果、章末压力不得调换或改写。
+- 每个事件、句子或段落在优化稿中只出现一次；严禁为了证明“已保留”而复制同一段落、动作或资源清单。
 - 不得删改关键事件，不得补写档案、解释或分析。
-
-风格档案只提供定性参考，历史统计不得转成正文配额。
+- 初稿中的每一句话都是故事内容的组成部分——包括动作、对白、设定说明、内心独白、临别赠言、旁白议论等。
+- 严禁以“精简讲述”“优化节奏”“避免冗余”为由删除对白、设定说明或内心独白。
+- 同一事件只能在原有叙事位置保留一份；不得把已有前缀、资源清单或动作段落再次粘贴到后文。
+- canary 证据：模型曾系统性删除“通常需要三人以上的战术小队配合才能猎杀”“活着回来”“是时候去把那1250积分拿回来了”等设定说明/对白/独白——这些是故事骨架的组成部分，删除即阻断。
 
 【中文网文自然表达软检查】
 - 不要默认重复“慢了/迟了/顿了半拍”“短了半寸”“少了两分”“凝实了一分”等伪精确状态变化；除非它是明确的世界观、距离、伤势或战斗计量。
@@ -47,17 +51,14 @@ export const STYLE_SYSTEM_PROMPT = `你是中文长篇小说的作者风格编�
 - “不是X，而是Y”与“绝对/终极/维度/瞬杀”等能力命名连续出现时，优先改为伤口、动作、队友反应和具体结果；具体事实区分、技能专名和角色宣言可保留。
 - 这些是软检查，不是禁词表；保留作者风格、角色声音、类型修辞和明确计量。
 
-【内容完整约束】
-- 初稿中的每一句话都是故事内容的组成部分——包括动作、对白、设定说明、内心独白、临别赠言、旁白议论等。
-- 严禁以"精简讲述""优化节奏""避免冗余"为由删除对白、设定说明或内心独白。
-- 风格优化只调整措辞、句式和节奏；初稿中的每一句话在优化稿中都必须有对应内容（可以改写措辞，但不得删除或用其他事件替换）。
-- 同一事件只能在原有叙事位置保留一份；不得把已有前缀、资源清单或动作段落再次粘贴到后文。
-- canary 证据：模型曾系统性删除"通常需要三人以上的战术小队配合才能猎杀""活着回来""是时候去把那1250积分拿回来了"等设定说明/对白/独白——这些是故事骨架的组成部分，删除即阻断。
+【示例】
+- 正例：事件、动作、对象、结果与顺序原样保留，只在措辞、句读、节奏和语感上更贴近风格档案。
+- 反例：把某一动作换成另一类动作、删去对白或设定说明、把同一段落重复两次，或用“精简”名义改写事件结果。
 
-【输出格式硬约束】
+【输出格式】
 - 只输出优化后的完整章节正文，从正文第一段直接开始。
 - 严禁输出构思、计划、大纲、逐段润色说明、思考链、分析、注释、Markdown 标题或列表前缀（如"- 训练室段："）等任何非正文内容。
-- 严禁先写"润色计划"再写正文；正文必须是你输出的唯一内容。
+- 严禁先写“润色计划”再写正文；正文必须是你输出的唯一内容。
 - 如果你想规划如何优化，只在心里完成，不要把规划写进输出。`;
 
 const MAX_GUIDANCE_ITEMS = 12;
@@ -447,37 +448,13 @@ export function buildAuthorStyleUserPrompt(
   input: AuthorStyleOptimizationInput,
   guidance: ParsedStyleGuidance,
 ): string {
-  const parts: string[] = [];
-  if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
-    const protectedPrefix = input.currentChapterDraft.trimEnd();
-    parts.push(
-      "CONTINUATION MODE: The existing author draft is authoritative. Preserve its prefix exactly once. The exact text between the markers below is protected and must not be rewritten, summarized, corrected, or repeated. Continue only from its end."
-    );
-    parts.push(
-      "[EXACT AUTHOR PREFIX - COPY-PROTECTED]\n"
-      + protectedPrefix
-      + "\n[END EXACT AUTHOR PREFIX]",
-    );
-    if (input.continuationPrefixRecovery) {
-      parts.push(
-        "CONTINUATION PREFIX RECOVERY: The previous style attempt changed the protected prefix. "
-        + "For this retry, output ONLY the new suffix after [END EXACT AUTHOR PREFIX]. "
-        + "Do not output the chapter title, any earlier paragraph, or a rewritten version of the prefix. "
-        + "The host will prepend the protected prefix automatically.",
-      );
-    }
-  }
-  if (input.completeChapterEchoRecovery) {
-    parts.push(
-      "COMPLETE CHAPTER ECHO RECOVERY: The previous style attempt copied the entire Agentic draft "
-      + "and then appended a second rewritten chapter. Produce exactly one chapter only. "
-      + "Never paste the source chapter and then restate it; each event and paragraph may appear once. "
-      + (input.continuationMode === "append"
-        ? "In continuation mode, output only the new suffix after the protected prefix; the host prepends the prefix."
-        : "In replace mode, output one complete optimized chapter from the source, with no duplicated opening or second pass."),
-    );
-  }
-  parts.push(
+  // R07：生产 user prompt 按固定五要素顺序组织（【角色】【指令】【约束】【示例】【输出格式】）。
+  // 【指令】承载任务、续写/恢复说明与待优化资料；【约束】承载事实与表达边界；末尾固定输出契约。
+  const instructionParts: string[] = [];
+  instructionParts.push(input.continuationMode === "append"
+    ? `优化第 ${input.chapterNumber} 章的新增后缀。`
+    : `优化第 ${input.chapterNumber} 章完整正文。`);
+  instructionParts.push(
     "【表达优化硬边界】\n" +
     "只改表达，不改事件、动作和因果。\n" +
     "- 措辞、句式、节奏、感官、语气可以改。\n" +
@@ -485,6 +462,34 @@ export function buildAuthorStyleUserPrompt(
     "- 禁止把初稿动作换成另一类动作（交出≠看，拿起≠放下，离开≠走进，看不见≠看得见）。\n" +
     "- 每个事件、句子或段落只出现一次；不得复制已有前缀、资源清单或动作段落。",
   );
+  if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
+    const protectedPrefix = input.currentChapterDraft.trimEnd();
+    instructionParts.push(
+      "【续写模式】作者已有稿是权威版本。下面的受保护前缀只能出现一次，不得改写、概括、修正或重复；只从它的末尾继续。",
+    );
+    instructionParts.push(
+      "【受保护作者前缀原文】\n"
+      + protectedPrefix
+      + "\n【受保护作者前缀结束】",
+    );
+    if (input.continuationPrefixRecovery) {
+      instructionParts.push(
+        "【续写前缀恢复】上一轮风格优化改动了受保护前缀。"
+        + "本次重试只输出【受保护作者前缀结束】之后的新后缀；"
+        + "不要输出章节标题、任何更早段落，或受保护前缀的改写稿。"
+        + "主程序会自动拼接受保护前缀。",
+      );
+    }
+  }
+  if (input.completeChapterEchoRecovery) {
+    instructionParts.push(
+      "【完整章节回显恢复】上一轮风格优化复制了整个 Agentic 初稿，又追加了第二遍改写。"
+      + "本次只产出一章：不得先粘贴原稿再重述；每个事件和段落只出现一次。"
+      + (input.continuationMode === "append"
+        ? "续写模式下只输出受保护前缀之后的新后缀，主程序会拼接前缀。"
+        : "替换模式下只输出一份完整优化稿，不得重复开头或输出第二遍。"),
+    );
+  }
   // Drift retry：事件保持约束必须在初稿之前。
   if (input.driftFeedback?.replacedEvents?.length) {
     const eventList = input.driftFeedback.replacedEvents
@@ -494,11 +499,11 @@ export function buildAuthorStyleUserPrompt(
           `${i + 1}. 主体"${e.subject}"的事件「${e.rawSentence}」必须原样保留，不得删除、替换或改写为其他事件（上一轮错误地改成了「${e.editorialSentence}」）。`,
       )
       .join("\n");
-    parts.push(
+    instructionParts.push(
       `【事件保持硬约束（重试）】\n` +
       `上一轮风格优化把以下关键事件改写了，本轮必须保留初稿中的原始事件：\n${eventList}\n` +
       `只允许调整措辞、句式、节奏和感官描写；主体、动作、对象、结果和事件顺序必须与初稿完全一致。` +
-      `例如：初稿中"他看不见"，优化稿也必须是"看不见"，不能改成"看得见"；初稿中"看向万永福"，优化稿也必须有"看向万永福"这个动作。`,
+      `否定感知不得改成肯定感知，既定视线方向不得改成另一个方向。`,
     );
   }
   if (input.driftFeedback?.stateChangeLosses?.length) {
@@ -509,20 +514,23 @@ export function buildAuthorStyleUserPrompt(
           `${index + 1}. 主体"${item.subject}"的状态变化「${item.afterState}」来自初稿句「${item.rawSentence}」。上一轮漏掉了该变化（${item.reason}），本轮必须保留同一状态语义；允许使用同义措辞，但不得删除、反转或改成未发生。`,
       )
       .join("\n");
-    parts.push(
+    instructionParts.push(
       `【状态变化保持硬约束（重试）】\n${stateList}\n` +
       "状态变化是故事事实，不是可删的表达细节；请在相同主体和对象上保留结果。",
     );
   }
   if (input.recoveryFeedback) {
-    parts.push(buildRecoveryFeedbackBlock(input.recoveryFeedback, input.continuationMode === "append"));
+    instructionParts.push(buildRecoveryFeedbackBlock(input.recoveryFeedback, input.continuationMode === "append"));
   }
-  if (input.chineseAiLanguageGuidanceBlock) {
-    parts.push(input.chineseAiLanguageGuidanceBlock);
-  }
-  parts.push(input.continuationMode === "append"
-    ? `请优化第 ${input.chapterNumber} 章的新增后缀。受保护前缀仅供理解上下文，主程序会自动拼接；不要输出前缀。`
-    : `请优化第 ${input.chapterNumber} 章完整正文。`);
+  const sourceText = getStyleSourceText(input);
+  const sourceLabel = input.continuationMode === "append"
+    ? "【NovelOS Agentic 初稿（仅供表达优化）】"
+    : "【NovelOS Agentic 初稿】";
+  instructionParts.push(
+    `${sourceLabel}\n${sourceText || "（没有可单独优化的新后缀；保持原文并只输出必要的新内容。）"}`,
+  );
+
+  const constraintParts: string[] = [];
   const contractLines: string[] = [];
   const eventSummaries = input.intent.authorEventSummaries ?? [];
   const mustInclude = input.intent.authorMustInclude ?? [];
@@ -546,53 +554,58 @@ export function buildAuthorStyleUserPrompt(
     contractLines.push(`章末承接：${endingTarget.slice(0, 8).join("；")}`);
   }
   if (contractLines.length > 0) {
-    parts.push(
+    constraintParts.push(
       "【本章事件与因果契约（只允许改写表达）】\n" +
       contractLines.join("\n") + "\n" +
       "不得调换、删除或合并导致事件结果变化；必须保持每个事件的先后顺序、因果关系和状态变化。",
     );
   }
-  const sourceText = getStyleSourceText(input);
-  const sourceLabel = input.continuationMode === "append"
-    ? "【NovelOS Agentic 初稿（仅供表达优化）】"
-    : "【NovelOS Agentic 初稿】";
-  parts.push(
-    `${sourceLabel}\n${sourceText || "（没有可单独优化的新后缀；保持原文并只输出必要的新内容。）"}`,
-  );
-  parts.push(`【作者风格档案（定性指导）】\n${guidance.guidance.map((item) => `- ${item}`).join("\n")}`);
+  if (input.chineseAiLanguageGuidanceBlock) {
+    constraintParts.push(input.chineseAiLanguageGuidanceBlock);
+  }
+  constraintParts.push(`【作者风格档案（定性指导）】\n${guidance.guidance.map((item) => `- ${item}`).join("\n")}`);
   if (input.intent.inviolableFacts.length > 0) {
-    parts.push(`【不可改变的事实】\n${input.intent.inviolableFacts.map((item) => `- ${item}`).join("\n")}`);
+    constraintParts.push(`【不可改变的事实】\n${input.intent.inviolableFacts.map((item) => `- ${item}`).join("\n")}`);
   }
   const forbiddenZones = input.intent.factAndCharacterKnowledgeForbiddenZones ?? [];
   if (forbiddenZones.length > 0) {
-    parts.push(`【人物知识与事实禁区】\n${forbiddenZones.map((item) => `- ${item}`).join("\n")}`);
+    constraintParts.push(`【人物知识与事实禁区】\n${forbiddenZones.map((item) => `- ${item}`).join("\n")}`);
   }
   if (input.constitution?.forbiddenDrift.length) {
-    parts.push(`【作品禁止漂移】\n${input.constitution.forbiddenDrift.map((item) => `- ${item}`).join("\n")}`);
+    constraintParts.push(`【作品禁止漂移】\n${input.constitution.forbiddenDrift.map((item) => `- ${item}`).join("\n")}`);
   }
   // Phase 4B：注入策略参数块（voice_emphasis / rhythm_adjustment）
   // 这些块是定性指导，不是机械配额；模型可自由决定如何应用
   if (input.strategyParams?.voiceEmphasisBlock) {
-    parts.push(input.strategyParams.voiceEmphasisBlock);
+    constraintParts.push(input.strategyParams.voiceEmphasisBlock);
   }
   if (input.strategyParams?.rhythmAdjustmentBlock) {
-    parts.push(input.strategyParams.rhythmAdjustmentBlock);
+    constraintParts.push(input.strategyParams.rhythmAdjustmentBlock);
   }
   // P1 修复：注入字数软目标（与 Agentic 初稿保持一致的字数预算）
   if (input.targetWordCount) {
-    parts.push(
+    constraintParts.push(
       `【字数软目标】本章目标字数 ${input.targetWordCount.min}-${input.targetWordCount.max} 字（软目标，可自由调整，不作为硬门禁）。`,
     );
   }
-  // driftFeedback 块已移到 prompt 开头（初稿之前），见上方。
-  parts.push(
-    "只改表达，不改事件、动作和因果。" +
-    "主体、动作、对象、结果、事件顺序必须与初稿一致。" +
-    (input.continuationMode === "append"
-      ? "续写模式下只输出从受保护前缀末尾开始的新正文后缀；不要输出章节标题、受保护前缀或任何非正文说明。"
-      : "只输出优化后的完整正文，从正文第一段直接开始；严禁输出构思、计划、大纲、逐段润色说明或任何非正文内容。"),
-  );
-  return parts.join("\n\n");
+
+  const exampleBlock = "【示例】\n"
+    + "- 正例：事件、动作、对象、结果与顺序原样保留，只在措辞、句读、节奏和语感上更贴近风格档案。\n"
+    + "- 反例：把某一动作换成另一类动作、删去对白或设定说明、把同一段落重复两次，或用“精简”名义改写事件结果。";
+  const outputBlock = input.continuationMode === "append"
+    ? "【输出格式】\n只改表达，不改事件、动作和因果。主体、动作、对象、结果、事件顺序必须与初稿一致。"
+      + "只输出从受保护前缀末尾开始的新正文后缀；主程序会按原文拼接受保护前缀。"
+      + "不要输出章节标题、受保护前缀或任何非正文说明。"
+    : "【输出格式】\n只改表达，不改事件、动作和因果。主体、动作、对象、结果、事件顺序必须与初稿一致。"
+      + "只输出优化后的完整正文，从正文第一段直接开始；严禁输出构思、计划、大纲、逐段润色说明或任何非正文内容。";
+
+  return [
+    "【角色】你是中文长篇小说的作者风格编辑，只负责表达层优化，不负责故事层设计。",
+    `【指令】\n${instructionParts.join("\n\n")}`,
+    `【约束】\n${constraintParts.join("\n\n")}`,
+    exampleBlock,
+    outputBlock,
+  ].join("\n\n");
 }
 
 /**
@@ -659,7 +672,7 @@ export class AuthorStyleOptimizer {
           "只输出优化后的完整章节正文，从正文第一段直接开始。",
           "只输出优化后的完整新增后缀，从后缀第一段直接开始；不得输出受保护前缀。",
         )
-          + "\nAPPEND MODE RULE: when the user prompt contains CONTINUATION MODE, output only the new suffix and never rewrite the protected prefix."
+          + "\n【续写规则】当 user 指令包含续写说明时，只输出新增正文后缀，不得改写受保护前缀。"
         : STYLE_SYSTEM_PROMPT,
       userPrompt,
       kind: "author_style_optimization",

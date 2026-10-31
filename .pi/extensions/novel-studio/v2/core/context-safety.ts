@@ -89,6 +89,12 @@ export interface ContextSafetyCompileInput {
   modelWindowTokens: number;
   outputReserveTokens: number;
   safetyMarginTokens: number;
+  /**
+   * R03：所有真正交给模型的附加参考项（fewshot / 外部知识 / 本章角色 / 字数软目标）
+   * 必须在预算裁剪前进入 manifest，按 P4/P3/P2 优先级参与统一预算。
+   * 传入这里而不是在安全裁剪之后追加，才能保证 delivered/dropped 可解释且不越预算。
+   */
+  extraItems?: ConstraintManifestItem[];
 }
 
 export interface ContextSafetyResult {
@@ -368,17 +374,50 @@ export function compileConstraintManifestToContextPackage(
   };
 }
 
+/**
+ * R03：把附加参考项并入 manifest 并重算 manifestHash。
+ * 附加项在合并前统一 trim / 补 contentHash / 按实际文本估算 token，
+ * 保证报告里的 manifestHash 与真正参与预算的条目集合一致。
+ */
+function withExtraItems(
+  manifest: ConstraintManifest,
+  extraItems: ConstraintManifestItem[] | undefined,
+): ConstraintManifest {
+  if (!extraItems || extraItems.length === 0) return manifest;
+  const extras: ConstraintManifestItem[] = [];
+  for (const item of extraItems) {
+    const content = item.content?.trim();
+    if (!content) continue;
+    extras.push({
+      ...item,
+      content,
+      estimatedTokens: item.estimatedTokens > 0 ? item.estimatedTokens : estimateTokens(content),
+      contentHash: item.contentHash ?? createHash("sha256").update(content, "utf8").digest("hex"),
+    });
+  }
+  if (extras.length === 0) return manifest;
+  const items = [...manifest.items, ...extras];
+  const manifestHash = hash(items.map(({ id, priority, content, sourceRefs, contentHash: ch }) => ({ id, priority, content, sourceRefs, contentHash: ch })));
+  return {
+    ...manifest,
+    manifestId: `constraint-manifest:${manifestHash.slice(0, 16)}`,
+    manifestHash,
+    items,
+  };
+}
+
 export function compileContextSafety(input: ContextSafetyCompileInput): ContextSafetyResult {
+  const manifest = withExtraItems(input.manifest, input.extraItems);
   const inputBudgetTokens = Math.max(0, input.modelWindowTokens - input.outputReserveTokens - input.safetyMarginTokens);
-  const { retained: deduped, merged } = mergeDuplicates(input.manifest.items);
+  const { retained: deduped, merged } = mergeDuplicates(manifest.items);
   const conflicted = findProtectedConflicts(deduped);
   const report: ContextBudgetReport = {
-    manifestHash: input.manifest.manifestHash,
+    manifestHash: manifest.manifestHash,
     modelWindowTokens: input.modelWindowTokens,
     outputReserveTokens: input.outputReserveTokens,
     safetyMarginTokens: input.safetyMarginTokens,
     inputBudgetTokens,
-    estimatedOriginalTokens: input.manifest.items.reduce((sum, item) => sum + item.estimatedTokens, 0),
+    estimatedOriginalTokens: manifest.items.reduce((sum, item) => sum + item.estimatedTokens, 0),
     estimatedRetainedTokens: 0,
     recompileAttempts: 0,
     retained: [],
@@ -390,14 +429,14 @@ export function compileContextSafety(input: ContextSafetyCompileInput): ContextS
   if (conflicted.length > 0) {
     report.retained = deduped.map(toBudgetEntry);
     report.estimatedRetainedTokens = sumTokens(deduped);
-    return blocked("hard_constraint_conflict", input, report, deduped);
+    return blocked("hard_constraint_conflict", manifest, input, report, deduped);
   }
 
   const protectedItems = deduped.filter((item) => item.priority === "P0" || item.priority === "P1");
   if (sumTokens(protectedItems) > inputBudgetTokens) {
     report.retained = protectedItems.map(toBudgetEntry);
     report.estimatedRetainedTokens = sumTokens(protectedItems);
-    return blocked("protected_context_overflow", input, report, protectedItems);
+    return blocked("protected_context_overflow", manifest, input, report, protectedItems);
   }
 
   const retained = [...deduped];
@@ -414,15 +453,15 @@ export function compileContextSafety(input: ContextSafetyCompileInput): ContextS
   report.retained = retained.map(toBudgetEntry);
   report.estimatedRetainedTokens = sumTokens(retained);
   if (report.estimatedRetainedTokens > inputBudgetTokens) {
-    return blocked("context_overflow", input, report, retained);
+    return blocked("context_overflow", manifest, input, report, retained);
   }
   const working = buildWorkingInputs(input.intent, input.context, retained);
-  return { ok: true, manifest: input.manifest, workingIntent: working.intent, workingContext: working.context, report };
+  return { ok: true, manifest, workingIntent: working.intent, workingContext: working.context, report };
 }
 
-function blocked(blockReason: ContextSafetyResult["blockReason"], input: ContextSafetyCompileInput, report: ContextBudgetReport, retained: ConstraintManifestItem[]): ContextSafetyResult {
+function blocked(blockReason: ContextSafetyResult["blockReason"], manifest: ConstraintManifest, input: ContextSafetyCompileInput, report: ContextBudgetReport, retained: ConstraintManifestItem[]): ContextSafetyResult {
   const working = buildWorkingInputs(input.intent, input.context, retained);
-  return { ok: false, blockReason, manifest: input.manifest, workingIntent: working.intent, workingContext: working.context, report };
+  return { ok: false, blockReason, manifest, workingIntent: working.intent, workingContext: working.context, report };
 }
 
 function buildWorkingInputs(intent: ChapterIntent, context: CompiledContext, retained: ConstraintManifestItem[]): { intent: ChapterIntent; context: CompiledContext } {
@@ -506,7 +545,8 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/[\s，。；：、,.!！?？“”"'（）()【】]/g, "");
 }
 
-function estimateTokens(value: string): number {
+/** 统一的 token 估算口径：附加项也必须用它，避免出现两套不一致的估算。 */
+export function estimateTokens(value: string): number {
   return Math.ceil(value.length / 2) + 8;
 }
 

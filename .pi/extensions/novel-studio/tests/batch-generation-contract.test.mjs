@@ -168,11 +168,13 @@ describe("BATCH 契约：单章旧接口兼容 + 依赖边界 + trace 无 judge"
     assert.ok(props.stopOnFailure, "inputSchema 应含 stopOnFailure 字段");
     assert.ok(props.confirmLargeBatch, "inputSchema 应含 confirmLargeBatch 字段");
     assert.ok(props.jobId, "inputSchema 应含 jobId 字段");
-    // required 仍为单章兼容字段（TypeBox 的 required 在 anyOf 或直接 required 中）
+    // required 只强制 workspaceId：batch 的 resume/status/cancel 只需要 jobId，
+    // 无条件要求 chapterId/chapterNumber 会让合法 resume 调用被契约层误拒。
+    // 单章兼容字段仍须在 schema 中声明；其"非 batch 必填"由 raw inputSchema 的
+    // allOf 条件契约（else.required）表达，并由 handler 兜底校验。
     const required = schema.required || [];
-    assert.ok(
-      required.includes("workspaceId") && required.includes("chapterId") && required.includes("chapterNumber"),
-      "required 应保持单章兼容（含 workspaceId/chapterId/chapterNumber）",
-    );
+    assert.ok(required.includes("workspaceId"), "required 应包含 workspaceId");
+    assert.ok(props.chapterId, "单章兼容字段 chapterId 仍须声明");
+    assert.ok(props.chapterNumber, "单章兼容字段 chapterNumber 仍须声明");
   });
 });

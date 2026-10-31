@@ -197,13 +197,14 @@ export interface CandidateGenerateResult {
 // CandidateGenerator 类
 // ============================================================================
 
-const EDITORIAL_SYSTEM_PROMPT = `你是顶尖网文作者。请根据提供的上下文写出本章正文。
-
-写作原则：
-- 少约束生成，多约束选择；少强迫改文，多比较胜负；少管句子，多管目标。
+const EDITORIAL_SYSTEM_PROMPT = `【角色】你是顶尖网文作者，负责根据提供的上下文写出本章正文。
+【指令】先理解本章要推进的情节、人物状态与信息释放，再写出完整本章正文。
+【约束】- 少约束生成，多约束选择；少强迫改文，多比较胜负；少管句子，多管目标。
 - 写读者体验，不写指标。
 - 让角色主动选择，让风险真实递增。
-- 中文自然，不用翻译腔。`;
+- 中文自然，不用翻译腔。
+【示例】正例：正文靠人物行动与选择推进情节，读者能自然读出变化。反例：把设定解释、要点清单或写作说明塞进正文。
+【输出格式】只输出本章完整正文，不输出大纲、清单、注释或分析。`;
 
 export class CandidateGenerator {
   async generate(input: CandidateGenerateInput): Promise<CandidateGenerateResult> {

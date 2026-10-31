@@ -131,6 +131,7 @@ export function createProjectStreamFn(
   route: string,
   kind = "novelos_agentic",
   defaultTimeoutMs?: number,
+  beforeModelCall?: () => { stop: boolean; reason?: string },
 ): (model: Model<string>, context: Context, options?: { signal?: AbortSignal; timeoutMs?: number }) => AssistantMessageEventStream {
   // 通过 Adapter Registry 获取协议适配器（生产路径默认返回 ReactTextAdapter）
   const adapter: ModelProtocolAdapter = defaultAdapterRegistry.getAdapter(route);
@@ -156,6 +157,25 @@ export function createProjectStreamFn(
       return stream;
     }
     signal?.addEventListener("abort", finishAborted, { once: true });
+
+    // R01 执行边界：这是真实模型调用的唯一入口。loop 预算（turn/toolCall/耗时/错误连击）
+    // 在此统一复核，耗尽则不再发起下一次模型请求，直接产出停止消息。
+    // 原因：pi-agent-core 的 afterToolCall 只覆盖"工具真正执行完"的分支；工具不存在、
+    // 参数校验失败、beforeToolCall 阻断都是 immediate result，不经过 afterToolCall；
+    // 累计耗时也只在 turn_end 才计入，此时本轮终止判断已执行完毕。若只在 tool 回调里
+    // 判定，预算耗尽后仍会多打一轮模型，且部分出口没有失败信封。
+    if (beforeModelCall) {
+      const gate = beforeModelCall();
+      if (gate.stop) {
+        aborted = true;
+        const reason = gate.reason ?? "loop budget exhausted";
+        const stopped = makeAssistantMessage([], "error");
+        stopped.errorMessage = `loop_budget_stop: ${reason}`;
+        stream.push({ type: "error", reason: "error", error: stopped });
+        stream.end(stopped);
+        return stream;
+      }
+    }
 
     void (async () => {
       try {
@@ -196,6 +216,68 @@ export function createProjectStreamFn(
 }
 
 // ============================================================================
+// G1/G2 上下文管理：同次运行内工具结果历史的分层压缩
+// ============================================================================
+
+/**
+ * 最近 N 条 toolResult 保留全文（当前轮次检索通常不超过 retrievalCallLimit=4）。
+ * 更早的结果只保留摘要行，避免同一次运行内工具正文逐轮累积、无界重灌。
+ */
+export const TOOL_HISTORY_KEEP_FULL = 6;
+
+/** 早期工具结果摘要行的最大字符数 */
+export const TOOL_HISTORY_DIGEST_MAX_CHARS = 200;
+
+export interface ToolHistoryCompactionSummary {
+  /** 保留全文的条数 */
+  keptFull: number;
+  /** 被压缩为摘要行的条数 */
+  summarized: number;
+}
+
+/**
+ * 把工具结果正文压缩为首行摘要（确定性压缩，不调用模型）。
+ * 叙事工具正文首行本身就是"找到 N 条…"这类计数摘要，因此首行可安全作为远轮摘要。
+ */
+export function digestToolResultText(
+  text: string,
+  maxChars: number = TOOL_HISTORY_DIGEST_MAX_CHARS,
+): string {
+  const normalized = text.trim();
+  if (!normalized) return "（早期工具结果无文本内容）";
+  const lines = normalized.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  const first = lines[0] ?? normalized;
+  const clipped = first.length > maxChars ? `${first.slice(0, maxChars)}…` : first;
+  const omittedLines = Math.max(0, lines.length - 1);
+  return omittedLines > 0 ? `${clipped}（早期结果已压缩，省略 ${omittedLines} 行明细）` : clipped;
+}
+
+/**
+ * 对同次运行内累积的工具结果做分层保留：末尾 keepFull 条保留全文，
+ * 其余压缩为首行摘要。details 原样保留，来源引用与检索状态不丢失。
+ */
+export function compactToolHistory(
+  toolResults: ToolResultEvent[],
+  options?: { keepFull?: number; digestMaxChars?: number },
+): { results: ToolResultEvent[]; summary: ToolHistoryCompactionSummary } {
+  const keepFull = Math.max(0, Math.floor(options?.keepFull ?? TOOL_HISTORY_KEEP_FULL));
+  const digestMaxChars = Math.max(1, Math.floor(options?.digestMaxChars ?? TOOL_HISTORY_DIGEST_MAX_CHARS));
+  const boundary = Math.max(0, toolResults.length - keepFull);
+  const results = toolResults.map((result, index) => {
+    if (index >= boundary) return result;
+    const text = result.content.map((block) => block.text).join("\n");
+    return {
+      ...result,
+      content: [{ type: "text" as const, text: digestToolResultText(text, digestMaxChars) }],
+    };
+  });
+  return {
+    results,
+    summary: { keptFull: toolResults.length - boundary, summarized: boundary },
+  };
+}
+
+// ============================================================================
 // 内部：构建 userPrompt（basePrompt + toolResult 回灌，通过统一协议适配器）
 // ============================================================================
 
@@ -212,7 +294,7 @@ export function createProjectStreamFn(
  *
  * text-only ReAct 模型看不到结构化 toolResult 消息，必须回灌到 userPrompt 才能基于证据继续生成。
  */
-function buildUserPromptWithContext(
+export function buildUserPromptWithContext(
   context: Context,
   adapter: ModelProtocolAdapter,
 ): string {
@@ -261,18 +343,25 @@ function buildUserPromptWithContext(
     }
   }
 
+  // G1/G2：同次运行内工具结果分层保留——近期全文，早期摘要行 + 显式省略声明，
+  // 避免每轮把全部历史工具正文无界重灌进 userPrompt。
+  const compacted = compactToolHistory(toolResults);
+
   // 构建临时 ModelTurn（只填 toolResults，其他字段占位），调用 adapter 序列化
   const tempTurn: ModelTurn = {
     text: undefined,
     toolCalls: [],
-    toolResults,
+    toolResults: compacted.results,
     finishReason: "stop",
     parseStatus: "ok",
     protocol: adapter.protocol,
     adapterVersion: adapter.version,
   };
   const continuation = adapter.serializeToolResults(tempTurn);
-  const textAppend = continuation.textAppend;
+  let textAppend = continuation.textAppend;
+  if (compacted.summary.summarized > 0 && textAppend && textAppend.length > 0) {
+    textAppend = `${textAppend}\n（上下文压缩：${compacted.summary.summarized} 条更早的工具结果仅保留摘要行，完整结果留存于 trajectory 轨迹。）`;
+  }
   return textAppend && textAppend.length > 0
     ? `${basePrompt}\n\n${textAppend}`
     : basePrompt;
@@ -370,6 +459,11 @@ export interface CreateNovelOSAgentOptions {
   beforeToolCall?: AgentOptions["beforeToolCall"];
   /** 超时 ms（传给 modelGenerate） */
   timeoutMs?: number;
+  /**
+   * R01 模型调用边界预算闸门：每次真实模型调用前同步调用。
+   * 返回 { stop: true } 时不发起模型请求，直接产出 stopReason=error 的消息让 loop 收敛结束。
+   */
+  beforeModelCall?: () => { stop: boolean; reason?: string };
 }
 
 /**
@@ -394,10 +488,11 @@ export function createNovelOSAgent(options: CreateNovelOSAgentOptions): Agent {
     afterToolCall,
     beforeToolCall,
     timeoutMs,
+    beforeModelCall,
   } = options;
 
   const model = createPlaceholderModel(route);
-  const streamFn = createProjectStreamFn(modelGenerate, route, kind, timeoutMs);
+  const streamFn = createProjectStreamFn(modelGenerate, route, kind, timeoutMs, beforeModelCall);
   // 注入 ReAct 工具调用约定 + 工具 schema 到 system prompt（幂等）
   // 缺口一：allowedToolNames 白名单使注入边界 fail-closed，拒绝白名单外工具。
   const systemPromptWithTools = injectToolSchemas(systemPrompt, tools, allowedToolNames);

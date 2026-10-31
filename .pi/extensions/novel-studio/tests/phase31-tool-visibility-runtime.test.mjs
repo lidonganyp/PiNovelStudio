@@ -61,6 +61,9 @@ function makeStubRuntimeDeps() {
     recordToolCall() {},
     recordTokens() {},
     recordModelCall() {},
+    recordLatency() {},
+    recordToolError() {},
+    recordToolSuccess() {},
   };
   const trajectory = new Proxy({}, { get: () => () => {} });
   const modelGenerate = async () => ({ text: "最终章节正文。", model: "stub", route: "test", durationMs: 0 });

@@ -1,0 +1,859 @@
+{
+  "schemaVersion": 3,
+  "description": "外挂知识库结构化卡片的唯一权威资产（可入库审计）。verified 卡片带语料坐标与片段 SHA-256；unverified 卡片只保留旧版声明的来源作品与章节，未重新核验语料。不含任何外部小说原文或摘录。运行池由 scripts/build-scene-card-pool.mjs 从本文件确定性生成。",
+  "provenanceFile": "docs/external-kb/corpus-provenance.json",
+  "overlapWindow": 12,
+  "corpusVerification": {
+    "verifiedCount": 9,
+    "unverifiedCount": 10,
+    "verifiedAgainstCorpusRoot": "D:\\pns-exp\\novelbag-v0",
+    "unverifiedNote": "unverified 卡片未重新核验语料坐标，不得据此宣称已核对出处，也不得补造 evidence。"
+  },
+  "cards": [
+    {
+      "id": "combat-partial-suppression-then-leak",
+      "scene_type": "combat",
+      "chapter_phase": "climax",
+      "emotion_target": [
+        "紧张",
+        "不安"
+      ],
+      "narrative_function": "兑现压制优势的同时保留一处未清除的隐患",
+      "style_tags": [
+        "压制量化",
+        "隐患保留",
+        "优势有价"
+      ],
+      "scene_function": "combat_approach",
+      "beat": "payoff",
+      "pressure_type": "hostile_presence",
+      "decision_tradeoff": "safety_for_advantage",
+      "cost_type": [
+        "resource_loss"
+      ],
+      "state_delta": [
+        "position_up",
+        "risk_up",
+        "threat_up"
+      ],
+      "rule": "兑现压制时让压制的程度可被估算，同时保留一处此前未被处理的隐患，使「取得优势」与「仍有新压力」在同一段成立。",
+      "anti_pattern": "压制成功后所有威胁同时消失，优势没有代价，也没有留下一层新压力。",
+      "applicable_when": [
+        "主角刚取得一次可见优势",
+        "场上存在未处理的次要威胁"
+      ],
+      "avoid_when": [
+        "对手已在上一章彻底退场",
+        "本章是纯铺垫章"
+      ],
+      "source": "神秘复苏 scenes/combat.json#1283170-1283763",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/combat.json",
+        "sceneFileSha256": "7414bab825a9ff46d4fbf845df24c79f06f9fdb2a655e24d37c623640f22d5e6",
+        "sceneType": "combat",
+        "sourceWork": "神秘复苏",
+        "startPos": 1283170,
+        "endPos": 1283763,
+        "excerptChars": 593,
+        "excerptSha256": "9f19ea399f782727da90f0010415fc24bbbfe056313415e1c96ff7110ea31e67",
+        "sampleId": "combat:神秘复苏:1283170-1283763"
+      }
+    },
+    {
+      "id": "combat-role-brief-before-engagement",
+      "scene_type": "combat",
+      "chapter_phase": "opening",
+      "emotion_target": [
+        "紧张",
+        "期待"
+      ],
+      "narrative_function": "交锋前把人、位置与失败后的补救动作落实到具体分工",
+      "style_tags": [
+        "战前分工",
+        "撤退方案",
+        "职责归属"
+      ],
+      "scene_function": "combat_approach",
+      "beat": "setup",
+      "pressure_type": "hostile_presence",
+      "decision_tradeoff": "individual_for_team",
+      "cost_type": [
+        "physical_injury"
+      ],
+      "state_delta": [
+        "position_up",
+        "risk_up"
+      ],
+      "rule": "交锋开始前把分工、位置与失败后的补救责任落到具体角色，让承担危险位的人有可说明的理由，而不是只靠勇气表态。",
+      "anti_pattern": "只用「大家小心」「一起上」式口头动员，不说明谁在哪个位置、失败后由谁兜底。",
+      "applicable_when": [
+        "交锋即将开始但敌我位置未定",
+        "队伍里有人提出顶替危险岗位"
+      ],
+      "avoid_when": [
+        "已经进入正面交手阶段",
+        "本章是纯日常过渡"
+      ],
+      "source": "怪谈游戏设计师959 scenes/combat.json#33975-34602",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/combat.json",
+        "sceneFileSha256": "7414bab825a9ff46d4fbf845df24c79f06f9fdb2a655e24d37c623640f22d5e6",
+        "sceneType": "combat",
+        "sourceWork": "怪谈游戏设计师959",
+        "startPos": 33975,
+        "endPos": 34602,
+        "excerptChars": 627,
+        "excerptSha256": "b66ed903d43e03d4ba82ee518480468d0117d8ab6ba42bea92debee9f90f33e5",
+        "sampleId": "combat:怪谈游戏设计师959:33975-34602"
+      }
+    },
+    {
+      "id": "combat-shrink-domain-approach",
+      "scene_type": "combat",
+      "chapter_phase": "climax",
+      "emotion_target": [
+        "紧张",
+        "悬念"
+      ],
+      "narrative_function": "以收窄自身范围换取不被对手察觉的接近",
+      "style_tags": [
+        "收窄领域",
+        "屏蔽关键道具",
+        "读者先知的危险距离"
+      ],
+      "scene_function": "combat_approach",
+      "beat": "escalation",
+      "pressure_type": "hostile_presence",
+      "decision_tradeoff": "safety_for_advantage",
+      "cost_type": [
+        "exposure_risk"
+      ],
+      "state_delta": [
+        "risk_up",
+        "threat_up"
+      ],
+      "rule": "接近无法正面对抗的对手时，主角可收窄自身活动范围、降低关键依仗的存在感，让对手按最稳妥的方式行动；同时可把「对手已在极近距离」交给读者，而角色仍不知情。",
+      "anti_pattern": "双方距离与威胁程度只靠形容词升级，读者算不出危险到底有多近。",
+      "applicable_when": [
+        "对手无法正面对抗",
+        "主角需要在不惊动对手的前提下接近"
+      ],
+      "avoid_when": [
+        "双方已进入正面交手",
+        "本章是纯日常过渡"
+      ],
+      "source": "神秘复苏 scenes/combat.json#516714-517377",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/combat.json",
+        "sceneFileSha256": "7414bab825a9ff46d4fbf845df24c79f06f9fdb2a655e24d37c623640f22d5e6",
+        "sceneType": "combat",
+        "sourceWork": "神秘复苏",
+        "startPos": 516714,
+        "endPos": 517377,
+        "excerptChars": 663,
+        "excerptSha256": "1d86aaf19b9f941f5fbbbf466e330b0da681913dc99aa10c9784b5598436c4a4",
+        "sampleId": "combat:神秘复苏:516714-517377"
+      }
+    },
+    {
+      "id": "copy-end-hook",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "ending",
+      "emotion_target": [
+        "期待",
+        "不安"
+      ],
+      "narrative_function": "章末以未验证的规则或未解线索收束",
+      "style_tags": [
+        "章末钩子",
+        "规则悬念"
+      ],
+      "scene_function": "hook_close",
+      "beat": "close",
+      "pressure_type": "time_pressure",
+      "decision_tradeoff": null,
+      "cost_type": [],
+      "state_delta": [
+        "risk_up",
+        "knowledge_up"
+      ],
+      "rule": "章末落点可保持在未验证的新规则或对不上的旧线索上，让钩子推进规则认知，而不是只以打斗中断或主角昏迷收束。",
+      "anti_pattern": "章末用敌人来袭、主角倒地等纯动作暂停收束，规则悬念原地不动。",
+      "applicable_when": [
+        "本章已给出新线索",
+        "下一章仍在本副本内"
+      ],
+      "avoid_when": [
+        "本章是副本收尾章",
+        "需要给读者一个完整情绪落地"
+      ],
+      "source": "怪谈游戏设计师959 前期章节",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "cost-escalating-tool",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "any",
+      "emotion_target": [
+        "压抑",
+        "紧迫"
+      ],
+      "narrative_function": "用可见损耗的压制型道具替代无限能力",
+      "style_tags": [
+        "消耗道具",
+        "代价递增"
+      ],
+      "scene_function": "cost_payment",
+      "beat": "escalation",
+      "pressure_type": "resource_scarcity",
+      "decision_tradeoff": "cost_for_power",
+      "cost_type": [
+        "resource_loss",
+        "physical_injury"
+      ],
+      "state_delta": [
+        "resource_down",
+        "threat_up"
+      ],
+      "rule": "压制型道具的损耗可见且会累积（如裂纹、缺口、余量），读者能据此估算主角还能支撑多久；损耗不是需要紧张时才临时提起的设定。",
+      "anti_pattern": "道具无副作用，主角靠它无敌；或损耗只在需要紧张时才被提起。",
+      "applicable_when": [
+        "主角需要长线对抗规则污染",
+        "能力体系需要代价约束"
+      ],
+      "avoid_when": [
+        "本章是纯日常过渡",
+        "道具是一次性且当场毁掉"
+      ],
+      "source": "神秘复苏 第41章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "cost-payoff-itemized-ledger",
+      "scene_type": "breakthrough",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "期待",
+        "压抑"
+      ],
+      "narrative_function": "能力兑现后让代价可被清点并留下后续欠账",
+      "style_tags": [
+        "能力兑现",
+        "代价清单",
+        "欠账可视"
+      ],
+      "scene_function": "cost_payment",
+      "beat": "payoff",
+      "pressure_type": null,
+      "decision_tradeoff": null,
+      "cost_type": [
+        "physical_injury"
+      ],
+      "state_delta": [
+        "position_up",
+        "resource_down",
+        "risk_up"
+      ],
+      "rule": "能力兑现后让代价可被清点，并保留尚未处理的部分，使「变强」与「欠账」同时可见，读者能估算后面要还多少。",
+      "anti_pattern": "升级只写强度提升与爽感，代价含糊成一句「有些后遗症」。",
+      "applicable_when": [
+        "刚完成一次能力升级或突破",
+        "代价需要被读者记住并后续回收"
+      ],
+      "avoid_when": [
+        "本章是纯日常过渡",
+        "能力没有可量化代价"
+      ],
+      "source": "怪谈游戏设计师959 scenes/breakthrough.json#754187-754602",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/breakthrough.json",
+        "sceneFileSha256": "adf0b163342490d9f2ce7a50fb65abe988c3aac217944d372f6c11644b430ef0",
+        "sceneType": "breakthrough",
+        "sourceWork": "怪谈游戏设计师959",
+        "startPos": 754187,
+        "endPos": 754602,
+        "excerptChars": 415,
+        "excerptSha256": "fae00a0a4fc08b4739f3abdca843a2b47651d5f7108f09c51ef2e856f4abd318",
+        "sampleId": "breakthrough:怪谈游戏设计师959:754187-754602"
+      }
+    },
+    {
+      "id": "fake-authority",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "疑惑",
+        "鄙视"
+      ],
+      "narrative_function": "以自称懂行的冒充者遮蔽真正的规则参与者",
+      "style_tags": [
+        "假大师",
+        "信息遮蔽"
+      ],
+      "scene_function": "info_asymmetry",
+      "beat": "reveal",
+      "pressure_type": "information_gap",
+      "decision_tradeoff": "information_advantage_for_risk",
+      "cost_type": [
+        "exposure_risk"
+      ],
+      "state_delta": [
+        "information_up",
+        "risk_up"
+      ],
+      "rule": "需要延后揭示真正懂规则的人时，可让场上自称懂行的冒充者承担误导，使读者对他的可信度产生怀疑，而真正的规则参与者保持低调；误导者的破绽需要与前文细节对得上，而不是凭空出现。",
+      "anti_pattern": "反派直接自报身份；或骗子被主角瞬间识破、毫无戏份价值。",
+      "applicable_when": [
+        "需要延后真凶揭示",
+        "场上已有自称懂行的冒充者或可被误认的伪专家"
+      ],
+      "avoid_when": [
+        "副本已进入高强度对抗",
+        "读者已明确知道真凶"
+      ],
+      "source": "神秘复苏 第42章",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "info-asymmetry-tension",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "紧张",
+        "猜疑"
+      ],
+      "narrative_function": "用角色间信息差制造压力，而非抬高敌人强度",
+      "style_tags": [
+        "信息差",
+        "猜疑链"
+      ],
+      "scene_function": "info_asymmetry",
+      "beat": "escalation",
+      "pressure_type": "information_gap",
+      "decision_tradeoff": "information_advantage_for_risk",
+      "cost_type": [
+        "relationship_damage"
+      ],
+      "state_delta": [
+        "risk_up",
+        "relationship_shift"
+      ],
+      "rule": "压力来自信息差：有人已知规则却不说、有人只知一半；读者的信息量介于场上最弱与最强的角色之间。",
+      "anti_pattern": "靠敌人越来越强来加压；或所有角色信息完全对等、只是情绪激动。",
+      "applicable_when": [
+        "多人困在同一副本",
+        "需要在不加战力的情况下加压"
+      ],
+      "avoid_when": [
+        "单人视角且无外援",
+        "规则已完全公开"
+      ],
+      "source": "神秘复苏 第42-43章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "info-reveal-archive-exception",
+      "scene_type": "sacrifice",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "疑惑",
+        "不安"
+      ],
+      "narrative_function": "用可复核记录交付一个与预期相反的例外样本",
+      "style_tags": [
+        "档案核对",
+        "例外样本",
+        "反向兑现"
+      ],
+      "scene_function": "info_reveal",
+      "beat": "payoff",
+      "pressure_type": "information_gap",
+      "decision_tradeoff": null,
+      "cost_type": [],
+      "state_delta": [
+        "information_up"
+      ],
+      "rule": "兑现调查承诺时，若存在档案、监控这类可复核的记录来源，可在可核对的口径上给出与预期相反的例外，让答案本身成为新问题。",
+      "anti_pattern": "兑现只靠角色口头总结，既没有可核对载体，也没有与预期不符的例外。",
+      "applicable_when": [
+        "前文承诺过要查清某批样本或名单",
+        "手上有可复核的记录来源"
+      ],
+      "avoid_when": [
+        "本章是纯日常过渡",
+        "没有任何可核对记录"
+      ],
+      "source": "怪谈游戏设计师959 scenes/sacrifice.json#546433-546980",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/sacrifice.json",
+        "sceneFileSha256": "c79a094ff8b6b8a24f3d88a2b91fc01d189ae00fc1fef8bcbf15a93902a501dd",
+        "sceneType": "sacrifice",
+        "sourceWork": "怪谈游戏设计师959",
+        "startPos": 546433,
+        "endPos": 546980,
+        "excerptChars": 547,
+        "excerptSha256": "ddef391c0d886adbb1bb1bf323e0d7ae9e44432a6d89bebbde11df72d4c3f151",
+        "sampleId": "sacrifice:怪谈游戏设计师959:546433-546980"
+      }
+    },
+    {
+      "id": "info-reveal-bystander-withheld-question",
+      "scene_type": "foreshadow_reveal",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "疑惑",
+        "敬畏"
+      ],
+      "narrative_function": "用旁观者的「想问不敢问」承接能力展示后的信息落差",
+      "style_tags": [
+        "信息落差",
+        "旁观者视角",
+        "克制解释"
+      ],
+      "scene_function": "info_reveal",
+      "beat": "reveal",
+      "pressure_type": "information_gap",
+      "decision_tradeoff": "information_advantage_for_risk",
+      "cost_type": [],
+      "state_delta": [
+        "information_up"
+      ],
+      "rule": "展示能力或真相后不急着解释机制，可让层级更低的旁观者承接落差：他心存疑问却没有问出口，读者与旁观者一同停在「知道发生了什么、不知道怎么做成」。",
+      "anti_pattern": "由当事人把机制原理逐条讲清，旁观者只负责惊叹。",
+      "applicable_when": [
+        "需要展示能力或真相但不解释原理",
+        "场上有层级较低的旁观者"
+      ],
+      "avoid_when": [
+        "全知视角且无人旁观",
+        "信息必须在同一段内完全解释"
+      ],
+      "source": "神秘复苏 scenes/foreshadow_reveal.json#1394437-1395045",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/foreshadow_reveal.json",
+        "sceneFileSha256": "d889c8d220bb9532084376e64115ff58caa87ba898a7aaf5778abc15571027fd",
+        "sceneType": "foreshadow_reveal",
+        "sourceWork": "神秘复苏",
+        "startPos": 1394437,
+        "endPos": 1395045,
+        "excerptChars": 608,
+        "excerptSha256": "704ee549232be007471469c408b0b6d223e6308af0393bd10f63eccbb1b8e25d",
+        "sampleId": "foreshadow_reveal:神秘复苏:1394437-1395045"
+      }
+    },
+    {
+      "id": "info-reveal-trace-in-hand-close",
+      "scene_type": "cliffhanger",
+      "chapter_phase": "ending",
+      "emotion_target": [
+        "悬念",
+        "不安"
+      ],
+      "narrative_function": "对抗收束落在可检查物证上，让物证中的内容成为章末新问题",
+      "style_tags": [
+        "物证收尾",
+        "记录体",
+        "章末钩子"
+      ],
+      "scene_function": "info_reveal",
+      "beat": "close",
+      "pressure_type": "information_gap",
+      "decision_tradeoff": null,
+      "cost_type": [
+        "physical_injury"
+      ],
+      "state_delta": [
+        "information_up"
+      ],
+      "rule": "对抗结束后若现场留有可检查的记录或物证，把落点放在它上面，让物证中的内容成为章末的新问题，而不是停在胜负情绪上。",
+      "anti_pattern": "章末停在胜负宣判或角色倒地，线索不落地，读者手里没有可核对的东西。",
+      "applicable_when": [
+        "交锋或对抗刚结束",
+        "现场留下了可检查的物证"
+      ],
+      "avoid_when": [
+        "本章必须给出完整情绪落地",
+        "物证在前文已全部交代"
+      ],
+      "source": "怪谈游戏设计师959 scenes/cliffhanger.json#118815-119218",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/cliffhanger.json",
+        "sceneFileSha256": "35a85cbb963088b50b8ba0445cba198af1caefdd150ee3cefbc67bd719a4e866",
+        "sceneType": "cliffhanger",
+        "sourceWork": "怪谈游戏设计师959",
+        "startPos": 118815,
+        "endPos": 119218,
+        "excerptChars": 403,
+        "excerptSha256": "b7b221d824f99849014f04ebf8476a4d81248563690c52e128ec0196a55050f8",
+        "sampleId": "cliffhanger:怪谈游戏设计师959:118815-119218"
+      }
+    },
+    {
+      "id": "physical-anomaly-horror",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "any",
+      "emotion_target": [
+        "惊悚",
+        "不适"
+      ],
+      "narrative_function": "恐怖感由物理反常细节承担",
+      "style_tags": [
+        "物理反常",
+        "细节恐怖"
+      ],
+      "scene_function": "horror_anomaly",
+      "beat": "reveal",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": null,
+      "cost_type": [],
+      "state_delta": [
+        "threat_up",
+        "knowledge_up"
+      ],
+      "rule": "恐怖感由可验证的物理反常承担（如与常识不符的伤口或痕迹），细节可被读者核对，成因暂不解释。",
+      "anti_pattern": "靠“恐怖、阴森、毛骨悚然”等形容词与成段环境描写堆砌气氛。",
+      "applicable_when": [
+        "需要制造一次惊悚高点",
+        "现场留有物证"
+      ],
+      "avoid_when": [
+        "本章走轻喜剧或日常线",
+        "反常已被解释过"
+      ],
+      "source": "神秘复苏 第43章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "protagonist-cold-deduction",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "冷静",
+        "悬念"
+      ],
+      "narrative_function": "推演段落的节奏控制",
+      "style_tags": [
+        "内心独白",
+        "短句推演"
+      ],
+      "scene_function": "deduction",
+      "beat": "reveal",
+      "pressure_type": "time_pressure",
+      "decision_tradeoff": null,
+      "cost_type": [
+        "time_loss"
+      ],
+      "state_delta": [
+        "knowledge_up"
+      ],
+      "rule": "主角推演时以连续自问推进变量，逐步收束成一个可执行判断，而不是把完整因果链复盘一遍；推演篇幅以不打断当前节奏为界。",
+      "anti_pattern": "大段“因为A所以B因此C”的完整逻辑复盘；或连续疑问过多变成碎碎念。",
+      "applicable_when": [
+        "主角需要从线索推断规则",
+        "章节中段需要降速喘口气"
+      ],
+      "avoid_when": [
+        "已在动作高潮",
+        "推断结果读者早已知道"
+      ],
+      "source": "神秘复苏 第41、43章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "relationship-limited-alliance",
+      "scene_type": "team_gathering",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "紧张",
+        "谨慎"
+      ],
+      "narrative_function": "依据可核对证据与共同威胁给出有限结盟",
+      "style_tags": [
+        "有限结盟",
+        "证据互证",
+        "保留距离"
+      ],
+      "scene_function": "relationship_shift",
+      "beat": "escalation",
+      "pressure_type": "relationship_conflict",
+      "decision_tradeoff": "individual_for_team",
+      "cost_type": [
+        "relationship_damage"
+      ],
+      "state_delta": [
+        "relationship_shift",
+        "risk_up"
+      ],
+      "rule": "关系变化建立在可核对的外部证据与共同威胁上，而不是一句口头承诺；即使结盟，双方仍保留距离，不轻易交出底牌。",
+      "anti_pattern": "用一句「现在是伙伴了」跳过互信依据，或结盟后立刻毫无保留。",
+      "applicable_when": [
+        "两方原本互不信任",
+        "外部威胁已同时追到双方"
+      ],
+      "avoid_when": [
+        "本章是纯日常过渡",
+        "关系已牢固无需再议"
+      ],
+      "source": "怪谈游戏设计师959 scenes/team_gathering.json#565458-566068",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/team_gathering.json",
+        "sceneFileSha256": "b35cdb56b11d448554fad3c8e238bbf1bb6f5941db1abca2b5ef87674b82a0a5",
+        "sceneType": "team_gathering",
+        "sourceWork": "怪谈游戏设计师959",
+        "startPos": 565458,
+        "endPos": 566068,
+        "excerptChars": 610,
+        "excerptSha256": "f8b1a92288c323e7835a3513c231a2cb0d6104b543ddb1720f632992a434815a",
+        "sampleId": "team_gathering:怪谈游戏设计师959:565458-566068"
+      }
+    },
+    {
+      "id": "rule-copy-probe",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "opening",
+      "emotion_target": [
+        "不安",
+        "好奇"
+      ],
+      "narrative_function": "建立规则并立即用低成本试探验证规则边界",
+      "style_tags": [
+        "规则副本",
+        "试探",
+        "验证"
+      ],
+      "scene_function": "boundary_test",
+      "beat": "test",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": "short_term_safety_for_information",
+      "cost_type": [
+        "rule_trigger_risk",
+        "time_loss"
+      ],
+      "state_delta": [
+        "knowledge_up",
+        "risk_up"
+      ],
+      "rule": "新规则出现后，可先让主角用代价可控的方式靠近规则边界，用可见后果把规则从“被说明”变成“被验证”，而不是先由角色口述全文。",
+      "anti_pattern": "直接由角色口述规则全文，随后才发生事件；或规则从未被验证就被当作常识使用。",
+      "applicable_when": [
+        "首次进入副本",
+        "规则未明示",
+        "读者需要立刻知道底线"
+      ],
+      "avoid_when": [
+        "规则已在上一章验证过",
+        "当下冲突是人物情感而非规则"
+      ],
+      "source": "怪谈游戏设计师959 第1-3章",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "rule-hidden-loophole",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "紧张",
+        "反爽"
+      ],
+      "narrative_function": "在规则文本里留语义缺口，让主角靠钻字眼获得优势",
+      "style_tags": [
+        "規則文本",
+        "歧义",
+        "钻空子"
+      ],
+      "scene_function": "rule_exploitation",
+      "beat": "reversal",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": "safety_for_advantage",
+      "cost_type": [
+        "exposure_risk",
+        "rule_trigger_risk"
+      ],
+      "state_delta": [
+        "position_up",
+        "risk_up",
+        "knowledge_up"
+      ],
+      "rule": "规则文本里可以存在语义缺口（措辞歧义或适用对象错位），让主角靠钻字眼获得非预期优势；缺口需要在后续叙述中被回溯交代，而不是悬空或让前文紧张感失效。",
+      "anti_pattern": "漏洞靠主角“突然想到”且无铺垫；或漏洞大到让前文所有紧张感失效。",
+      "applicable_when": [
+        "规则文本已给出完整条文",
+        "主角处于必死局面需要反转"
+      ],
+      "avoid_when": [
+        "规则本身还没交代清楚",
+        "本章主线是人物关系"
+      ],
+      "source": "神秘复苏 第41章",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "team-panic-chain",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "middle",
+      "emotion_target": [
+        "压抑",
+        "敬畏"
+      ],
+      "narrative_function": "团队恐慌的外溢路径设计",
+      "style_tags": [
+        "群像",
+        "恐慌外溢"
+      ],
+      "scene_function": "team_pressure",
+      "beat": "escalation",
+      "pressure_type": "relationship_conflict",
+      "decision_tradeoff": "individual_for_team",
+      "cost_type": [
+        "physical_injury",
+        "relationship_damage"
+      ],
+      "state_delta": [
+        "risk_up",
+        "relationship_shift"
+      ],
+      "rule": "团队恐慌应呈现出可追溯的外溢路径（谁先不信规则、如何扩散、代价落在谁身上），让读者对规则生敬畏，而不是对队友生愤怒。",
+      "anti_pattern": "队友无差别犯错分摊；或犯错者被主角一句话说服立刻恢复冷静。",
+      "applicable_when": [
+        "多人副本且需要制造伤亡",
+        "规则需要被反面验证"
+      ],
+      "avoid_when": [
+        "团队只有两人",
+        "本章重点是个体心理"
+      ],
+      "source": "怪谈游戏设计师959 副本群像",
+      "confidence": "medium",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    },
+    {
+      "id": "team-pressure-discipline-list-close",
+      "scene_type": "cliffhanger",
+      "chapter_phase": "ending",
+      "emotion_target": [
+        "不安",
+        "疑惑"
+      ],
+      "narrative_function": "章末以可执行纪律要求收束团队压力，并保留一处与前文对不上的细节",
+      "style_tags": [
+        "纪律要求",
+        "前文对不上",
+        "章末收束"
+      ],
+      "scene_function": "team_pressure",
+      "beat": "close",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": null,
+      "cost_type": [
+        "time_loss"
+      ],
+      "state_delta": [
+        "risk_up",
+        "information_up"
+      ],
+      "rule": "章末可把团队压力落成可执行的纪律要求，并保留一处与前文对不上的细节；读者带走的是可执行要求与待核对矛盾，而不是单纯的惊吓。",
+      "anti_pattern": "章末只剩一句「今晚会很危险」，既不交付可执行要求，也不留下任何与前文对不上的细节。",
+      "applicable_when": [
+        "团队需要在受限环境里过夜或待命",
+        "契约里已有成文的纪律或规则条目"
+      ],
+      "avoid_when": [
+        "本章不需要悬念",
+        "规则已在前文完整交代"
+      ],
+      "source": "怪谈游戏设计师959 scenes/cliffhanger.json#316020-316342",
+      "confidence": "medium",
+      "provenanceStatus": "verified",
+      "provenance": {
+        "corpusRoot": "D:\\pns-exp\\novelbag-v0",
+        "sceneFile": "scenes/cliffhanger.json",
+        "sceneFileSha256": "35a85cbb963088b50b8ba0445cba198af1caefdd150ee3cefbc67bd719a4e866",
+        "sceneType": "cliffhanger",
+        "sourceWork": "怪谈游戏设计师959",
+        "startPos": 316020,
+        "endPos": 316342,
+        "excerptChars": 322,
+        "excerptSha256": "99a9ef563cfb1119a64fc2a673f0fc7ac528f85b29146e0cefc439c9d3c8fdb7",
+        "sampleId": "cliffhanger:怪谈游戏设计师959:316020-316342"
+      }
+    },
+    {
+      "id": "world-rule-via-consequence",
+      "scene_type": "rule_dungeon",
+      "chapter_phase": "opening",
+      "emotion_target": [
+        "不安",
+        "代入"
+      ],
+      "narrative_function": "用已发生的后果透露世界观规则",
+      "style_tags": [
+        "后果透露",
+        "反说明书"
+      ],
+      "scene_function": "world_reveal",
+      "beat": "setup",
+      "pressure_type": "environmental_rule",
+      "decision_tradeoff": null,
+      "cost_type": [],
+      "state_delta": [
+        "knowledge_up",
+        "risk_up"
+      ],
+      "rule": "世界观规则可以主要经由已发生的后果显露（如通行中断、信息查不到），让角色自己核对矛盾，避免用旁白讲解体系分级。",
+      "anti_pattern": "用“这个世界分为X等Y级”之类的旁白直接说明；或让人物互相科普设定。",
+      "applicable_when": [
+        "首次交代世界规则",
+        "需要保持读者与主角同步无知"
+      ],
+      "avoid_when": [
+        "规则已被多次验证",
+        "本章需要快速推进剧情"
+      ],
+      "source": "怪谈游戏设计师959 第1章",
+      "confidence": "high",
+      "provenanceStatus": "unverified",
+      "provenanceNote": "旧版蒸馏记录，仅保留声明的来源作品与章节，未重新核验原始语料坐标；不得据此宣称已核对出处。"
+    }
+  ]
+}

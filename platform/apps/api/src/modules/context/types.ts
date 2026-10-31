@@ -161,6 +161,14 @@ export interface ContextManifest {
   blocks: ContextBlockManifest[];
   previousChapterContinuation?: PreviousChapterContinuation;
   selectedEvidenceSpans: EvidenceSpan[];
+  /**
+   * 对话历史压缩声明（G2）：只保留最近 N 条消息，更早轮次直接丢弃，
+   * 必须显式记录条数，避免静默丢历史。
+   */
+  historyCompaction?: {
+    retained: number;
+    omitted: number;
+  };
 }
 
 export const DEFAULT_BLOCK_TOKEN_BUDGETS: Record<ContextBlockName, number> = {

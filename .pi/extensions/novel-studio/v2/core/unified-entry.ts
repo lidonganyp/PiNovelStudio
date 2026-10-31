@@ -277,7 +277,15 @@ export type {
 } from "./routing-governance-runtime.js";
 import { compileContextSafety, createConstraintManifest } from "./context-safety.js";
 import { buildVerifiedDraftBinding } from './verified-draft-checkpoint.js';
-import { compileProductionContextPackage } from "./context-package-production.js";
+import { buildExtraReferenceItems, compileProductionContextPackage } from "./context-package-production.js";
+// EXTERNAL-KB-3：外挂蒸馏知识库（结构化 Craft Pattern Card，PINOVEL_EXTERNAL_KB=1 才启用）。
+import {
+  EXTERNAL_KB_PRODUCTION_TOP_K,
+  buildExternalKnowledgeQuery,
+  buildExternalKnowledgeSelection,
+  deriveChapterPhase,
+  deriveStructuredRetrievalKey,
+} from "./external-knowledge-base.js";
 import type { ContextPackage } from "./trust/context-package.js";
 // EVOLUTION-RELEASE-GOVERNANCE-G6：生产入口发行治理门禁
 // 真相源：docs/evolution-release-governance-development-plan.md §Phase G6
@@ -2479,6 +2487,32 @@ export async function runUnifiedPipeline(
     `stage narrative state update: ${chapterId}`,
   );
   const constraintManifest = createConstraintManifest({ intent, context });
+  // EXTERNAL-KB-3：外挂蒸馏卡片只在显式开关下加载；关闭时返回 null（不读文件、零副作用）。
+  // 检索键由 ChapterIntent 派生（场景功能/节拍/压力/权衡/代价/状态变化），不拼接长散文；
+  // 空 key 或没有卡片达到结构化准入时返回空选集，不用章节阶段兜底塞入零相关卡片。
+  // 生产默认只交付 1 条主 advisory（EXTERNAL_KB_PRODUCTION_TOP_K）。
+  // 原文范文（含 ≤120 字短 span）永久不进入生产：此处不传 allowExcerpts，
+  // 即使部署环境误设 PINOVEL_EXTERNAL_EXCERPTS，生产侧也只留痕忽略。
+  const externalKnowledge = buildExternalKnowledgeSelection({
+    projectRoot,
+    query: buildExternalKnowledgeQuery(intent),
+    emotionTargets: intent.readerExperience ?? [],
+    chapterPhase: deriveChapterPhase({
+      chapterNumber,
+      chapterFunction: intent.chapterFunction,
+    }),
+    retrievalKey: deriveStructuredRetrievalKey(intent),
+    topK: EXTERNAL_KB_PRODUCTION_TOP_K,
+  });
+  // R03：附加参考项必须在统一安全裁剪前进入 manifest，按 P4/P3/P2 参与预算；
+  // 不再于 compileProductionContextPackage 中裁剪之后追加。
+  const extraReferenceItems = buildExtraReferenceItems({
+    snapshotId: evidenceSnapshot?.snapshotId,
+    characterNames,
+    targetWordCount,
+    fewshotSelection: acceptedChapterReferences,
+    externalKnowledgeSelection: externalKnowledge,
+  });
   const contextSafety = compileContextSafety({
     manifest: constraintManifest,
     intent,
@@ -2486,15 +2520,13 @@ export async function runUnifiedPipeline(
     modelWindowTokens: Number(process.env.PINOVEL_CONTEXT_WINDOW_TOKENS ?? 128000),
     outputReserveTokens: Number(process.env.PINOVEL_CONTEXT_OUTPUT_RESERVE_TOKENS ?? 8192),
     safetyMarginTokens: Number(process.env.PINOVEL_CONTEXT_SAFETY_MARGIN_TOKENS ?? 4096),
+    extraItems: extraReferenceItems,
   });
   let contextPackage: ContextPackage | undefined;
   if (contextSafety.ok) {
     const packaged = compileProductionContextPackage({
       safety: contextSafety,
       snapshotId: evidenceSnapshot?.snapshotId,
-      characterNames,
-      targetWordCount,
-      fewshotSelection: acceptedChapterReferences,
     });
     if (!packaged.ok || !packaged.package) {
       persistEarlyBlockedTrace(
@@ -2698,6 +2730,10 @@ export async function runUnifiedPipeline(
   if (blockedRawRecovery) {
     orchResult.stageResults.blockedRawRecovery = blockedRawRecovery.provenance;
   }
+  // EXTERNAL-KB-1：把检索报告（池子规模/硬过滤丢弃/阈值丢弃/注入条数）暴露给调用方。
+  if (externalKnowledge) {
+    orchResult.stageResults.externalKnowledge = externalKnowledge.report;
+  }
 
   // ── 5.1 保存策略信誉库（P1-7：在线学习持久化 / A5：仅成功交付才落盘）──
   // 编排器在 Stage 7.1（最终事实复检 + 正文保存成功之后）才通过 outcomeRecorder
@@ -2749,6 +2785,15 @@ export async function runUnifiedPipeline(
       orchResult, contextHash, releaseGovernanceTrace,
       { bundleId: bundleHash.bundleId, hashDimensions: bundleHash.hashDimensions },
     );
+    // EXTERNAL-KB-1：外挂知识库检索证据独立成一条 trace record（含丢弃记录，禁止 silent drop）。
+    if (externalKnowledge) {
+      traceRecords.push({
+        stage: "external_knowledge_retrieved",
+        timestamp: new Date().toISOString(),
+        contextHash,
+        externalKnowledge: externalKnowledge.report,
+      });
+    }
     const tracePersistence = persistUnifiedTraceWithFallback({
       projectRoot,
       workspaceId,

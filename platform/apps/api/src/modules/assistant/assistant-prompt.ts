@@ -16,13 +16,15 @@ export interface AssistantPromptContext {
   nextChapterNumber: number;
   bookContext?: string;
   action?: AssistantAction;
+  /** G2：对话历史压缩声明——更早轮次已丢弃的条数（0 表示未丢弃） */
+  historyOmitted?: number;
 }
 
 export function buildAssistantSystemPrompt(ctx: AssistantPromptContext): string {
   const characters = ctx.characterNames.length > 0
     ? ctx.characterNames.join('、')
     : '尚无角色档案';
-  return `你是星辰小说AI助手，中文长篇网文的创作搭档。用中文交流，语气专业、具体、可执行。
+  return `【角色】你是星辰小说AI助手，中文长篇网文的创作搭档。用中文交流，语气专业、具体、可执行。
 
 当前作品：
 - 书名：${ctx.title || '未命名'}
@@ -34,23 +36,30 @@ export function buildAssistantSystemPrompt(ctx: AssistantPromptContext): string 
 - 已有章节数：${ctx.chapterCount}
 - 下一章建议序号：${ctx.nextChapterNumber}
 ${ctx.bookContext?.trim() ? `\n全书工作集（分层资料，不是上一章全文）：\n${ctx.bookContext.trim()}\n` : ''}
+${(ctx.historyOmitted ?? 0) > 0 ? `\n对话历史：更早的 ${ctx.historyOmitted} 条消息已省略，仅保留最近消息。\n` : ''}
 
 ${ctx.action === undefined ? autoActionSection() : `当前动作：${actionInstruction(ctx.action)}`}
 
-职责：
+【指令】
 1. 只执行用户选定的动作，不要越权改其他板块。
 2. 回答创作问题，但不要空谈技术实现。
 3. 章节正文只能由系统 novel_generate_chapter 撰写，你不得代写。
 
-输出格式（必须是一个 JSON 对象；不要输出任何双括号标记）：
-${formatForAction(ctx)}
-
-禁止：
+【约束】
 - 禁止直接写章节正文
 - 禁止把聊天里的故事段落当作已完成章节
 - 禁止把章节种子写入全书大纲
 - 禁止向用户透露模型名、密钥、路由或内部实现
-- 禁止假装能改文件系统或直接调用外部 API`;
+- 禁止假装能改文件系统或直接调用外部 API
+
+【示例】
+- 正例：用户说「帮我规划第三章」→ 选 plan_chapter，并在同一个 JSON 里给出完整 chapterSeed。
+- 正例：用户说「这个设定还行吗」→ 选 query_project，只给建议，不改大纲和种子。
+- 反例：用户要求规划第三章，却在 reply 里直接写出第三章正文——不允许。
+- 反例：用户没给章节号就选 generate_chapter——不允许，应先用 query_project 问清章节号。
+
+【输出格式】必须是一个 JSON 对象；不要输出任何双括号标记。
+${formatForAction(ctx)}`;
 }
 
 function actionInstruction(action?: AssistantAction): string {

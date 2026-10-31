@@ -127,10 +127,10 @@ import {
  * 保持旧强制检索行为，B 组传入 UNCERTAINTY_DRIVEN_RETRIEVAL_PROMPT（与此默认一致）。
  */
 const DEFAULT_UNCERTAINTY_DRIVEN_PROMPT = [
-  "检索决策规则：",
+  "检索决策（软指导）：",
   "- 如果现有上下文已经足以保证事实、人物状态和因果关系正确，可以直接输出正文，不调用任何工具。",
   "- 如果缺少的信息可能改变上述三项之一（事实/人物状态/因果关系），先调用最相关的证据工具查证。",
-  '- 不要为了"完成流程"而进行无必要检索。',
+  "- 不要为了「完成流程」而进行无必要检索。",
 ].join("\n");
 
 // ============================================================================
@@ -451,8 +451,19 @@ export class NarrativeAgentLoop {
     plan: EvidencePlan,
     coverageRetryPrompt?: string,
   ): Promise<AgentTurnsResult> {
-    // R6 修复：eval 模式下注入【前文】段，确保 agentic 生成续写同一故事。
     const promptParts: string[] = [];
+
+    // 【角色】模型在本轮的身份与产物。
+    promptParts.push(
+      "【角色】你是本作品的中文网文作者，负责把本章意图与种子上下文写成可直接阅读的章节正文。",
+      "",
+      "【指令】",
+      input.chapterIntent,
+      "",
+    );
+
+    // 【上下文】只读资料：前文、作者前缀与种子上下文。
+    // R6 修复：eval 模式下注入【前文】段，确保 agentic 生成续写同一故事。
     if (input.evalPrefix && input.evalPrefix.trim().length > 0) {
       promptParts.push("【前文】", input.evalPrefix, "");
     }
@@ -465,16 +476,13 @@ export class NarrativeAgentLoop {
         "",
       );
     }
+    promptParts.push("种子上下文：", input.seedContext, "");
+
+    // 【约束】硬边界与事实核对要求。
+    promptParts.push("【约束】");
     if (input.recoveryDirective) {
       promptParts.push(renderRecoveryDirective(input.recoveryDirective, input.continuationMode === "append"), "");
     }
-    promptParts.push(
-      input.chapterIntent,
-      "",
-      "种子上下文：",
-      input.seedContext,
-      "",
-    );
     // Phase 2C：注入 mustVerify 事实点，引导 Agentic 优先检索这些事实。
     if (plan.mustVerify.length > 0) {
       promptParts.push(
@@ -514,8 +522,23 @@ export class NarrativeAgentLoop {
     if (coverageRetryPrompt) {
       promptParts.push("", coverageRetryPrompt);
     }
+
+    // 【示例】抽象正反例，不给可仿写范文。
+    promptParts.push(
+      "",
+      "【示例】",
+      "- 正例：上下文足够时直接写正文，不做任何工具调用。",
+      "- 正例：人物伤势、时间线或地点不确定时，先查证一次再落笔。",
+      "- 反例：对已确认的事实反复检索，只为走完流程。",
+      "- 反例：先输出本章大纲或写作计划，再写正文。",
+      "",
+      "【输出格式】",
+      "- 只输出章节正文，从正文第一段直接开始。",
+      "- 不输出大纲、清单、分析、注释、Markdown 标题或写作计划。",
+      "",
+    );
     if (input.continuationMode === "append" && input.currentChapterDraft?.trim()) {
-      promptParts.push("", "最终输出边界：只输出新增后缀正文；作者前缀由主程序保留并拼接，不要重新输出章节开头。");
+      promptParts.push("最终输出边界：只输出新增后缀正文；作者前缀由主程序保留并拼接，不要重新输出章节开头。");
     }
     const userPrompt = promptParts.join("\n");
 

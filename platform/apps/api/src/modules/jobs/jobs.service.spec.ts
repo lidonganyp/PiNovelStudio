@@ -1,4 +1,5 @@
 /** 章节 HTTP 调度的交付契约回归测试。 */
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { NotFoundException } from '@nestjs/common';
 import { FAILURE_CODES, makeFailure } from '../context/failure-envelope';
@@ -105,6 +106,91 @@ describe('JobsService HTTP generation delivery contract', () => {
     expect(payload).toContain('future-author-plan');
     expect(payload).not.toContain('old-target');
     expect(payload).not.toContain('old-future');
+  });
+
+  describe('author-approved chapter contract consumption', () => {
+    const contractText = '## 章节功能\n- 章号：2\n- 本章职能：把铜哨交到沈砚手里\n\n## 事件\n### 事件 1：铜哨交接';
+    const proposalHash = createHash('sha256').update(contractText, 'utf8').digest('hex');
+
+    function provenanceJson(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({
+        schemaVersion: 1,
+        chapterNumber: 2,
+        targetPath: 'series/ch2-outline-explicit.md',
+        proposalHash,
+        commitStatus: 'committed',
+        confirmedBy: 'author@example.com',
+        ...overrides,
+      });
+    }
+
+    function documentsWithContract(
+      documents: Array<{ id: number; documentType: string; title: string; content: string; updatedAt: Date }>,
+      provenance: string,
+    ) {
+      return [
+        ...documents,
+        { id: 6, documentType: 'chapter_contract:ch2', title: '章纲契约', content: contractText, updatedAt: new Date() },
+        { id: 7, documentType: 'chapter_contract_provenance:ch2', title: '审批记录', content: provenance, updatedAt: new Date() },
+        { id: 8, documentType: 'story_outline', title: '全书大纲', content: '# 全书大纲\n主线推进', updatedAt: new Date() },
+      ];
+    }
+
+    /** 仅测试访问：作者契约判定发生在运行时调度之前，单独验证不会污染计费事务。 */
+    function buildRuntimeWorkspaceInput(
+      service: JobsService,
+      request: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      return (service as unknown as {
+        buildRuntimeWorkspaceInput(value: Record<string, unknown>): Promise<Record<string, unknown>>;
+      }).buildRuntimeWorkspaceInput(request);
+    }
+
+    async function withPreviousChapter(prisma: ReturnType<typeof makeService>['prisma']): Promise<void> {
+      prisma.novelChapter.findFirst.mockImplementation(async (args: { where: { chapterNumber?: number } }) => (
+        args.where.chapterNumber === 1 ? { chapterNumber: 1, content: 'accepted-previous' } : null
+      ) as never);
+      Object.assign(prisma.novelChapter, {
+        findMany: vi.fn().mockResolvedValue([
+          { chapterNumber: 1, title: 'past', content: 'old-chapter-one-body' },
+        ]),
+      });
+    }
+
+    it('consumes the committed contract byte-for-byte and materializes its provenance', async () => {
+      const { service, prisma } = makeService({ status: 'ok', result: {} });
+      const documents = await prisma.novelDocument.findMany();
+      prisma.novelDocument.findMany.mockResolvedValue(documentsWithContract(documents, provenanceJson()));
+      await withPreviousChapter(prisma);
+
+      const runtimeInput = await buildRuntimeWorkspaceInput(service, { ...input, chapterNumber: 2 });
+      const workspaceDocuments = runtimeInput.workspaceDocuments as Array<{ type: string; content: string }>;
+      const explicit = workspaceDocuments.find((document) => document.type === 'explicit_outline');
+      expect(explicit?.content).toBe(contractText);
+      expect(workspaceDocuments.find((document) => document.type === 'chapter_contract_provenance')?.content)
+        .toBe(provenanceJson());
+      // 追加任何上下文层都会让 proposalHash 漂移，作者批准稿必须逐字节原样交付。
+      expect(explicit?.content).not.toContain('最近章节正文');
+    });
+
+    it('blocks generation when the approved contract provenance is not committed', async () => {
+      const { service, prisma } = makeService({ status: 'ok', result: {} });
+      const documents = await prisma.novelDocument.findMany();
+      prisma.novelDocument.findMany.mockResolvedValue(
+        documentsWithContract(documents, provenanceJson({ commitStatus: 'pending' })),
+      );
+      await withPreviousChapter(prisma);
+
+      await expect(buildRuntimeWorkspaceInput(service, { ...input, chapterNumber: 2 }))
+        .rejects.toMatchObject({
+          envelope: {
+            gate: 'explicit_outline_provenance',
+            code: FAILURE_CODES.runtimePreflightFailed,
+            severity: 'preflight',
+            evidence: expect.objectContaining({ chapterNumber: 2, rejectReason: 'not_committed' }),
+          },
+        });
+    });
   });
 
   describe('materials changed during the model call', () => {

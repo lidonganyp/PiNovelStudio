@@ -314,16 +314,20 @@ export function buildTrackAPrompt(caseData: ReferenceGuidedCase): TrackAPromptRe
 
   // 写下一章指令
   parts.push(
-    `你是顶尖网文作家。请基于上述前文，写第${caseData.referenceChapterNumber}章完整正文。` +
-    `标题中的章节号必须是第${caseData.referenceChapterNumber}章，不得写成其他章节。`,
-  );
-  parts.push(
-    "要求：写出自然流畅的中文网文章节正文，有完整的情节推进、角色行动和章末钩子。" +
-    "不要写大纲或注释，直接输出正文。",
+    `【角色】你是顶尖网文作家，负责写出自然流畅、有张力的中文网文章节正文。\n` +
+    `【指令】基于上述前文，写第${caseData.referenceChapterNumber}章完整正文。标题中的章节号必须是第${caseData.referenceChapterNumber}章，不得写成其他章节。\n` +
+    `【约束】- 承接前文的人物状态、事实与因果，保持连续性。\n` +
+    `- 不写大纲或注释。\n` +
+    `【示例】正例：新章从前文留下的局面继续推进，人物带着既有目标行动。反例：先把前文概括成摘要，或另起一段与前文无关的情节。\n` +
+    `【输出格式】只输出正文，不输出大纲或注释。`,
   );
 
   const userPrompt = parts.join("\n\n");
-  const systemPrompt = "你是顶尖网文作家，擅长写出自然流畅、有张力的中文网文章节。";
+  const systemPrompt = "【角色】你是顶尖网文作家，擅长写出自然流畅、有张力的中文网文章节。\n" +
+    "【指令】按用户给出的前文与章节号写出完整正文。\n" +
+    "【约束】保持人物、事实与因果连续性，不输出大纲或注释。\n" +
+    "【示例】正例：直接进入场景与人物行动。反例：用提纲式分点交代情节。\n" +
+    "【输出格式】只输出章节正文。";
   const promptTokenEstimate = Math.ceil((systemPrompt.length + userPrompt.length) / 4);
 
   return { systemPrompt, userPrompt, promptTokenEstimate };
@@ -1334,17 +1338,21 @@ export async function runReferenceGuidedAblationReal(
     RunReferenceGuidedOptions["judgeReferenceAware"]
   > = async (generatedText, referenceText, context, seed) => {
     const systemPrompt =
-      "你是资深文学评委。请比较生成稿（candidate）与参考正文（reference）。" +
-      "评价时允许情节不同，重点比较 7 个维度：异常进入日常 / 危险确认延迟与证据 / " +
+      "【角色】你是资深文学评委，负责比较生成稿与已出版的参考正文。\n" +
+      "【指令】评价时允许情节不同，重点比较 7 个维度：异常进入日常 / 危险确认延迟与证据 / " +
       "规则信息分批释放 / 主角可理解的生存选择 / 场景产生新状态 / " +
-      "对白承担人物与信息功能 / 章末因果压力。";
+      "对白承担人物与信息功能 / 章末因果压力。\n" +
+      "【约束】- 不以情节是否与参考正文相同作为优劣依据。\n" +
+      "- 每个维度的判定都要能指向正文片段。\n" +
+      "【示例】正例：生成稿用不同事件达到同等生存压力，仍判其在对应维度不劣。反例：因为情节不同于参考正文就直接判负。\n" +
+      "【输出格式】只输出结构化数据：{ \"pairResults\": [{ \"dimension\": \"...\", \"winner\": \"generated\"|\"reference\"|\"tie\", " +
+      `"reason": "...", "generatedSpan": {"excerpt": "..."}, "referenceSpan": {"excerpt": "..."} }] }`;
     const userPrompt =
       `caseId：${context.caseId}\n` +
       `本章意图：${context.chapterIntent}\n\n` +
       `【参考正文】（已出版实际章节）\n${referenceText.slice(0, 4000)}\n\n` +
       `【生成稿】（模型续写）\n${generatedText.slice(0, 4000)}\n\n` +
-      `请输出 JSON：{ "pairResults": [{ "dimension": "...", "winner": "generated"|"reference"|"tie", ` +
-      `"reason": "...", "generatedSpan": {"excerpt": "..."}, "referenceSpan": {"excerpt": "..."} }] }`;
+      `请按上述维度给出逐维比较，并只输出结构化数据。`;
 
     const result = await callJudgeModel(
       judgeConfig,

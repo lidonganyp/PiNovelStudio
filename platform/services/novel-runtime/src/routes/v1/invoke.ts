@@ -270,7 +270,7 @@ export function createInvokeRouter(
         const docs = workspaceDocuments.map((d) => d as {
           type: "creative_constitution" | "worldbuilding" | "character_profile" |
                 "story_outline" | "story_outline_full" | "style_profile" | "chapter_seed" |
-                "explicit_outline" | "narrative_state";
+                "explicit_outline" | "chapter_contract_provenance" | "narrative_state";
           content: string;
         });
 

@@ -82,10 +82,6 @@ export async function handleGenerateChapter(input: {
   previewTotalTimeoutMs?: number;
   /** Optional validated pre-prose scene solution card. */
   sceneSolution?: import("../v2/core/scene-solution-search.js").SceneSolutionCard | null;
-  // P11新增：人工审阅点恢复支持
-  reviewToken?: string;
-  reviewDecision?: "confirm" | "reject";
-  reviewFeedback?: string;
   /**
    * P30 新增（P39 扩展为 7 模型）：显式章节生成测试通道开关。
    *

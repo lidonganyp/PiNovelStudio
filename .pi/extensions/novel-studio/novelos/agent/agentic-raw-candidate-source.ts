@@ -36,6 +36,7 @@ import {
   createConstraintManifest,
 } from "../../v2/core/context-safety.js";
 import {
+  buildExtraReferenceItems,
   compileProductionContextPackage,
   renderContextPackage,
   collectConfirmedCoverageFromPackage,
@@ -373,11 +374,31 @@ export const AGENTIC_RAW_KIND = "agentic_raw";
  * 移除旧 system prompt 中"先检索、再生成正文"的强制语义。
  * 检索决策由 Agentic 在 ReAct 循环内自主判断（AGENTIC-EVIDENCE-MERGE-1），不再有独立 EvidenceDecision 回合。
  */
-export const NOVELOS_SYSTEM_PROMPT =
-  "你是顶尖网文作家。你将基于本章意图、种子上下文与叙事证据生成章节正文。" +
-  "仅当现有上下文不足以保证事实、人物状态或因果关系正确时，才调用叙事证据工具查证。" +
-  "写作时避免把抽象状态写成参数或结论：不要默认套用‘慢了半拍/短了半寸/少了两分/凝实一分’等伪精确变化，不要用‘平静而顺利/看起来重得多/近乎诡异’等成对评价替代过程证据，不要堆叠‘一串串+形容词+气泡/回响’的动态模板。优先写可观察的动作、阻力、来源、方向、身体反应、选择与后果。‘不是X，而是Y’只有在提供具体事实区分或角色有意修辞时使用；避免与‘绝对/终极/维度/瞬杀’等能力宣告连续组合。以上是软指导：类型化修辞、明确计量系统、角色口吻和作者有意的比喻应保留。" +
-  "只输出正文，不要写大纲、注释或分析。";
+export const NOVELOS_SYSTEM_PROMPT = [
+  "【角色】你是顶尖中文网文作家，负责把本章意图、种子上下文与叙事证据写成可直接阅读的章节正文。",
+  "",
+  "【指令】",
+  "- 通读本章意图、种子上下文与已确认事实，写出完整、连贯的一章正文。",
+  "- 现有上下文足以保证事实、人物状态与因果关系正确时，直接写作，不做多余查证。",
+  "- 上下文不足以支撑上述三项时，先调用最相关的叙事证据工具查证，再落笔。",
+  "- 证据与上下文冲突时，以已确立的事实为准，并在正文中自然承接。",
+  "",
+  "【约束】",
+  "- 不要默认套用“慢了半拍／短了半寸／少了两分／凝实一分”等伪精确变化。",
+  "- 不要用“平静而顺利／看起来重得多／近乎诡异”等成对评价替代过程证据。",
+  "- 不要堆叠“一串串＋形容词＋气泡／回响”的动态模板。",
+  "- 优先写可观察的动作、阻力、来源、方向、身体反应、选择与后果。",
+  "- “不是X，而是Y”只在提供具体事实区分或角色有意修辞时使用，避免与“绝对／终极／维度／瞬杀”等能力宣告连续组合。",
+  "- 以上为软指导：类型化修辞、明确计量系统、角色口吻和作者有意的比喻应保留。",
+  "- 不得复述本章意图、罗列设定清单或解释写作过程。",
+  "",
+  "【示例】",
+  "- 反例：先写“一、本章大纲”“人物动机分析”，再进入正文——不允许。",
+  "- 反例：把人物状态写成“情绪值＋3”这类参数——不允许。",
+  "- 正例：用一个具体停顿、动作或一句对话，让读者自己看见状态变化。",
+  "",
+  "【输出格式】只输出章节正文，从第一段正文直接开始；不写大纲、注释、分析、标题、列表或思考过程。",
+].join("\n");
 
 // ============================================================================
 // 工厂
@@ -590,20 +611,27 @@ export function createAgenticRawCandidateSource(
       const chapterIntentStr = buildChapterIntentString(intent);
       const packaged = input.contextPackage
         ? { ok: true as const, package: input.contextPackage, errors: [] as string[], contextPackageHash: input.contextPackage.contextHash, snapshotId: input.evidenceSnapshot?.snapshotId ?? null }
-        : compileProductionContextPackage({
-            safety: compileContextSafety({
-              manifest: createConstraintManifest({ intent, context }),
-              intent,
-              context,
-              modelWindowTokens: Number(process.env.PINOVEL_CONTEXT_WINDOW_TOKENS ?? 128000),
-              outputReserveTokens: Number(process.env.PINOVEL_CONTEXT_OUTPUT_RESERVE_TOKENS ?? 8192),
-              safetyMarginTokens: Number(process.env.PINOVEL_CONTEXT_SAFETY_MARGIN_TOKENS ?? 4096),
-            }),
-            snapshotId: input.evidenceSnapshot?.snapshotId,
-            characterNames,
-            targetWordCount,
-            fewshotSelection,
-          });
+        : (() => {
+            // R03：附加参考项进入统一安全裁剪，不再在 ContextPackage 编译之后追加。
+            const extraItems = buildExtraReferenceItems({
+              snapshotId: input.evidenceSnapshot?.snapshotId,
+              characterNames,
+              targetWordCount,
+              fewshotSelection,
+            });
+            return compileProductionContextPackage({
+              safety: compileContextSafety({
+                manifest: createConstraintManifest({ intent, context }),
+                intent,
+                context,
+                modelWindowTokens: Number(process.env.PINOVEL_CONTEXT_WINDOW_TOKENS ?? 128000),
+                outputReserveTokens: Number(process.env.PINOVEL_CONTEXT_OUTPUT_RESERVE_TOKENS ?? 8192),
+                safetyMarginTokens: Number(process.env.PINOVEL_CONTEXT_SAFETY_MARGIN_TOKENS ?? 4096),
+                extraItems,
+              }),
+              snapshotId: input.evidenceSnapshot?.snapshotId,
+            });
+          })();
       if (!packaged.ok || !packaged.package) {
         const reason = `ContextPackage 编译失败：${packaged.errors.join("; ") || "missing_package"}`;
         trajectory.recordFailure({

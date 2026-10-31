@@ -19,6 +19,11 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { wrapLegacyTool } from "./legacy-tool-wrapper.js";
 import { atomicSave } from "../v2/core/orchestrator-commit-save.js";
+import { logHarnessEvent } from "../utils/harness-logger.js";
+import {
+  renderToolInputViolations,
+  type ToolInputViolation,
+} from "./tool-input-validation.js";
 
 interface ChapterFileSnapshot {
   path: string;
@@ -38,6 +43,7 @@ const INTERNAL_ONLY_PUBLIC_FIELDS = new Set([
   "_mockGenerateChapter",
   "_commitAndSaveFn",
   "_registryOverride",
+  "_agentsDir",
   "callerOverride",
 ]);
 
@@ -51,6 +57,79 @@ function rejectInternalPublicFields(input: unknown): void {
     `内部字段不得通过生产工具入口传入：${forbidden.join(", ")}。` +
     "请使用已声明的生产参数；测试注入只能在隔离测试环境中使用。",
   );
+}
+
+/**
+ * R04：单章入口的条件必填兜底校验。
+ *
+ * `inputSchema` 用 `allOf/if/then` 表达"单章需要 chapterId/chapterNumber、
+ * mode=batch 不需要"，但 TypeBox 转换会丢弃条件约束，运行期校验器也不解析，
+ * 所以 handler 必须在任何文件快照、审计与模型副作用之前自行校验。
+ * batch 各 action 有独立契约，在 batch 分支内处理，不走这里。
+ */
+function validateSingleChapterContract(input: {
+  chapterId?: unknown;
+  chapterNumber?: unknown;
+}): ToolInputViolation[] {
+  const violations: ToolInputViolation[] = [];
+  const chapterId = typeof input.chapterId === "string" ? input.chapterId.trim() : "";
+  if (!chapterId) {
+    violations.push({
+      path: "/chapterId",
+      keyword: "required",
+      expected: "非空章节 ID",
+      actual: typeof input.chapterId === "string" ? "empty-string" : typeof input.chapterId,
+    });
+  } else if (/[\\/]|\.\./.test(chapterId)) {
+    // chapterId 会拼进 chapters/{id}.md 路径，禁止路径分隔符与上跳。
+    violations.push({
+      path: "/chapterId",
+      keyword: "contract",
+      expected: "不含路径分隔符或 .. 的章节 ID",
+      actual: "path-separator",
+    });
+  }
+  const chapterNumber = input.chapterNumber;
+  if (chapterNumber === undefined || chapterNumber === null) {
+    violations.push({
+      path: "/chapterNumber",
+      keyword: "required",
+      expected: "正整数章节编号",
+      actual: "missing",
+    });
+  } else if (
+    typeof chapterNumber !== "number"
+    || !Number.isInteger(chapterNumber)
+    || chapterNumber < 1
+  ) {
+    violations.push({
+      path: "/chapterNumber",
+      keyword: "type",
+      expected: "正整数章节编号（≥1）",
+      actual: typeof chapterNumber === "number" ? `number(${chapterNumber})` : typeof chapterNumber,
+    });
+  }
+  return violations;
+}
+
+function makeInputContractViolationResult(
+  toolName: string,
+  violations: ToolInputViolation[],
+  toolCallId?: string,
+): Record<string, unknown> {
+  logHarnessEvent("warn", "tool_input_contract_violation", {
+    stage: "tool",
+    tool: toolName,
+    severity: "hard",
+    toolCallId,
+    violations,
+  });
+  return {
+    status: "input_contract_violation",
+    toolName,
+    violations,
+    message: renderToolInputViolations(toolName, violations),
+  };
 }
 
 function captureChapterFileSnapshot(input: Record<string, unknown>): ChapterFileSnapshot | null {
@@ -148,8 +227,8 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         properties: {
           action: {
             type: "string",
-            enum: ["init", "list", "switch", "info", "chapters", "proxy_finalization", "proxy_review", "diagnostic", "ingest_reader_feedback", "record_return_chapter"],
-            description: "操作类型。init 创建 workspace；switch 切换到已有 workspace；proxy_finalization/proxy_review 处理代理审批；diagnostic/ingest_reader_feedback/record_return_chapter 为 advisory-only 子操作。",
+            enum: ["init", "list", "switch", "info", "chapters", "proxy_finalization", "proxy_review", "diagnostic", "ingest_reader_feedback", "record_return_chapter", "list_experts", "dispatch_expert", "handoff_chapter_contract"],
+            description: "操作类型。init 创建 workspace；switch 切换到已有 workspace；proxy_finalization/proxy_review 处理代理审批；diagnostic/ingest_reader_feedback/record_return_chapter 为 advisory-only 子操作；list_experts/dispatch_expert 发现与打包专家任务（宿主执行，扩展不调用模型）；handoff_chapter_contract 将专家契约提案经确认后写入显式章纲。",
           },
           workspaceId: { type: "string", description: "workspace ID（除 list 外通常必填）" },
           novelName: { type: "string", description: "init 必填：小说名称" },
@@ -274,6 +353,66 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             type: "string",
             description: "record_return_chapter 必填：回流章触发原因",
           },
+          // ── expert 子操作参数（action="list_experts"/"dispatch_expert"/"handoff_chapter_contract"） ──
+          // EXPERT-HOST-HANDOFF-1：专家群接入生产工具面，不注册第 7 个公开工具。
+          expertRole: {
+            type: "string",
+            description: "dispatch_expert 必填：专家角色名（对应 .pi/agents/<role>.md 的 name，如 chapter-intent-builder）",
+          },
+          objective: {
+            type: "string",
+            description: "dispatch_expert 必填：交给专家的任务目标",
+          },
+          inputPaths: {
+            type: "array",
+            items: { type: "string" },
+            description: "dispatch_expert 可选：专家可读输入路径（.env/chapters/长期状态/路由配置与目录外路径一律拒绝）",
+          },
+          constraints: {
+            type: "array",
+            items: { type: "string" },
+            description: "dispatch_expert 可选：附加约束",
+          },
+          expect: {
+            type: "string",
+            description: "dispatch_expert 可选：期望产物说明",
+          },
+          executionMode: {
+            type: "string",
+            enum: ["package", "execute"],
+            description: "dispatch_expert 执行方式。package（默认）返回宿主可执行任务包，扩展不调用模型；execute 在生产无授权执行器时 fail-closed。",
+          },
+          proposalText: {
+            type: "string",
+            description: "handoff_chapter_contract 必填：专家契约提案 Markdown（chapter-intent-builder 输出模板）",
+          },
+          handoffMode: {
+            type: "string",
+            enum: ["preview", "commit"],
+            description: "handoff_chapter_contract：preview（默认，只校验与返回文本，不写盘）/ commit（原子写入 series/ch{N}-outline-explicit.md 并落 provenance）",
+          },
+          confirmedBy: {
+            type: "string",
+            description: "handoff commit 必填：确认人（作者/协调层标识，仅作审计标签，不构成授权证明）",
+          },
+          approvalReceipt: {
+            type: "string",
+            description: "handoff commit 必填：可信宿主审批层（issueChapterContractApproval）签发的一次性凭证 id（绑定 workspace/chapter/proposalHash，单次使用）；preview 不签发凭证",
+          },
+          overwrite: {
+            type: "boolean",
+            description: "handoff commit：目标显式章纲已存在且内容不同时，需传 true 才覆盖",
+          },
+          knownFactIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "handoff 可选：已登记硬事实 ID；提供时提案引用未登记 ID 即阻断",
+          },
+          knownPromiseIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "handoff 可选：已确认 PROMISE ID；新书传空数组，禁止伪造 PROMISE-*",
+          },
         },
         required: ["action"],
       },
@@ -332,10 +471,6 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
           outline: { type: "string", description: "章节大纲（可选，workspace 中有则自动加载）" },
           previousChapterSummary: { type: "string", description: "前章摘要（可选）" },
           styleProfile: { type: "string", description: "风格配置（默认从 workspace 加载）" },
-          // P11新增：人工审阅点恢复支持
-          reviewToken: { type: "string", description: "【恢复用】审阅 token，用于恢复被暂停的章节生成流程" },
-          reviewDecision: { type: "string", description: "【恢复用】审阅决定：confirm 或 reject" },
-          reviewFeedback: { type: "string", description: "【恢复用】审阅反馈/修改意见" },
           // REAL-QUALITY-1-PREFLIGHT：单次路由锁定 + 可复现种子
           writerModel: {
             type: "string",
@@ -401,7 +536,16 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
             description: "用户命令幂等键（CONCURRENCY-WAVE5）。resume/cancel 必填；start 携带时重复提交返回首次结果，不重复保存或生成。缺省 resume/cancel 会 fail-closed。",
           },
         },
-        required: ["workspaceId", "chapterId", "chapterNumber"],
+        required: ["workspaceId"],
+        allOf: [
+          {
+            description:
+              "单章生成（不传 mode='batch'）必须提供 chapterId 与 chapterNumber；" +
+              "mode='batch' 的 resume/status/cancel 只用 jobId，不需要它们。",
+            if: { properties: { mode: { enum: ["batch"] } }, required: ["mode"] },
+            else: { required: ["chapterId", "chapterNumber"] },
+          },
+        ],
       },
       async invoke(input: {
         workspaceId: string;
@@ -413,9 +557,6 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         outline?: string;
         previousChapterSummary?: string;
         styleProfile?: string;
-        reviewToken?: string;
-        reviewDecision?: "confirm" | "reject";
-        reviewFeedback?: string;
         writerModel?: "claude" | "gemini31";
         seed?: number;
         candidateTimeoutMs?: number;
@@ -462,6 +603,14 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         // =========================================================================
         if ((input as any).mode === "batch") {
           return handlers.handleBatchGeneration(input);
+        }
+        // =========================================================================
+        // R04：单章分支在文件快照 / 审计 / 模型副作用之前强制条件必填与章号校验。
+        // 缺字段或非法章号直接返回 status=input_contract_violation，后续依赖调用为零。
+        // =========================================================================
+        const singleChapterViolations = validateSingleChapterContract(input);
+        if (singleChapterViolations.length > 0) {
+          return makeInputContractViolationResult("novel_generate_chapter", singleChapterViolations);
         }
         // =========================================================================
         // P24-续六 Fix6: Agentic model_timeout 章节级重试（调度层包裹）
@@ -590,7 +739,14 @@ export function registerTools(handlers: PublicToolHandlers): ToolDefinition[] {
         type: "object",
         properties: {
           workspaceId: { type: "string", description: "小说 workspace ID" },
-          mode: { type: "string", description: "idea_to_outline（生成整体剧情方向）。旧批量拆章模式已下线。", enum: ["idea_to_outline"] },
+          mode: {
+            type: "string",
+            description:
+              "唯一有效取值 idea_to_outline（生成整体剧情方向）。" +
+              "outline_to_chapter_outlines / full_pipeline 为已下线取值，显式传入会被 handler 硬拒绝（errorCode=MODE_DEPRECATED，不调用模型、不写文件），" +
+              "在此列出只为让拒绝理由可读，不得主动使用。",
+            enum: ["idea_to_outline", "outline_to_chapter_outlines", "full_pipeline"],
+          },
           idea: { type: "string", description: "用户创意，idea_to_outline 必填" },
           fullOutlineText: { type: "string", description: "完整总纲文本；不提供时读取 series/outline.md" },
           startChapter: { type: "number", description: "[已下线] 不再生成显式章纲" },

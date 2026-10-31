@@ -49,6 +49,8 @@ export interface WorkspaceDocument {
     | "style_profile"
     | "chapter_seed"
     | "explicit_outline"
+    /** 作者审批章纲的 provenance（与 explicit_outline 的 hash 绑定） */
+    | "chapter_contract_provenance"
     | "narrative_state";
   /** 文档内容（Markdown / JSON 字符串） */
   content: string;
@@ -444,6 +446,20 @@ function writeDocumentByType(workspacePath: string, doc: WorkspaceDocument, chap
         );
       }
       break;
+    case "chapter_contract_provenance": {
+      // 与 explicit_outline 同目录、同文件名 + .provenance.json；
+      // chapter-seed-builder 用 chapterContractProvenancePath 读取并做 hash 对账。
+      const baseName =
+        chapterNumber && chapterNumber > 0
+          ? `ch${chapterNumber}-outline-explicit.md`
+          : "ch-outline-explicit.md";
+      const parsed = JSON.parse(doc.content) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("chapter_contract_provenance must be a JSON object");
+      }
+      atomicWriteJson(join(workspacePath, "series", `${baseName}.provenance.json`), parsed);
+      break;
+    }
     case "chapter_seed":
       // chapter_seed 可能是 JSON
       try {

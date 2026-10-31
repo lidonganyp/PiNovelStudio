@@ -1503,6 +1503,7 @@ export class UnifiedOrchestrator {
             tokensIn: 0,
             tokensOut: 0,
             modelCalls: 0,
+            consecutiveToolErrors: 0,
             exhausted: false,
           },
           stopReason: "not_run",

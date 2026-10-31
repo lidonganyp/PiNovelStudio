@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "description": "已发现的不适用交付案例（反例集）。来源为 2026-10-31 开发集 11 次实际交付的人工逐条审查结论（见 docs/external-kb-scene-card-brief-20261030.md §10.8.3）。本文件只作离线验收标签，不进入运行池、不进入生产 prompt、不含章节白名单逻辑；章节编号仅作为案例定位用。",
+  "frozenPoolSha256": "652e40150683fa87090025d327dfc1858040405e8fd82ba0728374c2e3818bce",
+  "labelDefs": {
+    "applicable": "适用：卡片机制的适用条件在本章作者写前契约中成立",
+    "not_applicable": "不适用：契约明确显示适用条件不成立",
+    "insufficient": "证据不足：契约未提供足以判定适用与否的证据"
+  },
+  "labels": [
+    {
+      "novelName": "副本设计师",
+      "chapterNumber": 1,
+      "cardId": "rule-hidden-loophole",
+      "label": "applicable",
+      "evidenceRef": "workspaces/fuben/series/ch1-outline-explicit.md 事件6 规则原文第一行；事件1 30 分钟死亡倒计时与样本死亡条件",
+      "note": "规则条文与生死倒计时同时存在，机制适用。"
+    },
+    {
+      "novelName": "副本设计师",
+      "chapterNumber": 2,
+      "cardId": "rule-hidden-loophole",
+      "label": "applicable",
+      "evidenceRef": "workspaces/fuben/series/ch2-outline-explicit.md 事件2 至少三条规则条文；事件3 违规者被清算致死",
+      "note": "规则条文完整，且说谎即被清算构成生死利害，机制适用。"
+    },
+    {
+      "novelName": "心魔界",
+      "chapterNumber": 13,
+      "cardId": "team-panic-chain",
+      "label": "not_applicable",
+      "evidenceRef": "workspaces/xinmo/series/ch13-outline-explicit.md 早餐/训练/聚餐/祭炼四个事件",
+      "note": "契约无团队伤亡，也无规则被反面验证的环节，恐慌外溢机制无落点。"
+    },
+    {
+      "novelName": "心魔界",
+      "chapterNumber": 16,
+      "cardId": "combat-partial-suppression-then-leak",
+      "label": "insufficient",
+      "evidenceRef": "workspaces/xinmo/series/ch16-outline-explicit.md 事件2 大蛇碾压通过；事件3 进入噬魂林",
+      "note": "「碾压通过」描述的是大蛇通过，不等同主角取得压制优势；是否存在未处理的次要威胁亦未明示。判证据不足，非适用也非明确不成立。"
+    },
+    {
+      "novelName": "心魔界",
+      "chapterNumber": 17,
+      "cardId": "fake-authority",
+      "label": "not_applicable",
+      "evidenceRef": "workspaces/xinmo/series/ch17-outline-explicit.md 全文 5 个事件",
+      "note": "契约中没有冒充者、自称懂行者或可被误认的伪专家，冒充者遮蔽机制无落点。"
+    },
+    {
+      "novelName": "心魔界",
+      "chapterNumber": 18,
+      "cardId": "fake-authority",
+      "label": "not_applicable",
+      "evidenceRef": "workspaces/xinmo/series/ch18-outline-explicit.md 全文 5 个事件",
+      "note": "同 ch17，契约无冒充者；事件4 是真实情报揭示，不是伪专家误导。"
+    },
+    {
+      "novelName": "心魔界",
+      "chapterNumber": 22,
+      "cardId": "info-asymmetry-tension",
+      "label": "applicable",
+      "evidenceRef": "workspaces/xinmo/series/ch22-outline-explicit.md 本章功能「三层信息差拉满（读者>小妖>李一凡）」",
+      "note": "信息差被写进本章功能，机制成立；但契约未声明封闭副本场景，属于卡片的场景框架与本章情境不完全一致。"
+    },
+    {
+      "novelName": "p587",
+      "chapterNumber": 3,
+      "cardId": "info-reveal-archive-exception",
+      "label": "not_applicable",
+      "evidenceRef": "platform/.tmp 归档 p587 series/ch3-outline-explicit.md 雾隐兽救援/悬崖/医院/父亲背影",
+      "note": "契约没有档案、监控、名单这类可复核记录来源，例外样本机制无落点。"
+    },
+    {
+      "novelName": "p252",
+      "chapterNumber": 20,
+      "cardId": "info-reveal-trace-in-hand-close",
+      "label": "not_applicable",
+      "evidenceRef": "platform/.tmp 归档 p252 series/ch20-outline-explicit.md 章末目标：识海护罩裂缝与墨老回应",
+      "note": "章末落点是识海裂缝与回应，不是可检查物证；异常水样出现在事件1，不在章末。"
+    },
+    {
+      "novelName": "p587",
+      "chapterNumber": 1,
+      "cardId": "combat-partial-suppression-then-leak",
+      "label": "not_applicable",
+      "evidenceRef": "platform/.tmp 归档 p587 series/ch1-outline-explicit.md「想转身逃」「朝反方向逃去」",
+      "note": "契约写的是逃跑与逃亡，不存在主角取得可见优势，机制前提明确不成立。"
+    },
+    {
+      "novelName": "p252",
+      "chapterNumber": 430,
+      "cardId": "team-pressure-discipline-list-close",
+      "label": "not_applicable",
+      "evidenceRef": "platform/.tmp 归档 p252 novelos-sessions/novelos-430 契约块：溶洞单人装备/药品/退路检查",
+      "note": "session 契约为单人行动，不存在团队纪律清单落点。"
+    }
+  ]
+}

@@ -1,10 +1,15 @@
 /**
  * 设定文档 CRUD：每次保存追加版本。
+ *
+ * 作者审批链的系统文档（`chapter_contract:*` / `chapter_contract_provenance:*`）
+ * 只允许 `ChapterContractService` 在 runtime 审批通过后写入；通用 CRUD 一律 403，
+ * 否则作者可以伪造 provenance 的 `commitStatus=committed` 绕过审批。
  */
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { requireOwnedProject } from '../../common/ownership';
+import { isReservedAuthorContractDocumentType } from '../jobs/chapter-contract-materials';
 
 export class CreateDocumentDto {
   @IsString()
@@ -57,6 +62,7 @@ export class DocumentsService {
     dto: CreateDocumentDto,
   ): Promise<unknown> {
     await requireOwnedProject(this.prisma, userId, projectId);
+    assertWritableDocumentType(dto.documentType);
     let created;
     try {
       created = await this.prisma.$transaction(async (tx) => {
@@ -124,6 +130,7 @@ export class DocumentsService {
       where: { id: documentId, projectId, userId, deletedAt: null },
     });
     if (!row) throw new NotFoundException('文档不存在');
+    assertWritableDocumentType(row.documentType);
     const updated = await this.prisma.$transaction(async (tx) => {
       const nextVersion = row.currentVersion + 1;
       const write = await tx.novelDocument.updateMany({
@@ -172,6 +179,7 @@ export class DocumentsService {
       where: { id: documentId, projectId, userId, deletedAt: null },
     });
     if (!row) throw new NotFoundException('文档不存在');
+    assertWritableDocumentType(row.documentType);
     await this.prisma.novelDocument.update({
       where: { id: documentId },
       data: { deletedAt: new Date() },
@@ -194,4 +202,14 @@ export class DocumentsService {
       currentVersion: row.currentVersion,
     };
   }
+}
+
+/** 通用 CRUD 不得写入作者审批链的系统文档类型（只能经 ChapterContractService）。 */
+function assertWritableDocumentType(documentType: string): void {
+  if (!isReservedAuthorContractDocumentType(documentType)) return;
+  throw new ForbiddenException({
+    statusCode: 403,
+    message: '章纲契约与审批记录只能由章纲审批流程写入',
+    reason: 'reserved_document_type',
+  });
 }

@@ -336,7 +336,7 @@ test("append mode retries a rewritten prefix and succeeds with the strict suffix
 
     assert.equal(result.status, "ok", JSON.stringify(result.failureEnvelope));
     assert.equal(stylePrompts.length, 2);
-    assert.match(stylePrompts[1], /CONTINUATION PREFIX RECOVERY/);
+    assert.match(stylePrompts[1], /【续写前缀恢复】/);
     assert.equal(result.text, COMPLETE_DRAFT);
     assert.equal(result.text.split(FIRST_DRAFT).length - 1, 1);
     assert.equal(result.stageResults.authorStyleOptimizationRetry.succeeded, true);
@@ -372,7 +372,7 @@ test("repeated author-style echo blocks without relabeling the Agentic draft as 
 
     assert.equal(result.status, "blocked", JSON.stringify(result.failureEnvelope));
     assert.equal(stylePrompts.length, 2);
-    assert.match(stylePrompts[1], /COMPLETE CHAPTER ECHO RECOVERY/);
+    assert.match(stylePrompts[1], /【完整章节回显恢复】/);
     assert.equal(result.selectedSource, null);
     assert.ok(!result.chapterFilePath, "failed optimization must not save a chapter");
     assert.equal(result.stageResults.authorStyleOptimizationRetry.succeeded, false);

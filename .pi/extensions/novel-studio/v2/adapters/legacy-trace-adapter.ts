@@ -57,7 +57,9 @@ export type V2TraceStage =
   // Phase D 新增：编排重构后，先生成 rawStage2 候选再构建 SceneContract
   | "rawstage2_generated"
   // Step 5 新增：NovelOS agentic_raw shadow 候选（trajectory + budget snapshot）
-  | "novelos_agentic";
+  | "novelos_agentic"
+  // EXTERNAL-KB-1：外挂蒸馏知识库检索证据（池子规模 / 硬过滤与阈值丢弃 / 注入条数）
+  | "external_knowledge_retrieved";
 
 // ============================================================================
 // A6：完整 judge 证据 trace 结构（计划 §12）
@@ -263,6 +265,11 @@ export interface V2TraceRecord {
     narrativeStateRevision: string | null;
     capturedAt: string;
   };
+  /**
+   * EXTERNAL-KB-1：外挂蒸馏知识库检索报告（external_knowledge_retrieved 阶段）。
+   * 记录池子规模、硬过滤与阈值丢弃清单、实际注入条数，供人工确认无静默丢弃。
+   */
+  externalKnowledge?: unknown;
 }
 
 // ============================================================================

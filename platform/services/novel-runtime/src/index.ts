@@ -15,6 +15,8 @@
  * - GET  /healthz        — 健康检查（无认证）
  * - GET  /v1/tools       — 工具列表（无认证，仅供 platform-api 调试）
  * - POST /v1/invoke      — 调用工具（需 X-Novel-Task-Token）
+ * - POST /internal/chapter-contract/approvals — 宿主审批签发一次性章纲授权凭证
+ *   （需内部 HMAC；唯一调用方是 platform-api，agent/工具方触达不到）
  */
 
 import express from "express";
@@ -36,6 +38,12 @@ import { createTaskTokenAuthMiddleware } from "./middleware/task-token-auth.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createHealthRouter } from "./routes/health.js";
 import { createInvokeRouter } from "./routes/v1/invoke.js";
+import { createChapterContractApprovalRouter } from "./routes/internal/chapter-contract-approval.js";
+import { createChapterContractHandoffRouter } from "./routes/internal/chapter-contract-handoff.js";
+import {
+  loadChapterContractApprovalIssuer,
+  type ChapterContractApprovalIssuer,
+} from "./host-approval.js";
 import type { LoadedTools } from "./extension-loader.js";
 
 async function main(): Promise<void> {
@@ -82,6 +90,23 @@ async function main(): Promise<void> {
     },
     "PiNovelStudio extension loaded (6-tool whitelist enforced)",
   );
+
+  // ── 2b. 宿主审批签发器（EXPERT-HOST-APPROVAL-1，fail closed） ────
+  // 从同一扩展 dist 导入签发函数：与工具调用共享同一进程与同一凭证表，
+  // 因此这里签发的凭证能在 /v1/invoke 的 handoff commit 中被消费。
+  let approvalIssuer: ChapterContractApprovalIssuer;
+  try {
+    approvalIssuer = await loadChapterContractApprovalIssuer(config.novelStudioDistPath);
+  } catch (err) {
+    if (err instanceof ExtensionLoadError) {
+      logger.fatal(
+        { code: err.code, distPath: config.novelStudioDistPath },
+        "chapter contract approval issuer load failed (fail closed)",
+      );
+    }
+    throw err;
+  }
+  logger.info("chapter contract approval issuer loaded (host-only, internal HMAC required)");
 
   // ── 3. Provider 凭证（R4：PiNovelStudio 原生 provider 直连） ────
   // env 模式（默认）：容器 env 已注入直连密钥（GLM_API_KEY 等），零网络依赖。
@@ -181,6 +206,26 @@ async function main(): Promise<void> {
 
   // 路由
   app.use(createHealthRouter(loadedTools));
+  app.use(
+    "/internal",
+    createChapterContractApprovalRouter({
+      issuer: approvalIssuer,
+      workspaceManager,
+      internalApiSecret: config.internalApiSecret,
+      logger,
+    }),
+  );
+  // 作者侧审批闭环：preview 拿 proposalHash → 宿主签发 receipt → commit 落章纲 + provenance。
+  // 只在临时 workspace 内写入，读完即清理，不触碰生产目录。
+  app.use(
+    "/internal",
+    createChapterContractHandoffRouter({
+      loadedTools,
+      workspaceManager,
+      internalApiSecret: config.internalApiSecret,
+      logger,
+    }),
+  );
   app.use(
     "/v1",
     createTaskTokenAuthMiddleware(config),

@@ -32,6 +32,8 @@ import { getModelRequestTimeoutMs } from "../api/request-timeout.js";
 // P26新增：统一显式章纲解析器，Stage 0/Preflight 提前校验显式章纲
 // P27新增：hasVerifiableMandatoryElements 用于 mandatoryElements 可验证性校验
 import { parseExplicitOutline } from "./explicit-outline-parser.js";
+// CRASH-RECOVERY-1：显式章纲 provenance 对账与拒绝不一致提案。
+import { resolveChapterContractConsumption } from "./chapter-contract-provenance.js";
 import { resolveExistingChapterFile } from "../utils/chapter-path.js";
 
 export interface PreflightBlockingItem {
@@ -555,6 +557,32 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
   // ────────────────────────────────────────────────────────────────
   const explicitOutlinePath = join(workspacePath, "series", `ch${chapterNumber}-outline-explicit.md`);
   if (existsSync(explicitOutlinePath)) {
+    // CRASH-RECOVERY-1：先对账 provenance。pending 且内容与批准提案一致时修复为 committed；
+    // failed/mismatch/invalid 必须在模型前阻断，不得静默退化成“无显式章纲”。
+    const provenanceConsumption = (() => {
+      try {
+        return resolveChapterContractConsumption(
+          explicitOutlinePath,
+          readFileSync(explicitOutlinePath, "utf-8"),
+        );
+      } catch {
+        return null;
+      }
+    })();
+    if (provenanceConsumption && !provenanceConsumption.consumable) {
+      blockingItems.push({
+        check: "explicit_outline_provenance_inconsistent",
+        reason: `显式章纲 ch${chapterNumber}-outline-explicit.md 的 provenance 状态为 ${provenanceConsumption.state}，拒绝消费：${provenanceConsumption.reason ?? ""}`,
+        fixInstruction: `核对 workspaces/${workspaceId}/series/ch${chapterNumber}-outline-explicit.md.provenance.json；若提案未获作者批准或提交失败，删除章纲与 provenance 后由作者重新 handoff commit。`,
+        evidence: {
+          outlinePath: `series/ch${chapterNumber}-outline-explicit.md`,
+          provenancePath: `series/ch${chapterNumber}-outline-explicit.md.provenance.json`,
+          provenanceState: provenanceConsumption.state,
+          provenanceReason: provenanceConsumption.reason,
+        },
+      });
+      checks.explicitOutline = { passed: false, detail: { provenanceState: provenanceConsumption.state } };
+    } else {
     try {
       const explicitContent = readFileSync(explicitOutlinePath, "utf-8");
       const parsed = parseExplicitOutline(explicitContent);
@@ -633,6 +661,7 @@ export function preflightWorkspace(options: PreflightWorkspaceOptions): Prefligh
         evidence: { error: String(e) },
       });
       checks.explicitOutline = { passed: false, detail: { error: String(e) } };
+    }
     }
   } else {
     // 不存在 ch{N}-outline-explicit.md → 不阻断，走默认 ChapterSeed 链路

@@ -15,6 +15,7 @@ import {
   compileContextSafety,
 } from "../dist/v2/core/context-safety.js";
 import {
+  buildExtraReferenceItems,
   compileProductionContextPackage,
   renderContextPackage,
   collectConfirmedCoverageFromPackage,
@@ -107,7 +108,7 @@ function minimalContext(overrides = {}) {
   };
 }
 
-function compileSafety(intent, context, tokens = {}) {
+function compileSafety(intent, context, tokens = {}, extraItems = []) {
   const manifest = createConstraintManifest({ intent, context });
   return compileContextSafety({
     manifest,
@@ -116,6 +117,7 @@ function compileSafety(intent, context, tokens = {}) {
     modelWindowTokens: tokens.modelWindowTokens ?? 128000,
     outputReserveTokens: tokens.outputReserveTokens ?? 8192,
     safetyMarginTokens: tokens.safetyMarginTokens ?? 4096,
+    extraItems,
   });
 }
 
@@ -136,13 +138,17 @@ function makePlan(mustVerify) {
 test("CEG-3.1/3.2: snapshot 编译 ContextPackage，P3/P4 不得进入权威槽", () => {
   const intent = minimalIntent();
   const context = minimalContext();
-  const safety = compileSafety(intent, context);
+  // R03：附加参考项在 safety 前进入 manifest，不再于编译后追加。
+  const extraItems = buildExtraReferenceItems({
+    snapshotId: "snap:wave3",
+    characterNames: ["林舟"],
+    targetWordCount: { min: 2000, max: 3000 },
+  });
+  const safety = compileSafety(intent, context, {}, extraItems);
   assert.equal(safety.ok, true);
   const compiled = compileProductionContextPackage({
     safety,
     snapshotId: "snap:wave3",
-    characterNames: ["林舟"],
-    targetWordCount: { min: 2000, max: 3000 },
   });
   assert.equal(compiled.ok, true);
   assert.ok(compiled.package);
@@ -173,11 +179,11 @@ test("CEG-3.1/3.2: snapshot 编译 ContextPackage，P3/P4 不得进入权威槽"
 });
 
 test("CEG-3.3/3.4: renderer 只输出已选条目，不改选集，参考槽无指令权", () => {
-  const safety = compileSafety(minimalIntent(), minimalContext());
+  const extraItems = buildExtraReferenceItems({ snapshotId: "snap:render", characterNames: ["林舟"] });
+  const safety = compileSafety(minimalIntent(), minimalContext(), {}, extraItems);
   const compiled = compileProductionContextPackage({
     safety,
     snapshotId: "snap:render",
-    characterNames: ["林舟"],
   });
   const rendered = renderContextPackage(compiled.package);
   assert.match(rendered.text, /【作者契约】|【不可破坏事实】|【已提交状态】/);
@@ -383,4 +389,122 @@ test("CEG-5.1: 同 snapshot 的 confirmed + sourceRef 轨迹证据可通过", ()
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ============================================================================
+// R03：附加参考项进入统一预算裁剪
+// ============================================================================
+
+function r03ExtraItems() {
+  const longText = "参考判断文本".repeat(80); // 约 520 字
+  return buildExtraReferenceItems({
+    snapshotId: "snap:r03",
+    characterNames: ["林舟"],
+    targetWordCount: { min: 2000, max: 3000 },
+    fewshotSelection: {
+      manifestApproved: true,
+      examples: [
+        { id: "fs-a", text: `范文判断甲：${longText}` },
+        { id: "fs-b", text: `范文判断乙：${longText}` },
+      ],
+    },
+    externalKnowledgeSelection: {
+      items: [
+        { id: "ext-a", content: `外挂判断甲：${longText}`, sourceRef: "external:a", score: 1, literalScore: 1, boostScore: 0 },
+        { id: "ext-b", content: `外挂判断乙：${longText}`, sourceRef: "external:b", score: 1, literalScore: 1, boostScore: 0 },
+      ],
+      report: { enabled: true },
+    },
+  });
+}
+
+function compileWithBudget(intent, context, extraItems, totalTokens) {
+  return compileContextSafety({
+    manifest: createConstraintManifest({ intent, context }),
+    intent,
+    context,
+    modelWindowTokens: totalTokens,
+    outputReserveTokens: 0,
+    safetyMarginTokens: 0,
+    extraItems,
+  });
+}
+
+test("R03: 附加项进入 manifest 后按 P4 参与预算，dropped 能解释全部省略条目", () => {
+  const intent = minimalIntent();
+  const context = minimalContext();
+  const extras = r03ExtraItems();
+  assert.ok(extras.length >= 6, "fixture 应同时含 fewshot 与外部知识附加项");
+  const full = compileWithBudget(intent, context, extras, 10_000_000);
+  assert.equal(full.ok, true);
+  assert.equal(full.report.dropped.length, 0);
+  const retainedIds = new Set(full.report.retained.map((entry) => entry.id));
+  for (const extra of extras) {
+    assert.ok(full.manifest.items.some((item) => item.id === extra.id), "附加项必须并入 manifest");
+    assert.ok(retainedIds.has(extra.id), "宽裕预算下附加项必须被保留");
+  }
+
+  const allTokens = full.report.estimatedRetainedTokens;
+  const lastExtra = extras[extras.length - 1];
+  const tight = compileWithBudget(intent, context, extras, allTokens - lastExtra.estimatedTokens);
+  assert.equal(tight.ok, true);
+  assert.equal(tight.report.dropped.length, 1, "只差最后一条空间时只应丢弃一条");
+  assert.equal(tight.report.dropped[0].id, lastExtra.id);
+  assert.equal(tight.report.dropped[0].reason, "budget_drop_P4");
+  assert.ok(tight.report.estimatedRetainedTokens <= tight.report.inputBudgetTokens);
+
+  // 保留 + 丢弃 + 合并 必须完整解释 manifest 每一条
+  const mergedIds = tight.report.merged.reduce((sum, entry) => sum + entry.mergedIds.length, 0);
+  assert.equal(
+    tight.report.retained.length + tight.report.dropped.length + mergedIds,
+    tight.manifest.items.length,
+  );
+});
+
+test("R03: fewshot 与外部知识同时存在时都受同一预算约束", () => {
+  const intent = minimalIntent();
+  const context = minimalContext();
+  const extras = r03ExtraItems();
+  const full = compileWithBudget(intent, context, extras, 10_000_000);
+  const p4Tokens = extras
+    .filter((item) => item.priority === "P4")
+    .reduce((sum, item) => sum + item.estimatedTokens, 0);
+  const tight = compileWithBudget(
+    intent,
+    context,
+    extras,
+    full.report.estimatedRetainedTokens - p4Tokens,
+  );
+  assert.equal(tight.ok, true);
+  const droppedIds = tight.report.dropped.map((entry) => entry.id);
+  assert.ok(droppedIds.some((id) => id.startsWith("p4:fewshot:")), "fewshot 必须参与预算裁剪");
+  assert.ok(droppedIds.some((id) => id.startsWith("p4:external:")), "外部知识必须参与预算裁剪");
+  assert.ok(tight.report.dropped.every((entry) => entry.reason === "budget_drop_P4"));
+});
+
+test("R03: 条目预算刚好用满时渲染开销越限必须显式报错，不得静默超限", () => {
+  const intent = minimalIntent();
+  const context = minimalContext();
+  const extras = r03ExtraItems();
+  const full = compileWithBudget(intent, context, extras, 10_000_000);
+  const exactlyFull = compileWithBudget(intent, context, extras, full.report.estimatedRetainedTokens);
+  assert.equal(exactlyFull.ok, true);
+  assert.equal(exactlyFull.report.dropped.length, 0);
+  const compiled = compileProductionContextPackage({ safety: exactlyFull, snapshotId: "snap:r03" });
+  assert.equal(compiled.ok, false);
+  assert.match(compiled.errors[0], /^context_package_overflow:/);
+});
+
+test("R03: 保护项本身超限仍然 fail-closed", () => {
+  const huge = "甲".repeat(4000);
+  const intent = minimalIntent({
+    inviolableFacts: [huge],
+    chapterFunction: huge,
+  });
+  const extras = r03ExtraItems();
+  const safety = compileWithBudget(intent, minimalContext(), extras, 100);
+  assert.equal(safety.ok, false);
+  assert.equal(safety.blockReason, "protected_context_overflow");
+  const compiled = compileProductionContextPackage({ safety, snapshotId: "snap:r03" });
+  assert.equal(compiled.ok, false);
 });

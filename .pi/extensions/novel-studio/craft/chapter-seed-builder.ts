@@ -19,6 +19,8 @@
 import { join } from "path";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { parseExplicitOutline, parseMandatoryElementTag } from "./explicit-outline-parser.js";
+// CRASH-RECOVERY-1：显式章纲写入后进程崩溃时，由消费方对账 provenance 并拒绝不一致提案。
+import { resolveChapterContractConsumption } from "./chapter-contract-provenance.js";
 // P1-F：章节连续性快照（commitAndSave 写入，前章承接加载）
 import { loadChapterContinuitySnapshot } from "./chapter-continuity-snapshot.js";
 import type {
@@ -452,7 +454,10 @@ function loadHighLevelDirection(workspacePath: string, chapterNumber: number): H
     if (existsSync(explicitPath)) {
       try {
         const explicitText = readFileSync(explicitPath, "utf-8");
-        chapterThemeHint = extractMarkdownField(explicitText, ["本章功能", "章节功能"]);
+        // 未完成事务的章纲不得污染高层方向主题提示。
+        if (resolveChapterContractConsumption(explicitPath, explicitText).consumable) {
+          chapterThemeHint = extractMarkdownField(explicitText, ["本章功能", "章节功能"]);
+        }
       } catch {
         chapterThemeHint = undefined;
       }
@@ -884,6 +889,13 @@ function loadExplicitOutlineEventCharacters(
     return [];
   }
 
+  // CRASH-RECOVERY-1：provenance 不一致（pending/failed/hash mismatch）时不得把
+  // 未完成事务的章纲当作 eventCharacters 权威来源。
+  const consumption = resolveChapterContractConsumption(outlinePath, text);
+  if (!consumption.consumable) {
+    return [];
+  }
+
   // P26: 委托统一 parser（支持 ##/###/#### 事件 1/事件1/事件 E1/事件E1 四种变体）
   const parsed = parseExplicitOutline(text);
   if (parsed.events.length === 0) {
@@ -1056,49 +1068,40 @@ function parseChoicesAndCosts(values: string[]): Array<{ choice: string; cost: s
 function loadAuthorChapterContract(workspacePath: string, chapterNumber: number): AuthorChapterContract {
   const sourceId = `series/ch${chapterNumber}-outline-explicit.md`;
   const outlinePath = join(workspacePath, sourceId);
+  /** 统一构造“不可用”契约，避免三处重复。 */
+  const unavailable = (sourceIds: string[], provenanceState?: string): AuthorChapterContract => ({
+    available: false,
+    readerExperience: [],
+    currentPressure: [],
+    focusCharacterGoals: [],
+    resistance: [],
+    choicesAndCosts: [],
+    expectedIrreversibleChange: [],
+    causalEndPressure: [],
+    eventSummaries: [],
+    mustInclude: [],
+    stateChanges: [],
+    foreshadowing: [],
+    causalRelations: [],
+    relevantCharacters: [],
+    characterMotivations: [],
+    sourceIds,
+    ...(provenanceState ? { provenanceState } : {}),
+  });
   if (!existsSync(outlinePath)) {
-    return {
-      available: false,
-      readerExperience: [],
-      currentPressure: [],
-      focusCharacterGoals: [],
-      resistance: [],
-      choicesAndCosts: [],
-      expectedIrreversibleChange: [],
-      causalEndPressure: [],
-      eventSummaries: [],
-      mustInclude: [],
-      stateChanges: [],
-      foreshadowing: [],
-      causalRelations: [],
-      relevantCharacters: [],
-      characterMotivations: [],
-      sourceIds: [],
-    };
+    return unavailable([]);
   }
 
   try {
     const text = readFileSync(outlinePath, "utf-8");
+    // CRASH-RECOVERY-1：pending 且内容与批准提案一致 → 对账修复；failed/mismatch → 拒绝消费。
+    const consumption = resolveChapterContractConsumption(outlinePath, text);
+    if (!consumption.consumable) {
+      return unavailable([sourceId], consumption.state);
+    }
     const parsed = parseExplicitOutline(text);
     if (parsed.parseError) {
-      return {
-        available: false,
-        readerExperience: [],
-        currentPressure: [],
-        focusCharacterGoals: [],
-        resistance: [],
-        choicesAndCosts: [],
-        expectedIrreversibleChange: [],
-        causalEndPressure: [],
-        eventSummaries: [],
-        mustInclude: [],
-        stateChanges: [],
-        foreshadowing: [],
-        causalRelations: [],
-        relevantCharacters: [],
-        characterMotivations: [],
-        sourceIds: [sourceId],
-      };
+      return unavailable([sourceId], consumption.state);
     }
 
     const relevantCharacters = uniqueStrings(parsed.events.flatMap((event) => event.characters));
@@ -1147,26 +1150,10 @@ function loadAuthorChapterContract(workspacePath: string, chapterNumber: number)
       characterMotivations: motivationEntries.filter((entry, index, all) =>
         all.findIndex((candidate) => candidate.character === entry.character && candidate.motivation === entry.motivation) === index),
       sourceIds: [sourceId],
+      provenanceState: consumption.state,
     };
   } catch {
-    return {
-      available: false,
-      readerExperience: [],
-      currentPressure: [],
-      focusCharacterGoals: [],
-      resistance: [],
-      choicesAndCosts: [],
-      expectedIrreversibleChange: [],
-      causalEndPressure: [],
-      eventSummaries: [],
-      mustInclude: [],
-      stateChanges: [],
-      foreshadowing: [],
-      causalRelations: [],
-      relevantCharacters: [],
-      characterMotivations: [],
-      sourceIds: [sourceId],
-    };
+    return unavailable([sourceId]);
   }
 }
 
@@ -1257,6 +1244,15 @@ export function buildChapterSeed(options: ChapterSeedBuilderOptions): ChapterSee
     warnings.push(`series/ch${chapterNumber}-outline-explicit.md 提供 ${explicitEventCharacters.length} 个事件的显式参与角色，已作为 eventCharacters 权威来源。`);
   }
   const authorChapterContract = loadAuthorChapterContract(workspacePath, chapterNumber);
+  if (
+    !authorChapterContract.available &&
+    authorChapterContract.provenanceState &&
+    ["pending", "failed", "mismatch", "invalid"].includes(authorChapterContract.provenanceState)
+  ) {
+    warnings.push(
+      `series/ch${chapterNumber}-outline-explicit.md 的 provenance 状态为 ${authorChapterContract.provenanceState}，已拒绝作为写前契约消费。`,
+    );
+  }
   const intent = inferChapterIntent(chapterFunction, currentPressure, previousContinuation, highLevelDirection);
 
   // 字数预算

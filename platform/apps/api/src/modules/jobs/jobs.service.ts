@@ -58,6 +58,11 @@ import {
   resolveProjectGenre,
 } from './runtime-workspace-defaults';
 import {
+  chapterContractDocumentType,
+  chapterContractProvenanceDocumentType,
+  resolveApprovedChapterContract,
+} from './chapter-contract-materials';
+import {
   mergeChapterContinuation,
   type ContinuationMode,
 } from './chapter-continuation';
@@ -1145,6 +1150,45 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     }
 
     const byType = new Map(documents.map((document) => [document.documentType, document]));
+
+    // 作者批准的章纲契约优先于平台自动生成的 explicit outline，但只有 provenance
+    // 处于 committed 且 hash 与正文一致时才可消费（CRASH-RECOVERY-1）。状态不一致
+    // 一律 fail-closed：绝不消费 pending/failed 提案，也不静默退回自动生成稿。
+    const authoredContract = resolveApprovedChapterContract({
+      chapterNumber: input.chapterNumber,
+      contractContent: documents.find(
+        (document) => document.documentType === chapterContractDocumentType(input.chapterNumber),
+      )?.content,
+      provenanceContent: documents.find(
+        (document) => document.documentType === chapterContractProvenanceDocumentType(input.chapterNumber),
+      )?.content,
+    });
+    if (authoredContract && !authoredContract.ok) {
+      throw new ContextCompileError(makeFailure({
+        stage: 'runtime.preflight',
+        gate: 'explicit_outline_provenance',
+        code: FAILURE_CODES.runtimePreflightFailed,
+        severity: 'preflight',
+        reason: `第${input.chapterNumber}章章纲契约与审批记录状态不一致，已阻断生成（${authoredContract.reason}）`,
+        evidence: {
+          chapterNumber: input.chapterNumber,
+          rejectReason: authoredContract.reason,
+          provenanceStatus: authoredContract.provenanceStatus ?? 'missing_or_invalid',
+          expectedHash: authoredContract.expectedHash,
+          actualHash: authoredContract.actualHash,
+        },
+        recoverable: false,
+        userActionRequired: ['重新在章纲契约面板提交并通过审批', '确认审批记录未被手工修改'],
+        fixInstructions: [
+          '检查 chapter_contract:ch{N} 与 chapter_contract_provenance:ch{N} 是否成对存在',
+          'provenance 的 commitStatus 必须为 committed 且 proposalHash 与章纲正文一致',
+        ],
+      }));
+    }
+    const authoredOutline = authoredContract?.ok ? authoredContract.outlineMarkdown : undefined;
+    const authoredProvenanceJson = authoredContract?.ok ? authoredContract.provenanceJson : undefined;
+    const hasAuthoredContract = authoredOutline !== undefined;
+
     const stateDocument = byType.get('narrative_state');
     const narrativeState = await new GenerationHistoryResolver().resolve({
       chapterNumber: input.chapterNumber,
@@ -1230,21 +1274,28 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       usableStoryOutline: compiled.usableStoryOutline,
     }));
 
-    const explicitOutline = buildExplicitOutlineMarkdown({
-      intent: seed.intent,
-      mustInclude: seed.mustInclude,
-      forbiddenFacts: seed.forbiddenFacts,
-      characterMotives: seed.characterMotives,
-      promises: seed.promises,
-      endingGoal: seed.endingGoal,
-      characterNames: characters.map((character) => character.name),
-      openPromises: compiled.compact.promise.map((item) => item.description),
-    });
+    // 作者已批准契约时用它替换自动生成稿；作者手写章纲（无契约文档）仍按原逻辑生成。
+    const explicitOutline = hasAuthoredContract
+      ? (authoredOutline as string)
+      : buildExplicitOutlineMarkdown({
+          intent: seed.intent,
+          mustInclude: seed.mustInclude,
+          forbiddenFacts: seed.forbiddenFacts,
+          characterMotives: seed.characterMotives,
+          promises: seed.promises,
+          endingGoal: seed.endingGoal,
+          characterNames: characters.map((character) => character.name),
+          openPromises: compiled.compact.promise.map((item) => item.description),
+        });
 
     const workspaceDocuments: Array<{ type: string; content: string }> = [
       { type: 'character_profile', content: characterContent },
       { type: 'explicit_outline', content: explicitOutline },
     ];
+    if (hasAuthoredContract && authoredProvenanceJson) {
+      // provenance 必须随章纲一起物化：runtime 的消费方据此对账，重启后也不丢授权证据。
+      workspaceDocuments.push({ type: 'chapter_contract_provenance', content: authoredProvenanceJson });
+    }
     const constitution = byType.get('creative_constitution')?.content?.trim();
     const worldbuilding = byType.get('worldbuilding')?.content?.trim();
     const styleProfile = byType.get('style_profile')?.content?.trim();
@@ -1276,8 +1327,12 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       if (runtimeContextLayers) {
         const outlineDocument = workspaceDocuments.find((document) => document.type === 'story_outline');
         if (outlineDocument) outlineDocument.content = `${outlineDocument.content}\n\n${runtimeContextLayers}`;
-        const explicitDocument = workspaceDocuments.find((document) => document.type === 'explicit_outline');
-        if (explicitDocument) explicitDocument.content = `${explicitDocument.content}\n\n${runtimeContextLayers}`;
+        // 作者批准稿必须与 proposalHash 逐字节一致；追加任何上下文层都会让 hash 漂移，
+        // 因此只在自动生成稿上追加。
+        if (!hasAuthoredContract) {
+          const explicitDocument = workspaceDocuments.find((document) => document.type === 'explicit_outline');
+          if (explicitDocument) explicitDocument.content = `${explicitDocument.content}\n\n${runtimeContextLayers}`;
+        }
       }
       // FactGuard 的术语授权只能依据它能读到的材料判定，裁剪后的提示词副本会让大纲
       // 尾部已有术语被误判为未授权新设定。这里额外物化一份全文，专供授权使用。

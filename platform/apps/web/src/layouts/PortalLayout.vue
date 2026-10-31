@@ -107,6 +107,7 @@ onMounted(() => {
         </router-link>
       </nav>
       <span class="spacer" />
+      <span class="qq-group" title="PiNovel 用户交流 QQ 群">QQ群：1061884215</span>
       <router-link
         v-if="auth.user"
         class="balance-chip"
@@ -253,6 +254,19 @@ onMounted(() => {
 }
 .spacer {
   flex: 1;
+}
+/* 交流群提示：位于顶栏中部空白区，窄屏隐藏以免挤压导航 */
+.qq-group {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: text;
+}
+@media (max-width: 1024px) {
+  .qq-group {
+    display: none;
+  }
 }
 .balance-chip {
   display: flex;
