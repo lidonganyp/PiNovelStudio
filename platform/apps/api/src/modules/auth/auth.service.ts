@@ -14,6 +14,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { env } from '../../config/env';
 import type {
   AuthResult,
   AuthUserPayload,
@@ -48,14 +49,31 @@ export class AuthService {
     }
 
     const passwordHash = await argon2.hash(dto.password);
+    // 新用户注册初始金（分）：默认 2 元，可通过 REGISTER_INITIAL_BALANCE_FEN 调整；0 表示不赠送。
+    const initialBalance = BigInt(env.REGISTER_INITIAL_BALANCE_FEN);
     let created: UserRow;
     try {
-      created = await this.prisma.user.create({
-        data: {
-          email: dto.email,
-          passwordHash,
-          nickname: dto.nickname,
-        },
+      created = await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email: dto.email,
+            passwordHash,
+            nickname: dto.nickname,
+            ...(initialBalance > 0n ? { balance: initialBalance } : {}),
+          },
+        });
+        if (initialBalance > 0n) {
+          await tx.novelBillingAdjustment.create({
+            data: {
+              userId: user.id,
+              amount: initialBalance,
+              reason: '新用户注册初始金',
+              // 系统行为无人工操作人，沿用自引用约定。
+              adminUserId: user.id,
+            },
+          });
+        }
+        return user;
       });
     } catch (error: unknown) {
       if (

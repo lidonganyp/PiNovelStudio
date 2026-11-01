@@ -203,3 +203,90 @@ function readTokenCount(value: unknown, fallback: PlannerChatMessage[] | number)
   const chars = fallback.map((item) => item.content).join('').length;
   return Math.max(1, chars);
 }
+
+const JSON_UNESCAPES: Record<string, string> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+};
+
+/**
+ * 增量提取流式 JSON 输出中顶层指定字段的字符串内容。
+ *
+ * 规划模型的结构化 envelope 尚未完整就绪时，把 reply 正文的可见增量实时
+ * 透出给聊天窗口；非目标字段、键名与 JSON 语法符号一律不产生输出。
+ * 字段定位基于缓冲整体正则（envelope 约定 reply 为首个业务字段），取值阶段
+ * 用逐字符状态机正确处理反斜杠转义与 \uXXXX 序列，值串闭合或遇到非法转义即终止。
+ */
+export function createJsonFieldStreamer(field: string, onText: (text: string) => void): (chunk: string) => void {
+  const keyPattern = new RegExp(
+    `(^|[,{\\s])"${field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\s*:\\s*"`,
+  );
+  let buffer = '';
+  let valueStart = -1;
+  let consumed = 0;
+  let closed = false;
+  let escaped = false;
+
+  const emitValue = (segment: string): void => {
+    let out = '';
+    let i = 0;
+    while (i < segment.length && !closed) {
+      const char = segment[i];
+      if (escaped) {
+        if (char === 'u') {
+          if (i + 4 >= segment.length) break;
+          const hex = segment.slice(i + 1, i + 5);
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
+            closed = true;
+            break;
+          }
+          out += String.fromCharCode(parseInt(hex, 16));
+          i += 5;
+          escaped = false;
+          continue;
+        }
+        const mapped = JSON_UNESCAPES[char];
+        if (mapped === undefined) {
+          closed = true;
+          break;
+        }
+        out += mapped;
+        escaped = false;
+        i += 1;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        i += 1;
+        continue;
+      }
+      if (char === '"') {
+        closed = true;
+        break;
+      }
+      out += char;
+      i += 1;
+    }
+    consumed += i;
+    if (out) onText(out);
+  };
+
+  return (chunk: string): void => {
+    if (closed) return;
+    buffer += chunk;
+    if (valueStart < 0) {
+      const match = buffer.match(keyPattern);
+      if (!match || match.index === undefined) return;
+      valueStart = match.index + match[0].length;
+      consumed = valueStart;
+    }
+    const segment = buffer.slice(consumed);
+    if (segment) emitValue(segment);
+  };
+}

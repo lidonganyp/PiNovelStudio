@@ -58,6 +58,7 @@ import {
 } from '../context/generation-steward';
 import {
   completePlannerChat,
+  createJsonFieldStreamer,
   type PlannerChatMessage,
 } from './planner-client';
 import { chapterNumberFromTitle } from '../context/chapter-number';
@@ -356,15 +357,28 @@ export class AssistantService {
           request.chapterNumber,
         );
         contextManifest = plannerContext.manifest;
+        // 流式打字机：模型流式输出结构化 JSON 时，把 reply 字段的可见增量实时透出；
+        // 解析完成后的权威正文由 done 事件整体校正，避免重复推送。
+        let streamedReplyLength = 0;
+        const streamReply = onDelta
+          ? createJsonFieldStreamer('reply', (text) => {
+              streamedReplyLength += text.length;
+              onDelta(text);
+            })
+          : undefined;
         const planned = await completePlannerChat({
           baseUrl: endpoint.baseUrl,
           apiKey: endpoint.apiKey,
           model: endpoint.model,
           messages: plannerContext.messages,
           timeoutMs: env.PLANNER_REQUEST_TIMEOUT_MS,
+          onDelta: streamReply,
         });
         const envelope = parsePlannerEnvelope(planned.text, request.action);
-        onDelta?.(envelope.reply);
+        // 流式提取器未透出任何内容（非流式降级或提取失败）时，补发完整正文。
+        if (streamedReplyLength === 0) {
+          onDelta?.(envelope.reply);
+        }
         // auto 模式：动作由模型判断；generate_chapter 视为模型已确认用户明确要求生成。
         const action = envelope.action ?? request.action;
         if (!action) {

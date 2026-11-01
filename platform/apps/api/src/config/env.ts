@@ -99,6 +99,8 @@ const envSchema = z
   PLANNER_API_KEY: z.string().default(''),
   PLANNER_MODEL: z.string().default('gpt-5.6'),
   PLANNER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
+  /** 新注册用户初始金（分），默认 200 分 = 2 元；0 表示不赠送。 */
+  REGISTER_INITIAL_BALANCE_FEN: z.coerce.number().int().min(0).default(200),
   /** ContextCompiler prompt tier: 128k first, then 256k/512k as validated. */
   PINOVEL_CONTEXT_PROFILE: z.enum(['16k', '128k', '256k', '512k']).default('128k'),
   WEB_DIST_DIR: z.string().default(''),
