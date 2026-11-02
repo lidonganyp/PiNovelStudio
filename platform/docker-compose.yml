@@ -168,12 +168,23 @@ services:
       # silently producing an anonymous production identity.
       PINOVEL_RELEASE_COMMIT: ${PINOVEL_RELEASE_COMMIT:?PINOVEL_RELEASE_COMMIT is required and must match the active release manifest}
       PINOVEL_MODEL_REQUEST_TIMEOUT_MS: ${PINOVEL_MODEL_REQUEST_TIMEOUT_MS:-300000}
+      # G6 governance resolution: the runtime invokes the extension with a
+      # per-job temp project root (workspace-manager), so the gate cannot
+      # discover governance state by walking from projectRoot. Pin the
+      # evolution root, identity pack and fingerprint root to the mounted
+      # app tree; missing values must fail closed at the gate, not bypass it.
+      PINOVEL_EVOLUTION_ROOT: /app/pnovel/.pi/extensions/novel-studio/config/evolution-release
+      PINOVEL_PRODUCTION_IDENTITY_PACK: /app/pnovel/config/production-identity/active.pack.json
+      PINOVEL_FINGERPRINT_ROOT: /app/pnovel
       NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
     volumes:
       - novel_workspaces:/var/lib/novel-runtime/workspaces
       # The sealed production identity is deployment state, not source code.
       # Mount it read-only so G6 can verify the release on a clean checkout.
       - ../config/production-identity:/app/pnovel/config/production-identity:ro
+      # G6 governance state (pointer, release manifests, approvals) is also
+      # deployment state; mount read-only for the same fail-closed reason.
+      - ../.pi/extensions/novel-studio/config/evolution-release:/app/pnovel/.pi/extensions/novel-studio/config/evolution-release:ro
     # 不映射宿主端口：仅 compose 内网（api）可达
     depends_on:
       api:
