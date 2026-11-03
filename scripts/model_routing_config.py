@@ -2,12 +2,10 @@
 # -*- coding: utf-8 -*-
 """Shared model-routing helpers for PiNovelStudio scripts."""
 
-from __future__ import annotations
-
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 
 BASE_URL_ENV_MAP = {
@@ -48,7 +46,7 @@ def normalize_base_url(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
-def load_model_routing(repo_root: Path) -> dict[str, Any]:
+def load_model_routing(repo_root: Path) -> Dict[str, Any]:
     path = repo_root / "config" / "model-routing.json"
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -57,7 +55,7 @@ def provider_base_url_env(provider_key: str) -> str:
     return BASE_URL_ENV_MAP.get(provider_key, f"{provider_key.upper()}_BASE_URL")
 
 
-def provider_model_env_keys(provider_key: str, default_model: str) -> list[str]:
+def provider_model_env_keys(provider_key: str, default_model: str) -> List[str]:
     if provider_key != "deepseek":
         return MODEL_OVERRIDE_ENV_MAP.get(provider_key, [f"{provider_key.upper()}_MODEL"])
 
@@ -90,11 +88,11 @@ def provider_model(provider_key: str, default_model: str) -> str:
 
 def resolve_provider_configs(
     repo_root: Path,
-    selected_ids: list[str] | None = None,
-) -> dict[str, dict[str, Any]]:
+    selected_ids: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
     routing = load_model_routing(repo_root)
     selected = set(selected_ids or [])
-    models: dict[str, dict[str, Any]] = {}
+    models: Dict[str, Dict[str, Any]] = {}
 
     for provider_key, provider_cfg in routing.get("providers", {}).items():
         if selected and provider_key not in selected:

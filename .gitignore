@@ -108,6 +108,8 @@ data/runtime/*
 !data/runtime/contrastive-rules-index.json
 !data/runtime/fewshot-index.json
 !data/runtime/prompt-pattern-library.json
+# 中文网文 AI 腔研究库运行时数据集（由 docs/research 同名研究文档派生，chinese-ai-language-guidance 软提示依赖）
+!data/runtime/chinese-webnovel-ai-language-patterns.json
 # P42 candidate 规则产物（candidate seed，待 replay 晋级到 validated-craft-rules.json）
 # 与 candidate-rules.json 同属"机制就绪、待样本晋级"的产物，需纳入版本控制
 !data/runtime/p42-candidate-collocation-rules.json

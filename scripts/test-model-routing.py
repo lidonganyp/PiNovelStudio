@@ -14,7 +14,7 @@ import subprocess
 import sys
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 from model_routing_config import load_dotenv, load_model_routing, resolve_provider_configs
 
@@ -34,7 +34,7 @@ def configure_stdout() -> None:
         pass
 
 
-def build_config() -> dict[str, dict[str, Any]]:
+def build_config() -> Dict[str, Dict[str, Any]]:
     """Build provider config from config/model-routing.json and .env."""
     configs = resolve_provider_configs(REPO_ROOT)
     if not configs:
@@ -53,9 +53,9 @@ def current_provider_for_role(role: str) -> str:
     return "unknown"
 
 
-CONFIG: dict[str, dict[str, Any]] = {}
+CONFIG: Dict[str, Dict[str, Any]] = {}
 PROVIDERS = []
-ROUTE_CONFIG: dict[str, Any] = {}
+ROUTE_CONFIG: Dict[str, Any] = {}
 
 
 # ── Test Cases ──────────────────────────────────────────────
