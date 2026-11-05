@@ -125,6 +125,10 @@ services:
       WECHAT_PLATFORM_CERT: ${WECHAT_PLATFORM_CERT:-}
     ports:
       - '${API_PORT:-3000}:3000'
+    # 前端静态文件挂载（只读）：宿主机 apps/web/dist 覆盖镜像内 /app/web，
+    # 前端更新只需重新构建 dist 并重启 api 容器，无需重建镜像。
+    volumes:
+      - ./apps/web/dist:/app/web:ro
     healthcheck:
       test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1']
       interval: 10s
