@@ -659,6 +659,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       jobType: job.jobType,
       status: job.status,
       progressStage: job.progressStage,
+      progressText: job.progressText ?? null,
       maxCharge: fenToString(job.maxCharge),
       settledAmount: fenToString(job.settledAmount),
       failureMessage: job.failureMessage,
@@ -691,6 +692,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     jobId: string;
     status?: string;
     stage?: string;
+    progressText?: string;
   }): Promise<{ status: string; stage: string; accepted: boolean } | null> {
     const job = await this.prisma.novelGenerationJob.findUnique({
       where: { jobId: input.jobId },
@@ -729,6 +731,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       data: {
         ...(input.stage ? { progressStage: input.stage } : {}),
         ...(input.status === 'running' ? { status: 'running' } : {}),
+        ...(typeof input.progressText === 'string' ? { progressText: input.progressText } : {}),
       },
     });
     if (updated.count !== 1) {

@@ -22,7 +22,7 @@ import type { ClaudeMessage } from "./claude.js";
 import type { GLMMessage, GLMResponse } from "./glm.js";
 import type { GPTMessage } from "./gpt.js";
 import { fetchWithTimeout } from "./request-timeout.js";
-import { runWithTransportRoute } from './transport-scope.js';
+import { runWithTransportRoute, currentModelTransport } from './transport-scope.js';
 import { parseAnthropicResponse } from "./anthropic-stream.js";
 import { parseOpenAIStream } from "./openai-stream.js";
 import { callOpenAIResponses } from "./openai-responses.js";
@@ -149,6 +149,8 @@ type ChatCallOptions = {
   thinking?: ProviderRequestOptions["thinking"];
   timeoutMs?: number;
   stream?: boolean;
+  /** Streaming delta fan-out (writer routes); exceptions inside are swallowed by the parser. */
+  onDelta?: (delta: string) => void;
   /** 采样种子（受控复现实验）。仅透传给支持 seed 的 OpenAI 兼容协议；不支持则调用方标记 unsupported。 */
   seed?: number;
 };
@@ -1367,7 +1369,12 @@ export class APIFallbackManager {
     }
 
     if (streamResponse && response.headers.get("content-type")?.includes("text/event-stream")) {
-      return await parseOpenAIStream(response, model) as GLMResponse;
+      const scope = currentModelTransport();
+      const routeName = scope.route;
+      const streamDelta = options?.onDelta ?? (scope.hooks?.onDelta
+        ? (delta: string): void => scope.hooks?.onDelta?.(delta, routeName)
+        : undefined);
+      return await parseOpenAIStream(response, model, streamDelta) as GLMResponse;
     }
     const data = await response.json();
     if ((data as { error?: { message?: string; code?: string } }).error) {

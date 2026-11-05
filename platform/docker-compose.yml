@@ -34,7 +34,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
-    restart: unless-stopped
+    restart: always
 
   # 一次性迁移（成功后退出；api 依赖其完成）
   api-migrate:
@@ -142,7 +142,7 @@ services:
         condition: service_completed_successfully
       api-bootstrap:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: always
 
   runtime:
     build:
@@ -193,7 +193,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    restart: unless-stopped
+    restart: always
 
 volumes:
   platform_pgdata:

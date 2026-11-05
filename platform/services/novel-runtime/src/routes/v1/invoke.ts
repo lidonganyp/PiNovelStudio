@@ -342,6 +342,35 @@ export function createInvokeRouter(
       // 经 meteringBinder 包装 invoke，事后结算
       const transportAccounting = toolName === 'novel_generate_chapter' && loadedTools.runWithTransportHooks
         ? createTransportAccounting(deps.billingClient, jobCtx.jobId, taskToken.payload.maxCharge, abortController.signal) : undefined;
+      // STREAMING-WRITER-1：正文写作路由（v2_rawstage2/v2_amplified）的 SSE 增量
+      // 经 transport hooks 透出，按节流快照上报 platform-api 供前端打字机展示。
+      // 上报失败静默处理，永不影响生成与计费主链路。
+      if (transportAccounting && deps.billingClient.reportProgress) {
+        const WRITER_DELTA_ROUTES = new Set(['v2_rawstage2', 'v2_amplified', 'v2_rawstage2_gemini31', 'v2_amplified_gemini31']);
+        const MAX_PROGRESS_TEXT = 200000;
+        const MIN_REPORT_INTERVAL_MS = 1500;
+        let streamed = '';
+        let lastReportAt = 0;
+        let reportedLength = 0;
+        let reportChain: Promise<void> = Promise.resolve();
+        transportAccounting.hooks.onDelta = (delta: string, route?: string): void => {
+          if (!route || !WRITER_DELTA_ROUTES.has(route)) return;
+          if (streamed.length >= MAX_PROGRESS_TEXT) return;
+          streamed += delta;
+          const now = Date.now();
+          if (now - lastReportAt < MIN_REPORT_INTERVAL_MS) return;
+          if (streamed.length === reportedLength) return;
+          lastReportAt = now;
+          reportedLength = streamed.length;
+          const snapshot = streamed.slice(0, MAX_PROGRESS_TEXT);
+          const jobId = jobCtx.jobId;
+          const report = deps.billingClient.reportProgress;
+          if (!report) return;
+          reportChain = reportChain
+            .then(() => report.call(deps.billingClient, { jobId, status: 'running', stage: 'generating_text', progressText: snapshot }))
+            .catch(() => undefined);
+        };
+      }
       if (transportAccounting) {
         const reserve = transportAccounting.hooks.reserve;
         transportAccounting.hooks.reserve = async (request): Promise<void> => {

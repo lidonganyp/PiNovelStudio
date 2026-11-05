@@ -103,6 +103,11 @@ export interface BillingClient {
    * 幂等：重复 finalize 按 hold 当前状态返回（alreadyFinalized=true）。
    */
   finalize(jobId: string, outcome: "success" | "failure"): Promise<BillingFinalizeResult>;
+  /**
+   * 流式正文进度上报：携带当前已生成的正文快照（全量前缀）与阶段。
+   * 展示用途，不影响计费；调用方吞掉所有错误，永不阻断生成。
+   */
+  reportProgress?(input: { jobId: string; status: "running"; stage: string; progressText: string }): Promise<void>;
 }
 
 /**
@@ -277,6 +282,14 @@ export function createBillingClient(
       };
     },
 
+    async reportProgress(input: { jobId: string; status: "running"; stage: string; progressText: string }): Promise<void> {
+      const path = `/internal/jobs/${encodeURIComponent(input.jobId)}/status`;
+      try {
+        await signedPost(path, { status: input.status, stage: input.stage, progressText: input.progressText }, "SETTLE_FAILED");
+      } catch {
+        // 进度上报是展示增强，失败不得影响生成与计费主链路。
+      }
+    },
     async finalize(jobId: string, outcome: "success" | "failure"): Promise<BillingFinalizeResult> {
       const path = `/internal/billing/holds/${encodeURIComponent(jobId)}/finalize`;
       const { statusCode, body } = await signedPost(path, { outcome }, "FINALIZE_FAILED");

@@ -94,6 +94,7 @@ export class InternalController {
       jobId,
       status: dto.status,
       stage: dto.stage,
+      progressText: dto.progressText,
     });
     // A stale callback must not roll the hold-side progress backward either.
     // For legacy holds without a corresponding API job, retain the Phase-2

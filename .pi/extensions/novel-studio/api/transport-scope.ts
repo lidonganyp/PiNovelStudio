@@ -9,6 +9,8 @@ export interface ModelTransportHooks {
   signal?: AbortSignal;
   reserve(input: TransportReservationInput): Promise<void>;
   settle(input: TransportSettlementInput): Promise<void>;
+  /** Optional streaming delta fan-out (writer routes only); must never throw. */
+  onDelta?(delta: string, route?: string): void;
 }
 const hooks = new AsyncLocalStorage<ModelTransportHooks>();
 const route = new AsyncLocalStorage<string>();

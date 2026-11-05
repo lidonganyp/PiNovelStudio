@@ -5,6 +5,7 @@
 export async function parseOpenAIStream(
   response: Response,
   model: string,
+  onDelta?: (delta: string) => void,
 ): Promise<{
   choices: Array<{
     message: { role: "assistant"; content: string; reasoning_content?: string };
@@ -32,7 +33,10 @@ export async function parseOpenAIStream(
         try { chunk = JSON.parse(raw); } catch { continue; }
         const choice = chunk?.choices?.[0];
         const delta = choice?.delta;
-        if (typeof delta?.content === "string") content += delta.content;
+        if (typeof delta?.content === "string") {
+          content += delta.content;
+          try { onDelta?.(delta.content); } catch { /* delta fan-out must never break generation */ }
+        }
         if (typeof delta?.reasoning_content === "string") reasoning += delta.reasoning_content;
         if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
       }

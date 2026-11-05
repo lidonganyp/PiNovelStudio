@@ -18,4 +18,9 @@ export class JobStatusDto {
   @IsOptional()
   @IsObject()
   detail?: Record<string, unknown>;
+  /** 流式正文增量快照（全量前缀，截断存储），仅运行态任务接受。 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200000)
+  progressText?: string;
 }

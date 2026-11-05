@@ -415,6 +415,7 @@ model NovelGenerationJob {
   maxCharge       BigInt    @map("max_charge")
   settledAmount   BigInt    @default(0) @map("settled_amount")
   progressStage   String    @default("checking_materials") @map("progress_stage")
+  progressText    String?   @map("progress_text")
   failureMessage  String?   @map("failure_message")
   failure         Json?
   revisionId      String?   @map("revision_id")

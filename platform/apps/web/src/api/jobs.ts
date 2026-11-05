@@ -39,6 +39,8 @@ export interface NovelJob {
   jobType: string;
   status: JobStatus | string;
   progressStage: string | null;
+  /** 流式正文增量快照（生成中由 runtime 持续上报）。 */
+  progressText?: string | null;
   maxCharge: string;
   settledAmount: string;
   failureMessage: string | null;
