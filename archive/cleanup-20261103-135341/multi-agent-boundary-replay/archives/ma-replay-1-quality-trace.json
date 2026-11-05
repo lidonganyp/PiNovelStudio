@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "workspaceId": "ma-boundary-replay",
+  "chapterId": "ma-replay-1",
+  "createdAt": "2026-11-02T16:03:40.773Z",
+  "events": [],
+  "patches": [],
+  "gates": [
+    {
+      "stage": "v2_novelos_agentic",
+      "status": "completed",
+      "passed": true,
+      "blocked": false,
+      "score": 0,
+      "reason": "V2 stage novelos_agentic completed",
+      "issueTypes": [],
+      "revisionHints": [],
+      "evidence": {}
+    },
+    {
+      "stage": "v2_candidate_generated",
+      "status": "completed",
+      "passed": true,
+      "blocked": false,
+      "score": 2,
+      "reason": "2 candidates generated",
+      "issueTypes": [],
+      "revisionHints": [],
+      "evidence": {}
+    },
+    {
+      "stage": "v2_final_selected",
+      "status": "completed",
+      "passed": true,
+      "blocked": false,
+      "score": 1,
+      "reason": "selected=candidate:author_style:novelos-ma-replay-1-7ba39acf-agentic_generation-a7c94ba2227dd2c2-0 source=v2_amplified gain=positive",
+      "issueTypes": [],
+      "revisionHints": [],
+      "evidence": {
+        "strategyContext": {
+          "modelVersion": "gemini-4-argon",
+          "selectedStrategyIds": [],
+          "sourceChapter": "ch1",
+          "opportunityType": "author_style",
+          "strategyBundleId": "bundle:empty",
+          "orchestratorRunId": "run:ma-boundary-replay:ch1:1793635420666",
+          "exposureId": "exp:run:ma-boundary-replay:ch1:1793635420666:author_style",
+          "promptBundleId": "prompt:author_style:default",
+          "candidateId": "novelos-ma-replay-1-7ba39acf-agentic_generation-a7c94ba2227dd2c2-0",
+          "deliveredSource": "editorial",
+          "exposureSnapshot": {
+            "strategyIds": [],
+            "strategyBundleId": "bundle:empty",
+            "selectedCount": 0
+          }
+        },
+        "modelCalls": [
+          {
+            "route": "v2_rawstage2",
+            "kind": "agentic_raw",
+            "model": "gemini-4-argon",
+            "durationMs": 4,
+            "ts": 1793635420603,
+            "tokenUsage": {
+              "in": 100,
+              "out": 200
+            },
+            "provider": "gemini31",
+            "requestedRoute": "v2_rawstage2_gemini31",
+            "expectedProvider": "gemini31",
+            "expectedModel": "gemini-4-argon",
+            "actualProvider": "gemini31",
+            "actualModel": "gemini-4-argon",
+            "runId": "run_mvzg7vym_041bb51d",
+            "stage": "agentic_raw",
+            "modelVersion": "gemini-4-argon",
+            "promptBundleHash": "bundle:unset",
+            "contextHash": "context:unset",
+            "temperature": 0.72,
+            "timeout": 300000,
+            "retryIndex": 0,
+            "budgetType": "normal",
+            "cost": 0.001125
+          },
+          {
+            "route": "v2_amplified_gemini31",
+            "kind": "author_style_optimization",
+            "model": "gemini-4-argon",
+            "durationMs": 0,
+            "ts": 1793635420668,
+            "tokenUsage": {
+              "in": 100,
+              "out": 200
+            },
+            "provider": "gemini31",
+            "expectedProvider": "gemini31",
+            "expectedModel": "gemini-4-argon",
+            "actualProvider": "gemini31",
+            "actualModel": "gemini-4-argon",
+            "promptProfile": "gemini_writer_v2",
+            "runId": "run_mvzg7vym_041bb51d",
+            "stage": "author_style_optimization",
+            "modelVersion": "gemini-4-argon",
+            "promptBundleHash": "bundle:unset",
+            "contextHash": "context:unset",
+            "temperature": 0.72,
+            "timeout": 300000,
+            "retryIndex": 0,
+            "budgetType": "normal",
+            "cost": 0.001125
+          }
+        ],
+        "releaseGovernance": {
+          "devMode": true,
+          "releaseId": null,
+          "environmentFingerprint": null,
+          "approvalRef": null,
+          "canaryEvidenceRunId": null,
+          "behaviorIdentity": {
+            "bundleId": null,
+            "modelVersion": null,
+            "promptBundleHash": null,
+            "modelRoutingHash": null,
+            "toolSchemaHash": null,
+            "contextCompilerHash": null,
+            "qualityPolicyHash": null,
+            "recoveryPolicyHash": null,
+            "knowledgeSnapshotHash": null,
+            "runtimeFingerprint": null,
+            "capabilityPackageSetHash": null,
+            "evalProtocolVersion": null
+          }
+        },
+        "generationBaseline": {
+          "activeReleaseId": "rel-prod-20261102-r2",
+          "executionReleaseId": null,
+          "constitutionHash": "",
+          "narrativeStateRevision": "e3b0c44298fc1c14",
+          "capturedAt": "2026-11-02T16:03:40.587Z"
+        }
+      }
+    }
+  ],
+  "buildInfo": {
+    "buildTimestamp": "2026-11-02T02:07:02.797Z",
+    "gitHash": "7ebd902a98b4a18453d061691d2e77c2d2e30cb7",
+    "nodeVersion": "v22.23.3"
+  },
+  "v2Summary": {
+    "v2Mode": "full_chain",
+    "candidateCount": 2,
+    "finalSelectedId": "candidate:author_style:novelos-ma-replay-1-7ba39acf-agentic_generation-a7c94ba2227dd2c2-0",
+    "finalSelectedSource": "v2_amplified",
+    "projectGain": "positive",
+    "amplifiedVariantIds": [
+      "candidate:author_style:novelos-ma-replay-1-7ba39acf-agentic_generation-a7c94ba2227dd2c2-0"
+    ],
+    "contextHash": "80da27eb1ad8455aecb959d8b4d94924d510317c38632edc29e088ce6cb2c1bb",
+    "stages": [
+      {
+        "stage": "novelos_agentic",
+        "timestamp": "2026-11-02T16:03:40.772Z"
+      },
+      {
+        "stage": "candidate_generated",
+        "timestamp": "2026-11-02T16:03:40.772Z"
+      },
+      {
+        "stage": "final_selected",
+        "timestamp": "2026-11-02T16:03:40.772Z"
+      }
+    ]
+  },
+  "failureEnvelopes": []
+}

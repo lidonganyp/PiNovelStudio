@@ -11,8 +11,8 @@
   - **真实模型运行 + 证据防伪 + 文学净正收益**：`REQUIRES_AUTH / Partial` — 仓库中无符合 schema 的五章真实 Claude Opus 4.6 + gpt-5.6-sol evidence 输入文件；provenance 校验只检查字符串/哈希格式，未核验 `tracePath` 存在、request ID 与 trace 对应、响应 hash 与落盘原始响应一致，因此目前仍可伪造。
 - `--auth` 状态：未启用，退出码 2，fail-closed，不调用真实模型
 - Git HEAD 证据边界：仅记录基准提交，不代表当前脏工作树的完整代码快照
-- 冻结 raw manifest hash：`4acaf7e53362647046d6e42c968d37c97e1d8a43ceb5f0463ef4a4010a7b020a`
-- 冻结 raw manifest：`D:\CODE\PiNovelStudio\.pi\extensions\novel-studio\scripts\ending-pressure-real-1\raw-manifest.json`
+- 冻结 raw manifest hash：`bb216d960809635f31c5aca846068d0e8eb95ee4e59a3cb2e7b5ce80e54645d7`
+- 冻结 raw manifest：`/root/PiNovelStudio/.pi/extensions/novel-studio/scripts/ending-pressure-real-1/raw-manifest.json`
 
 > ⚠️ **REQUIRES_AUTH 边界**：本切片为 offline stub 模式 + 真实 raw 文本 fixture。
 > 真实 Claude Opus 4.6 (`v2_amplified`) + gpt-5.6-sol 异源 judge (`v2_literary_judge`) 调用属于 REQUIRES_AUTH，作为后续切片单独提交。
@@ -394,7 +394,7 @@
 - ✅ FactGuard 接入（真实 `checkCandidateFactGuard` 调用：6 类硬阻断检查 + 高影响新设定 review 诊断）
 - ✅ PairwiseJudge 反向 A/B（两轮 verdict：confidence=uncertain 触发 needsReverseReview，reverseRound 非空）
 - ✅ SelectionPolicy raw 兜底（tie 时保留 raw）
-- ✅ 非章末候选拒绝证据：`D:\CODE\PiNovelStudio\reports\ending-pressure-real-1\stub-non-tail-rejection.json`
+- ✅ 非章末候选拒绝证据：`/root/PiNovelStudio/reports/ending-pressure-real-1/stub-non-tail-rejection.json`
 
 ### 仍未完成（真实运行层 REQUIRES_AUTH / Partial）
 
@@ -419,7 +419,7 @@
 
 ---
 
-**生成时间**: 2026-10-31T15:53:12.963Z
+**生成时间**: 2026-11-02T16:02:50.405Z
 **脚本**: `scripts/ending-pressure-real-1/run-verification.mjs`
 **模式**: stub
-**Git HEAD（仅基准提交，不代表脏工作树快照）**: 584a6e4eb70ec3a38745bccd3f74cb2eef9c3c1d
+**Git HEAD（仅基准提交，不代表脏工作树快照）**: d657790b0baab56f021aa4047fbd1449ec6aa4d3

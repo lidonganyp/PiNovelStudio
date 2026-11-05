@@ -270,3 +270,6 @@ config/production-identity/active.pack.json
 
 # 用户章节同步工作文件（本地工具产物，不进入发布基线）
 /sync-chapters.json
+
+# Windows stray pnpm cache dirs
+platform/D:*
