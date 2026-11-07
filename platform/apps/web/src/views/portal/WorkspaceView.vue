@@ -28,6 +28,7 @@ import DocumentPanel from '../../components/workspace/DocumentPanel.vue';
 import VersionPanel from '../../components/workspace/VersionPanel.vue';
 import AssistantWorkspace from '../../components/workspace/chat/AssistantWorkspace.vue';
 import GenerationPanel from '../../components/workspace/GenerationPanel.vue';
+import ReviewPanel from '../../components/workspace/ReviewPanel.vue';
 import RevisionPanel from '../../components/workspace/RevisionPanel.vue';
 import FeedbackPanel from '../../components/workspace/FeedbackPanel.vue';
 
@@ -269,6 +270,12 @@ defineExpose({ loadChapters, patchChapter });
           :chapter="activeChapter"
           @register-track="(fn) => (trackJob = fn)"
           @succeeded="loadChapters"
+        />
+        <ReviewPanel
+          :project-id="projectId"
+          :chapter="activeChapter"
+          @track-job="(jobId) => trackJob?.(jobId)"
+          @chapter-changed="loadChapters"
         />
         <AssistantWorkspace :project-id="projectId" :project-title="project.title" />
       </aside>

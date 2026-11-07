@@ -3,6 +3,7 @@
  */
 import { Type } from 'class-transformer';
 import {
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -80,4 +81,16 @@ export class RestoreVersionDto {
   @IsInt()
   @Min(1)
   versionNumber!: number;
+}
+export class ChapterDecisionDto {
+  @IsIn(['keep', 'regenerate', 'revise_outline'])
+  decision!: 'keep' | 'regenerate' | 'revise_outline';
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  expectedVersion!: number;
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  revisedIntent?: string;
 }

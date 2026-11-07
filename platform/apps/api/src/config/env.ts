@@ -94,6 +94,11 @@ const envSchema = z
   NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(2_700_000),
   /** Exact model-route keys that runtime may settle for a production chapter. */
   NOVEL_BILLING_REQUIRED_MODELS: z.string().default(''),
+  PINOVEL_CHAPTER_REVIEW_MODE: z.enum(['advisory', 'blocking', 'off']).default('advisory'),
+  PINOVEL_CHAPTER_REVIEW_MODEL: z.string().default(''),
+  PINOVEL_CHAPTER_REVIEW_BASE_URL: z.string().default(''),
+  PINOVEL_CHAPTER_REVIEW_API_KEY: z.string().default(''),
+  PINOVEL_CHAPTER_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
   PLANNER_MODE: z.enum(['stub', 'http', 'disabled']).default('stub'),
   PLANNER_API_BASE_URL: z.string().default(''),
   PLANNER_API_KEY: z.string().default(''),

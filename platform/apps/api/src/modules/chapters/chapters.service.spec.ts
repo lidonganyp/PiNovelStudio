@@ -226,3 +226,148 @@ describe('ChaptersService chapter-number uniqueness', () => {
     }));
   });
 });
+
+describe('ChaptersService recordDecision（评审决策路由与版本链）', () => {
+  const OWNED_PROJECT = { id: 2, userId: 1, deletedAt: null };
+  const CHAPTER = {
+    id: 3,
+    projectId: 2,
+    userId: 1,
+    chapterNumber: 1,
+    title: '第一章',
+    content: '正文',
+    wordCount: 2,
+    status: 'generated',
+    version: 5,
+    generationJobId: 'job-old',
+    reviewStatus: 'completed',
+    reviewVerdict: 'hold',
+    reviewRationale: '节奏可再放缓',
+    seed: null,
+  };
+
+  function makePrisma(overrides?: { guardCount?: number }) {
+    const updateMany = vi.fn().mockResolvedValue({ count: overrides?.guardCount ?? 1 });
+    const seedUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const decisionCreate = vi.fn().mockResolvedValue({
+      id: 11,
+      decision: 'keep',
+      chapterVersion: 5,
+    });
+    const prisma = {
+      novelProject: {
+        findFirst: vi.fn().mockResolvedValue(OWNED_PROJECT),
+      },
+      novelChapter: {
+        findFirst: vi.fn().mockResolvedValue(CHAPTER),
+      },
+      novelChapterDecision: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({
+          novelChapter: {
+            updateMany,
+            findFirst: vi.fn().mockResolvedValue({ version: 6 }),
+          },
+          novelChapterSeed: { updateMany: seedUpdateMany },
+          novelChapterDecision: { create: decisionCreate },
+        }),
+      ),
+    };
+    return { prisma, updateMany, seedUpdateMany, decisionCreate };
+  }
+
+  it('keep：章节锁定为定稿（status=final），不触碰评审快照与种子', async () => {
+    const { prisma, updateMany, seedUpdateMany } = makePrisma();
+    const service = new ChaptersService(prisma as never);
+    await expect(
+      service.recordDecision(1, 2, 3, { decision: 'keep', expectedVersion: 5 }),
+    ).resolves.toMatchObject({ id: 11, decision: 'keep' });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 3, version: 5 }),
+        data: { status: 'final' },
+      }),
+    );
+    expect(seedUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('regenerate：清理章节评审快照（旧评审结论随新版本过期）', async () => {
+    const { prisma, updateMany, decisionCreate } = makePrisma();
+    decisionCreate.mockResolvedValue({ id: 12, decision: 'regenerate', chapterVersion: 5 });
+    const service = new ChaptersService(prisma as never);
+    await service.recordDecision(1, 2, 3, { decision: 'regenerate', expectedVersion: 5 });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { reviewStatus: null, reviewVerdict: null, reviewRationale: null },
+      }),
+    );
+  });
+
+  it('revise_outline：更新种子意图并递增种子版本，决策记录携带 revisedIntent', async () => {
+    const { prisma, seedUpdateMany, decisionCreate } = makePrisma();
+    decisionCreate.mockResolvedValue({ id: 13, decision: 'revise_outline', chapterVersion: 5 });
+    const service = new ChaptersService(prisma as never);
+    await service.recordDecision(1, 2, 3, {
+      decision: 'revise_outline',
+      expectedVersion: 5,
+      revisedIntent: '强化开场的悬念冲突',
+    });
+    expect(seedUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { chapterId: 3, projectId: 2, userId: 1 },
+        data: expect.objectContaining({
+          intent: '强化开场的悬念冲突',
+          status: 'ready',
+          version: { increment: 1 },
+        }),
+      }),
+    );
+    expect(decisionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          decision: 'revise_outline',
+          revisedIntent: '强化开场的悬念冲突',
+          chapterVersion: 5,
+        }),
+      }),
+    );
+  });
+
+  it('revise_outline 缺少 revisedIntent：拒绝（400）', async () => {
+    const { prisma } = makePrisma();
+    const service = new ChaptersService(prisma as never);
+    await expect(
+      service.recordDecision(1, 2, 3, { decision: 'revise_outline', expectedVersion: 5 }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('版本冲突（预检）：直接拒绝 409，不进入事务', async () => {
+    const { prisma, decisionCreate } = makePrisma();
+    const service = new ChaptersService(prisma as never);
+    await expect(
+      service.recordDecision(1, 2, 3, { decision: 'keep', expectedVersion: 4 }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(decisionCreate).not.toHaveBeenCalled();
+  });
+
+  it('版本冲突（事务内原子守卫）：并发修改导致守卫失败时拒绝 409', async () => {
+    const { prisma, decisionCreate } = makePrisma({ guardCount: 0 });
+    const service = new ChaptersService(prisma as never);
+    await expect(
+      service.recordDecision(1, 2, 3, { decision: 'keep', expectedVersion: 5 }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(decisionCreate).not.toHaveBeenCalled();
+  });
+
+  it('attachDecisionJob：把新生成任务回填到决策记录形成版本链', async () => {
+    const { prisma } = makePrisma();
+    const service = new ChaptersService(prisma as never);
+    await service.attachDecisionJob(1, 12, 'job-new');
+    expect(prisma.novelChapterDecision.updateMany).toHaveBeenCalledWith({
+      where: { id: 12, userId: 1 },
+      data: { newJobId: 'job-new' },
+    });
+  });
+});

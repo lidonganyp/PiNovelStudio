@@ -2,6 +2,7 @@
  * 章节目录 / 正文乐观锁 / 软删除 / 种子 / 版本。
  */
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -14,6 +15,7 @@ import {
   reanchorNarrativeStateToChapter,
 } from '../context/context-compiler';
 import type {
+  ChapterDecisionDto,
   CreateChapterDto,
   RestoreVersionDto,
   UpdateChapterDto,
@@ -267,6 +269,129 @@ export class ChaptersService {
     return this.toChapterView(updated);
   }
 
+  /**
+   * 记录用户对章节评审建议的决策。
+   * - keep：接受当前章节，章节进入定稿状态（status=final）；
+   * - regenerate：沿用当前种子重新生成，清理过期评审快照，旧正文保留在版本历史；
+   * - revise_outline：先把修改后的创作要求写入种子 intent，再由调用方触发生成。
+   * 决策通过 chapter version 乐观锁守卫，决策记录绑定做出决策时的章节版本。
+   */
+  async recordDecision(
+    userId: number,
+    projectId: number,
+    chapterId: number,
+    dto: ChapterDecisionDto,
+  ): Promise<{ id: number; decision: string; chapterVersion: number }> {
+    const chapter = await this.requireChapter(userId, projectId, chapterId);
+    if (chapter.version !== dto.expectedVersion) {
+      throw new ConflictException({
+        statusCode: 409,
+        message: '章节版本冲突',
+        reason: 'version_conflict',
+        currentVersion: chapter.version,
+      });
+    }
+    if (
+      dto.decision === 'revise_outline' &&
+      !(dto.revisedIntent ?? '').trim()
+    ) {
+      throw new BadRequestException('修改大纲后重新生成需要提供 revisedIntent');
+    }
+    const decision = await this.prisma.$transaction(async (tx) => {
+      // 原子守卫：决策针对的章节版本必须与当前版本一致，否则拒绝，避免
+      // 决策记录在用户已编辑过的新版本上。
+      const guardData: Record<string, unknown> =
+        dto.decision === 'keep'
+          ? { status: 'final' }
+          : {
+              // 重新生成会让旧评审结论过期，先清理章节快照，新评审会覆盖评审记录
+              reviewStatus: null,
+              reviewVerdict: null,
+              reviewRationale: null,
+            };
+      const guard = await tx.novelChapter.updateMany({
+        where: {
+          id: chapterId,
+          projectId,
+          userId,
+          deletedAt: null,
+          version: dto.expectedVersion,
+        },
+        data: guardData,
+      });
+      if (guard.count !== 1) {
+        const current = await tx.novelChapter.findFirst({
+          where: { id: chapterId, projectId, userId, deletedAt: null },
+          select: { version: true },
+        });
+        throw new ConflictException({
+          statusCode: 409,
+          message: '章节版本冲突',
+          reason: 'version_conflict',
+          currentVersion: current?.version ?? chapter.version,
+        });
+      }
+      if (dto.decision === 'revise_outline' && dto.revisedIntent) {
+        await tx.novelChapterSeed.updateMany({
+          where: { chapterId, projectId, userId },
+          data: {
+            intent: dto.revisedIntent,
+            status: 'ready',
+            version: { increment: 1 },
+          },
+        });
+      }
+      return tx.novelChapterDecision.create({
+        data: {
+          chapterId,
+          projectId,
+          userId,
+          chapterVersion: dto.expectedVersion,
+          decision: dto.decision,
+          revisedIntent:
+            dto.decision === 'revise_outline'
+              ? (dto.revisedIntent ?? null)
+              : null,
+        },
+      });
+    });
+    return {
+      id: decision.id,
+      decision: decision.decision,
+      chapterVersion: decision.chapterVersion,
+    };
+  }
+  /** 决策触发的新生成任务回填到决策记录，构成可追溯的决策-版本链。 */
+  async attachDecisionJob(
+    userId: number,
+    decisionId: number,
+    jobId: string,
+  ): Promise<void> {
+    await this.prisma.novelChapterDecision.updateMany({
+      where: { id: decisionId, userId },
+      data: { newJobId: jobId },
+    });
+  }
+  /** 章节决策历史（按时间倒序）。 */
+  async listDecisions(
+    userId: number,
+    projectId: number,
+    chapterId: number,
+  ): Promise<unknown[]> {
+    await this.requireChapter(userId, projectId, chapterId);
+    const rows = await this.prisma.novelChapterDecision.findMany({
+      where: { chapterId, projectId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      decision: row.decision,
+      chapterVersion: row.chapterVersion,
+      revisedIntent: row.revisedIntent,
+      newJobId: row.newJobId,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
   /** 软删除章节。 */
   async remove(
     userId: number,
@@ -452,6 +577,9 @@ export class ChaptersService {
     status: string;
     version: number;
     generationJobId: string | null;
+    reviewStatus: string | null;
+    reviewVerdict: string | null;
+    reviewRationale: string | null;
     seed: {
       id: number;
       intent: string;
@@ -485,6 +613,9 @@ export class ChaptersService {
     status: string;
     version: number;
     generationJobId: string | null;
+    reviewStatus?: string | null;
+    reviewVerdict?: string | null;
+    reviewRationale?: string | null;
     seed?: unknown;
   }): Record<string, unknown> {
     return {
@@ -497,6 +628,9 @@ export class ChaptersService {
       status: row.status,
       version: row.version,
       generationJobId: row.generationJobId,
+      reviewStatus: row.reviewStatus ?? null,
+      reviewVerdict: row.reviewVerdict ?? null,
+      reviewRationale: row.reviewRationale ?? null,
       seed: row.seed ? this.toSeedView(row.seed as never) : null,
     };
   }

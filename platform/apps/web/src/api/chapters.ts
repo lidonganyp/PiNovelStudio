@@ -148,3 +148,66 @@ export function submitGeneration(
     .post(`/projects/${projectId}/chapters/${chapterId}/generate`)
     .then((r) => r.data);
 }
+
+/** 章节评审建议视图（advisory，仅供作者参考）。 */
+export interface ChapterReviewAdvice {
+  status: 'pending' | 'completed' | 'failed' | 'disabled';
+  verdict: 'approve' | 'hold' | 'reject' | null;
+  rationale: string;
+  risks: string[];
+  evidenceSpans: string[];
+  model: string | null;
+  durationMs: number | null;
+  error: string | null;
+  mode: string;
+  chapterVersion: number;
+  reviewedAt: string;
+}
+
+/** 查询当前章节最新评审建议；无评审记录时返回 null。 */
+export async function getChapterReview(
+  projectId: number,
+  chapterId: number,
+): Promise<ChapterReviewAdvice | null> {
+  try {
+    const r = await http.get(
+      `/projects/${projectId}/chapters/${chapterId}/review`,
+    );
+    return r.data as ChapterReviewAdvice;
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404) return null;
+    throw err;
+  }
+}
+
+/** 手动触发重新评审（评审失败/不可用后的重试入口）。 */
+export function requestChapterReview(
+  projectId: number,
+  chapterId: number,
+): Promise<ChapterReviewAdvice> {
+  return http
+    .post(`/projects/${projectId}/chapters/${chapterId}/review`)
+    .then((r) => r.data);
+}
+
+/** 用户决策提交：保留 / 直接重新生成 / 修改大纲后重新生成。 */
+export interface ChapterDecisionResult {
+  id: number;
+  decision: 'keep' | 'regenerate' | 'revise_outline';
+  job?: { jobId?: string } | null;
+}
+
+export function submitChapterDecision(
+  projectId: number,
+  chapterId: number,
+  input: {
+    decision: 'keep' | 'regenerate' | 'revise_outline';
+    expectedVersion: number;
+    revisedIntent?: string;
+  },
+): Promise<ChapterDecisionResult> {
+  return http
+    .post(`/projects/${projectId}/chapters/${chapterId}/decisions`, input)
+    .then((r) => r.data);
+}

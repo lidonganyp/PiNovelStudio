@@ -13,6 +13,7 @@ import { RevisionsController } from './revisions.controller';
 import { ChapterContractApprovalService } from './chapter-contract-approval.service';
 import { ChapterContractController } from './chapter-contract.controller';
 import { ChapterContractService } from './chapter-contract.service';
+import { ChapterReviewAdvisorService } from '../chapters/chapter-review-advisor.service';
 
 @Module({
   imports: [BillingModule, RatesModule, ErrorReportsModule],
@@ -27,6 +28,7 @@ import { ChapterContractService } from './chapter-contract.service';
     RevisionsService,
     ChapterContractApprovalService,
     ChapterContractService,
+    ChapterReviewAdvisorService,
   ],
   exports: [JobsService],
 })

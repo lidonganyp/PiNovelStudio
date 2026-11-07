@@ -23,6 +23,7 @@ import { computeChargeFen, fenToString } from '../billing/money';
 import { RatesService } from '../rates/rates.service';
 import { RuntimeClient } from './runtime.client';
 import { signTaskToken } from './task-token';
+import { ChapterReviewAdvisorService } from '../chapters/chapter-review-advisor.service';
 import {
   assertRuntimeWorkspacePayloadFits,
   RuntimeWorkspacePayloadError,
@@ -195,6 +196,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     private readonly billing: BillingService,
     private readonly rates: RatesService,
     private readonly runtime: RuntimeClient,
+    private readonly reviewAdvisor: ChapterReviewAdvisorService,
     @Optional() private readonly errorReports?: ErrorReportsService,
   ) {}
 
@@ -1583,6 +1585,24 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }, { isolationLevel: 'Serializable' });
+    // 内容评审后置为建议模式：章节落盘成功后异步触发，评审结果仅供用户参考。
+    // fire-and-forget：评审超时/失败只更新评审记录，不回滚、不阻断章节交付。
+    // 评审请求绑定了触发时的章节版本号，用户后续修改章节后过期结果会被丢弃。
+    setTimeout(() => {
+      void this.reviewAdvisor
+        .reviewGeneratedChapter({
+          userId: input.userId,
+          projectId: input.projectId,
+          chapterId: input.chapterId,
+          chapterVersion: input.chapterVersion + 1,
+          generationJobId: input.jobId,
+        })
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `chapter review dispatch failed chapter=${input.chapterId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+    }, 0);
   }
 }
 
