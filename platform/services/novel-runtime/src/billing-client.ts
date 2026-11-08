@@ -223,7 +223,8 @@ export function createBillingClient(
     async reserveTransport(input) {
       const path = '/internal/billing/transports/reserve';
       const response = await signedPost(path, input, 'SETTLE_FAILED');
-      if (response.statusCode === 409 || response.statusCode === 402) throw new BillingClientError('本次生成的费用、时间或恢复次数授权不足，已停止后续调用；未知用量仍按最大费用占用授权预算。', 'BUDGET_EXHAUSTED', response.statusCode);
+      if (response.statusCode === 402) throw new BillingClientError('本次生成的费用、时间或恢复次数授权不足，已停止后续调用；未知用量仍按最大费用占用授权预算。', 'BUDGET_EXHAUSTED', response.statusCode);
+      if (response.statusCode === 409) throw new BillingClientError('模型调用与当前生成授权状态冲突（授权已结束、调用标识冲突或执行授权缺失），已停止后续调用。', 'TRANSPORT_ADMISSION_DENIED', response.statusCode);
       if (response.statusCode >= 400 && response.statusCode < 500) throw new BillingClientError('模型调用未通过授权检查，已停止后续调用', 'TRANSPORT_ADMISSION_DENIED', response.statusCode);
       if (response.statusCode >= 400) throw httpError(path, response.statusCode, response.body, 'SETTLE_FAILED');
       return { maximumFen: String(requiredNum(response.body, 'maximumFen', path)) };

@@ -6,6 +6,7 @@ import { PRODUCTION_BILLING_MODEL_ROUTES } from '../../config/env';
 import { RatesService } from '../rates/rates.service';
 import { BillingService } from './billing.service';
 import { computeChargeFen } from './money';
+import { HoldExhaustedException } from './billing.errors';
 
 export interface ReserveTransport {
   jobId: string; callId: string; route: string; model: string; requestHash: string;
@@ -59,7 +60,7 @@ export class TransportBudgetService {
       if (chapterEntries.length >= 25 || (isRecovery && chapterEntries.filter((e) => e.recovery).length >= 6)) throw new ConflictException('本章模型调用或恢复次数预算已用尽');
       if (cost(entries) + maximumFen > hold.amount
         || (plan?.perChapterFen !== undefined && cost(chapterEntries) + maximumFen > BigInt(plan.perChapterFen))
-        || (plan?.totalFen !== undefined && cost(allEntries) + maximumFen > BigInt(plan.totalFen))) throw new ConflictException('剩余预算不足以覆盖下一次模型调用的最大费用');
+        || (plan?.totalFen !== undefined && cost(allEntries) + maximumFen > BigInt(plan.totalFen))) throw new HoldExhaustedException('剩余预算不足以覆盖下一次模型调用的最大费用');
       execution.transports = [...entries, { ...input, maximumFen: maximumFen.toString(), recovery: isRecovery, state: 'reserved', rate }];
       await tx.novelGenerationJob.update({ where: { jobId: input.jobId }, data: { execution: execution as unknown as Prisma.InputJsonValue } });
       return { admitted: true, maximumFen: maximumFen.toString(), alreadyAdmitted: false };

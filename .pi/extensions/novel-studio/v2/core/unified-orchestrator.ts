@@ -2326,6 +2326,23 @@ export class UnifiedOrchestrator {
         // 工具层 chapter_level_retry 只保留给 Agentic 生成超时。
         // Agentic raw 初稿只作为 blocked evidence 保留在 trace，不交付、不保存。
         const failureKind = styleResult.failureKind ?? "no_guidance";
+        // STYLE-DEGRADE-1：风格档案缺失/无可消费指导（no_guidance）属于资料缺口，
+        // 不是模型或系统故障。用户已为 Agentic 初稿付费，直接丢弃初稿等同于把
+        // 『用户还没填风格档案』变成『本章生成失败』，体验上是误杀。此处降级为
+        // 交付 Agentic 初稿 + 显式降级标记，并提示用户补充风格档案后可重跑优化。
+        if (failureKind === "no_guidance" && !input.evalMode && !input.qualityExperiment) {
+          warnings.push(
+            "作者风格档案缺失或没有可消费的定性指导，本次以未优化初稿交付；补充风格档案后可重新生成本章以获得风格优化版本。",
+          );
+          stageResults.styleOptimizationBlocked = {
+            reason: "no_guidance_degraded_to_raw",
+            failureKind,
+            failureReason: styleResult.failureReason ?? "未产出候选",
+            recoverable: true,
+            inStageRetryAttempted: transientStyleFailure,
+          };
+          return this.deliverRaw(input, agenticCandidate, warnings, stageResults, null, [], candidates);
+        }
         stageResults.styleOptimizationBlocked = {
           reason: "no_candidate",
           failureKind,
@@ -5368,10 +5385,14 @@ export class UnifiedOrchestrator {
     // RECOVERY-P4：生产 agentic_style 路径禁止静默 raw 降级交付。
     // evalMode / qualityExperiment 允许 deliverRaw（消融与只读实验）。
     // 正式生产：Agentic 初稿必须经作者风格优化；失败只能 retry/checkpoint/blocked。
+    const styleBlocked = stageResults.styleOptimizationBlocked as
+      { reason?: string } | undefined;
+    const noGuidanceDegraded = styleBlocked?.reason === "no_guidance_degraded_to_raw";
     if (
       input.productionFlow === "agentic_style" &&
       !input.evalMode &&
-      !input.qualityExperiment
+      !input.qualityExperiment &&
+      !noGuidanceDegraded
     ) {
       return this.hardBlock(
         input,

@@ -167,6 +167,9 @@ services:
       # release manifest; a missing value must prevent deployment rather than
       # silently producing an anonymous production identity.
       PINOVEL_RELEASE_COMMIT: ${PINOVEL_RELEASE_COMMIT:?PINOVEL_RELEASE_COMMIT is required and must match the active release manifest}
+      # 生产治理目录（active-production 指针 + release manifests）的显式路径，
+      # 避免门禁从临时 workspace 目录向上回溯时找不到挂载点
+      PINOVEL_EVOLUTION_ROOT: /app/pnovel/.pi/extensions/novel-studio/config/evolution-release
       PINOVEL_MODEL_REQUEST_TIMEOUT_MS: ${PINOVEL_MODEL_REQUEST_TIMEOUT_MS:-300000}
       NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
     volumes:
@@ -174,6 +177,8 @@ services:
       # The sealed production identity is deployment state, not source code.
       # Mount it read-only so G6 can verify the release on a clean checkout.
       - ../config/production-identity:/app/pnovel/config/production-identity:ro
+      # 生产治理目录（active-production 指针 + release manifests）：部署状态，只读挂载
+      - /opt/pinovel-frozen/.pi/extensions/novel-studio/config/evolution-release:/app/pnovel/.pi/extensions/novel-studio/config/evolution-release:ro
     # 不映射宿主端口：仅 compose 内网（api）可达
     depends_on:
       api:
