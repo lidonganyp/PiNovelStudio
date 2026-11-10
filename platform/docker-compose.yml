@@ -172,6 +172,10 @@ services:
       PINOVEL_EVOLUTION_ROOT: /app/pnovel/.pi/extensions/novel-studio/config/evolution-release
       PINOVEL_MODEL_REQUEST_TIMEOUT_MS: ${PINOVEL_MODEL_REQUEST_TIMEOUT_MS:-300000}
       NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
+      # 评审智能体（gpt-6.1-sol 经中转，独立于主写作通道）：缺失即启动报错
+      NOVELOS_JUDGE_BASE_URL: ${NOVELOS_JUDGE_BASE_URL:?NOVELOS_JUDGE_BASE_URL is required}
+      NOVELOS_JUDGE_API_KEY: ${NOVELOS_JUDGE_API_KEY:?NOVELOS_JUDGE_API_KEY is required}
+      NOVELOS_JUDGE_MODEL: ${NOVELOS_JUDGE_MODEL:?NOVELOS_JUDGE_MODEL is required}
     volumes:
       - novel_workspaces:/var/lib/novel-runtime/workspaces
       # The sealed production identity is deployment state, not source code.

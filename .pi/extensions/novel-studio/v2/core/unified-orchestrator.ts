@@ -34,6 +34,7 @@ import type {
 import { captureGenerationBaseline } from "./commit-stale-guard.js";
 import { loadVerifiedDraft, saveVerifiedDraft, verifiedDraftPath } from './verified-draft-checkpoint.js';
 import type { ChapterIntent } from "./chapter-intent-builder.js";
+import { runReviewLoop, type ReviewLoopProgressEvent } from "./review-agent-loop.js";
 import type { ModelGenerateFn, ModelGenerateInput } from "../adapters/legacy-model-route-adapter.js";
 import { createEditorialOpportunityJudge } from "./editorial-opportunity-judge.js";
 import { createLanguageRiskLibrary } from "./language-risk-library.js";
@@ -1212,6 +1213,7 @@ export class UnifiedOrchestrator {
       // 注：两条 stage4b 重试路径故意不映射中文——acceptance-probes 测试用其 stage 名作源码
       // 锚点扫描 retry 代码块，映射会引入提前出现的位置干扰测试。这两阶段 fallback 到 stage 名。
       stage5_finalFactRecheck: "最终事实复检中",
+      review_loop: "评审智能体三轮闭环中（评审→修改→再评审，最多 3 轮）",
       stage6_commitAndSave: "提交并原子保存章节中",
       stage7_commitAndSave: "提交并原子保存章节中",
       stage1_raw: "正文初稿生成中",
@@ -3520,6 +3522,44 @@ export class UnifiedOrchestrator {
         // P1-3：记录本次选中的策略 id，供 novel_strategy_feedback 的自然语言反馈编译器归因
         selectedStrategyIds: authorStyleStrategySelection?.selected.map((s) => s.strategyId) ?? [],
       };
+      // ── REVIEW-LOOP-1：评审智能体三轮闭环（stage5 之后、提交之前）──
+      // 评审（gpt-6.1-sol 独立通道，NOVELOS_JUDGE_*）→ 修改（主写作通道）→ 再评审，
+      // 最多 3 轮；通过（无 must_fix）提前终止；三轮不通过交付 V3 + 未解决清单。
+      // 评审/修改失败不阻断交付（质量增强，非硬门）；eval/preview 模式跳过。
+      if (!input.evalMode && !input.fullPipelinePreview) {
+        const reviewLoop = await timeAsync("review_loop", () =>
+          runReviewLoop({
+            workspaceId: input.workspaceId,
+            chapterId: input.chapterId,
+            chapterNumber: input.chapterNumber,
+            projectRoot: input.projectRoot,
+            text: styledCandidate.text,
+            intent,
+            context,
+            modelGenerate: wrappedModelGenerate!,
+            onUpdate: input.onUpdate as unknown as ((event: ReviewLoopProgressEvent) => void) | undefined,
+          }),
+        );
+        stageResults.reviewLoop = {
+          executed: reviewLoop.executed,
+          passed: reviewLoop.passed,
+          rounds: reviewLoop.rounds.map((round) => ({
+            round: round.round,
+            passed: round.passed,
+            issueCount: round.issues.length,
+            mustFixCount: round.issues.filter((issue) => issue.severity === "must_fix").length,
+            summary: round.summary,
+            issues: round.issues,
+            revisionNotes: round.revisionNotes,
+            error: round.error,
+          })),
+          unresolvedIssues: reviewLoop.unresolvedIssues,
+          tracePath: reviewLoop.tracePath,
+        };
+        if (reviewLoop.executed && reviewLoop.finalText && reviewLoop.finalText !== styledCandidate.text) {
+          styledCandidate = { ...styledCandidate, text: reviewLoop.finalText };
+        }
+      }
 
       // MA-4.3：提交前阶段守卫（Agentic→风格→故事保持→终检）
       // 注意：不得用“业务门通过 + 手动 push completedStages”伪装契约成功。
