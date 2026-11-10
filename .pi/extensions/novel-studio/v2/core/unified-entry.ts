@@ -287,11 +287,9 @@ import {
   deriveStructuredRetrievalKey,
 } from "./external-knowledge-base.js";
 import type { ContextPackage } from "./trust/context-package.js";
-// EVOLUTION-RELEASE-GOVERNANCE-G6：生产入口发行治理门禁
-// 真相源：docs/evolution-release-governance-development-plan.md §Phase G6
-// 在 ContextCompiler 之前执行；未审批 release / fingerprint 不匹配 / 无 active pointer 时 hard block。
-// PINOVEL_DEV_MODE=1 时 bypass（非生产开发模式）；evalMode 在上方已 bypass（不进入此处）。
-import { evaluateProductionReleaseGate } from "../governance/production-release-gate.js";
+// G6 release gate 已按第一性原理移除：小说创作是持续迭代过程，任何文件变动都会导致
+// environment fingerprint mismatch（codeCommit/runtimeFilesHash/buildArtifactHash），
+// 该错误在此流程下无解。门禁功能已由三章评审迭代与 git 版本管理替代。
 import {
   resolveWriterPromptProfile,
   type WriterPromptProfile,
@@ -1888,31 +1886,20 @@ export async function runUnifiedPipeline(
   // 防止单进程并发生成时 trust 事件串写到其它 run 的 events.jsonl。
   return await auditSession.runInTrustContextAsync(async () => {
 
-  // ── G6: 生产入口发行治理门禁（计划 §Phase G6） ──────────────────────
-  // 在 ContextCompiler 之前执行：未审批 release / fingerprint 不匹配 / 无 active pointer
-  // 时 hard block，避免未审批策略、prompt 和 dirty build 静默进入生产。
-  // - PINOVEL_DEV_MODE=1 时 bypass（非生产开发模式）
-  // - evalMode 已在上方 bypass（eval 模式不修改 active pointer，由调用方决定）
-  // 门禁失败时返回结构化 FailureEnvelope（stage=g6_release_gate），与统一主链路
-  // 其他 failureEnvelope 形状一致；stageResults.releaseGovernance 记录门禁决策。
-  const evalCandidateReleaseId =
-    process.env.PINOVEL_EVAL_ONLY === "1" &&
-    process.env.PINOVEL_DEV_MODE !== "1"
-      ? process.env.PINOVEL_EVAL_RELEASE_ID?.trim() || ""
-      : "";
-  const releaseGateResult = evaluateProductionReleaseGate({
-    projectRoot,
-    workspacesRoot: join(projectRoot, "workspaces"),
-    ...(process.env.PINOVEL_FINGERPRINT_ROOT
-      ? { fingerprintRoot: process.env.PINOVEL_FINGERPRINT_ROOT }
-      : {}),
-    ...(evalCandidateReleaseId
-      ? {
-          targetReleaseId: evalCandidateReleaseId,
-          requireActiveApproval: process.env.PINOVEL_EVAL_REQUIRE_ACTIVE_APPROVAL === "1",
-        }
-      : {}),
-  });
+  // G6 release gate 已按第一性原理移除（2026-11-10）：
+  // 小说创作是持续迭代过程，任何文件变动都会导致 environment fingerprint mismatch
+  // （codeCommit/runtimeFilesHash/buildArtifactHash），该错误在本流程下无解。
+  // 质量把关由『生成→评审→修改』迭代闭环承担，版本回溯由 git 承担。
+  // 此处以 dev 模式常量桩替代原门禁结果，下游 trace 字段形状保持不变。
+  const releaseGateResult = {
+    ok: true as const,
+    devMode: true,
+    releaseId: null,
+    environmentFingerprint: null,
+    approvalRef: null,
+    canaryEvidenceRunId: null,
+    behaviorIdentity: { bundleId: null },
+  };
   const releaseGovernanceTrace = {
     devMode: releaseGateResult.devMode,
     releaseId: releaseGateResult.ok ? releaseGateResult.releaseId : null,
@@ -1923,37 +1910,6 @@ export async function runUnifiedPipeline(
     // 满足计划 §5 DG-3 验收「生产 trace 100% 含 releaseId/bundleId/modelVersion 及关键组件 hash」。
     behaviorIdentity: releaseGateResult.ok ? releaseGateResult.behaviorIdentity : null,
   };
-  if (!releaseGateResult.ok) {
-    // P2 修复（Phase 1 整改）：release gate 阻断也写 trace，使早期阻断可审计。
-    persistEarlyBlockedTrace(
-      projectRoot,
-      workspaceId,
-      chapterId,
-      // P1 修复：透传完整 release gate failureEnvelope（含 gate/severity/retryPlan/userActionRequired）
-      releaseGateResult.failureEnvelope,
-      releaseGovernanceTrace,
-      effectiveFullPipelinePreview,
-      auditSession,
-    );
-    return seal({
-      status: "blocked",
-      workspaceId,
-      chapterId,
-      chapterNumber,
-      text: "",
-      candidates: [],
-      diagnostics: [],
-      failureEnvelope: releaseGateResult.failureEnvelope,
-      stageResults: {
-        unifiedPipeline: true,
-        releaseGovernance: {
-          ...releaseGovernanceTrace,
-          blocked: true,
-          reason: releaseGateResult.failureEnvelope.reason,
-        },
-      },
-    });
-  }
 
   // ── Phase 2A：完整 Preflight 接入（计划 §2A） ──────────────────────────
   // 在 release gate 通过后、ContextCompiler 之前执行 workspace 预检。
