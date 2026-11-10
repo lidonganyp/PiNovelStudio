@@ -15,6 +15,7 @@ const emit = defineEmits<{
   revise: [message: ChatMessage];
   openTab: [tab: 'outline' | 'characters' | 'chapter', chapterNumber?: number];
   openSeed: [chapterNumber?: number];
+  retryJob: [message: ChatMessage, jobId: string];
   scroll: [element: HTMLElement];
 }>();
 
@@ -58,6 +59,7 @@ defineExpose({ scrollToBottom, listElement });
         @revise="emit('revise', message)"
         @open-tab="(tab, chapterNumber) => emit('openTab', tab, chapterNumber)"
         @open-seed="(chapterNumber) => emit('openSeed', chapterNumber)"
+        @retry-job="(jobId) => emit('retryJob', message, jobId)"
       />
     </div>
     <transition name="fade">

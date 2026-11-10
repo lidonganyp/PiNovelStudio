@@ -18,8 +18,6 @@ const route = useRoute();
 /** 门户导航项。 */
 const navItems: Array<{ name: string; label: string }> = [
   { name: 'portal-home', label: '我的项目' },
-  { name: 'billing', label: '计费明细' },
-  { name: 'recharge', label: '充值' },
 ];
 
 /** 工作台页需要无 padding 的满高布局。 */
@@ -42,6 +40,14 @@ function resetPasswordForm(): void {
 function onUserCommand(command: string): void {
   if (command === 'admin') {
     void router.push({ name: 'admin-home' });
+    return;
+  }
+  if (command === 'billing') {
+    void router.push({ name: 'billing' });
+    return;
+  }
+  if (command === 'recharge') {
+    void router.push({ name: 'recharge' });
     return;
   }
   if (command === 'password') {
@@ -128,7 +134,13 @@ onMounted(() => {
             <el-dropdown-item v-if="auth.role === 'admin'" command="admin">
               管理后台
             </el-dropdown-item>
-            <el-dropdown-item command="password">
+            <el-dropdown-item command="billing">
+              计费明细
+            </el-dropdown-item>
+            <el-dropdown-item command="recharge">
+              充值
+            </el-dropdown-item>
+            <el-dropdown-item command="password" divided>
               修改密码
             </el-dropdown-item>
             <el-dropdown-item command="logout" divided>

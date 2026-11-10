@@ -5,7 +5,6 @@ import ConversationHeader from './ConversationHeader.vue';
 import MessageList from './MessageList.vue';
 import Composer from './Composer.vue';
 import StreamStatus from './StreamStatus.vue';
-import GenerationRequestCard from './GenerationRequestCard.vue';
 import {
   type AssistantRequest,
   type StewardView,
@@ -16,10 +15,12 @@ const props = defineProps<{ projectId: number; projectTitle?: string }>();
 const expanded = ref(false);
 const listElement = ref<HTMLElement | null>(null);
 const editingProposal = ref<{ message: ChatMessage; values: Record<string, string> } | null>(null);
-const trackJob = inject<(jobId: string) => void>('trackJob');
 const reloadMaterials = inject<(opts?: { tab?: string; chapterNumber?: number }) => Promise<void>>('reloadMaterials');
 const activeChapterNumber = inject<ComputedRef<number | null> | null>('activeChapterNumber', null);
-const chat = useAssistantChat({ projectId: props.projectId, trackJob, reloadMaterials });
+const chat = useAssistantChat({ projectId: props.projectId, reloadMaterials });
+/** 向父级注册任务跟踪入口：SeedEditor 直生成路径的状态卡片也进聊天流。 */
+const registerTrackJob = inject<(fn: (jobId: string, chapterNumber?: number) => void) => void>('registerTrackJob', () => {});
+registerTrackJob(chat.trackJob);
 
 function getListElement(): HTMLElement | null {
   return listElement.value ?? document.querySelector('.message-list');
@@ -114,6 +115,7 @@ onMounted(() => { void chat.load(); void nextTick(() => { listElement.value = do
         @revise="startRevise"
         @open-tab="(tab, chapterNumber) => reloadMaterials?.({ tab, chapterNumber })"
         @open-seed="(chapterNumber) => reloadMaterials?.({ tab: 'seed', chapterNumber })"
+        @retry-job="(_message, jobId) => chat.retryJob(jobId)"
       />
     </div>
     <StreamStatus :sending="chat.sending.value" :manifest="latestManifest" @stop="chat.stop" />
@@ -121,13 +123,6 @@ onMounted(() => { void chat.load(); void nextTick(() => { listElement.value = do
       <strong>{{ chat.panelError.value.reason }}</strong>
       <button v-if="chat.panelError.value.recoverable" type="button" @click="chat.send(true, undefined, getListElement())">重试</button>
     </div>
-    <GenerationRequestCard
-      v-if="chat.jobSubmitted.value"
-      class="panel-job"
-      :job-id="chat.jobSubmitted.value.jobId"
-      :chapter-number="chat.jobSubmitted.value.chapterNumber"
-      @open="reloadMaterials?.({ tab: 'chapter', chapterNumber: chat.jobSubmitted.value?.chapterNumber })"
-    />
     <Composer v-model="chat.input.value" :sending="chat.sending.value" @send="send" @stop="chat.stop" />
 
     <el-dialog v-model="editingProposal" title="修改方案" width="420px" append-to-body>
@@ -148,8 +143,6 @@ onMounted(() => { void chat.load(); void nextTick(() => { listElement.value = do
 .chat-body { display: flex; flex: 1; min-height: 0; flex-direction: column; overflow: hidden; }
 .panel-error { display: flex; justify-content: space-between; gap: 8px; margin: 0 12px 6px; padding: 7px 9px; border-radius: 5px; font-size: 12px; background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
 .panel-error button { border: 0; background: transparent; color: inherit; cursor: pointer; }
-.panel-job { margin: 0 12px 6px; }
-.panel-job :deep(.generation-card) { margin-top: 0; }
 .proposal-editor { display: grid; gap: 12px; }
 .proposal-editor label { display: grid; gap: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 @media (max-width: 720px) {

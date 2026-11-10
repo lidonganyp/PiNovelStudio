@@ -2,7 +2,7 @@
  * Assistant chat state machine. The composable owns UI state only; all
  * persistence and generation authorization remain in the existing API.
  */
-import { computed, nextTick, ref, type Ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, type Ref } from 'vue';
 import {
   buildStewardRequest,
   clearMessages,
@@ -18,6 +18,7 @@ import {
   type FailureEnvelope,
   type StewardView,
 } from '../api/assistant';
+import { getJob, retryGeneration, isTerminalStatus } from '../api/jobs';
 
 export interface ContextManifest {
   profile?: string;
@@ -44,11 +45,21 @@ export interface ChatMessage {
   artifacts?: AssistantArtifacts;
   failure?: FailureEnvelope;
   contextManifest?: ContextManifest;
+  /** 生成任务实时状态：嵌入聊天流随内容滚动展示，不遮挡聊天。 */
+  job?: JobStatus;
+}
+
+/** 生成任务实时状态（聊天流内嵌卡片）。 */
+export interface JobStatus {
+  jobId: string;
+  chapterNumber?: number;
+  status: string;
+  progressStage: string | null;
+  failureMessage: string | null;
 }
 
 export interface AssistantChatOptions {
   projectId: Ref<number> | number;
-  trackJob?: (jobId: string) => void;
   reloadMaterials?: (opts?: { tab?: string; chapterNumber?: number }) => Promise<void>;
 }
 
@@ -66,6 +77,73 @@ export function useAssistantChat(options: AssistantChatOptions) {
   const hasMoreAbove = ref(false);
   const atBottom = ref(true);
   const abortController = ref<AbortController | null>(null);
+  /** 进行中的任务轮询定时器（jobId → timer）。 */
+  const jobTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  function stopAllJobTimers(): void {
+    for (const timer of jobTimers.values()) clearTimeout(timer);
+    jobTimers.clear();
+  }
+  /** 跟踪生成任务：在聊天流插入/复用状态卡片并轮询到终态。 */
+  function trackJob(jobId: string, chapterNumber?: number): void {
+    const existing = messages.value.find((message) => message.job?.jobId === jobId);
+    if (existing?.job) {
+      if (chapterNumber != null && existing.job.chapterNumber !== chapterNumber) {
+        existing.job = { ...existing.job, chapterNumber };
+      }
+    } else {
+      messages.value.push({
+        id: nextLocalMessageId('local'),
+        role: 'assistant',
+        content: '',
+        job: { jobId, chapterNumber, status: 'pending', progressStage: null, failureMessage: null },
+      });
+    }
+    pollJob(jobId);
+  }
+  function pollJob(jobId: string): void {
+    const timer = jobTimers.get(jobId);
+    if (timer) clearTimeout(timer);
+    const tick = async (): Promise<void> => {
+      try {
+        const job = await getJob(jobId);
+        const message = messages.value.find((item) => item.job?.jobId === jobId);
+        if (message?.job) {
+          message.job = {
+            ...message.job,
+            status: String(job.status),
+            progressStage: job.progressStage,
+            failureMessage: job.failureMessage,
+          };
+          if (job.status === 'succeeded') {
+            void options.reloadMaterials?.({ tab: 'chapter', chapterNumber: message.job.chapterNumber });
+          }
+        }
+        if (!isTerminalStatus(String(job.status))) {
+          jobTimers.set(jobId, setTimeout(tick, 2000));
+        } else {
+          jobTimers.delete(jobId);
+        }
+      } catch {
+        jobTimers.set(jobId, setTimeout(tick, 4000));
+      }
+    };
+    void tick();
+  }
+  /** 失败任务重试：复用同一张状态卡片，跟踪新任务。 */
+  async function retryJob(jobId: string): Promise<void> {
+    try {
+      const next = await retryGeneration(jobId);
+      const message = messages.value.find((item) => item.job?.jobId === jobId);
+      if (message?.job) {
+        message.job = { ...message.job, jobId: next.jobId, status: 'pending', progressStage: null, failureMessage: null };
+        pollJob(next.jobId);
+      } else {
+        trackJob(next.jobId);
+      }
+    } catch {
+      /* 重试提交失败：保留原卡片，用户可稍后再试 */
+    }
+  }
 
   function nextLocalMessageId(kind: 'local' | 'stream'): string {
     localMessageSequence += 1;
@@ -138,7 +216,7 @@ export function useAssistantChat(options: AssistantChatOptions) {
       panelError.value = failure;
     } else if (event.type === 'job_submitted') {
       jobSubmitted.value = { jobId: event.jobId, chapterNumber: event.chapterNumber };
-      options.trackJob?.(event.jobId);
+      trackJob(event.jobId, event.chapterNumber);
     } else if (event.type === 'done' && target) {
       target.content = event.message.content;
       target.streaming = false;
@@ -149,7 +227,7 @@ export function useAssistantChat(options: AssistantChatOptions) {
       target.artifacts = event.artifacts;
       if (event.steward) syncSteward(event.steward);
       target.contextManifest = event.contextManifest;
-      if (event.generationJobId) options.trackJob?.(event.generationJobId);
+      if (event.generationJobId) trackJob(event.generationJobId, event.artifacts?.chaptersTouched?.[0]);
       // 仅在资料真正落库（artifacts 非空）或提交生成任务时刷新工作台；
       // 普通查询类回复不打断用户当前的工作台状态。
       const materialChanged =
@@ -245,6 +323,7 @@ export function useAssistantChat(options: AssistantChatOptions) {
   async function clear(): Promise<void> {
     if (sending.value) return;
     await clearMessages(projectId.value);
+    stopAllJobTimers();
     messages.value = [];
     panelError.value = null;
     jobSubmitted.value = null;
@@ -256,7 +335,8 @@ export function useAssistantChat(options: AssistantChatOptions) {
     messages.value = messages.value.filter((item) => item.id !== message.id);
   }
 
-  return { messages, input, loadingHistory, historyError, sending, panelError, jobSubmitted, lastPayload, hasMoreAbove, atBottom, load, send, continueFromFailure, stop, clear, remove, sendSteward, pendingSteward, updateBottomState };
+  onBeforeUnmount(stopAllJobTimers);
+  return { messages, input, loadingHistory, historyError, sending, panelError, jobSubmitted, lastPayload, hasMoreAbove, atBottom, load, send, continueFromFailure, stop, clear, remove, sendSteward, pendingSteward, updateBottomState, trackJob, retryJob };
 }
 
 export function isChapterRequest(content: string): boolean {

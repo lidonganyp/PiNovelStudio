@@ -8,6 +8,7 @@ import StewardProposalCard from './StewardProposalCard.vue';
 import OutlineArtifactCard from './OutlineArtifactCard.vue';
 import ChapterSeedCard from './ChapterSeedCard.vue';
 import GenerationRequestCard from './GenerationRequestCard.vue';
+import JobStatusCard from './JobStatusCard.vue';
 
 const props = defineProps<{ message: ChatMessage; pendingSteward?: boolean; sending?: boolean }>();
 const emit = defineEmits<{
@@ -21,6 +22,7 @@ const emit = defineEmits<{
   revise: [];
   openTab: [tab: 'outline' | 'characters' | 'chapter', chapterNumber?: number];
   openSeed: [chapterNumber?: number];
+  retryJob: [jobId: string];
 }>();
 const expanded = ref(false);
 const collapsedLimit = 5000;
@@ -76,6 +78,14 @@ async function onContentClick(event: MouseEvent): Promise<void> {
         v-if="message.artifacts?.chaptersTouched?.length"
         :chapters-touched="message.artifacts.chaptersTouched"
         @open="emit('openSeed', message.artifacts?.chaptersTouched?.[0])"
+      />
+      <!-- 生成任务实时状态：嵌入聊天流随内容滚动，不遮挡聊天。 -->
+      <JobStatusCard
+        v-if="message.job"
+        :job="message.job"
+        :disabled="sending"
+        @retry="emit('retryJob', message.job.jobId)"
+        @open="(chapterNumber) => emit('openTab', 'chapter', chapterNumber)"
       />
       <!-- steward 消息由 StewardProposalCard 展示任务编号（该路径落库 artifacts 不含 generationJobId），
            此处只恢复主链路直生成消息的历史任务卡片，避免同一 jobId 双卡片且刷新前后行为不一致。 -->

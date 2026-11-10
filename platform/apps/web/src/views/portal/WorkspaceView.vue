@@ -27,7 +27,6 @@ import ChapterContractPanel from '../../components/workspace/ChapterContractPane
 import DocumentPanel from '../../components/workspace/DocumentPanel.vue';
 import VersionPanel from '../../components/workspace/VersionPanel.vue';
 import AssistantWorkspace from '../../components/workspace/chat/AssistantWorkspace.vue';
-import GenerationPanel from '../../components/workspace/GenerationPanel.vue';
 import RevisionPanel from '../../components/workspace/RevisionPanel.vue';
 import FeedbackPanel from '../../components/workspace/FeedbackPanel.vue';
 
@@ -42,10 +41,21 @@ const chaptersLoading = ref(false);
 const activeChapterId = ref<number | null>(null);
 const activeTab = ref('chapter');
 
-/** GenerationPanel 通过 provide/inject 拿到 track 入口。 */
-const trackJob = ref<((jobId: string) => void) | null>(null);
+/** 聊天流任务跟踪入口：AssistantWorkspace 注册（生成状态卡片进聊天流，随内容滚动）。 */
+const trackJob = ref<((jobId: string, chapterNumber?: number) => void) | null>(null);
 const materialEpoch = ref(0);
-provide('trackJob', (jobId: string) => trackJob.value?.(jobId));
+provide('registerTrackJob', (fn: (jobId: string, chapterNumber?: number) => void) => { trackJob.value = fn; });
+/** 次要资料页：收进『更多』下拉，一级界面只留章节与大纲。 */
+const SECONDARY_TABS = [
+  { value: 'seed', label: '种子（本章）' },
+  { value: 'contract', label: '章纲契约（本章）' },
+  { value: 'characters', label: '角色（全书）' },
+  { value: 'documents', label: '文档（全书）' },
+  { value: 'versions', label: '版本' },
+  { value: 'revision', label: '整书重写' },
+  { value: 'feedback', label: '反馈' },
+] as const;
+const secondaryLabel = computed(() => SECONDARY_TABS.find((tab) => tab.value === activeTab.value)?.label ?? '');
 provide('materialEpoch', materialEpoch);
 provide('activeChapterNumber', computed(() => activeChapter.value?.chapterNumber ?? null));
 provide(
@@ -110,7 +120,7 @@ async function startGeneration(): Promise<void> {
     projectId.value,
     activeChapter.value.id,
   );
-  trackJob.value?.(job.jobId);
+  trackJob.value?.(job.jobId, activeChapter.value.chapterNumber);
   activeTab.value = 'chapter';
   ElMessage.success('生成任务已提交');
 }
@@ -123,7 +133,7 @@ onMounted(async () => {
 
 /** 阶段五：右栏拖拽调宽（移动端由 CSS 隐藏拖拽把手，抽屉模式不受影响）。 */
 const RIGHT_PANE_WIDTH_KEY = 'pi-novel.right-pane-width';
-const DEFAULT_RIGHT_WIDTH = 360;
+const DEFAULT_RIGHT_WIDTH = 460;
 const rightWidth = ref(DEFAULT_RIGHT_WIDTH);
 const resizing = ref(false);
 try {
@@ -138,7 +148,7 @@ function startResize(event: MouseEvent): void {
 
 function onResizeMove(event: MouseEvent): void {
   if (!resizing.value) return;
-  const max = Math.max(320, Math.min(960, window.innerWidth - 620));
+  const max = Math.max(320, Math.min(960, window.innerWidth - 520));
   rightWidth.value = Math.max(320, Math.min(max, window.innerWidth - event.clientX));
 }
 
@@ -194,8 +204,29 @@ defineExpose({ loadChapters, patchChapter });
       </aside>
 
       <main class="center-pane">
-        <el-tabs v-model="activeTab" class="content-tabs">
-          <el-tab-pane label="章节" name="chapter">
+        <div class="pane-toolbar">
+          <div class="pane-tabs">
+            <button type="button" class="pane-tab" :class="{ active: activeTab === 'chapter' }" @click="activeTab = 'chapter'">章节</button>
+            <button type="button" class="pane-tab" :class="{ active: activeTab === 'outline' }" @click="activeTab = 'outline'">大纲</button>
+            <button
+              v-if="secondaryLabel"
+              type="button"
+              class="pane-tab active"
+              title="点击返回章节"
+              @click="activeTab = 'chapter'"
+            >{{ secondaryLabel }} ✕</button>
+          </div>
+          <el-dropdown trigger="click" @command="(tab: string | number | object) => (activeTab = String(tab))">
+            <el-button size="small" class="more-btn">更多资料</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item v-for="tab in SECONDARY_TABS" :key="tab.value" :command="tab.value">{{ tab.label }}</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+        <div class="pane-content">
+          <template v-if="activeTab === 'chapter'">
             <ChapterEditor
               v-if="activeChapter"
               :key="activeChapter.id + '-' + activeChapter.version"
@@ -204,13 +235,9 @@ defineExpose({ loadChapters, patchChapter });
               @updated="patchChapter"
             />
             <el-empty v-else description="左侧新建或选择一个章节" />
-          </el-tab-pane>
-          <!-- 项目级：全书大纲，不随章节切换 -->
-          <el-tab-pane label="大纲（全书）" name="outline">
-            <OutlinePanel :project-id="projectId" />
-          </el-tab-pane>
-          <!-- 章节级：当前选中章节的种子 -->
-          <el-tab-pane label="种子（本章）" name="seed">
+          </template>
+          <OutlinePanel v-if="activeTab === 'outline'" :project-id="projectId" />
+          <template v-if="activeTab === 'seed'">
             <SeedEditor
               v-if="activeChapter"
               :key="'seed-' + activeChapter.id + '-' + (activeChapter.seed?.version ?? 0)"
@@ -220,9 +247,8 @@ defineExpose({ loadChapters, patchChapter });
               @generate="startGeneration"
             />
             <el-empty v-else description="先选择一个章节" />
-          </el-tab-pane>
-          <!-- 章节级：当前选中章节的章纲契约（作者审批） -->
-          <el-tab-pane label="章纲契约（本章）" name="contract" lazy>
+          </template>
+          <template v-if="activeTab === 'contract'">
             <ChapterContractPanel
               v-if="activeChapter"
               :key="'contract-' + activeChapter.id"
@@ -230,16 +256,10 @@ defineExpose({ loadChapters, patchChapter });
               :chapter-number="activeChapter.chapterNumber"
             />
             <el-empty v-else description="先选择一个章节" />
-          </el-tab-pane>
-          <!-- 项目级：全书角色档案，不随章节切换 -->
-          <el-tab-pane label="角色（全书）" name="characters" lazy>
-            <CharacterPanel :project-id="projectId" />
-          </el-tab-pane>
-          <!-- 项目级：全书设定文档 -->
-          <el-tab-pane label="文档（全书）" name="documents" lazy>
-            <DocumentPanel :project-id="projectId" />
-          </el-tab-pane>
-          <el-tab-pane label="版本" name="versions" lazy>
+          </template>
+          <CharacterPanel v-if="activeTab === 'characters'" :project-id="projectId" />
+          <DocumentPanel v-if="activeTab === 'documents'" :project-id="projectId" />
+          <template v-if="activeTab === 'versions'">
             <VersionPanel
               v-if="activeChapter"
               :project-id="projectId"
@@ -247,11 +267,10 @@ defineExpose({ loadChapters, patchChapter });
               @restored="patchChapter"
             />
             <el-empty v-else description="先选择一个章节" />
-          </el-tab-pane>
-          <el-tab-pane label="反馈" name="feedback" lazy>
-            <FeedbackPanel :project-id="projectId" :chapter-id="activeChapterId" />
-          </el-tab-pane>
-        </el-tabs>
+          </template>
+          <RevisionPanel v-if="activeTab === 'revision'" :project-id="projectId" :chapters="chapters" @progress="loadChapters" />
+          <FeedbackPanel v-if="activeTab === 'feedback'" :project-id="projectId" :chapter-id="activeChapterId" />
+        </div>
       </main>
 
       <div
@@ -263,13 +282,6 @@ defineExpose({ loadChapters, patchChapter });
         @dblclick="resetRightWidth"
       />
       <aside class="right-pane" :style="{ width: rightWidth + 'px' }">
-        <RevisionPanel :project-id="projectId" :chapters="chapters" @progress="loadChapters" />
-        <GenerationPanel
-          :project-id="projectId"
-          :chapter="activeChapter"
-          @register-track="(fn) => (trackJob = fn)"
-          @succeeded="loadChapters"
-        />
         <AssistantWorkspace :project-id="projectId" :project-title="project.title" />
       </aside>
     </div>
@@ -362,18 +374,16 @@ defineExpose({ loadChapters, patchChapter });
   .right-resizer { display: none; }
   .right-pane { width: auto !important; }
 }
-.content-tabs {
+.pane-toolbar {
   display: flex;
-  flex-direction: column;
-  height: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
 }
-.content-tabs :deep(.el-tabs__content) {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-/* 面板定高：章节编辑器才能按 100% 撑满并让 textarea 内部滚动 */
-.content-tabs :deep(.el-tab-pane) {
-  height: 100%;
-}
+.pane-tabs { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.pane-tab { padding: 5px 14px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--el-text-color-regular); }
+.pane-tab:hover { background: var(--el-fill-color-light); }
+.pane-tab.active { background: var(--el-color-primary); color: #fff; }
+.pane-content { flex: 1; min-height: 0; overflow-y: auto; }
 </style>
