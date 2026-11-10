@@ -97,7 +97,7 @@ onMounted(() => {
 
 <template>
   <el-container class="portal">
-    <el-header class="portal-header">
+    <el-header v-if="!isWorkspace" class="portal-header">
       <router-link class="brand" :to="{ name: 'portal-home' }">
         <span class="brand-logo">π</span>
         <span class="brand-name">PiNovel 平台</span>

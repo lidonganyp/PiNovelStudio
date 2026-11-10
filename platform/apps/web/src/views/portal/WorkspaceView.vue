@@ -7,7 +7,7 @@
 import { computed, onMounted, onUnmounted, provide, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { ArrowLeft } from '@element-plus/icons-vue';
+import { ArrowLeft, Files, Menu } from '@element-plus/icons-vue';
 import { useAuthStore } from '../../stores/auth';
 import {
   getProject,
@@ -41,6 +41,16 @@ const chaptersLoading = ref(false);
 const activeChapterId = ref<number | null>(null);
 const activeTab = ref('chapter');
 
+/** 第二轮极简：章节抽屉 + 中间区按需展开（无内容时右栏聊天全屏）。 */
+const chaptersDrawerOpen = ref(false);
+const userOpenedCenter = ref(false);
+const centerVisible = computed(
+  () =>
+    userOpenedCenter.value ||
+    activeTab.value !== 'chapter' ||
+    !!activeChapter.value?.content,
+);
+
 /** 聊天流任务跟踪入口：AssistantWorkspace 注册（生成状态卡片进聊天流，随内容滚动）。 */
 const trackJob = ref<((jobId: string, chapterNumber?: number) => void) | null>(null);
 const materialEpoch = ref(0);
@@ -62,6 +72,7 @@ provide(
   'reloadMaterials',
   async (opts?: { tab?: string; chapterNumber?: number }): Promise<void> => {
     materialEpoch.value += 1;
+    userOpenedCenter.value = true;
     await loadChapters();
     try {
       project.value = await getProject(projectId.value);
@@ -102,6 +113,8 @@ async function loadChapters(): Promise<void> {
 function selectChapter(id: number): void {
   activeChapterId.value = id;
   activeTab.value = 'chapter';
+  userOpenedCenter.value = true;
+  chaptersDrawerOpen.value = false;
 }
 
 /** 单章刷新（生成成功后替换本地行）。 */
@@ -185,15 +198,26 @@ defineExpose({ loadChapters, patchChapter });
         title="返回项目列表"
         @click="router.push({ name: 'portal-home' })"
       />
-      <span class="project-title" :title="project.title">{{ project.title }}</span>
-      <el-tag v-if="project.genre" size="small">{{ project.genre }}</el-tag>
-      <span v-for="sub in project.subGenres" :key="sub" class="sub-genre">{{ sub }}</span>
-      <span class="spacer" />
-      <span class="workflow">流程：{{ project.workflowState }}</span>
+      <el-button :icon="Menu" circle title="章节目录" @click="chaptersDrawerOpen = true" />
+      <el-dropdown trigger="click" @command="(tab: string | number | object) => (activeTab = String(tab))">
+        <el-button :icon="Files" circle title="更多资料（大纲等）" />
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="outline">大纲</el-dropdown-item>
+            <el-dropdown-item v-for="tab in SECONDARY_TABS" :key="tab.value" :command="tab.value">{{ tab.label }}</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
 
-    <div class="workspace-body">
-      <aside class="left-pane" v-loading="chaptersLoading">
+    <el-drawer
+      v-model="chaptersDrawerOpen"
+      direction="ltr"
+      size="300px"
+      append-to-body
+      title="章节目录"
+    >
+      <div v-loading="chaptersLoading" class="drawer-tree">
         <ChapterTree
           :chapters="chapters"
           :active-id="activeChapterId"
@@ -201,9 +225,11 @@ defineExpose({ loadChapters, patchChapter });
           @select="selectChapter"
           @changed="loadChapters"
         />
-      </aside>
+      </div>
+    </el-drawer>
 
-      <main class="center-pane">
+    <div class="workspace-body">
+      <main v-if="centerVisible" class="center-pane">
         <div class="pane-toolbar">
           <div class="pane-tabs">
             <button type="button" class="pane-tab" :class="{ active: activeTab === 'chapter' }" @click="activeTab = 'chapter'">章节</button>
@@ -274,6 +300,7 @@ defineExpose({ loadChapters, patchChapter });
       </main>
 
       <div
+        v-if="centerVisible"
         class="right-resizer"
         :class="{ active: resizing }"
         title="拖拽调整助手栏宽度，双击恢复默认"
@@ -281,7 +308,11 @@ defineExpose({ loadChapters, patchChapter });
         @mousedown="startResize"
         @dblclick="resetRightWidth"
       />
-      <aside class="right-pane" :style="{ width: rightWidth + 'px' }">
+      <aside
+        class="right-pane"
+        :class="{ full: !centerVisible }"
+        :style="centerVisible ? { width: rightWidth + 'px' } : undefined"
+      >
         <AssistantWorkspace :project-id="projectId" :project-title="project.title" />
       </aside>
     </div>
@@ -291,66 +322,44 @@ defineExpose({ loadChapters, patchChapter });
 <style scoped>
 /* 高度由 PortalLayout 的 workspace-main（flex 列容器）提供，不再使用负 margin。 */
 .workspace {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: #fff;
 }
+/* 悬浮工具条：绝对定位胶囊，不占布局空间。 */
 .workspace-header {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 10;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  background: #fff;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.drawer-tree {
+  min-height: 200px;
 }
 .back-btn {
   flex-shrink: 0;
-}
-.project-title {
-  font-size: 16px;
-  font-weight: 600;
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sub-genre {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-  padding: 0 6px;
-  white-space: nowrap;
-}
-.spacer {
-  flex: 1;
-}
-.workflow {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
 }
 .workspace-body {
   flex: 1;
   display: flex;
   min-height: 0;
 }
-.left-pane {
-  width: 264px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--el-border-color-lighter);
-  overflow: hidden;
-  min-height: 0;
-  padding: 10px 8px;
-}
 .center-pane {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 0 16px;
+  padding: 48px 16px 0;
 }
 .right-resizer {
   width: 5px;
@@ -370,6 +379,10 @@ defineExpose({ loadChapters, patchChapter });
   flex-direction: column;
   overflow: hidden;
 }
+.right-pane.full {
+  flex: 1;
+  border-left: 0;
+}
 @media (max-width: 720px) {
   .right-resizer { display: none; }
   .right-pane { width: auto !important; }
@@ -379,7 +392,7 @@ defineExpose({ loadChapters, patchChapter });
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 0;
+  padding: 8px 0 8px 108px;
 }
 .pane-tabs { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 .pane-tab { padding: 5px 14px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--el-text-color-regular); }
