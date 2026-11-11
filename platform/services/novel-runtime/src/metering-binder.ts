@@ -130,11 +130,19 @@ export interface MeteringBinderDeps {
  */
 export interface MeteringBinderInstance {
   invokeWithMetering(
-    tool: { name: string; invoke?: (input: unknown, signal?: AbortSignal) => Promise<unknown> },
+    tool: {
+      name: string;
+      invoke?: (
+        input: unknown,
+        signal?: AbortSignal,
+        onUpdate?: (event: unknown) => void,
+      ) => Promise<unknown>;
+    },
     input: unknown,
     jobCtx: { jobId: string; userId: string; projectId: string },
     signal?: AbortSignal,
     transportAccounting?: TransportAccounting,
+    onUpdate?: (event: unknown) => void,
   ): Promise<{ result: unknown; metering: MeteringResult }>;
 }
 
@@ -154,11 +162,19 @@ export function createMeteringBinder(deps: MeteringBinderDeps): MeteringBinderIn
      * @returns 原始 result + metering 摘要
      */
     async invokeWithMetering(
-      tool: { name: string; invoke?: (input: unknown, signal?: AbortSignal) => Promise<unknown> },
+      tool: {
+        name: string;
+        invoke?: (
+          input: unknown,
+          signal?: AbortSignal,
+          onUpdate?: (event: unknown) => void,
+        ) => Promise<unknown>;
+      },
       input: unknown,
       jobCtx: { jobId: string; userId: string; projectId: string },
       signal?: AbortSignal,
       transportAccounting?: TransportAccounting,
+      onUpdate?: (event: unknown) => void,
     ): Promise<{ result: unknown; metering: MeteringResult }> {
       const metering = emptyMeteringResult();
 
@@ -166,7 +182,7 @@ export function createMeteringBinder(deps: MeteringBinderDeps): MeteringBinderIn
       // Production chapter calls use trusted transport hooks to reserve cost
       // before every HTTP attempt; no raw draft may bypass mandatory stages.
       let result: unknown;
-      result = await tool.invoke?.(input, signal);
+      result = await tool.invoke?.(input, signal, onUpdate);
       if (transportAccounting) {
         const observed = transportAccounting.summary();
         if (observed.settleErrors.length && (result as PiNovelInvokeResult | undefined)?.status === 'ok') {

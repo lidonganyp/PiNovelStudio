@@ -76,6 +76,7 @@ export class BillingClientError extends Error {
     public readonly code:
       | "SETTLE_FAILED"
       | "FINALIZE_FAILED"
+      | "PROGRESS_REPORT_FAILED"
       | "BUDGET_EXHAUSTED"
       | "TRANSPORT_ADMISSION_DENIED"
       | "INVALID_RESPONSE"
@@ -103,6 +104,11 @@ export interface BillingClient {
    * 幂等：重复 finalize 按 hold 当前状态返回（alreadyFinalized=true）。
    */
   finalize(jobId: string, outcome: "success" | "failure"): Promise<BillingFinalizeResult>;
+  /**
+   * 上报任务进度事件（阶段消息/评审意见全文），供任务卡片聊天流回放。
+   * 尽力而为：调用方以 fire-and-forget 方式调用并捕获错误，失败不影响生成主链路。
+   */
+  reportJobEvent(input: { jobId: string; stage: string; content: string }): Promise<void>;
 }
 
 /**
@@ -127,7 +133,7 @@ export function createBillingClient(
   async function signedPost(
     path: string,
     payload: unknown,
-    errorCode: "SETTLE_FAILED" | "FINALIZE_FAILED",
+    errorCode: "SETTLE_FAILED" | "FINALIZE_FAILED" | "PROGRESS_REPORT_FAILED",
   ): Promise<{ statusCode: number; body: Record<string, unknown> }> {
     const url = `${baseUrl.replace(/\/$/, "")}${path}`;
     const body = stableStringify(payload);
@@ -210,7 +216,7 @@ export function createBillingClient(
     path: string,
     statusCode: number,
     body: Record<string, unknown>,
-    code: "SETTLE_FAILED" | "FINALIZE_FAILED",
+    code: "SETTLE_FAILED" | "FINALIZE_FAILED" | "PROGRESS_REPORT_FAILED",
   ): BillingClientError {
     return new BillingClientError(
       `${code}: ${statusCode} from ${path}: ${JSON.stringify(body).slice(0, 300)}`,
@@ -301,6 +307,28 @@ export function createBillingClient(
         status: str(body, "status") ?? "unknown",
         alreadyFinalized: bool(body, "alreadyFinalized") ?? false,
       };
+    },
+    /**
+     * 上报任务进度事件（阶段消息/评审意见全文）。
+     * 尽力而为：调用方（invoke.ts 进度回调）以 fire-and-forget 方式调用并捕获错误，
+     * 上报失败只记日志，绝不影响生成主链路。
+     */
+    async reportJobEvent(input: {
+      jobId: string;
+      stage: string;
+      content: string;
+    }): Promise<void> {
+      const path = `/internal/jobs/${encodeURIComponent(input.jobId)}/events`;
+      // jobId 只在 URL path 中携带；DTO 契约（JobEventDto）仅 stage/content，
+      // 多余字段会被 api 侧 forbidNonWhitelisted 校验拒绝（400）。
+      const { statusCode, body } = await signedPost(
+        path,
+        { stage: input.stage, content: input.content },
+        "PROGRESS_REPORT_FAILED",
+      );
+      if (statusCode >= 400) {
+        throw httpError(path, statusCode, body, "PROGRESS_REPORT_FAILED");
+      }
     },
   };
 }

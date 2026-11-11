@@ -355,12 +355,47 @@ export function createInvokeRouter(
           }
         };
       }
+      // 任务进度事件回调：提取事件 stage/message 全文，fire-and-forget 上报
+      // platform-api 落库（NovelGenerationJobEvent），供任务卡片聊天流回放。
+      // 上报失败只记日志，绝不影响生成主链路（回调内不 await，异常全部吞掉）。
+      const reportJobEvent = (event: unknown): void => {
+        try {
+          if (!jobCtx.jobId) return;
+          if (!event || typeof event !== "object") return;
+          const record = event as {
+            stage?: unknown;
+            message?: unknown;
+            status?: unknown;
+          };
+          const stage = typeof record.stage === "string" ? record.stage : "";
+          const message = typeof record.message === "string" ? record.message : "";
+          const status =
+            record.status === "start" || record.status === "done"
+              ? record.status
+              : "";
+          const content = status
+            ? `${status === "start" ? "开始" : "完成"}：${message}`
+            : message;
+          if (!stage && !content) return;
+          void deps.billingClient
+            .reportJobEvent({ jobId: jobCtx.jobId, stage, content })
+            .catch((error: unknown) => {
+              logger?.warn(
+                { jobId: jobCtx.jobId, stage, err: error },
+                "job event report failed",
+              );
+            });
+        } catch {
+          // 进度上报构造失败不影响生成
+        }
+      };
       const invoke = () => deps.meteringBinder.invokeWithMetering(
         tool,
         inputWithMeta,
         jobCtx,
         abortController.signal,
         transportAccounting,
+        reportJobEvent,
       );
       const { result, metering } = transportAccounting && loadedTools.runWithTransportHooks
         ? await loadedTools.runWithTransportHooks(transportAccounting.hooks, invoke) : await invoke();

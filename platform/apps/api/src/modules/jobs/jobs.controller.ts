@@ -32,4 +32,12 @@ export class JobsController {
   ): Promise<unknown> {
     return this.jobs.getCalls(user.sub, jobId);
   }
+
+  @Get(':jobId/events')
+  events(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('jobId') jobId: string,
+  ): Promise<unknown> {
+    return this.jobs.getJobEvents(user.sub, jobId);
+  }
 }

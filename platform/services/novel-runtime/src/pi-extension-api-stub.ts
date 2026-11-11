@@ -35,7 +35,11 @@ export interface PiTool extends ToolLike {
   name: string;
   description?: string;
   inputSchema?: unknown;
-  invoke?: (input: unknown, signal?: AbortSignal) => Promise<unknown>;
+  invoke?: (
+    input: unknown,
+    signal?: AbortSignal,
+    onUpdate?: (event: unknown) => void,
+  ) => Promise<unknown>;
   /**
    * PI 内部协议：wrapLegacyTool 产出的工具用此方法。
    * 返回 { content: [{type:"text", text}], details: raw.invoke 返回值 }。

@@ -429,6 +429,16 @@ model NovelGenerationJob {
   @@index([revisionId])
   @@map("novel_generation_jobs")
 }
+/// 任务进度事件流：阶段消息全文（含评审意见）按序持久化，供任务卡片回放。
+model NovelGenerationJobEvent {
+  id        Int      @id @default(autoincrement())
+  jobId     String   @map("job_id")
+  stage     String
+  content   String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@index([jobId, createdAt])
+  @@map("novel_generation_job_events")
+}
 
 /// One author confirmation authorizes only this frozen range and budget.
 model NovelRevision {

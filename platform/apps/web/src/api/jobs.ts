@@ -47,6 +47,14 @@ export interface NovelJob {
   completedAt: string | null;
 }
 
+/** 任务进度事件（阶段消息/评审意见全文，按时间正序）。 */
+export interface JobEvent {
+  id: number;
+  stage: string;
+  content: string;
+  createdAt: string;
+}
+
 /** 逐调用明细行。 */
 export interface JobCall {
   callId: string;
@@ -68,6 +76,10 @@ export function retryGeneration(jobId: string): Promise<NovelJob> {
 
 export function getJobCalls(jobId: string): Promise<JobCall[]> {
   return http.get(`/jobs/${jobId}/calls`).then((r) => r.data);
+}
+
+export function getJobEvents(jobId: string): Promise<JobEvent[]> {
+  return http.get(`/jobs/${jobId}/events`).then((r) => r.data);
 }
 
 /** 任务是否处于终态（轮询停止条件）。 */

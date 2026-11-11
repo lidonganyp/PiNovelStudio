@@ -60,8 +60,10 @@ export interface LoadedTools {
  *     （wrapLegacyTool 返回 { content, details }；details 是 PiNovelStudio raw.invoke 返回值）
  *   - 两者都无 → 原样返回，让下游守卫返回 TOOL_NOT_FOUND（fail-closed）
  *
- * 信号预留：当前 signal 传 undefined；P0-7 在 metering-binder 入口创建 AbortController
- * 后可传入，PiNovelStudio 当前不消费 signal，但接口已就位。
+ * 信号与进度：signal 由 metering-binder 入口创建的 AbortController 传入；
+ * onUpdate（进度事件回调）由 invoke.ts 构造、经 metering-binder 透传到本包装器，
+ * 再传给 execute 第 4 参——PiNovelStudio 的 wrapLegacyTool 会把它包装成
+ * params.__onUpdate 注入工具内部（进度推送失败不影响生成）。
  */
 export function adaptExecuteToInvoke(tool: PiTool): PiTool {
   if (typeof tool.invoke === "function") return tool;
@@ -71,12 +73,16 @@ export function adaptExecuteToInvoke(tool: PiTool): PiTool {
   };
   return {
     ...tool,
-    invoke: async (input: unknown, signal?: AbortSignal): Promise<unknown> => {
+    invoke: async (
+      input: unknown,
+      signal?: AbortSignal,
+      onUpdate?: (event: unknown) => void,
+    ): Promise<unknown> => {
       const result = await executeTool.execute(
         "invoke-call",
         input,
         signal,
-        undefined,
+        onUpdate,
         // The runtime, not the HTTP caller, supplies _projectRoot after it
         // materializes an isolated workspace.  Mark that hand-off so the
         // extension can reject caller-injected roots on every other surface.

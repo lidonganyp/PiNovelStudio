@@ -3,7 +3,7 @@
  * 生成任务实时状态卡片：嵌入聊天消息流，随聊天内容滚动。
  * 阶段进度 + 状态 + 失败重试，替代原右侧固定 GenerationPanel（不再遮挡聊天）。
  */
-import { computed } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { Loading } from '@element-plus/icons-vue';
 import { JOB_STAGES, isTerminalStatus } from '../../../api/jobs';
 import type { JobStatus } from '../../../composables/useAssistantChat';
@@ -33,6 +33,21 @@ const running = computed(() => !isTerminalStatus(props.job.status));
 const canRetry = computed(
   () => props.job.status === 'failed' || props.job.status === 'insufficient_balance',
 );
+/** 进度事件容器：新事件到达时滚动到底部，跟随最新消息。 */
+const eventsBox = ref<HTMLElement | null>(null);
+watch(
+  () => props.job.events?.length,
+  async () => {
+    await nextTick();
+    eventsBox.value?.scrollTo({ top: eventsBox.value.scrollHeight });
+  },
+);
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleTimeString('zh-CN', { hour12: false });
+}
 </script>
 <template>
   <div class="job-card">
@@ -53,6 +68,12 @@ const canRetry = computed(
     <el-steps :active="stageIndex + 1" finish-status="success" simple class="job-steps">
       <el-step v-for="stage in JOB_STAGES" :key="stage.value" :title="stage.label" />
     </el-steps>
+    <div v-if="job.events?.length" ref="eventsBox" class="job-events">
+      <div v-for="event in job.events" :key="event.id" class="job-event">
+        <span class="event-time">{{ formatTime(event.createdAt) }}</span>
+        <span class="event-text">{{ event.content }}</span>
+      </div>
+    </div>
     <div v-if="job.failureMessage" class="job-failure">{{ job.failureMessage }}</div>
     <div v-if="canRetry" class="job-actions">
       <el-button size="small" type="primary" :disabled="disabled" @click="emit('retry')">
@@ -67,6 +88,10 @@ const canRetry = computed(
 .job-title { font-size: 13px; font-weight: 600; }
 .spacer { flex: 1; }
 .job-steps { margin-top: 8px; }
+.job-events { margin-top: 8px; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.job-event { font-size: 12px; line-height: 1.5; color: var(--el-text-color-regular); }
+.event-time { color: var(--el-text-color-secondary); margin-right: 6px; font-variant-numeric: tabular-nums; }
+.event-text { white-space: pre-wrap; word-break: break-all; }
 .job-failure { margin-top: 8px; font-size: 12px; color: var(--el-color-danger); word-break: break-all; }
 .job-actions { margin-top: 8px; }
 .spin { animation: job-spin 1.2s linear infinite; }

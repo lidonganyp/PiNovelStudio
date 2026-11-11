@@ -18,7 +18,8 @@ import {
   type FailureEnvelope,
   type StewardView,
 } from '../api/assistant';
-import { getJob, retryGeneration, isTerminalStatus } from '../api/jobs';
+import { getJob, getJobEvents, retryGeneration, isTerminalStatus } from '../api/jobs';
+import type { JobEvent } from '../api/jobs';
 
 export interface ContextManifest {
   profile?: string;
@@ -56,6 +57,8 @@ export interface JobStatus {
   status: string;
   progressStage: string | null;
   failureMessage: string | null;
+  /** 进度事件（阶段消息/评审意见全文），随轮询刷新。 */
+  events?: JobEvent[];
 }
 
 export interface AssistantChatOptions {
@@ -118,10 +121,32 @@ export function useAssistantChat(options: AssistantChatOptions) {
             void options.reloadMaterials?.({ tab: 'chapter', chapterNumber: message.job.chapterNumber });
           }
         }
+        // 进度事件：与任务详情同轮拉取（阶段消息/评审意见全文）。
+        // 拉取失败保留已有事件，随下一轮状态轮询重试。
+        try {
+          const events = await getJobEvents(jobId);
+          const target = messages.value.find((item) => item.job?.jobId === jobId);
+          if (target?.job) {
+            target.job = { ...target.job, events };
+          }
+        } catch {
+          /* 事件拉取失败：不影响状态轮询 */
+        }
         if (!isTerminalStatus(String(job.status))) {
           jobTimers.set(jobId, setTimeout(tick, 2000));
         } else {
           jobTimers.delete(jobId);
+          // 终态后补拉一次事件：捕获仍在途的最后一批进度消息（如收尾 done 事件）。
+          setTimeout(() => {
+            void getJobEvents(jobId)
+              .then((events) => {
+                const target = messages.value.find((item) => item.job?.jobId === jobId);
+                if (target?.job) target.job = { ...target.job, events };
+              })
+              .catch(() => {
+                /* 补拉失败：保留已有事件 */
+              });
+          }, 2000);
         }
       } catch {
         jobTimers.set(jobId, setTimeout(tick, 4000));
@@ -135,7 +160,7 @@ export function useAssistantChat(options: AssistantChatOptions) {
       const next = await retryGeneration(jobId);
       const message = messages.value.find((item) => item.job?.jobId === jobId);
       if (message?.job) {
-        message.job = { ...message.job, jobId: next.jobId, status: 'pending', progressStage: null, failureMessage: null };
+        message.job = { ...message.job, jobId: next.jobId, status: 'pending', progressStage: null, failureMessage: null, events: [] };
         pollJob(next.jobId);
       } else {
         trackJob(next.jobId);

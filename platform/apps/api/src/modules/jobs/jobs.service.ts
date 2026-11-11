@@ -668,6 +668,46 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * 内部进度事件落库（进度消息/评审意见全文）。
+   * job 不存在时静默忽略（兼容仅 hold 的 Phase-2 路径）。
+   * 事件表是 append-only 日志：终态后到达的迟到事件（如最后阶段 done）仍写入，
+   * 不触碰任务状态字段，不影响 durable 终态转换。
+   */
+  async appendJobEvent(input: {
+    jobId: string;
+    stage: string;
+    content: string;
+  }): Promise<void> {
+    const job = await this.prisma.novelGenerationJob.findUnique({
+      where: { jobId: input.jobId },
+      select: { jobId: true },
+    });
+    if (!job) return;
+    await this.prisma.novelGenerationJobEvent.create({
+      data: {
+        jobId: input.jobId,
+        stage: input.stage,
+        content: input.content,
+      },
+    });
+  }
+
+  /** 任务进度事件列表（用户态，归属校验后按时间正序返回）。 */
+  async getJobEvents(userId: number, jobId: string): Promise<unknown[]> {
+    await this.getJob(userId, jobId);
+    const rows = await this.prisma.novelGenerationJobEvent.findMany({
+      where: { jobId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      stage: row.stage,
+      content: row.content,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
   /** 任务逐调用明细。 */
   async getCalls(userId: number, jobId: string): Promise<unknown[]> {
     await this.getJob(userId, jobId);

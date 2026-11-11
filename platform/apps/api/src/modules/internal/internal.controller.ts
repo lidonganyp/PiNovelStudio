@@ -17,6 +17,7 @@ import { JobsService } from '../jobs/jobs.service';
 import { RatesService } from '../rates/rates.service';
 import { CreateHoldDto } from './dto/create-hold.dto';
 import { FinalizeHoldDto } from './dto/finalize-hold.dto';
+import { JobEventDto } from './dto/job-event.dto';
 import { JobStatusDto } from './dto/job-status.dto';
 import { SettleCallDto } from './dto/settle-call.dto';
 import { HmacGuard } from './hmac.guard';
@@ -81,6 +82,21 @@ export class InternalController {
   async credentials(): Promise<{ providers: unknown }> {
     const providers = await this.rates.listEnabledCredentials();
     return { providers };
+  }
+
+  /** POST /internal/jobs/:jobId/events（进度事件落库：阶段消息/评审意见全文） */
+  @Post('jobs/:jobId/events')
+  @HttpCode(200)
+  async appendJobEvent(
+    @Param('jobId') jobId: string,
+    @Body() dto: JobEventDto,
+  ): Promise<Record<string, unknown>> {
+    await this.jobs.appendJobEvent({
+      jobId,
+      stage: dto.stage,
+      content: dto.content,
+    });
+    return { jobId, accepted: true };
   }
 
   /** POST /internal/jobs/:jobId/status */
