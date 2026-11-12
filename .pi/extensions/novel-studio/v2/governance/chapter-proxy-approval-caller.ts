@@ -46,7 +46,7 @@ import type {
   RecommendedSource,
   AnonymousMapping,
 } from "./chapter-proxy-approval-types.js";
-import { localizeLlmMessages, localizeLlmText } from "../../utils/llm-language-guard.js";
+import { delocalizeLlmJsonText, localizeLlmMessages, localizeLlmText } from "../../utils/llm-language-guard.js";
 import { callOpenAIResponses, usesConfiguredResponsesEndpoint } from "../../api/openai-responses.js";
 import {
   CHAPTER_PROXY_APPROVAL_REVIEWER_MODEL,
@@ -507,7 +507,9 @@ export async function callOpenAIChatCompletions(
       timeoutMs: options?.timeoutMs ?? 60000,
       jsonMode: options?.responseFormat === "json_object",
     });
-    return { text: response.choices[0].message.content, model: response.model, durationMs: Date.now() - started };
+    const responsesDurationMs = Date.now() - started;
+    console.log(`[JudgeCallEnd] endpoint=responses model=${response.model} durationMs=${responsesDurationMs} textLen=${response.choices[0].message.content.length} head=${JSON.stringify(response.choices[0].message.content.slice(0, 160))}`);
+    return { text: delocalizeLlmJsonText(response.choices[0].message.content), model: response.model, durationMs: responsesDurationMs };
   }
   const body: Record<string, unknown> = {
     model: modelId,
@@ -550,10 +552,12 @@ export async function callOpenAIChatCompletions(
         `callOpenAIChatCompletions: 响应缺少 choices[0].message.content（响应：${JSON.stringify(data).slice(0, 200)}）`,
       );
     }
+    const chatDurationMs = Date.now() - start;
+    console.log(`[JudgeCallEnd] endpoint=chat model=${data.model ?? modelId} durationMs=${chatDurationMs} textLen=${content.length} head=${JSON.stringify(content.slice(0, 160))}`);
     return {
-      text: content,
+      text: delocalizeLlmJsonText(content),
       model: data.model ?? modelId,
-      durationMs: Date.now() - start,
+      durationMs: chatDurationMs,
     };
   } catch (e) {
     if ((e as Error).name === "AbortError") {
@@ -693,7 +697,7 @@ export function createOpenAIChatCompletionsFn(options: {
         timeoutMs: callOpts?.timeoutMs ?? 300000,
         jsonMode: callOpts?.responseFormat === "json_object",
       });
-      return { text: response.choices[0].message.content, model: response.model, durationMs: Date.now() - started };
+      return { text: delocalizeLlmJsonText(response.choices[0].message.content), model: response.model, durationMs: Date.now() - started };
     }
     const requestBody: Record<string, unknown> = {
       model: modelId,
@@ -736,7 +740,7 @@ export function createOpenAIChatCompletionsFn(options: {
       const model = data?.model ?? modelId;
       const durationMs = Date.now() - startMs;
 
-      return { text, model, durationMs };
+      return { text: delocalizeLlmJsonText(text), model, durationMs };
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
       // 区分超时与其他错误，便于上层 envelope 归因

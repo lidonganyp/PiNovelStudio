@@ -39,6 +39,7 @@ import type { ModelGenerateFn, ModelGenerateInput } from "../adapters/legacy-mod
 import { createEditorialOpportunityJudge } from "./editorial-opportunity-judge.js";
 import { createLanguageRiskLibrary } from "./language-risk-library.js";
 import { buildChineseAiLanguageGuidance } from "../../craft/chinese-ai-language-guidance.js";
+import { assertChapterProseOutput } from "../../utils/llm-language-guard.js";
 import type { EditorialHypothesis } from "./editorial-hypothesis.js";
 import {
   createEditorialCandidateGenerator,
@@ -1204,9 +1205,9 @@ export class UnifiedOrchestrator {
     // 阶段计时 helper：async 与 sync 两种，finally 保证早返回也记录已完成阶段。
     // 同时通过 onUpdate 向前端推送阶段进度（ProgressEvent），避免长时间无响应被前端误判超时。
     const STAGE_MESSAGES: Record<string, string> = {
-      stage1_novelosAgentic: "NovelOS Agentic 生成初稿中（最耗时，约 5-15 分钟）",
+      stage1_novelosAgentic: "NovelOS Agentic 生成初稿中（通常约 1-2 分钟）",
       stage2_agenticFactGuard: "Agentic 事实守门检查中",
-      stage3_authorStyleOptimization: "作者风格整章优化中（通常 5-15 分钟，超时会自动重试一次）",
+      stage3_authorStyleOptimization: "作者风格整章优化中（通常约 30 秒-1 分钟，超时会自动重试一次）",
       stage4_storyPreservation: "故事保持性检查中",
       stage4a_authorStyleRetryUnverifiable: "作者风格优化重试中（事实不可验证，已缩减指导）",
       stage4a_authorStyleRetryDrift: "作者风格优化重试中（漂移修正）",
@@ -2337,7 +2338,7 @@ export class UnifiedOrchestrator {
             "作者风格档案缺失或没有可消费的定性指导，本次以未优化初稿交付；补充风格档案后可重新生成本章以获得风格优化版本。",
           );
           stageResults.styleOptimizationBlocked = {
-            reason: "no_guidance_degraded_to_raw",
+            reason: "style_failure_degraded_to_raw",
             failureKind,
             failureReason: styleResult.failureReason ?? "未产出候选",
             recoverable: true,
@@ -2345,37 +2346,21 @@ export class UnifiedOrchestrator {
           };
           return this.deliverRaw(input, agenticCandidate, warnings, stageResults, null, [], candidates);
         }
+        // 风格优化失败（任何类型，阶段内重试已耗尽）降级交付 Agentic 初稿
+        // （用户原则：小说必须生成成功，最终决策由用户决定——与 STYLE-DEGRADE-1 同理，
+        // 用户已为初稿付费，风格优化通道故障不应丢弃有效初稿）。
+        // 交付的初稿仍会经过提交前正文契约硬门校验，确保是真实章节正文。
+        warnings.push(
+          `作者风格优化未能完成（${failureKind}），本次以未优化初稿交付，请人工审阅后定稿；可稍后重新生成本章以获得风格优化版本。`,
+        );
         stageResults.styleOptimizationBlocked = {
-          reason: "no_candidate",
+          reason: "style_failure_degraded_to_raw",
           failureKind,
           failureReason: styleResult.failureReason ?? "未产出候选",
-          recoverable: false,
+          recoverable: true,
           inStageRetryAttempted: transientStyleFailure,
         };
-        return this.hardBlock(
-          input,
-          "style_optimization_no_candidate",
-          `作者风格整章优化未产出候选（${failureKind}）：${styleResult.failureReason ?? "未产出候选"}。Agentic 初稿仅作 blocked evidence 保留，不交付。`,
-          stageResults,
-          {
-            rawText: agenticCandidate.text,
-            rawFinishReason: agenticCandidate.finishReason ?? null,
-            rawMaxTokens: agenticCandidate.maxTokens ?? null,
-            rawModel: agenticCandidate.model,
-            modelVersion: detectModelVersion(agenticCandidate.model),
-            candidateId: agenticCandidate.id,
-          },
-          {
-            gate: "style_optimization",
-            severityOverride: "hard",
-            recoverable: false,
-            candidateDisposition: "blocked_evidence_only",
-            prohibitedActions: [
-              "accept_or_deliver_blocked_candidate",
-              "save_blocked_candidate_as_chapter",
-            ],
-          },
-        );
+        return this.deliverRaw(input, agenticCandidate, warnings, stageResults, null, [], candidates);
       }
       let styledCandidate: Candidate = initialStyledCandidate;
       // MA：若首次未记（transient 失败后重试成功），此处补记 author_style ok
@@ -3525,7 +3510,7 @@ export class UnifiedOrchestrator {
       // ── REVIEW-LOOP-1：评审智能体三轮闭环（stage5 之后、提交之前）──
       // 评审（gpt-6.1-sol 独立通道，NOVELOS_JUDGE_*）→ 修改（主写作通道）→ 再评审，
       // 最多 3 轮；通过（无 must_fix）提前终止；三轮不通过交付 V3 + 未解决清单。
-      // 评审/修改失败不阻断交付（质量增强，非硬门）；eval/preview 模式跳过。
+      // 评审无效（空评审/评审通道异常）不阻断交付：正文照常提交并附醒目警示，交用户终审；修改失败保留当前文本继续；eval/preview 模式跳过。
       if (!input.evalMode && !input.fullPipelinePreview) {
         const reviewLoop = await timeAsync("review_loop", () =>
           runReviewLoop({
@@ -3543,6 +3528,7 @@ export class UnifiedOrchestrator {
         stageResults.reviewLoop = {
           executed: reviewLoop.executed,
           passed: reviewLoop.passed,
+          invalidReview: reviewLoop.invalidReview,
           rounds: reviewLoop.rounds.map((round) => ({
             round: round.round,
             passed: round.passed,
@@ -3558,6 +3544,24 @@ export class UnifiedOrchestrator {
         };
         if (reviewLoop.executed && reviewLoop.finalText && reviewLoop.finalText !== styledCandidate.text) {
           styledCandidate = { ...styledCandidate, text: reviewLoop.finalText };
+        }
+        // 评审无效（空评审/评审通道异常）：不阻断交付——正文照常提交，
+        // 醒目警示交用户终审（用户原则：小说必须生成成功，最终决策由用户决定）。
+        if (reviewLoop.invalidReview) {
+          warnings.push(
+            "评审智能体无效（空评审或评审通道异常）：本章正文未经有效评审确认，请人工审阅后定稿",
+          );
+          try {
+            input.onUpdate?.({
+              stage: "review_loop",
+              status: "done",
+              message:
+                "评审服务异常（连续空评审）：本章正文已照常交付，未经有效评审确认，请人工审阅后定稿",
+              timestamp: new Date().toISOString(),
+            } as ProgressEvent);
+          } catch {
+            // 进度推送失败不影响交付
+          }
         }
       }
 
@@ -3585,6 +3589,36 @@ export class UnifiedOrchestrator {
         );
       }
 
+      // fail-closed：提交前正文契约硬门——最终正文必须是真实章节散文，
+      // 供应商拦截/拒答说明、编码残留、过短文本一律不得进入 commitAndSave。
+      // 与 preCommit 守卫一致：preview 模式仅记录不阻断。
+      let proseContractError: string | null = null;
+      try {
+        assertChapterProseOutput(styledCandidate.text);
+      } catch (proseErr) {
+        proseContractError = (proseErr as Error).message;
+      }
+      stageResults.chapterProseContract = proseContractError
+        ? { ok: false, error: proseContractError }
+        : { ok: true };
+      if (proseContractError && !input.fullPipelinePreview) {
+        return this.hardBlock(
+          input,
+          "chapter_prose_contract",
+          `提交前正文契约校验失败：${proseContractError}`,
+          stageResults,
+          {
+            rawText: agenticCandidate.text,
+            rawFinishReason: agenticCandidate.finishReason ?? null,
+            rawMaxTokens: agenticCandidate.maxTokens ?? null,
+            rawModel: agenticCandidate.model,
+            modelVersion: detectModelVersion(agenticCandidate.model),
+            candidateId: styledCandidate.id,
+            selectedSource: "editorial",
+            finalText: styledCandidate.text,
+          },
+        );
+      }
       let commitOutcome: { ok: boolean; error?: string; stateCommit: { committed: number; rejected: number } | null };
       if (input.fullPipelinePreview) {
         commitOutcome = { ok: true, stateCommit: null };
@@ -5427,7 +5461,7 @@ export class UnifiedOrchestrator {
     // 正式生产：Agentic 初稿必须经作者风格优化；失败只能 retry/checkpoint/blocked。
     const styleBlocked = stageResults.styleOptimizationBlocked as
       { reason?: string } | undefined;
-    const noGuidanceDegraded = styleBlocked?.reason === "no_guidance_degraded_to_raw";
+    const noGuidanceDegraded = styleBlocked?.reason === "style_failure_degraded_to_raw";
     if (
       input.productionFlow === "agentic_style" &&
       !input.evalMode &&

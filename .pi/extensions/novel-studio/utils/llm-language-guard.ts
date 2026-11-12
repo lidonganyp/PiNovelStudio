@@ -164,9 +164,105 @@ function findUniqueIndex(text: string, search: string): number {
   if (first < 0) return -1;
   return text.indexOf(search, first + 1) < 0 ? first : -1;
 }
+// ============================================================================
+// 响应侧定点解码（2026-11-12 遗留项①：评审通道键名编码根因修复）
+// 请求经 localizeLlmMessages 编码后，模型按编码 schema 应答，JSON 键名与枚举值
+// 被逐字母映射为天干地支（如 summary→申戌寅寅甲未玄）。此前只编码请求、不解码
+// 响应，导致标准键全部落空（空评审根因）。解码仅处理 JSON 结构内的纯别名键名与
+// 白名单枚举值，中文散文值原样保留；JSON 解析失败时原样透传，行为与现状一致。
+// ============================================================================
+const ALIAS_CHAR_SET: ReadonlySet<string> = new Set(LATIN_LETTER_ALIASES.split(""));
+const ALIAS_DECODE_MAP: ReadonlyMap<string, string> = new Map(
+  LATIN_LETTER_ALIASES.split("").map((ch, index) => [ch, String.fromCharCode(65 + index)]),
+);
+const LOWERCASE_ENUM_VALUES: ReadonlySet<string> = new Set([
+  "must_fix",
+  "should_fix",
+  "suggestion",
+  "story_structure",
+  "character",
+  "prose_style",
+  "consistency",
+]);
+const UPPERCASE_ENUM_VALUES: ReadonlySet<string> = new Set([
+  "PROXY_APPROVED",
+  "HOLD_FOR_REGENERATION",
+]);
+const CAMEL_KEY_NORMALIZATIONS: Readonly<Record<string, string>> = {
+  recommendedlabel: "recommendedLabel",
+  winningspans: "winningSpans",
+  losingspans: "losingSpans",
+  revisedtext: "revisedText",
+  revisionnotes: "revisionNotes",
+};
+function isPureAliasToken(token: string): boolean {
+  return token.length > 0 && [...token].every((ch) => ch === "_" || ALIAS_CHAR_SET.has(ch));
+}
+function decodeAliasToken(token: string): string {
+  return [...token].map((ch) => ALIAS_DECODE_MAP.get(ch) ?? ch).join("");
+}
+function decodeAliasJsonKey(key: string): string {
+  if (!isPureAliasToken(key)) return key;
+  const lowered = decodeAliasToken(key).toLowerCase();
+  return CAMEL_KEY_NORMALIZATIONS[lowered] ?? lowered;
+}
+function decodeAliasJsonStringValue(value: string): string {
+  if (value.length > 40 || !isPureAliasToken(value)) return value;
+  const decoded = decodeAliasToken(value);
+  if (/^[A-Z]$/.test(decoded)) return decoded;
+  if (UPPERCASE_ENUM_VALUES.has(decoded)) return decoded;
+  const lowered = decoded.toLowerCase();
+  if (LOWERCASE_ENUM_VALUES.has(lowered)) return lowered;
+  return value;
+}
+function decodeAliasJsonNode(value: unknown): unknown {
+  if (typeof value === "string") return decodeAliasJsonStringValue(value);
+  if (Array.isArray(value)) return value.map(decodeAliasJsonNode);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      out[decodeAliasJsonKey(key)] = decodeAliasJsonNode(item);
+    }
+    return out;
+  }
+  return value;
+}
+/**
+ * 对模型响应文本做定点解码：截取首个 { 至末个 } 的 JSON 片段尝试解析，成功则
+ * 解码纯别名键名与白名单枚举值后以解码结果替换原片段；任何一步失败都原样返回。
+ */
+export function delocalizeLlmJsonText(text: string): string {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return text;
+  const slice = text.slice(start, end + 1);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(slice);
+  } catch {
+    return text;
+  }
+  if (parsed === null || typeof parsed !== "object") return text;
+  const decoded = decodeAliasJsonNode(parsed);
+  return text.slice(0, start) + JSON.stringify(decoded) + text.slice(end + 1);
+}
 /** Reject explicit writing-analysis protocol blocks; ordinary foreign language prose remains valid. */
 export function assertChapterProseOutput(text: string): void {
   const markers = /(?:^|\n)\s*(?:<\/?(?:think|analysis)>|\[(?:analysis|thinking)\]|#{1,6}\s*(?:analysis|thinking(?: process)?|writing plan|润色计划|写作分析)\s*(?:[:：]|$)|(?:润色计划|写作分析|思考过程|写作思路)\s*[:：])/im;
   const selfPlanning = /^\s*(?:okay[,!.]?\s*)?(?:let['’]s\s+(?:plan|analy[sz]e|think through)\b|(?:i|we)\s+(?:need to|will|must)\s+(?:write|rewrite|polish|generate)\s+(?:this|the|a)\s+(?:chapter|story|prose|text)\b)/i;
   if (markers.test(text) || selfPlanning.test(text)) throw new Error('chapter_output_contract: 模型将写作分析混入正文，必须仅返回正文后重试；未删除或交付污染文本');
+
+  // fail-closed：供应商账号策略拦截 / 拒答 / 编码拦截提示 / 过短输出一律不得作为正文交付
+  const providerBlocked = /request\s+(?:is\s+)?blocked|prohibited\s+(?:use\s+)?policy|account\s+restrictions?|policy\s+violation|send\s+feedback|aistudio\.google\.com|账号(?:限制|受限|封禁)|策略拦截|内容安全拦截|生成请求被拦截|根据.*?政策.*?无法|违反.*?使用政策/i;
+  const refusalNotice = /请重新粘贴|并非小说正文|并非.*?正文|没有实际.*?正文|无法(?:为你|为您)?(?:完成|进行)?(?:润色|优化|改写|续写)|不能凭空编造|提供(?:正确|完整)的?(?:初稿|正文|文本)|作为\s*(?:AI|人工智能)\s*助手我(?:不能|无法)/;
+  if (providerBlocked.test(text) || refusalNotice.test(text)) {
+    throw new Error('chapter_output_contract: 模型返回供应商拦截/拒答说明而非章节正文，必须阻断交付并重试；未删除或交付污染文本');
+  }
+  const aliasRun = new RegExp(`[${LATIN_LETTER_ALIASES}]{6,}`);
+  if (aliasRun.test(text)) {
+    throw new Error('chapter_output_contract: 检测到疑似供应商拦截文本的编码残留（天干地支连排），必须阻断交付并重试；未删除或交付污染文本');
+  }
+  if (text.trim().length < 200) {
+    throw new Error(`chapter_output_contract: 输出不足 200 字（实际 ${text.trim().length} 字），不可能是完整章节正文，必须阻断交付并重试；未删除或交付污染文本`);
+  }
 }

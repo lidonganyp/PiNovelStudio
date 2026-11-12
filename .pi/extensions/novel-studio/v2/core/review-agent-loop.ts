@@ -56,6 +56,7 @@ export interface ReviewRound {
 export interface ReviewLoopResult {
   executed: boolean;
   passed: boolean;
+  invalidReview: boolean;
   rounds: ReviewRound[];
   finalText: string;
   unresolvedIssues: ReviewIssue[];
@@ -240,12 +241,15 @@ async function runReviewOnce(
     { timeoutMs: REVIEW_TIMEOUT_MS, responseFormat: "json_object" },
   );
   const parsed = extractJson(result.text);
-  return {
-    summary: typeof parsed.summary === "string" ? parsed.summary : "",
-    issues: normalizeIssues(parsed.issues),
-    model: result.model,
-    durationMs: result.durationMs,
-  };
+  const summary = typeof parsed.summary === "string" ? parsed.summary : "";
+  const issues = normalizeIssues(parsed.issues);
+  // 空评审观测：评审通道返回可解析但内容为空的 JSON 时，记录原始应答供诊断（此前完全无日志）
+  if (issues.length === 0 && !summary.trim()) {
+    console.warn(
+      `[ReviewEmpty] 评审通道返回空评审 model=${result.model} durationMs=${result.durationMs} rawHead=${JSON.stringify(result.text.slice(0, 300))}`,
+    );
+  }
+  return { summary, issues, model: result.model, durationMs: result.durationMs };
 }
 
 interface RevisionOnceResult {
@@ -310,6 +314,7 @@ export async function runReviewLoop(input: ReviewLoopInput): Promise<ReviewLoopR
   const rounds: ReviewRound[] = [];
   let currentText = input.text;
   let passed = false;
+  let invalidReview = false;
   let unresolvedIssues: ReviewIssue[] = [];
   let executed = false;
 
@@ -321,11 +326,13 @@ export async function runReviewLoop(input: ReviewLoopInput): Promise<ReviewLoopR
       const review = await runReviewOnce(input, currentText, previousIssues);
       executed = true;
       const mustFixCount = review.issues.filter((issue) => issue.severity === "must_fix").length;
-      const roundPassed = mustFixCount === 0;
+      // fail-closed：空评审（无问题清单且无总评）视为无效评审，不得据此判通过
+      const roundInvalid = review.issues.length === 0 && !review.summary.trim();
+      const roundPassed = mustFixCount === 0 && !roundInvalid;
       let revisedText: string | null = null;
       let revisionNotes: string | null = null;
       let revisionModel: string | null = null;
-      if (!roundPassed && round < REVIEW_LOOP_MAX_ROUNDS) {
+      if (!roundInvalid && !roundPassed && round < REVIEW_LOOP_MAX_ROUNDS) {
         emit(input, `review_loop_revise_${round}`, "start", `根据第 ${round} 轮评审意见修改中`);
         try {
           const revision = await runRevisionOnce(input, currentText, review.issues);
@@ -365,14 +372,27 @@ export async function runReviewLoop(input: ReviewLoopInput): Promise<ReviewLoopR
         `review_loop_round_${round}`,
         "done",
         [
-          `第 ${round} 轮评审${roundPassed ? "通过" : "未通过"}（必须修改 ${mustFixCount} 项）`,
+          roundInvalid
+            ? `第 ${round} 轮评审无效：评审通道（模型 ${review.model || "未知"}）返回空评审——无问题清单且无总评，耗时 ${review.durationMs}ms，原始应答已记入 runtime 日志；不判通过`
+            : `第 ${round} 轮评审${roundPassed ? "通过" : "未通过"}（必须修改 ${mustFixCount} 项）`,
           `总评：${review.summary || "（未提供）"}`,
           `问题清单：\n${formatIssues(review.issues)}`,
         ].join("\n"),
       );
       if (roundPassed) {
         passed = true;
+        invalidReview = false;
         unresolvedIssues = review.issues;
+        break;
+      }
+      if (roundInvalid) {
+        invalidReview = true;
+        if (round < REVIEW_LOOP_MAX_ROUNDS) {
+          // 无效评审：重试评审本身，不基于空意见进入修改
+          continue;
+        }
+        // 末轮仍无效：整轮评审无效，不判通过
+        unresolvedIssues = [];
         break;
       }
       if (round === REVIEW_LOOP_MAX_ROUNDS) {
@@ -384,22 +404,23 @@ export async function runReviewLoop(input: ReviewLoopInput): Promise<ReviewLoopR
         round,
         summary: "",
         issues: [],
-        passed: true,
+        passed: false,
         revisedText: null,
         revisionNotes: null,
         reviewModel: null,
         revisionModel: null,
         durationMs: Date.now() - roundStartedAt,
-        error: `第 ${round} 轮评审失败（不阻断交付）：${(reviewErr as Error).message}`,
+        error: `第 ${round} 轮评审失败（评审无效，不判通过）：${(reviewErr as Error).message}`,
       });
       emit(
         input,
         `review_loop_round_${round}`,
         "done",
-        `第 ${round} 轮评审失败（保留当前文本交付）：${(reviewErr as Error).message}`,
+        `第 ${round} 轮评审失败（评审无效，不判通过）：${(reviewErr as Error).message}`,
       );
-      // 评审通道故障：终止循环，交付当前文本
-      passed = true;
+      // fail-closed：评审通道故障时评审无效，不得据此判通过
+      invalidReview = true;
+      passed = false;
       unresolvedIssues = [];
       break;
     }
@@ -408,6 +429,7 @@ export async function runReviewLoop(input: ReviewLoopInput): Promise<ReviewLoopR
   const result: ReviewLoopResult = {
     executed,
     passed,
+    invalidReview,
     rounds,
     finalText: currentText,
     unresolvedIssues,

@@ -6,7 +6,6 @@ import { PRODUCTION_BILLING_MODEL_ROUTES } from '../../config/env';
 import { RatesService } from '../rates/rates.service';
 import { BillingService } from './billing.service';
 import { computeChargeFen } from './money';
-import { HoldExhaustedException } from './billing.errors';
 
 export interface ReserveTransport {
   jobId: string; callId: string; route: string; model: string; requestHash: string;
@@ -48,19 +47,14 @@ export class TransportBudgetService {
       if (!['pending', 'running'].includes(job.status) || execution.deadlineAt <= Date.now()) throw new ConflictException('生成授权已结束');
       const hold = await tx.novelBalanceHold.findUniqueOrThrow({ where: { jobId: input.jobId } });
       if (hold.status !== 'active') throw new ConflictException('生成费用预占已结束');
-      const revision = job.revisionId ? await tx.novelRevision.findUniqueOrThrow({ where: { id: job.revisionId } }) : null;
       const siblings = job.revisionId ? await tx.novelGenerationJob.findMany({ where: { revisionId: job.revisionId } }) : [job];
-      const plan = revision?.plan as { perChapterFen?: number; totalFen?: number } | undefined;
-      const cost = (items: Entry[]): bigint => items.reduce((sum, e) => sum + BigInt(e.actualFen ?? e.maximumFen), 0n);
       const read = (value: unknown): Entry[] => (value as Execution | null)?.transports ?? [];
       const chapterEntries = siblings.filter((s) => s.chapterId === job.chapterId).flatMap((s) => read(s.execution));
-      const allEntries = siblings.flatMap((s) => read(s.execution));
       const isRecovery = input.recovery === true || siblings.some((s) => s.chapterId === job.chapterId && s.jobId !== job.jobId)
         || entries.some((e) => e.state === 'unknown' || (e.status ?? 0) >= 400);
       if (chapterEntries.length >= 25 || (isRecovery && chapterEntries.filter((e) => e.recovery).length >= 6)) throw new ConflictException('本章模型调用或恢复次数预算已用尽');
-      if (cost(entries) + maximumFen > hold.amount
-        || (plan?.perChapterFen !== undefined && cost(chapterEntries) + maximumFen > BigInt(plan.perChapterFen))
-        || (plan?.totalFen !== undefined && cost(allEntries) + maximumFen > BigInt(plan.totalFen))) throw new HoldExhaustedException('剩余预算不足以覆盖下一次模型调用的最大费用');
+      // 费用维度准入预检已移除（方案A：生成不阻断原则，保留上方调用次数防失控上限）；
+      // 费用由结算层 capAtHold 按预占余量封顶——超额部分免单，不中断半成品、平台不超卖。
       execution.transports = [...entries, { ...input, maximumFen: maximumFen.toString(), recovery: isRecovery, state: 'reserved', rate }];
       await tx.novelGenerationJob.update({ where: { jobId: input.jobId }, data: { execution: execution as unknown as Prisma.InputJsonValue } });
       return { admitted: true, maximumFen: maximumFen.toString(), alreadyAdmitted: false };
@@ -83,7 +77,8 @@ export class TransportBudgetService {
         if (input.tokensIn! > entry.inputTokenLimit || input.tokensOut! > entry.outputTokenLimit) throw new ConflictException('供应商用量超过预留上限，已阻断后续调用等待核对');
         const settled = await this.billing.settleCall({ jobId: input.jobId, callId: input.callId,
           internalStage: /amplif/.test(entry.route) ? 'style_optimizer' : 'agentic_raw', model: entry.route,
-          tokensIn: input.tokensIn!, tokensOut: input.tokensOut! }, entry.rate, tx as unknown as Prisma.TransactionClient);
+          // capAtHold：内容已生成、丢弃即浪费——按预占余量封顶结算，超额免单（方案A：不阻断、不超卖）
+          tokensIn: input.tokensIn!, tokensOut: input.tokensOut!, capAtHold: true }, entry.rate, tx as unknown as Prisma.TransactionClient);
         entry.actualFen = settled.actualCharge.toString(); entry.tokensIn = input.tokensIn; entry.tokensOut = input.tokensOut;
         entry.state = 'settled';
       } else { entry.state = 'unknown'; }

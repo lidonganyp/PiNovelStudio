@@ -355,9 +355,10 @@ export function createInvokeRouter(
           }
         };
       }
-      // 任务进度事件回调：提取事件 stage/message 全文，fire-and-forget 上报
+      // 任务进度事件回调：提取事件 stage/message 全文，按序上报
       // platform-api 落库（NovelGenerationJobEvent），供任务卡片聊天流回放。
-      // 上报失败只记日志，绝不影响生成主链路（回调内不 await，异常全部吞掉）。
+      // 上报失败只记日志，绝不影响生成主链路；per-job 串行链保证落库顺序与发出顺序一致（修复事件乱序）。
+      let jobEventChain: Promise<void> = Promise.resolve();
       const reportJobEvent = (event: unknown): void => {
         try {
           if (!jobCtx.jobId) return;
@@ -377,14 +378,16 @@ export function createInvokeRouter(
             ? `${status === "start" ? "开始" : "完成"}：${message}`
             : message;
           if (!stage && !content) return;
-          void deps.billingClient
-            .reportJobEvent({ jobId: jobCtx.jobId, stage, content })
-            .catch((error: unknown) => {
-              logger?.warn(
-                { jobId: jobCtx.jobId, stage, err: error },
-                "job event report failed",
-              );
-            });
+          jobEventChain = jobEventChain.then(() =>
+            deps.billingClient
+              .reportJobEvent({ jobId: jobCtx.jobId, stage, content })
+              .catch((error: unknown) => {
+                logger?.warn(
+                  { jobId: jobCtx.jobId, stage, err: error },
+                  "job event report failed",
+                );
+              }),
+          );
         } catch {
           // 进度上报构造失败不影响生成
         }
