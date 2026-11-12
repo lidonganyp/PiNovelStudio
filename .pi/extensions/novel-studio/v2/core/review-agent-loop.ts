@@ -163,6 +163,14 @@ function normalizeDimension(value: unknown): ReviewDimension {
     : "story_structure";
 }
 
+function normalizeDirection(record: Record<string, unknown>): string {
+  for (const key of ["direction", "suggestion", "fix", "advice"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
 function normalizeIssues(value: unknown): ReviewIssue[] {
   if (!Array.isArray(value)) return [];
   const issues: ReviewIssue[] = [];
@@ -171,12 +179,19 @@ function normalizeIssues(value: unknown): ReviewIssue[] {
     const record = item as Record<string, unknown>;
     const problem = typeof record.problem === "string" ? record.problem.trim() : "";
     if (!problem) continue;
+    const direction = normalizeDirection(record);
+    if (!direction) {
+      // direction 缺失观测：记录 issue 实际键名与问题开头，便于定位评审模型的 schema 遵循问题
+      console.warn(
+        `[ReviewDirectionMissing] issue 缺少 direction 字段 keys=${JSON.stringify(Object.keys(record))} problemHead=${JSON.stringify(problem.slice(0, 120))}`,
+      );
+    }
     issues.push({
       severity: normalizeSeverity(record.severity),
       dimension: normalizeDimension(record.dimension),
       location: typeof record.location === "string" ? record.location : "（未定位）",
       problem,
-      direction: typeof record.direction === "string" ? record.direction : "（未给出方向）",
+      direction: direction || "（未给出方向）",
     });
   }
   return issues;
@@ -195,9 +210,13 @@ function formatIssues(issues: ReviewIssue[]): string {
 const REVIEW_SYSTEM_PROMPT = [
   "你是一名独立的资深小说评审编辑，与作者相互独立，只评审、不改写正文。",
   "从读者视角评审，维度：故事结构（story_structure）、人物（character）、文字风格（prose_style）、设定一致性（consistency）。",
-  "severity 标准：must_fix=硬伤（情节矛盾、人设崩坏、设定冲突、严重逻辑漏洞）；should_fix=明显可改进；suggestion=锦上添花。",
-  "location 给出可定位的章节位置或引文片段；direction 给出具体修改方向，不给出改写后的文字。",
+  "severity 判定标准（严格执行）：",
+  "must_fix 仅限五类硬伤：(a) 与章卡不可违背事实冲突；(b) 情节、时间线或因果前后矛盾；(c) 人物行为无动机支撑或人设崩坏；(d) 与世界规则或既有事实冲突；(e) 导致后文无法成立的逻辑断裂。",
+  "must_fix 负面清单：文笔偏好、节奏快慢、详略取舍、风格习惯、描写重复等永远不得标 must_fix，至多 should_fix 或 suggestion。",
+  "should_fix=明显可改进但不影响故事成立；suggestion=锦上添花。",
+  "location 给出可定位的章节位置或引文片段；problem 只描述问题本身，禁止混入修改建议；direction 为必填独立字段，给出具体修改方向，不给出改写后的文字。",
   "输出 JSON：{\"summary\":\"总评（200字内）\",\"issues\":[{\"severity\":\"must_fix|should_fix|suggestion\",\"dimension\":\"story_structure|character|prose_style|consistency\",\"location\":\"...\",\"problem\":\"...\",\"direction\":\"...\"}]}",
+  "示例 issue：{\"severity\":\"must_fix\",\"dimension\":\"consistency\",\"location\":\"第 3 段\",\"problem\":\"主角前文已失去左臂，本章却用左手持剑\",\"direction\":\"改为单手持剑，或交代假肢、他人递剑的来源\"}",
   "没有需要指出的问题时 issues 为空数组。不要输出 JSON 以外的任何内容。",
 ].join("\n");
 
@@ -258,13 +277,34 @@ interface RevisionOnceResult {
   model: string;
 }
 
+const REVISION_MAX_LENGTH_CHANGE_RATIO = 0.35;
+
+function checkRevisionGuardrail(
+  before: string,
+  after: string,
+  notes: string,
+): { ok: boolean; reason: string } {
+  if (!after.trim()) return { ok: false, reason: "修改后正文为空" };
+  if (!notes.trim()) return { ok: false, reason: "修改说明为空，无法核对与评审意见的对应关系" };
+  if (before.length > 0) {
+    const ratio = Math.abs(after.length - before.length) / before.length;
+    if (ratio > REVISION_MAX_LENGTH_CHANGE_RATIO) {
+      return {
+        ok: false,
+        reason: `正文字数变化率 ${(ratio * 100).toFixed(1)}% 超过上限 ${REVISION_MAX_LENGTH_CHANGE_RATIO * 100}%`,
+      };
+    }
+  }
+  return { ok: true, reason: "" };
+}
+
 async function runRevisionOnce(
   input: ReviewLoopInput,
   text: string,
   issues: ReviewIssue[],
 ): Promise<RevisionOnceResult> {
   const userPrompt = [
-    "【评审意见】",
+    "【评审意见（must_fix 必须全部解决；should_fix 尽力解决，不得为此改动未点名内容；suggestion 不处理）】",
     formatIssues(issues),
     "【当前正文】",
     text,
@@ -335,17 +375,31 @@ export async function runReviewLoop(input: ReviewLoopInput): Promise<ReviewLoopR
       if (!roundInvalid && !roundPassed && round < REVIEW_LOOP_MAX_ROUNDS) {
         emit(input, `review_loop_revise_${round}`, "start", `根据第 ${round} 轮评审意见修改中`);
         try {
-          const revision = await runRevisionOnce(input, currentText, review.issues);
-          revisedText = revision.text;
-          revisionNotes = revision.notes;
-          revisionModel = revision.model;
-          currentText = revision.text;
-          emit(
-            input,
-            `review_loop_revise_${round}`,
-            "done",
-            `第 ${round} 轮修改完成。修改说明：\n${revision.notes || "（未提供）"}`,
+          const revisionIssues = review.issues.filter(
+            (issue) => issue.severity === "must_fix" || issue.severity === "should_fix",
           );
+          const revision = await runRevisionOnce(input, currentText, revisionIssues);
+          const guardrail = checkRevisionGuardrail(currentText, revision.text, revision.notes);
+          if (!guardrail.ok) {
+            // 护栏拦截：保留上一版文本，本轮不采纳修改，下一轮基于原文继续评审
+            emit(
+              input,
+              `review_loop_revise_${round}`,
+              "done",
+              `第 ${round} 轮修改被护栏拦截（保留上一版文本继续）：${guardrail.reason}`,
+            );
+          } else {
+            revisedText = revision.text;
+            revisionNotes = revision.notes;
+            revisionModel = revision.model;
+            currentText = revision.text;
+            emit(
+              input,
+              `review_loop_revise_${round}`,
+              "done",
+              `第 ${round} 轮修改完成。修改说明：\n${revision.notes || "（未提供）"}`,
+            );
+          }
         } catch (revisionErr) {
           emit(
             input,
@@ -424,6 +478,15 @@ export async function runReviewLoop(input: ReviewLoopInput): Promise<ReviewLoopR
       unresolvedIssues = [];
       break;
     }
+  }
+
+  if (executed && !passed && !invalidReview && unresolvedIssues.length > 0) {
+    emit(
+      input,
+      "review_loop_final",
+      "done",
+      `评审闭环结束：${REVIEW_LOOP_MAX_ROUNDS} 轮内未完全通过，交付当前最终稿。未解决清单：\n${formatIssues(unresolvedIssues)}`,
+    );
   }
 
   const result: ReviewLoopResult = {

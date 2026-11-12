@@ -42,6 +42,8 @@ export function runtimeInvokeFailure(
       status?: unknown;
       /** runtime 422 响应顶层字段：失败归档的 workspace 路径（含 traces/） */
       traceArchivePath?: unknown;
+      /** runtime 422 响应顶层字段：describeUndeliverableChapter 产出的真实原因摘要 */
+      message?: unknown;
     };
     const traceArchivePath = typeof value.traceArchivePath === 'string' && value.traceArchivePath.trim()
       ? value.traceArchivePath.trim()
@@ -83,6 +85,27 @@ export function runtimeInvokeFailure(
         fixInstructions: Array.isArray(raw.fixInstructions)
           ? raw.fixInstructions.filter((item): item is string => typeof item === 'string')
           : undefined,
+        traceArchivePath,
+      }));
+    }
+    // 422 响应的 message 字段：runtime 侧 describeUndeliverableChapter 已产出
+    // 真实失败原因摘要（含 failureEnvelope.reason 或底层 reason），
+    // 在 envelope 与顶层 reason 均缺失时作为失败原因，避免落入模糊兜底文案。
+    if (
+      typeof value.message === 'string' && value.message.trim()
+      && value.message.trim() !== '章节生成未产出可交付正文'
+      && value.message.trim() !== '章节生成未调用模型，未产出可交付正文'
+    ) {
+      const reason = value.message.trim();
+      const code = codeFromRuntimeReason(reason, value.status);
+      return new JobFailureError(makeFailure({
+        stage: stageForCode(code),
+        gate: typeof value.status === 'string' ? value.status : 'runtime',
+        code,
+        severity: severityForCode(code),
+        reason,
+        recoverable: isNonRecoverablePreflightCode(code) ? false : true,
+        retryPlan: isNonRecoverablePreflightCode(code) ? undefined : 'retry_same_stage',
         traceArchivePath,
       }));
     }

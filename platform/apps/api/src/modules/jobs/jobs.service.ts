@@ -421,6 +421,10 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     } = {},
   ): Promise<unknown> {
     await requireOwnedProject(this.prisma, userId, projectId);
+    // 默认字数软目标（约 2000 字/章）：api.solov.cc 渠道 100 秒响应限制下的稳定输出标准
+    // （实测约 34 字/秒，2400 字上限约 71 秒，稳定低于限制）。请求级 options.targetWordCount
+    // 优先；未显式传入时注入默认 {min:1800, max:2400}，流经 Agentic 初稿/风格优化/评审修改全链路。
+    const targetWordCount = options.targetWordCount ?? { min: 1800, max: 2400 };
     if (options.jobId) {
       const existing = await this.prisma.novelGenerationJob.findUnique({ where: { jobId: options.jobId } });
       if (existing) {
@@ -473,7 +477,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
           chapterId,
           chapterNumber: chapter.chapterNumber,
           continuationMode,
-          targetWordCount: options.targetWordCount,
+          targetWordCount,
         });
         assertRuntimeWorkspacePayloadFits({
           chapterNumber: chapter.chapterNumber,
@@ -532,7 +536,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       version: 1, deadlineAt: Date.now() + Math.min(options.timeoutMs ?? env.NOVEL_RUNTIME_REQUEST_TIMEOUT_MS, env.NOVEL_RUNTIME_REQUEST_TIMEOUT_MS),
       input: { userId, projectId, chapterId, jobId, revisionId: options.revisionId, maxCharge: maxCharge.toString(),
         chapterNumber: chapter.chapterNumber, chapterVersion: chapter.version, seedVersion: seed.version,
-        continuationMode, continuationDraft: chapter.content, targetWordCount: options.targetWordCount, runtimeWorkspaceInput },
+        continuationMode, continuationDraft: chapter.content, targetWordCount, runtimeWorkspaceInput },
     };
 
     try {
@@ -621,7 +625,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
         intent: seed.intent,
         continuationMode,
         continuationDraft: chapter.content,
-        targetWordCount: options.targetWordCount,
+        targetWordCount,
       });
     } else {
       await this.dispatchStoredJobs();
@@ -647,6 +651,45 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 任务详情（归属校验）。 */
+  /** 刷新恢复：项目下进行中 + 最近终态（30 分钟内）的章节生成任务，供前端重建聊天卡片。 */
+  async listRestorableJobs(userId: number, projectId: number): Promise<unknown[]> {
+    await requireOwnedProject(this.prisma, userId, projectId);
+    // 终态恢复窗口 30 分钟：窗口内完成的任务仍恢复卡片，用户能看到最终成败。
+    const terminalSince = new Date(Date.now() - 30 * 60 * 1000);
+    const rows = await this.prisma.novelGenerationJob.findMany({
+      where: {
+        userId,
+        projectId,
+        jobType: 'chapter_generation',
+        OR: [
+          { status: { in: ['pending', 'running'] } },
+          {
+            status: { in: ['succeeded', 'failed', 'insufficient_balance'] },
+            completedAt: { gte: terminalSince },
+          },
+        ],
+      },
+      orderBy: { startedAt: 'desc' },
+      take: 5,
+      include: { chapter: true },
+    });
+    return rows.map((job) => ({
+      jobId: job.jobId,
+      projectId: job.projectId,
+      chapterId: job.chapterId,
+      chapterNumber: job.chapter?.chapterNumber ?? null,
+      jobType: job.jobType,
+      status: job.status,
+      progressStage: job.progressStage,
+      maxCharge: fenToString(job.maxCharge),
+      settledAmount: fenToString(job.settledAmount),
+      failureMessage: job.failureMessage,
+      failure: readStoredFailure(job.failure, job.failureMessage),
+      startedAt: job.startedAt.toISOString(),
+      completedAt: job.completedAt?.toISOString() ?? null,
+    }));
+  }
+
   async getJob(userId: number, jobId: string): Promise<unknown> {
     const job = await this.prisma.novelGenerationJob.findFirst({
       where: { jobId, userId },

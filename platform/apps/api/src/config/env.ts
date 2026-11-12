@@ -70,6 +70,8 @@ function normalizeIpv6(host: string): string | null {
 export const PRODUCTION_BILLING_MODEL_ROUTES = [
   'v2_rawstage2_gemini31',
   'v2_amplified_gemini31',
+  'v2_rawstage2_gemini31_argon',
+  'v2_amplified_gemini31_argon',
 ] as const;
 
 const envSchema = z

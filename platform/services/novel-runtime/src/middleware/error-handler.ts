@@ -20,6 +20,8 @@ export interface AppError {
   code: string;
   message: string;
   statusCode: number;
+  /** 内部诊断详情：真实错误消息（不含堆栈/路径），供内部调用方 platform-api 生成用户可读的失败原因。 */
+  detail?: string;
 }
 
 /** 把任意错误归一化为 AppError（脱敏） */
@@ -96,12 +98,14 @@ export function normalizeError(err: unknown): AppError {
       code: "INTERNAL_ERROR",
       message: "内部错误",
       statusCode: 500,
+      detail: err.message.slice(0, 1000),
     };
   }
   return {
     code: "UNKNOWN_ERROR",
     message: "未知错误",
     statusCode: 500,
+    detail: String(err).slice(0, 1000),
   };
 }
 
@@ -112,6 +116,21 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     message: appError.message,
     // 不暴露 requestId 之外的细节（requestId 由中间件注入 res.locals）
     requestId: res.locals.requestId ?? "unknown",
+    // 内部错误详情：调用方是内部服务 platform-api（非终端用户），
+    // 以 failureEnvelope.reason 传递真实失败原因，供其写入任务失败信息供用户排查。
+    ...(appError.detail
+      ? {
+          failureEnvelope: {
+            code: appError.code,
+            stage: "runtime.invoke",
+            gate: "internal_error",
+            severity: "hard",
+            reason: appError.detail,
+            recoverable: true,
+            retryPlan: "retry_same_stage",
+          },
+        }
+      : {}),
     ...(err instanceof UsageReconciliationRequired ? {status:'blocked',failureEnvelope:{
       code:'generation_usage_unknown',stage:'runtime.accounting',gate:'usage_unknown',severity:'recoverable',
       reason:err.message,recoverable:true,retryPlan:'retry_same_stage',

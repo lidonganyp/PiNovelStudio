@@ -6,6 +6,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { Loading } from '@element-plus/icons-vue';
 import { JOB_STAGES, isTerminalStatus } from '../../../api/jobs';
+import { fenToYuan } from '../../../api/billing';
 import type { JobStatus } from '../../../composables/useAssistantChat';
 
 const props = defineProps<{ job: JobStatus; disabled?: boolean }>();
@@ -33,6 +34,13 @@ const running = computed(() => !isTerminalStatus(props.job.status));
 const canRetry = computed(
   () => props.job.status === 'failed' || props.job.status === 'insufficient_balance',
 );
+/** 终态费用展示：实际结算金额（分 → 元）；退款任务由消费明细页标注。 */
+const costText = computed(() => {
+  if (isTerminalStatus(props.job.status) && props.job.settledAmount != null && props.job.settledAmount !== '') {
+    return `本次消耗 ¥${fenToYuan(props.job.settledAmount)}`;
+  }
+  return '';
+});
 /** 进度事件容器：新事件到达时滚动到底部，跟随最新消息。 */
 const eventsBox = ref<HTMLElement | null>(null);
 watch(
@@ -55,6 +63,7 @@ function formatTime(iso: string): string {
       <el-icon v-if="running" class="spin"><Loading /></el-icon>
       <span class="job-title">第{{ job.chapterNumber ?? '?' }}章 · 生成任务</span>
       <el-tag :type="statusMeta.type" size="small">{{ statusMeta.text }}</el-tag>
+      <span v-if="costText" class="job-cost">{{ costText }}</span>
       <span class="spacer" />
       <el-button
         v-if="job.status === 'succeeded'"
@@ -86,6 +95,7 @@ function formatTime(iso: string): string {
 .job-card { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; background: var(--el-bg-color-page); }
 .job-head { display: flex; align-items: center; gap: 8px; }
 .job-title { font-size: 13px; font-weight: 600; }
+.job-cost { font-size: 12px; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
 .spacer { flex: 1; }
 .job-steps { margin-top: 8px; }
 .job-events { margin-top: 8px; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }

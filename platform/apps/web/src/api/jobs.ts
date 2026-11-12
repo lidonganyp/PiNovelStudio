@@ -36,6 +36,8 @@ export interface NovelJob {
   jobId: string;
   projectId: number;
   chapterId: number;
+  /** 章节号（restorable 列表返回，用于重建聊天卡片标题）。 */
+  chapterNumber?: number | null;
   jobType: string;
   status: JobStatus | string;
   progressStage: string | null;
@@ -68,6 +70,10 @@ export interface JobCall {
 
 export function getJob(jobId: string): Promise<NovelJob> {
   return http.get(`/jobs/${jobId}`).then((r) => r.data);
+}
+/** 刷新恢复：项目下进行中 + 最近终态的章节生成任务（重建聊天卡片用）。 */
+export function listRestorableJobs(projectId: number): Promise<NovelJob[]> {
+  return http.get('/jobs/restorable', { params: { projectId } }).then((r) => r.data);
 }
 
 export function retryGeneration(jobId: string): Promise<NovelJob> {

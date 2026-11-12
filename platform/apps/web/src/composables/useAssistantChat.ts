@@ -18,7 +18,7 @@ import {
   type FailureEnvelope,
   type StewardView,
 } from '../api/assistant';
-import { getJob, getJobEvents, retryGeneration, isTerminalStatus } from '../api/jobs';
+import { getJob, getJobEvents, retryGeneration, isTerminalStatus, listRestorableJobs } from '../api/jobs';
 import type { JobEvent } from '../api/jobs';
 
 export interface ContextManifest {
@@ -57,6 +57,8 @@ export interface JobStatus {
   status: string;
   progressStage: string | null;
   failureMessage: string | null;
+  /** 实际结算金额（分，字符串）：终态后展示本次消耗。 */
+  settledAmount?: string | null;
   /** 进度事件（阶段消息/评审意见全文），随轮询刷新。 */
   events?: JobEvent[];
 }
@@ -116,6 +118,7 @@ export function useAssistantChat(options: AssistantChatOptions) {
             status: String(job.status),
             progressStage: job.progressStage,
             failureMessage: job.failureMessage,
+            settledAmount: job.settledAmount,
           };
           if (job.status === 'succeeded') {
             void options.reloadMaterials?.({ tab: 'chapter', chapterNumber: message.job.chapterNumber });
@@ -195,6 +198,32 @@ export function useAssistantChat(options: AssistantChatOptions) {
         if (message.steward?.proposalId) latestProposals.set(message.steward.proposalId, message.steward);
       }
       for (const steward of latestProposals.values()) syncSteward(steward);
+      // 刷新恢复：重建进行中/最近终态任务的实时状态卡片。
+      // 后端 job 体系持久化（刷新不中断任务），这里只恢复展示与轮询。
+      try {
+        const restorable = await listRestorableJobs(projectId.value);
+        for (const job of restorable) {
+          const existing = messages.value.find((message) => message.job?.jobId === job.jobId);
+          if (existing?.job) continue;
+          messages.value.push({
+            id: nextLocalMessageId('local'),
+            role: 'assistant',
+            content: '',
+            job: {
+              jobId: job.jobId,
+              chapterNumber: job.chapterNumber ?? undefined,
+              status: String(job.status),
+              progressStage: job.progressStage,
+              failureMessage: job.failureMessage,
+              settledAmount: job.settledAmount,
+            },
+          });
+          // 进行中任务恢复轮询；终态任务只重建卡片（用户能看到最终成败）。
+          if (!isTerminalStatus(String(job.status))) pollJob(job.jobId);
+        }
+      } catch {
+        /* 恢复失败不阻断历史加载：聊天仍可用，仅缺任务卡片 */
+      }
     } catch {
       historyError.value = '聊天历史加载失败，请刷新后重试。';
     } finally {

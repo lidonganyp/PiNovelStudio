@@ -137,6 +137,10 @@ export type ModelGenerateFn = (input: ModelGenerateInput) => Promise<ModelGenera
  * it never changes channels or writer families.
  */
 export function authorizedWriterFallbackRoutes(route: string): string[] {
+  // Argon fallback: when carbon provider is unhealthy (503/524), switch to gemini-4-argon
+  // on the same OpenAI-compatible endpoint (same API key, different model name).
+  if (route === "v2_rawstage2_gemini31") return ["v2_rawstage2_gemini31_argon"];
+  if (route === "v2_amplified_gemini31") return ["v2_amplified_gemini31_argon"];
   return [];
 }
 
@@ -912,8 +916,8 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
     let usedRoute = input.route;
     for (const route of attemptedRoutes) {
       const manager = fallbackMod.createAPIFallbackManager({
-        totalTimeoutMs: candidateTimeoutMs,
-        ...(judgeMaxRetries === undefined ? {} : { maxRetries: judgeMaxRetries }),
+        totalTimeoutMs: candidateTimeoutMs * attemptedRoutes.length,
+        maxRetries: judgeMaxRetries ?? 1,
       });
       try {
         result = await manager.callWithFallback(

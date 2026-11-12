@@ -99,7 +99,7 @@ services:
       NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
       # Must exactly match runtime modelCalls.requestedRoute values, and each
       # key must have a current enabled model_rates row before API starts.
-      NOVEL_BILLING_REQUIRED_MODELS: v2_rawstage2_gemini31,v2_amplified_gemini31
+      NOVEL_BILLING_REQUIRED_MODELS: v2_rawstage2_gemini31,v2_amplified_gemini31,v2_rawstage2_gemini31_argon,v2_amplified_gemini31_argon
       # 默认关闭占位助手；配置 PLANNER_API_* 后可切 http 直连规划模型。
       PLANNER_MODE: ${PLANNER_MODE:-disabled}
       PLANNER_API_BASE_URL: ${PLANNER_API_BASE_URL:-}

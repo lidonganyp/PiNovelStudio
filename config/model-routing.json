@@ -682,6 +682,21 @@
         "chinese_naturalizer_ernie": 8192,
         "narrator_backup_ernie": 8192
       }
+    },
+    "gemini31_argon": {
+      "name": "Gemini 4 Argon fallback writer",
+      "base_url": "${GOOGLE_GEMINI_BASE_URL}",
+      "api_key_env": "GEMINI_API_KEY",
+      "model": "gemini-4-argon",
+      "protocol": "openai",
+      "temperature": {
+        "v2_rawstage2_gemini31_argon": 0.72,
+        "v2_amplified_gemini31_argon": 0.6
+      },
+      "max_tokens": {
+        "v2_rawstage2_gemini31_argon": 16384,
+        "v2_amplified_gemini31_argon": 16384
+      }
     }
   },
   "stage_routing": {
@@ -1217,6 +1232,22 @@
       "max_tokens": 8192,
       "fallback": [],
       "note": "NB-5: Reference-aware Judge Doubao 裁判路由。匿名 pairwise + 反向复判 + 5 维度评分 + span 引用。fallback=[] 保证失败时不回退。temperature=0.2 适合结构化判断；max_tokens=8192 容纳含 5 维度+span 的结构化 JSON。⚠️ 真正生效值见 providers.doubao.temperature.nb5_judge_doubao / providers.doubao.max_tokens.nb5_judge_doubao。lab-only。"
+    },
+    "v2_rawstage2_gemini31_argon": {
+      "provider": "gemini31_argon",
+      "model": "gemini-4-argon",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "fallback": [],
+      "note": "Argon fallback for v2_rawstage2 when carbon provider is unhealthy or exhausted."
+    },
+    "v2_amplified_gemini31_argon": {
+      "provider": "gemini31_argon",
+      "model": "gemini-4-argon",
+      "base_url_env": "GOOGLE_GEMINI_BASE_URL",
+      "api_key_env": "GEMINI_API_KEY",
+      "fallback": [],
+      "note": "Argon fallback for v2_amplified when carbon provider is unhealthy or exhausted."
     }
   },
   "best_of_n_config": {
@@ -1317,7 +1348,10 @@
     "glm": [],
     "qwen": [],
     "ernie": [],
-    "gemini31": []
+    "gemini31": [
+      "v2_rawstage2_gemini31_argon",
+      "v2_amplified_gemini31_argon"
+    ]
   },
   "retry": {
     "max_retries": 3,
