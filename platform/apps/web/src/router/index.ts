@@ -25,7 +25,12 @@ const router = createRouter({
       path: '/',
       component: () => import('../layouts/PortalLayout.vue'),
       children: [
-        { path: '', redirect: '/projects' },
+        {
+          path: '',
+          name: 'landing',
+          component: () => import('../views/LandingView.vue'),
+          meta: { public: true },
+        },
         {
           path: 'projects',
           name: 'portal-home',

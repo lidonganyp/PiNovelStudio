@@ -20,6 +20,9 @@ const navItems: Array<{ name: string; label: string }> = [
   { name: 'portal-home', label: '我的项目' },
 ];
 
+/** 公开落地页使用全屏星空布局，不显示门户顶栏。 */
+const isLanding = computed(() => route.name === 'landing');
+
 /** 工作台页需要无 padding 的满高布局。 */
 const isWorkspace = computed(() => route.name === 'workspace');
 
@@ -91,13 +94,14 @@ async function onChangePassword(): Promise<void> {
 }
 
 onMounted(() => {
+  if (isLanding.value) return;
   void auth.fetchMe();
 });
 </script>
 
 <template>
   <el-container class="portal">
-    <el-header v-if="!isWorkspace" class="portal-header">
+    <el-header v-if="!isWorkspace && !isLanding" class="portal-header">
       <router-link class="brand" :to="{ name: 'portal-home' }">
         <span class="brand-logo">π</span>
         <span class="brand-name">PiNovel 平台</span>
@@ -150,7 +154,7 @@ onMounted(() => {
         </template>
       </el-dropdown>
     </el-header>
-    <el-main class="portal-main" :class="{ 'workspace-main': isWorkspace }">
+    <el-main class="portal-main" :class="{ 'workspace-main': isWorkspace, 'landing-main': isLanding }">
       <router-view />
     </el-main>
     <el-dialog
@@ -343,6 +347,11 @@ onMounted(() => {
 }
 .portal-main {
   background: #f5f6f8;
+}
+.portal-main.landing-main {
+  padding: 0;
+  overflow: hidden;
+  background: #05070f;
 }
 .portal-main.workspace-main {
   padding: 0;
