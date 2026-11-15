@@ -123,6 +123,9 @@ services:
       WECHAT_PRIVATE_KEY: ${WECHAT_PRIVATE_KEY:-}
       WECHAT_API_V3_KEY: ${WECHAT_API_V3_KEY:-}
       WECHAT_PLATFORM_CERT: ${WECHAT_PLATFORM_CERT:-}
+      # B6 融合：PiVideoStudio 视频工场入口
+      PIVIDEO_API_URL: ${PIVIDEO_API_URL:-http://172.17.0.1:3100}
+      PIVIDEO_WEB_URL: ${PIVIDEO_WEB_URL:-http://localhost:5173}
     ports:
       - '${API_PORT:-3000}:3000'
     healthcheck:

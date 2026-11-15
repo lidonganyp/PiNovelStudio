@@ -21,6 +21,7 @@ import { JobsModule } from './modules/jobs/jobs.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { ErrorReportsModule } from './modules/error-reports/error-reports.module';
+import { PivideoModule } from './modules/pivideo/pivideo.module';
 import { HealthController } from './health/health.controller';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { env } from './config/env';
@@ -60,6 +61,7 @@ import { env } from './config/env';
     PaymentModule,
     FeedbackModule,
     ErrorReportsModule,
+    PivideoModule,
   ],
   controllers: [HealthController],
   providers: [

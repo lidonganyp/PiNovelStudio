@@ -5,7 +5,7 @@
  */
 import { ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { updateChapter, type Chapter } from '../../api/chapters';
+import { updateChapter, generateVideo, type Chapter } from '../../api/chapters';
 
 const props = defineProps<{
   projectId: number;
@@ -18,6 +18,7 @@ const chapterNumber = ref(props.chapter.chapterNumber);
 const title = ref(props.chapter.title);
 const content = ref(props.chapter.content);
 const saving = ref(false);
+const generatingVideo = ref(false);
 
 watch(
   () => props.chapter,
@@ -85,6 +86,23 @@ async function save(): Promise<void> {
     saving.value = false;
   }
 }
+
+async function generateVideoForChapter(): Promise<void> {
+  generatingVideo.value = true;
+  try {
+    const res = await generateVideo(props.projectId, props.chapter.id);
+    if (res.ok && res.videoProjectUrl) {
+      ElMessage.success('视频项目已创建，正在跳转…');
+      window.open(res.videoProjectUrl, '_blank');
+    } else {
+      ElMessage.error('生成视频失败，请稍后重试');
+    }
+  } catch {
+    // http 拦截器已统一提示
+  } finally {
+    generatingVideo.value = false;
+  }
+}
 </script>
 
 <template>
@@ -103,6 +121,7 @@ async function save(): Promise<void> {
       <el-input v-model="title" maxlength="200" placeholder="章节标题" class="title-input" />
       <span class="word-count">{{ content.length }} 字符 / 官方字数 {{ chapter.wordCount }}</span>
       <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button type="success" :loading="generatingVideo" @click="generateVideoForChapter">生成视频</el-button>
     </div>
     <el-input
       v-model="content"

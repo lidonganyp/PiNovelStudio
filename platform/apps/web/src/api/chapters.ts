@@ -148,3 +148,13 @@ export function submitGeneration(
     .post(`/projects/${projectId}/chapters/${chapterId}/generate`)
     .then((r) => r.data);
 }
+
+/** 生成视频：调用 PiVideoStudio API 创建视频项目。 */
+export function generateVideo(
+  projectId: number,
+  chapterId: number,
+): Promise<{ ok: boolean; videoProjectId: string; videoProjectUrl: string }> {
+  return http
+    .post(`/projects/${projectId}/chapters/${chapterId}/generate-video`)
+    .then((r) => r.data);
+}
