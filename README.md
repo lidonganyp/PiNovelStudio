@@ -8,6 +8,12 @@
 
 PiNovelStudio 是一个基于 PI (AI Coding Agent) 的**中文长篇小说章节生成系统**。它以 PI 为编排大脑，以 `NovelOS Agentic → 作者风格整章优化 → 事实复检 → 状态提交/原子保存` 为生产内核。原始 `corpus/` 已从仓库删除；生产章节生成不依赖原始语料。
 
+> 商用平台（NestJS + Vue 3 + PostgreSQL）项目概览见 [platform/docs/project-overview.md](platform/docs/project-overview.md)。
+
+### B6 融合：PiVideoStudio 联动
+
+章节编辑器内置『生成视频』按钮，一键聚合章节正文、大纲、人物卡、种子上下文，调用 PiVideoStudio API 创建视频项目并跳转，实现小说到视频的跨平台工作流。
+
 ## 核心特性
 
 - **统一主链路生成内核**: `novel_generate_chapter` 唯一公开入口；NovelOS Agentic 检索/验证初稿 → 作者风格整章优化 → StoryPreservation/FactGuard/Completeness → 原子保存
