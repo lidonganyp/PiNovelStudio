@@ -284,6 +284,14 @@ export function createBillingClient(
       };
     },
 
+    async reportProgress(input: { jobId: string; status: "running"; stage: string; progressText: string }): Promise<void> {
+      const path = `/internal/jobs/${encodeURIComponent(input.jobId)}/status`;
+      try {
+        await signedPost(path, { status: input.status, stage: input.stage, progressText: input.progressText }, "SETTLE_FAILED");
+      } catch {
+        // 进度上报是展示增强，失败不得影响生成与计费主链路。
+      }
+    },
     async finalize(jobId: string, outcome: "success" | "failure"): Promise<BillingFinalizeResult> {
       const path = `/internal/billing/holds/${encodeURIComponent(jobId)}/finalize`;
       const { statusCode, body } = await signedPost(path, { outcome }, "FINALIZE_FAILED");

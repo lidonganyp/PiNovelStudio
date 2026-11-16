@@ -3,7 +3,7 @@
  * P5-3 生成任务面板：阶段步骤条 + 消耗实时（预占/已结算）+
  * 逐调用明细 + 失败呈现与重试。轮询由 useJobPolling 驱动。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
 import { JOB_STAGES, isTerminalStatus } from '../../api/jobs';
@@ -51,6 +51,21 @@ const stageIndex = computed(() => {
   const stage = job.value?.progressStage;
   if (!stage) return -1;
   return JOB_STAGES.findIndex((s) => s.value === stage);
+});
+
+/** STREAMING-WRITER-1：流式正文增量（打字机效果），仅运行中且已有增量时展示。 */
+const progressText = computed(() => {
+  const text = job.value?.progressText;
+  return typeof text === 'string' ? text : '';
+});
+const showProgressText = computed(
+  () => progressText.value.length > 0 && !isTerminalStatus(String(job.value?.status)),
+);
+/** 新增量到达时把预览滚动到底部。 */
+watch(progressText, async () => {
+  await nextTick();
+  const el = document.querySelector<HTMLElement>('.stream-preview');
+  if (el) el.scrollTop = el.scrollHeight;
 });
 
 const totalChargeYuan = computed(() =>
@@ -132,6 +147,12 @@ watch(
     <p v-if="stageIndex < 0 && job.progressStage" class="unknown-stage">
       当前阶段：{{ job.progressStage }}
     </p>
+
+    <!-- 流式正文增量（打字机效果） -->
+    <div v-if="showProgressText" class="stream-block">
+      <div class="stream-title">正在生成正文…（{{ progressText.length }} 字）</div>
+      <div class="stream-preview">{{ progressText }}</div>
+    </div>
 
     <!-- 消耗实时 -->
     <div class="charge-row">
@@ -268,5 +289,36 @@ watch(
   color: var(--el-text-color-secondary);
   text-align: center;
   margin: 6px 0 0;
+}
+.stream-block {
+  margin: 8px 0;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-extra-light);
+}
+.stream-title {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+}
+.stream-preview {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--el-text-color-regular);
+}
+.stream-preview::after {
+  content: '▍';
+  animation: stream-caret 1s step-end infinite;
+  color: var(--el-color-primary);
+}
+@keyframes stream-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 </style>

@@ -9,8 +9,8 @@
 - 真实模型与正收益状态：`REQUIRES_AUTH`
 - `--auth` 状态：未启用，退出码 2，fail-closed，不调用真实模型
 - Git HEAD 证据边界：仅记录基准提交，不代表当前脏工作树的完整代码快照
-- 冻结 raw manifest hash：`902a480df8ec02ae6cafddb425d972b2e52aec70dcb54b328dc0de3d27e3c91e`
-- 冻结 raw manifest：`D:\CODE\PiNovelStudio\.pi\extensions\novel-studio\scripts\language-calibration-real-1\raw-manifest.json`
+- 冻结 raw manifest hash：`8fca55d50b5b7c465bf553380eca7ded0fb91124f6807c08597cf82c91e2b266`
+- 冻结 raw manifest：`/root/PiNovelStudio/.pi/extensions/novel-studio/scripts/language-calibration-real-1/raw-manifest.json`
 
 > ⚠️ **REQUIRES_AUTH 边界**：本切片为 offline stub 模式 + 真实 raw 文本 fixture。
 > 真实 Doubao Seed 2.1 Pro (`v2_chinese_calibration`) + gpt-5.6-sol 异源 judge (`v2_literary_judge`) 调用属于 REQUIRES_AUTH，作为后续切片单独提交。
@@ -330,7 +330,7 @@
 - ✅ PairwiseJudge 反向 A/B（两轮 verdict：confidence=uncertain 触发 needsReverseReview，reverseRound 非空）
 - ✅ SelectionPolicy raw 兜底（tie 时保留 raw）
 
-- ✅ 越界拒绝证据：`D:\CODE\PiNovelStudio\reports\language-calibration-real-1\stub-boundary-rejection.json`
+- ✅ 越界拒绝证据：`/root/PiNovelStudio/reports/language-calibration-real-1/stub-boundary-rejection.json`
 
 后续 REQUIRES_AUTH 切片需要：
 - 真实 Doubao Seed 2.1 Pro 调用（`v2_chinese_calibration`）
@@ -342,7 +342,7 @@
 
 ---
 
-**生成时间**: 2026-10-31T15:54:50.568Z
+**生成时间**: 2026-11-02T16:03:27.909Z
 **脚本**: `scripts/language-calibration-real-1/run-verification.mjs`
 **模式**: stub
-**Git HEAD（仅基准提交，不代表脏工作树快照）**: 584a6e4eb70ec3a38745bccd3f74cb2eef9c3c1d
+**Git HEAD（仅基准提交，不代表脏工作树快照）**: d657790b0baab56f021aa4047fbd1449ec6aa4d3

@@ -36,6 +36,9 @@ model User {
   chapterSeeds     NovelChapterSeed[]
   chapterVersions  NovelChapterVersion[]    @relation("ChapterVersionUser")
   chapterVersionsCreated NovelChapterVersion[] @relation("ChapterVersionCreator")
+  chapterReviews   NovelChapterReview[]
+  chapterDecisions NovelChapterDecision[]
+  chapterReviewTraces NovelChapterReviewTrace[]
   characters       NovelCharacter[]
   outlineNodes     NovelOutlineNode[]
   documents        NovelDocument[]
@@ -186,6 +189,9 @@ model NovelProject {
   assistantMessages NovelAssistantMessage[]
   feedback          NovelFeedback[]
   generationJobs    NovelGenerationJob[]
+  chapterReviews    NovelChapterReview[]
+  chapterDecisions  NovelChapterDecision[]
+  chapterReviewTraces NovelChapterReviewTrace[]
 
   @@index([userId, status])
   @@map("novel_projects")
@@ -204,6 +210,9 @@ model NovelChapter {
   status          String    @default("draft") // draft | generated | final
   version         Int       @default(1)
   generationJobId String?   @map("generation_job_id")
+  reviewStatus    String?   @map("review_status")
+  reviewVerdict   String?   @map("review_verdict")
+  reviewRationale String?   @map("review_rationale")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
   deletedAt       DateTime? @map("deleted_at")
@@ -212,10 +221,87 @@ model NovelChapter {
   versions NovelChapterVersion[]
   feedback NovelFeedback[]
   jobs     NovelGenerationJob[]
+  review   NovelChapterReview?
+  decisions NovelChapterDecision[]
+  reviewTraces NovelChapterReviewTrace[]
 
   @@index([projectId, chapterNumber])
   @@index([userId])
   @@map("novel_chapters")
+}
+
+model NovelChapterReview {
+  id              Int       @id @default(autoincrement())
+  chapterId       Int       @unique @map("chapter_id")
+  chapter         NovelChapter @relation(fields: [chapterId], references: [id])
+  projectId       Int       @map("project_id")
+  project         NovelProject @relation(fields: [projectId], references: [id])
+  userId          Int       @map("user_id")
+  user            User      @relation(fields: [userId], references: [id])
+  chapterVersion  Int       @map("chapter_version")
+  generationJobId String?   @map("generation_job_id")
+  mode            String    @default("advisory")
+  status          String    @default("pending") // pending | completed | failed | disabled
+  verdict         String?   // approve | hold | reject
+  rationale       String    @default("")
+  risks           Json?
+  evidenceSpans   Json?     @map("evidence_spans")
+  model           String?
+  durationMs      Int?      @map("duration_ms")
+  error           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([userId])
+  @@map("novel_chapter_reviews")
+}
+
+model NovelChapterReviewTrace {
+  id              Int       @id @default(autoincrement())
+  chapterId       Int       @map("chapter_id")
+  chapter         NovelChapter @relation(fields: [chapterId], references: [id])
+  projectId       Int       @map("project_id")
+  project         NovelProject @relation(fields: [projectId], references: [id])
+  userId          Int       @map("user_id")
+  user            User      @relation(fields: [userId], references: [id])
+  chapterVersion  Int       @map("chapter_version")
+  generationJobId String?   @map("generation_job_id")
+  mode            String    @default("advisory")
+  status          String    // pending | completed | failed | disabled
+  verdict         String?   // approve | hold | reject
+  rationale       String    @default("")
+  risks           Json?
+  evidenceSpans   Json?     @map("evidence_spans")
+  model           String?
+  durationMs      Int?      @map("duration_ms")
+  error           String?
+  source          String    @default("auto") // auto | manual
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  @@index([chapterId, createdAt])
+  @@index([projectId])
+  @@index([userId])
+  @@map("novel_chapter_review_traces")
+}
+
+model NovelChapterDecision {
+  id             Int       @id @default(autoincrement())
+  chapterId      Int       @map("chapter_id")
+  chapter        NovelChapter @relation(fields: [chapterId], references: [id])
+  projectId      Int       @map("project_id")
+  project        NovelProject @relation(fields: [projectId], references: [id])
+  userId         Int       @map("user_id")
+  user           User      @relation(fields: [userId], references: [id])
+  chapterVersion Int       @map("chapter_version")
+  decision       String    // keep | regenerate | revise_outline
+  revisedIntent  String?   @map("revised_intent")
+  newJobId       String?   @map("new_job_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([chapterId, createdAt])
+  @@index([projectId])
+  @@map("novel_chapter_decisions")
 }
 
 model NovelChapterSeed {
@@ -415,6 +501,7 @@ model NovelGenerationJob {
   maxCharge       BigInt    @map("max_charge")
   settledAmount   BigInt    @default(0) @map("settled_amount")
   progressStage   String    @default("checking_materials") @map("progress_stage")
+  progressText    String?   @map("progress_text")
   failureMessage  String?   @map("failure_message")
   failure         Json?
   revisionId      String?   @map("revision_id")

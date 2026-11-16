@@ -65,7 +65,10 @@ function makeService(runtimeResult: unknown) {
   };
   const runtime = { invoke: vi.fn().mockResolvedValue(runtimeResult) };
   const errorReports = { recordServerError: vi.fn().mockResolvedValue(null) };
-  const service = new JobsService(prisma as never, billing as never, rates as never, runtime as never, errorReports as never);
+  // 评审顾问桩：生成成功后评审后置为 fire-and-forget，测试中不真正触发评审。
+  // 注意构造函数参数顺序：reviewAdvisor 第 5 位，errorReports 第 6 位（可选）。
+  const reviewAdvisor = { reviewGeneratedChapter: vi.fn().mockResolvedValue(undefined) };
+  const service = new JobsService(prisma as never, billing as never, rates as never, runtime as never, reviewAdvisor as never, errorReports as never);
   return { service, prisma, billing, runtime, rates, errorReports };
 }
 

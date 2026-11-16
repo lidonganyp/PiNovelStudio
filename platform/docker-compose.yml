@@ -34,7 +34,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
-    restart: unless-stopped
+    restart: always
 
   # 一次性迁移（成功后退出；api 依赖其完成）
   api-migrate:
@@ -128,6 +128,10 @@ services:
       PIVIDEO_WEB_URL: ${PIVIDEO_WEB_URL:-http://localhost:5173}
     ports:
       - '${API_PORT:-3000}:3000'
+    # 前端静态文件挂载（只读）：宿主机 apps/web/dist 覆盖镜像内 /app/web，
+    # 前端更新只需重新构建 dist 并重启 api 容器，无需重建镜像。
+    volumes:
+      - ./apps/web/dist:/app/web:ro
     healthcheck:
       test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1']
       interval: 10s
@@ -141,7 +145,7 @@ services:
         condition: service_completed_successfully
       api-bootstrap:
         condition: service_completed_successfully
-    restart: unless-stopped
+    restart: always
 
   runtime:
     build:
@@ -174,6 +178,14 @@ services:
       # 避免门禁从临时 workspace 目录向上回溯时找不到挂载点
       PINOVEL_EVOLUTION_ROOT: /app/pnovel/.pi/extensions/novel-studio/config/evolution-release
       PINOVEL_MODEL_REQUEST_TIMEOUT_MS: ${PINOVEL_MODEL_REQUEST_TIMEOUT_MS:-300000}
+      # G6 governance resolution: the runtime invokes the extension with a
+      # per-job temp project root (workspace-manager), so the gate cannot
+      # discover governance state by walking from projectRoot. Pin the
+      # evolution root, identity pack and fingerprint root to the mounted
+      # app tree; missing values must fail closed at the gate, not bypass it.
+      PINOVEL_EVOLUTION_ROOT: /app/pnovel/.pi/extensions/novel-studio/config/evolution-release
+      PINOVEL_PRODUCTION_IDENTITY_PACK: /app/pnovel/config/production-identity/active.pack.json
+      PINOVEL_FINGERPRINT_ROOT: /app/pnovel
       NOVEL_RUNTIME_REQUEST_TIMEOUT_MS: ${NOVEL_RUNTIME_REQUEST_TIMEOUT_MS:-900000}
       # 评审智能体（gpt-6.1-sol 经中转，独立于主写作通道）：缺失即启动报错
       NOVELOS_JUDGE_BASE_URL: ${NOVELOS_JUDGE_BASE_URL:?NOVELOS_JUDGE_BASE_URL is required}
@@ -190,7 +202,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    restart: unless-stopped
+    restart: always
 
 volumes:
   platform_pgdata:

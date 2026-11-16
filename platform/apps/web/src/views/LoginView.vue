@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
- * 登录页：品牌区 + 邮箱密码表单，成功后跳转 redirect 参数指定的页面或门户首页。
- * 布局样式与注册页共享（styles/global.css 的 .auth-*）。
+ * 首页（登录页）：科技感品牌首页 + 登录入口。
+ * 全屏粒子网络动效 + 渐变光晕 + 特性矩阵，突出项目核心优势；
+ * 页面底部标注开源地址：https://github.com/lidonganyp/PiNovelStudio
  */
-import { reactive, ref } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 
@@ -33,6 +34,144 @@ async function onSubmit(): Promise<void> {
 async function goRegister(): Promise<void> {
   await router.push({ name: 'register' });
 }
+
+/* ---------------- 粒子网络动效 ---------------- */
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  r: number;
+}
+
+const canvasRef = ref<HTMLCanvasElement | null>(null);
+let rafId = 0;
+let particles: Particle[] = [];
+let mouseX = -9999;
+let mouseY = -9999;
+
+function initParticles(width: number, height: number): void {
+  const density = Math.min(110, Math.floor((width * height) / 16000));
+  particles = Array.from({ length: density }, () => ({
+    x: Math.random() * width,
+    y: Math.random() * height,
+    vx: (Math.random() - 0.5) * 0.45,
+    vy: (Math.random() - 0.5) * 0.45,
+    r: Math.random() * 1.6 + 0.6,
+  }));
+}
+
+function tick(): void {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const { width, height } = canvas;
+  ctx.clearRect(0, 0, width, height);
+
+  const linkDist = 130;
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    if (p.x < 0 || p.x > width) p.vx *= -1;
+    if (p.y < 0 || p.y > height) p.vy *= -1;
+
+    const dxm = mouseX - p.x;
+    const dym = mouseY - p.y;
+    const dm = Math.hypot(dxm, dym);
+    if (dm < 160 && dm > 0.001) {
+      p.x += (dxm / dm) * 0.25;
+      p.y += (dym / dm) * 0.25;
+    }
+  }
+
+  for (let i = 0; i < particles.length; i += 1) {
+    const a = particles[i];
+    for (let j = i + 1; j < particles.length; j += 1) {
+      const b = particles[j];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (d < linkDist) {
+        const alpha = (1 - d / linkDist) * 0.35;
+        ctx.strokeStyle = `rgba(96, 165, 250, ${alpha})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  for (const p of particles) {
+    ctx.fillStyle = 'rgba(147, 197, 253, 0.9)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  rafId = window.requestAnimationFrame(tick);
+}
+
+function resizeCanvas(): void {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  initParticles(canvas.width, canvas.height);
+}
+
+function onMouseMove(e: MouseEvent): void {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+}
+
+onMounted(() => {
+  resizeCanvas();
+  tick();
+  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('mousemove', onMouseMove);
+});
+
+onBeforeUnmount(() => {
+  window.cancelAnimationFrame(rafId);
+  window.removeEventListener('resize', resizeCanvas);
+  window.removeEventListener('mousemove', onMouseMove);
+});
+
+/* ---------------- 特性与数据 ---------------- */
+
+const features = [
+  {
+    icon: '⚡',
+    title: '统一主链路生成',
+    desc: 'Agentic 初稿 → 作者风格整章优化 → 事实复检落库，一条流水线产出可连载章节',
+  },
+  {
+    icon: '🌱',
+    title: '种子驱动章节',
+    desc: '六要素章纲决定每章走向，写前契约清晰，AI 不再自由发挥跑题',
+  },
+  {
+    icon: '🧠',
+    title: '全书长期记忆',
+    desc: '大纲、角色、伏笔跨章跟踪，百万字长篇设定不漂移、不吃书',
+  },
+  {
+    icon: '🛠️',
+    title: '可介入工作台',
+    desc: '章节树、版本回溯、修订恢复、AI 助手对话，创作全程可控可改',
+  },
+];
+
+const stats = [
+  { value: '100万+', label: '字长篇连贯生成' },
+  { value: '6 要素', label: '章纲种子契约' },
+  { value: '3 道关', label: '初稿/优化/复检' },
+  { value: '100%', label: '开源可自部署' },
+];
+
+const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
 </script>
 
 <template>
@@ -60,46 +199,97 @@ async function goRegister(): Promise<void> {
           </li>
         </ul>
       </div>
-    </aside>
-    <main class="auth-main">
-      <el-card class="auth-card" shadow="never">
-        <h2 class="auth-title">欢迎回来</h2>
-        <p class="auth-sub">登录 PiNovel 平台，继续你的创作</p>
-        <el-form :model="form" label-position="top" size="large" @submit.prevent="onSubmit">
-          <el-form-item label="邮箱">
-            <el-input
-              v-model="form.email"
-              placeholder="you@example.com"
-              autocomplete="email"
-            />
-          </el-form-item>
-          <el-form-item label="密码">
-            <el-input
-              v-model="form.password"
-              type="password"
-              show-password
-              placeholder="至少 8 位"
-              autocomplete="current-password"
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-button
-              class="auth-submit"
-              type="primary"
-              native-type="submit"
-              :loading="loading"
-            >
-              登录
-            </el-button>
-          </el-form-item>
-        </el-form>
-        <div class="auth-footer">
-          还没有账号？
-          <el-button text type="primary" @click="goRegister">立即注册</el-button>
+      <a class="lp-github" :href="githubUrl" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+          />
+        </svg>
+        <span>GitHub</span>
+      </a>
+    </header>
+
+    <!-- 主体 -->
+    <main class="lp-main">
+      <section class="lp-hero">
+        <div class="lp-badge">
+          <span class="lp-badge-dot" />
+          AI 驱动的长篇小说创作工作台 · 开源
+        </div>
+        <h1 class="lp-title">
+          把灵感，写成
+          <span class="lp-title-glow">百万字长篇</span>
+        </h1>
+        <p class="lp-subtitle">
+          种子驱动 · 统一主链路生成 · 全书状态长期跟踪。
+          PiNovel Studio 让 AI 像职业作者一样，稳定地产出连贯、可控、可连载的长篇小说。
+        </p>
+
+        <div class="lp-features">
+          <div v-for="f in features" :key="f.title" class="lp-feature-card">
+            <div class="lp-feature-icon">{{ f.icon }}</div>
+            <div class="lp-feature-title">{{ f.title }}</div>
+            <div class="lp-feature-desc">{{ f.desc }}</div>
+          </div>
+        </div>
+
+        <div class="lp-stats">
+          <div v-for="s in stats" :key="s.label" class="lp-stat">
+            <div class="lp-stat-value tnum">{{ s.value }}</div>
+            <div class="lp-stat-label">{{ s.label }}</div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="lp-auth">
+        <div class="lp-card">
+          <h2 class="lp-card-title">开启创作</h2>
+          <p class="lp-card-sub">登录 PiNovel 平台，继续你的长篇小说</p>
+          <el-form :model="form" label-position="top" size="large" @submit.prevent="onSubmit">
+            <el-form-item label="邮箱">
+              <el-input
+                v-model="form.email"
+                placeholder="you@example.com"
+                autocomplete="email"
+              />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input
+                v-model="form.password"
+                type="password"
+                show-password
+                placeholder="至少 8 位"
+                autocomplete="current-password"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button
+                class="lp-submit"
+                type="primary"
+                native-type="submit"
+                :loading="loading"
+              >
+                进入工作台
+              </el-button>
+            </el-form-item>
+          </el-form>
+          <div class="lp-card-footer">
+            还没有账号？
+            <el-button text type="primary" @click="goRegister">立即注册</el-button>
+          </div>
         </div>
       </el-card>
       <router-link class="login-back" to="/">← 返回首页</router-link>
     </main>
+
+    <!-- 底部开源信息 -->
+    <footer class="lp-footer">
+      <span class="lp-footer-text">开源项目 · Open Source</span>
+      <a class="lp-footer-link" :href="githubUrl" target="_blank" rel="noopener">
+        {{ githubUrl }}
+      </a>
+    </footer>
   </div>
 </template>
 

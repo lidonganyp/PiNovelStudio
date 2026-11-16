@@ -10,6 +10,8 @@ export interface RuntimeTransportHooks {
   signal?: AbortSignal;
   reserve(input: TransportReservation): Promise<void>;
   settle(input: TransportSettlement): Promise<void>;
+  /** Streaming delta fan-out for writer routes; consumed by the extension parser. */
+  onDelta?(delta: string, route?: string): void;
 }
 export type TransportHookRunner = <T>(hooks: RuntimeTransportHooks, fn: () => Promise<T>) => Promise<T>;
 export interface TransportAccounting { hooks: RuntimeTransportHooks; summary(): MeteringResult; }

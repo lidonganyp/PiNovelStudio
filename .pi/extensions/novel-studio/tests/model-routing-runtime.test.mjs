@@ -238,7 +238,7 @@ describe("model routing runtime alignment", () => {
   });
 
   test("legacy route smoke script help works without API keys", () => {
-    const result = spawnSync("python", ["scripts/test-model-routing.py", "--help"], {
+    const result = spawnSync("python3", ["scripts/test-model-routing.py", "--help"], {
       cwd: repoRoot,
       encoding: "utf-8",
       env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },

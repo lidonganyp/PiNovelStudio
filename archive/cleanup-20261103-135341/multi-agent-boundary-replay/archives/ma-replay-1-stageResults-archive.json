@@ -1,0 +1,20 @@
+{
+  "sampleId": "ma-replay-1",
+  "status": "error",
+  "failureEnvelope": {
+    "stage": "unified_entry",
+    "gate": "unified_entry_exception",
+    "severity": "hard_block",
+    "reason": "统一主链路执行失败：GEMINI_MODEL is required in .env",
+    "evidence": {
+      "error": "GEMINI_MODEL is required in .env",
+      "stack": "Error: GEMINI_MODEL is required in .env\n    at getGeminiWriterModel (file:///root/PiNovelStudio/.pi/extensions/novel-studio/dist/utils/config.js:160:15)\n    at initializeDefaultCapabilities (file:///root/PiNovelStudio/.pi/extensions/novel-studio/dist/novelos/protocol/capability-registry.js:236:35)\n    at file:///root/PiNovelStudio/.pi/extensions/novel-studio/dist/novelos/protocol/capability-registry.js:333:1\n    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)\n    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26)\n    at async Object.handleGenerateChapter (file:///root/PiNovelStudio/.pi/extensions/novel-studio/dist/handlers/public-handlers.js:107:40)\n    at async Object.invoke (file:///root/PiNovelStudio/.pi/extensions/novel-studio/dist/tools/register-tools.js:569:37)\n    at async Object.execute (file:///root/PiNovelStudio/.pi/extensions/novel-studio/dist/tools/legacy-tool-wrapper.js:116:32)\n    at async main (file:///root/PiNovelStudio/.pi/extensions/novel-studio/scripts/multi-agent-boundary-replay.mjs:227:22)"
+    },
+    "recoverable": false,
+    "degradedTo": "hard_block"
+  },
+  "stageResults": {
+    "unifiedPipeline": true,
+    "loadError": "GEMINI_MODEL is required in .env"
+  }
+}

@@ -18,6 +18,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, chmodSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -525,6 +526,8 @@ test("handoff 事务：provenance 写失败时章纲不落盘，凭证恢复可�
     // 人为制造 provenance 写入失败：只读目标文件在 Windows 上 rename 会 EPERM。
     writeFileSync(provenanceFile, JSON.stringify({ commitStatus: "prior" }), "utf8");
     chmodSync(provenanceFile, 0o444);
+    // root 可绕过 chmod 只读位，ext4 上用 chattr +i 确保 provenance 写入真实失败。
+    execFileSync("chattr", ["+i", provenanceFile]);
 
     const failed = await handleWorkspaceManager({
       action: "handoff_chapter_contract",
@@ -546,6 +549,7 @@ test("handoff 事务：provenance 写失败时章纲不落盘，凭证恢复可�
     assert.equal(existsSync(targetFile), false, "provenance 失败时章纲不得落盘");
     assert.equal(readFileSync(provenanceFile, "utf8"), JSON.stringify({ commitStatus: "prior" }));
     // 一次性凭证未被消费：修正文件系统后可原样重试。
+    execFileSync("chattr", ["-i", provenanceFile]);
     chmodSync(provenanceFile, 0o666);
     rmSync(provenanceFile, { force: true });
     const retried = await handleWorkspaceManager({
@@ -566,6 +570,9 @@ test("handoff 事务：provenance 写失败时章纲不落盘，凭证恢复可�
     const committed = JSON.parse(readFileSync(provenanceFile, "utf8"));
     assert.equal(committed.commitStatus, "committed");
   } finally {
+    try {
+      execFileSync("chattr", ["-i", provenanceFile]);
+    } catch {}
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -596,6 +603,8 @@ test("handoff 事务：章纲写失败保留可审计 failed 状态并允许凭�
     // 已有章纲只读：pending provenance 可写，章纲 rename 失败。
     writeFileSync(targetFile, "旧章纲占位", "utf8");
     chmodSync(targetFile, 0o444);
+    // root 可绕过 chmod 只读位，ext4 上用 chattr +i 确保章纲 rename 真实失败。
+    execFileSync("chattr", ["+i", targetFile]);
 
     const failed = await handleWorkspaceManager({
       action: "handoff_chapter_contract",
@@ -621,6 +630,7 @@ test("handoff 事务：章纲写失败保留可审计 failed 状态并允许凭�
     assert.equal(failureRecord.failure.outlineRolledBack, false);
     assert.ok(failureRecord.failure.message.length > 0);
 
+    execFileSync("chattr", ["-i", targetFile]);
     chmodSync(targetFile, 0o666);
     const retried = await handleWorkspaceManager({
       action: "handoff_chapter_contract",
@@ -640,6 +650,9 @@ test("handoff 事务：章纲写失败保留可审计 failed 状态并允许凭�
     assert.ok(readFileSync(targetFile, "utf8").includes("藏书阁受阻"));
     assert.equal(JSON.parse(readFileSync(provenanceFile, "utf8")).commitStatus, "committed");
   } finally {
+    try {
+      execFileSync("chattr", ["-i", targetFile]);
+    } catch {}
     rmSync(root, { recursive: true, force: true });
   }
 });

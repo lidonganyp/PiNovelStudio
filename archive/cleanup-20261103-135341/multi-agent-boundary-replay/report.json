@@ -1,0 +1,57 @@
+{
+  "schema": "pinovel.multi-agent-boundary-replay",
+  "version": "1.0.0",
+  "mode": "stub_workspace_replay",
+  "generatedAt": "2026-11-02T16:03:40.930Z",
+  "workspaceId": "ma-boundary-replay",
+  "gates": {
+    "sampleCount": 2,
+    "passCount": 2,
+    "traceRetentionRate": 1,
+    "agentCollaborationRate": 1,
+    "agentLineageIndexRate": 1,
+    "machineJudgeCalls": 0,
+    "oneShotRawCalls": 0,
+    "thresholds": {
+      "minTraceRetentionRate": 1,
+      "minAgentCollaborationRate": 1,
+      "minAgentLineageIndexRate": 1,
+      "maxMachineJudgeCalls": 0,
+      "maxOneShotRawCalls": 0
+    }
+  },
+  "gateFailures": [],
+  "samples": [
+    {
+      "sampleId": "ma-replay-1",
+      "status": "ok",
+      "tracePath": "/root/PiNovelStudio/workspaces/ma-boundary-replay/traces/ma-replay-1-quality-trace.json",
+      "archivePath": "/root/PiNovelStudio/reports/multi-agent-boundary-replay/archives/ma-replay-1-quality-trace.json",
+      "hasTracePath": true,
+      "hasTraceArchivePath": true,
+      "hasAgentCollaboration": true,
+      "hasAgentLineageIndex": true,
+      "productionFlowMode": "agentic_style_full_pipeline",
+      "machineJudgeCalled": false,
+      "oneShotRawCalled": false,
+      "issues": [],
+      "ok": true
+    },
+    {
+      "sampleId": "ma-replay-2",
+      "status": "ok",
+      "tracePath": "/root/PiNovelStudio/workspaces/ma-boundary-replay/traces/ma-replay-2-quality-trace.json",
+      "archivePath": "/root/PiNovelStudio/reports/multi-agent-boundary-replay/archives/ma-replay-2-quality-trace.json",
+      "hasTracePath": true,
+      "hasTraceArchivePath": true,
+      "hasAgentCollaboration": true,
+      "hasAgentLineageIndex": true,
+      "productionFlowMode": "agentic_style_full_pipeline",
+      "machineJudgeCalled": false,
+      "oneShotRawCalled": false,
+      "issues": [],
+      "ok": true
+    }
+  ],
+  "overallPass": true
+}

@@ -1,0 +1,792 @@
+{
+  "datasetId": "chinese-webnovel-ai-patterns-2025-2026",
+  "patterns": [
+    {
+      "id": "CNW-AI-001",
+      "label": "模型残留占位符",
+      "severity": "A",
+      "forms": [
+        "[待补充]",
+        "XXX",
+        "〈角色名〉"
+      ],
+      "naturalAlternatives": [
+        "补入作品内确定的物件和动作；缺信息时停止生成，不留占位符。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-002",
+      "label": "元章节/提示语闯入正文",
+      "severity": "A",
+      "forms": [
+        "本章将",
+        "前文提到",
+        "后文会"
+      ],
+      "naturalAlternatives": [
+        "从正在发生的动作或冲突开场，把信息放入有动机的对话。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-003",
+      "label": "公式化预告式结尾",
+      "severity": "A",
+      "forms": [
+        "一切才刚开始",
+        "而这",
+        "只是开始"
+      ],
+      "naturalAlternatives": [
+        "落在新声音、物件、选择或代价上。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-004",
+      "label": "抽象对比套式“不是 X，而是 Y”",
+      "severity": "A",
+      "forms": [
+        "不是恐惧",
+        "而是某种更深层的东西",
+        "不是因为 A"
+      ],
+      "naturalAlternatives": [
+        "写回避、停顿、误判等行为；具体事实区分如“不是麻绳，是褪灰的细丝绳”通常正常。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-005",
+      "label": "翻译腔硬搭配",
+      "severity": "A",
+      "forms": [
+        "阳光劈头砸下",
+        "目光劈下来",
+        "声音被拽断"
+      ],
+      "naturalAlternatives": [
+        "阳光直照下来、话没说完、光线洒进夜色。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-006",
+      "label": "机制说明插入叙事",
+      "severity": "A",
+      "forms": [
+        "在心里推开那道空间的门——短距瞬移",
+        "这意味着能力进入第二阶段。"
+      ],
+      "naturalAlternatives": [
+        "用能力的失败、代价和结果展示规则；必要说明放进有动机的对话。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-007",
+      "label": "安全垫式免责声明",
+      "severity": "A",
+      "forms": [
+        "需要指出的是",
+        "需要注意的是",
+        "在一定程度上"
+      ],
+      "naturalAlternatives": [
+        "把限制写成角色承担的代价，让事实承担含义。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-008",
+      "label": "任务复述与三段式开场",
+      "severity": "A",
+      "forms": [
+        "基于你的需求",
+        "下面将从三方面",
+        "首先…其次…最后…"
+      ],
+      "naturalAlternatives": [
+        "从正在发生的动作开场，让人物目标在冲突中显露。"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-009",
+      "label": "直接替读者解释心理",
+      "severity": "B",
+      "forms": [
+        "他感到",
+        "意识到",
+        "明白"
+      ],
+      "naturalAlternatives": [
+        "写停顿、回避、动作后果"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-010",
+      "label": "抽象名词承担人物动作",
+      "severity": "B",
+      "forms": [
+        "沉默笼罩",
+        "恐惧攫住",
+        "不安蔓延"
+      ],
+      "naturalAlternatives": [
+        "落到没人接话、咽唾沫、物件变化"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-011",
+      "label": "标准反应包被重复调用",
+      "severity": "B",
+      "forms": [
+        "脸色微变",
+        "眼中闪过精光",
+        "肩膀绷紧"
+      ],
+      "naturalAlternatives": [
+        "用角色独有习惯和关系动作"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-012",
+      "label": "标签替情绪表演",
+      "severity": "B",
+      "forms": [
+        "呢喃道",
+        "低语道",
+        "咆哮道"
+      ],
+      "naturalAlternatives": [
+        "用“说/问/喊”配合动作和台词内容"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-013",
+      "label": "感官与强物理动词硬配",
+      "severity": "B",
+      "forms": [
+        "腥气黏在鼻腔",
+        "声音拽断",
+        "目光切碎"
+      ],
+      "naturalAlternatives": [
+        "用中文惯用搭配或具体感知"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-014",
+      "label": "非人主语承担人的感知/判断",
+      "severity": "B",
+      "forms": [
+        "低吼撞进耳朵",
+        "紧张感顶上来",
+        "冲突贴到眼前"
+      ],
+      "naturalAlternatives": [
+        "他又紧张起来、他听见低吼"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-015",
+      "label": "定语后置，像外语逐词映射",
+      "severity": "B",
+      "forms": [
+        "下面有东西",
+        "大的",
+        "客气"
+      ],
+      "naturalAlternatives": [
+        "下面有个大家伙"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-016",
+      "label": "参数化镜头节拍",
+      "severity": "B",
+      "forms": [
+        "慢了半拍",
+        "迟了半拍",
+        "顿了半拍"
+      ],
+      "naturalAlternatives": [
+        "写话到嘴边停住、手指一松、脚步逼近又停住"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-017",
+      "label": "名词串像报告/标签",
+      "severity": "B",
+      "forms": [
+        "青鱼嘴",
+        "水域采样",
+        "风险评估与资源配置"
+      ],
+      "naturalAlternatives": [
+        "补主语、动作和结果"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-018",
+      "label": "完美推理链替人物做结论",
+      "severity": "B",
+      "forms": [
+        "观察→判断→调整→成功",
+        "这意味着→这说明→由此可见"
+      ],
+      "naturalAlternatives": [
+        "保留盲区、误判和代价"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-019",
+      "label": "旁白替读者宣布正确解读",
+      "severity": "B",
+      "forms": [
+        "显然",
+        "真正的危险",
+        "命运的齿轮"
+      ],
+      "naturalAlternatives": [
+        "给证据，不宣布结论"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-020",
+      "label": "百科/手册段落脱离现场",
+      "severity": "B",
+      "forms": [
+        "该能力具有三个特点",
+        "其核心机制在于"
+      ],
+      "naturalAlternatives": [
+        "在选择、失败和代价中释放规则"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-021",
+      "label": "抽象人生金句封口",
+      "severity": "B",
+      "forms": [
+        "所谓成长",
+        "有些事",
+        "再也回不去"
+      ],
+      "naturalAlternatives": [
+        "收在具体物件、未说出口的话"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-022",
+      "label": "长文复用成功句法",
+      "severity": "B",
+      "forms": [
+        "相同章首/章尾模板"
+      ],
+      "naturalAlternatives": [
+        "按章节功能变换入口"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-023",
+      "label": "自动补齐第三项，节拍过整齐",
+      "severity": "B",
+      "forms": [
+        "三项并列：冷静",
+        "克制",
+        "坚定"
+      ],
+      "naturalAlternatives": [
+        "留最有区分度的一项"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-024",
+      "label": "把全部逻辑说给读者",
+      "severity": "B",
+      "forms": [
+        "然而/此外/因此/总之 连锁"
+      ],
+      "naturalAlternatives": [
+        "让动作和段落顺序表达关系"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-025",
+      "label": "事件后强行总结升华",
+      "severity": "B",
+      "forms": [
+        "这说明",
+        "这意味着",
+        "归根结底"
+      ],
+      "naturalAlternatives": [
+        "让下一次选择体现变化"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-026",
+      "label": "抽象名词化，弱化施动者",
+      "severity": "B",
+      "forms": [
+        "进行分析",
+        "实现突破",
+        "展开讨论"
+      ],
+      "naturalAlternatives": [
+        "改成具体人物动作"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-027",
+      "label": "叙事节拍像参数输出",
+      "severity": "B",
+      "forms": [
+        "句长方差低",
+        "连续独句成段"
+      ],
+      "naturalAlternatives": [
+        "让句长随信息轻重变化"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-028",
+      "label": "对话只投递背景",
+      "severity": "B",
+      "forms": [
+        "我来解释一下",
+        "正如你所知"
+      ],
+      "naturalAlternatives": [
+        "用隐瞒、反问、打断携带信息"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-029",
+      "label": "模型偏好任务完成，抹平余味",
+      "severity": "B",
+      "forms": [
+        "伏笔“出现→解释→意义→主题”全闭环"
+      ],
+      "naturalAlternatives": [
+        "留一层未知或误读"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-030",
+      "label": "默认模型声音覆盖人物差异",
+      "severity": "B",
+      "forms": [
+        "角色共享相同句长",
+        "连接词和金句"
+      ],
+      "naturalAlternatives": [
+        "建立角色词汇、禁忌和回避方式"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-031",
+      "label": "相同比喻句法高密度时显得模板化",
+      "severity": "B",
+      "forms": [
+        "仿佛/如同/似乎/像是"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-032",
+      "label": "程度和模糊副词堆叠会填补空泛情绪",
+      "severity": "B",
+      "forms": [
+        "微微/缓缓/不禁/莫名/非常/极其"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-033",
+      "label": "四字词连续堆叠像宣传文案",
+      "severity": "B",
+      "forms": [
+        "古色古香/跌宕起伏/意味深长"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-034",
+      "label": "被动连续可能削弱人物能动性",
+      "severity": "B",
+      "forms": [
+        "被…被…被…"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-035",
+      "label": "2025 微博研究中的跨域文体辅助特征",
+      "severity": "B",
+      "forms": [
+        "标点",
+        "停词和句长异常规整"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-036",
+      "label": "有稳定中文译名却无动机夹英文",
+      "severity": "B",
+      "forms": [
+        "context/state/cache/claim"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-037",
+      "label": "时间容器反复会造成机械转场",
+      "severity": "B",
+      "forms": [
+        "当…的时候/与此同时/过了一会儿/就在这时"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-038",
+      "label": "情绪标签替代行为",
+      "severity": "B",
+      "forms": [
+        "心中涌起…之情/不知为何/陷入沉思"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-039",
+      "label": "跨域研究提示确定性表达可作辅助",
+      "severity": "B",
+      "forms": [
+        "绝对/肯定/当然/无疑/必然"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-040",
+      "label": "泛化评价删去后无事实损失",
+      "severity": "B",
+      "forms": [
+        "巨大的变化/深刻的意义/复杂的情绪"
+      ],
+      "naturalAlternatives": [],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-041",
+      "label": "可插拔的情绪槽位，缺少具体证据",
+      "severity": "B",
+      "forms": [
+        "一股/一阵/一缕 + 寒意/气息/情绪"
+      ],
+      "naturalAlternatives": [
+        "写手心、呼吸、话语和具体气味"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-042",
+      "label": "用低风险修饰填补动作节奏",
+      "severity": "B",
+      "forms": [
+        "缓缓/慢慢/静静/轻轻 副词串"
+      ],
+      "naturalAlternatives": [
+        "只留一个有作用的速度词，或写阻力和后果"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-043",
+      "label": "用摘要跳过训练过程和代价",
+      "severity": "B",
+      "forms": [
+        "日夜苦练/水磨工夫/一日千里/经过一夜的融合"
+      ],
+      "naturalAlternatives": [
+        "选一次失败和一次修正，写资源与伤势"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-044",
+      "label": "像宣传文案，先下结论再缺证据",
+      "severity": "B",
+      "forms": [
+        "优雅与朴实结合却异常和谐 等审美结论"
+      ],
+      "naturalAlternatives": [
+        "写材质、磨损、光线和人物使用方式"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-045",
+      "label": "快速确认主角正确和强大，抹掉试错",
+      "severity": "B",
+      "forms": [
+        "难道自己是天才/真不愧是我/果然如此"
+      ],
+      "naturalAlternatives": [
+        "写误判、代价和他人反应"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-046",
+      "label": "一个句子承载动作、心理、解释和结论",
+      "severity": "B",
+      "forms": [
+        "长句一逗到底"
+      ],
+      "naturalAlternatives": [
+        "按行动和发现拆句，删除即时解释"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-047",
+      "label": "设定段为消除歧义强行自证，抹平风险",
+      "severity": "B",
+      "forms": [
+        "看似凶险但是非常安全/经过融合无后遗症"
+      ],
+      "naturalAlternatives": [
+        "用副作用、失败和边界展示安全性"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-048",
+      "label": "情绪信号全部补齐，读者无推断空间",
+      "severity": "B",
+      "forms": [
+        "三连催泪：眼睛湿了+眼角发热+长大了"
+      ],
+      "naturalAlternatives": [
+        "只保留一个反应，让人物做选择"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-049",
+      "label": "像模型逐项完成环境描写任务",
+      "severity": "B",
+      "forms": [
+        "景物清单：天空/远处/旁边/树木/建筑/人群"
+      ],
+      "naturalAlternatives": [
+        "选择影响人物行动的一个景物"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-050",
+      "label": "按清单覆盖感官，没有 POV 重点",
+      "severity": "B",
+      "forms": [
+        "五感固定顺序：看到→听见→闻到→触到"
+      ],
+      "naturalAlternatives": [
+        "从最先/最强感官切入并改变判断"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-051",
+      "label": "通用气氛比喻不提供信息",
+      "severity": "B",
+      "forms": [
+        "指示灯像野兽眼睛/屏幕像鬼火"
+      ],
+      "naturalAlternatives": [
+        "写设备状态如何影响行动和判断"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-052",
+      "label": "行为被立即解释，缺少遮掩和多重动机",
+      "severity": "B",
+      "forms": [
+        "因为/由于 紧跟完整动机"
+      ],
+      "naturalAlternatives": [
+        "让行为先发生，原因由后果或细节揭示"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-053",
+      "label": "为交代信息来源而重复确认",
+      "severity": "B",
+      "forms": [
+        "他看见了/听到了/闻到了 感知确认"
+      ],
+      "naturalAlternatives": [
+        "门口站着一个人，除非观察动作本身有意义"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-054",
+      "label": "整齐状态标签替代信息递进",
+      "severity": "B",
+      "forms": [
+        "灯灭了。门响了。风停了。 同构短句"
+      ],
+      "naturalAlternatives": [
+        "合并有因果的动作，只留改变局势的状态"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-055",
+      "label": "论证骨架完整但像报告，抽象两侧无行动",
+      "severity": "B",
+      "forms": [
+        "一方面/另一方面",
+        "不仅/而且 对称论证"
+      ],
+      "naturalAlternatives": [
+        "让两个目标在同一行动中冲突"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-056",
+      "label": "泛化暧昧标签替代关系和具体观察",
+      "severity": "B",
+      "forms": [
+        "心爱女孩/这妖精竟然脸红了 低龄套语"
+      ],
+      "naturalAlternatives": [
+        "写脸红原因、掩饰方式和关系变化"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-057",
+      "label": "身体部位+抽象状态+封闭式重比喻",
+      "severity": "B",
+      "forms": [
+        "眉宇间沉得像压着一层铅块"
+      ],
+      "naturalAlternatives": [
+        "写眉头、视线、语气和手上动作"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-058",
+      "label": "抽象状态+伪精确分数，像参数调色",
+      "severity": "B",
+      "forms": [
+        "轻慢少了两分/气息凝实了一分"
+      ],
+      "naturalAlternatives": [
+        "写目光、语气、脚步和动作后果"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-059",
+      "label": "成对评价词把过程封口，抹掉阻力",
+      "severity": "B",
+      "forms": [
+        "整个过程平静而顺利"
+      ],
+      "naturalAlternatives": [
+        "写步骤、阻力、失败和代价"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-060",
+      "label": "表面/深层比较骨架+抽象重量",
+      "severity": "B",
+      "forms": [
+        "比表面看起来重得多"
+      ],
+      "naturalAlternatives": [
+        "把“重”落到阻力、代价和限制"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-061",
+      "label": "叠量词+模板化动态形容词",
+      "severity": "B",
+      "forms": [
+        "一串串急促的气泡"
+      ],
+      "naturalAlternatives": [
+        "写气泡来源、方向及是否暴露位置"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-062",
+      "label": "生理状态+近乎诡异的结论标签",
+      "severity": "B",
+      "forms": [
+        "心跳沉稳得近乎诡异"
+      ],
+      "naturalAlternatives": [
+        "写缺氧压力与身体异常证据"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    },
+    {
+      "id": "CNW-AI-063",
+      "label": "否定对比叠加绝对化能力命名；组合后 AI 感显著",
+      "severity": "B",
+      "forms": [
+        "不是…能打出的伤害",
+        "那是绝对维度的瞬杀"
+      ],
+      "naturalAlternatives": [
+        "写伤口、队友反应和不可解释后果"
+      ],
+      "runtimeRecommendation": "span_diagnostic"
+    }
+  ]
+}

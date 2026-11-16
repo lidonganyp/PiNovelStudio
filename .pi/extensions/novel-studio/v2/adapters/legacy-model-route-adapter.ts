@@ -151,6 +151,12 @@ const STREAMING_JUDGE_ROUTES = new Set([
   "v2_opportunity_judge",
   "v2_literary_judge",
 ]);
+// STREAMING-WRITER-1：正文写作路由启用 SSE 流式，增量经 transport hooks 上报给平台展示。
+// 仅作用于 Gemini 生产 writer 路由；judge 路由的 streaming 语义保持不变。
+const STREAMING_WRITER_ROUTES = new Set([
+  "v2_rawstage2_gemini31",
+  "v2_amplified_gemini31",
+]);
 
 function parseRetryLimit(value: string | undefined, maximum: number): number | undefined {
   if (!value?.trim()) return undefined;
@@ -928,7 +934,7 @@ export function createLegacyModelGenerateFn(): ModelGenerateFn {
             ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
             ...(input.seed === undefined ? {} : { seed: input.seed }),
             timeoutMs: candidateTimeoutMs,
-            ...(STREAMING_JUDGE_ROUTES.has(route) ? { stream: true } : {}),
+            ...((STREAMING_JUDGE_ROUTES.has(route) || STREAMING_WRITER_ROUTES.has(route)) ? { stream: true } : {}),
           },
         );
         usedRoute = route;
