@@ -42,6 +42,11 @@ const router = createRouter({
           component: () => import('../views/portal/ProjectCreateView.vue'),
         },
         {
+          path: 'projects/:id/video',
+          name: 'project-video',
+          component: () => import('../views/portal/VideoContainerView.vue'),
+        },
+        {
           path: 'projects/:id/workbench',
           name: 'workspace',
           component: () => import('../views/portal/WorkspaceView.vue'),

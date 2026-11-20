@@ -174,9 +174,6 @@ services:
       # release manifest; a missing value must prevent deployment rather than
       # silently producing an anonymous production identity.
       PINOVEL_RELEASE_COMMIT: ${PINOVEL_RELEASE_COMMIT:?PINOVEL_RELEASE_COMMIT is required and must match the active release manifest}
-      # 生产治理目录（active-production 指针 + release manifests）的显式路径，
-      # 避免门禁从临时 workspace 目录向上回溯时找不到挂载点
-      PINOVEL_EVOLUTION_ROOT: /app/pnovel/.pi/extensions/novel-studio/config/evolution-release
       PINOVEL_MODEL_REQUEST_TIMEOUT_MS: ${PINOVEL_MODEL_REQUEST_TIMEOUT_MS:-300000}
       # G6 governance resolution: the runtime invokes the extension with a
       # per-job temp project root (workspace-manager), so the gate cannot

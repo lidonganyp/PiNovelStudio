@@ -20,6 +20,7 @@ export class PivideoService {
     userId: number,
     projectId: number,
     chapterId: number,
+    authHeader: string,
   ): Promise<{
     ok: boolean;
     videoProjectId: string;
@@ -87,7 +88,10 @@ export class PivideoService {
     try {
       resp = await fetch(`${baseUrl}/api/projects`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authHeader ? { Authorization: authHeader } : {}),
+        },
         body: JSON.stringify({
           title: `${project.title} · ${chapter.title}`,
           rawText: chapter.content,

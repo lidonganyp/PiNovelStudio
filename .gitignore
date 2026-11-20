@@ -273,3 +273,8 @@ config/production-identity/active.pack.json
 
 # Windows stray pnpm cache dirs
 platform/D:*
+
+# Windows pnpm 缓存垃圾文件
+D:\CODE
+**/.pnpm-cache
+**/.pnpm-state

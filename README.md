@@ -2,7 +2,7 @@
 
 > 顶尖网文级小说章节生成系统
 >
-> **版本**: v2.0 | **更新日期**: 2026-07-20
+> **版本**: v2.0 | **更新日期**: 2026-11-20
 
 ## 项目概述
 
@@ -10,9 +10,14 @@ PiNovelStudio 是一个基于 PI (AI Coding Agent) 的**中文长篇小说章节
 
 > 商用平台（NestJS + Vue 3 + PostgreSQL）项目概览见 [platform/docs/project-overview.md](platform/docs/project-overview.md)。
 
-### B6 融合：PiVideoStudio 联动
+### 融合：PiVideoStudio 联动（B6 + B7）
 
-章节编辑器内置『生成视频』按钮，一键聚合章节正文、大纲、人物卡、种子上下文，调用 PiVideoStudio API 创建视频项目并跳转，实现小说到视频的跨平台工作流。
+**与 PiVideoStudio（小说转视频工场）同属一个产品**：统一域名 `ainovel.cloud`，一套账号、一份余额。
+
+- **B6 工作流联动**：章节编辑器内置『生成视频』按钮，一键聚合章节正文、大纲、人物卡、种子上下文，调用 PiVideoStudio API 创建视频项目并跳转（`https://ainovel.cloud/video/projects/{id}`）。
+- **B7 统一账号与计费**：PiVideoStudio 复用本平台签发的 JWT（共享登录态，项目按用户隔离）；视频生成经内部计费 API（hold 预占 → 按秒结算 → 收尾释放）消耗本平台余额，费率见 `model_rates` 表（`pivideo_*` 前缀）。
+
+> 融合整体架构见 [PiVideoStudio/docs/fusion-architecture.md](../PiVideoStudio/docs/fusion-architecture.md)。
 
 ## 核心特性
 
@@ -199,6 +204,42 @@ PiNovelStudio 不是「写完就发」的玩具项目——每次生成内核变
 - [生产发布治理运行手册](./docs/production-release-governance-runbook-20261102.md)
 - [生产架构](./docs/production-architecture.md) / [生产运行手册](./docs/production-runbook.md)
 - [AGENTS.md](./AGENTS.md) — PI 项目指令文件（架构决策、硬约束、审计入口）
+
+## 运维与备份
+
+### 数据库备份
+
+PostgreSQL 数据库每天自动备份（crontab 3:00），保留最近 7 天：
+
+```bash
+# 手动备份
+./platform/scripts/backup-db.sh
+
+# 查看备份
+ls -la platform/backups/
+```
+
+### 健康检查
+
+```bash
+# API 健康检查
+curl http://localhost:3000/api/health
+# {"status":"ok","uptime":12345}
+```
+
+### Docker 容器管理
+
+```bash
+cd platform
+# 启动
+docker compose up -d
+# 状态
+docker compose ps
+# 日志
+docker compose logs -f api
+# 停止
+docker compose down
+```
 
 ## License
 

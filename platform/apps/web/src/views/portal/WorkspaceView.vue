@@ -64,7 +64,9 @@ const SECONDARY_TABS = [
   { value: 'versions', label: '版本' },
   { value: 'revision', label: '整书重写' },
   { value: 'feedback', label: '反馈' },
+  { value: 'video', label: '视频生成' },
 ] as const;
+const goToVideo = () => router.push('/projects/' + projectId.value + '/video');
 const secondaryLabel = computed(() => SECONDARY_TABS.find((tab) => tab.value === activeTab.value)?.label ?? '');
 provide('materialEpoch', materialEpoch);
 provide('activeChapterNumber', computed(() => activeChapter.value?.chapterNumber ?? null));
@@ -263,6 +265,13 @@ defineExpose({ loadChapters, patchChapter });
             <el-empty v-else description="左侧新建或选择一个章节" />
           </template>
           <OutlinePanel v-if="activeTab === 'outline'" :project-id="projectId" />
+          <div v-if="activeTab === 'video'" class="video-entry-pane">
+            <el-result icon="info" title="视频生成工作台" sub-title="将本章小说内容转化为视频">
+              <template #extra>
+                <el-button type="primary" @click="goToVideo">进入视频工作台</el-button>
+              </template>
+            </el-result>
+          </div>
           <template v-if="activeTab === 'seed'">
             <SeedEditor
               v-if="activeChapter"

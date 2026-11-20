@@ -15,3 +15,15 @@ app.use(createPinia());
 app.use(router);
 app.use(ElementPlus, { locale: zhCn });
 app.mount('#app');
+
+// qiankun 微前端：注册 PiVideoStudio 子应用
+import { registerMicroApps, start } from 'qiankun';
+registerMicroApps([
+  {
+    name: 'pivideo-web',
+    entry: '//ainovel.cloud/video/',
+    container: '#pivideo-container',
+    activeRule: (location: Location) => /^\/projects\/\d+\/video\/?$/.test(location.pathname),
+  },
+]);
+start({ prefetch: false });

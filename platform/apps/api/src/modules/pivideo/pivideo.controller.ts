@@ -2,7 +2,8 @@
  * PiVideoStudio 视频工场入口（B6 融合）。
  * 章节页『生成视频』按钮的后端：聚合上下文 → 创建 PiVideoStudio 项目。
  */
-import { Controller, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { Controller, Param, ParseIntPipe, Post, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthUserPayload } from '../auth/auth.types';
@@ -19,7 +20,11 @@ export class PivideoController {
     @CurrentUser() user: AuthUserPayload,
     @Param('id', ParseIntPipe) projectId: number,
     @Param('cid', ParseIntPipe) chapterId: number,
+    @Req() req: Request,
   ): Promise<unknown> {
-    return this.pivideo.generateVideo(user.sub, projectId, chapterId);
+    // 透传用户 JWT：PiVideoStudio 与本服务共享 JWT_SECRET，可直接验签
+    const authHeader =
+      typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+    return this.pivideo.generateVideo(user.sub, projectId, chapterId, authHeader);
   }
 }
