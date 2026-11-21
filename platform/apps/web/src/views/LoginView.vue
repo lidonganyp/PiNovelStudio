@@ -176,6 +176,7 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
 
 <template>
   <div class="auth-page login-page">
+    <canvas ref="canvasRef" class="lp-canvas"></canvas>
     <aside class="auth-brand">
       <div class="auth-brand-inner">
         <div class="auth-brand-logo">π</div>
@@ -208,7 +209,7 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
         </svg>
         <span>GitHub</span>
       </a>
-    </header>
+    </aside>
 
     <!-- 主体 -->
     <main class="lp-main">
@@ -279,7 +280,7 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
             <el-button text type="primary" @click="goRegister">立即注册</el-button>
           </div>
         </div>
-      </el-card>
+      </aside>
       <router-link class="login-back" to="/">← 返回首页</router-link>
     </main>
 
@@ -297,6 +298,8 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
 /* 登录页专属星空视觉：仅在登录页生效，注册页仍使用 global.css 的共享样式 */
 .login-page {
   position: relative;
+  flex-wrap: wrap;
+  overflow-x: hidden;
   background:
     radial-gradient(900px 600px at 12% 0%, rgba(70, 110, 255, 0.28), transparent 62%),
     radial-gradient(800px 560px at 88% 8%, rgba(150, 80, 255, 0.22), transparent 62%),
@@ -316,7 +319,16 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
     radial-gradient(1.4px 1.4px at 76px 164px, rgba(255, 255, 255, 0.6), transparent);
   background-size: 200px 200px, 240px 240px, 320px 320px;
 }
-/* 左侧品牌区：半透明玻璃质感，保留原有 slogan 与特性列表 */
+
+/* 全屏粒子网络画布：固定于视口背景层，不拦截鼠标事件 */
+.lp-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 左侧品牌区：玻璃质感深色渐变（布局尺寸继承 global.css 的 .auth-brand） */
 .login-page .auth-brand {
   z-index: 1;
   background: linear-gradient(
@@ -355,13 +367,152 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
   color: #9dabcc;
   opacity: 1;
 }
-/* 右侧表单区 */
-.login-page .auth-main {
+.lp-github {
   position: relative;
   z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 36px;
+  font-size: 13px;
+  color: #9db8ff;
+  text-decoration: none;
+  transition: color 0.2s;
 }
-.login-page .auth-card {
+.lp-github:hover {
+  color: #c3d6ff;
+}
+
+/* 右侧主体区：纵向居中排布 hero + 登录卡片 */
+.login-page .lp-main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  padding: 56px 48px 40px;
+}
+
+/* Hero 区 */
+.lp-hero {
+  width: 100%;
+  max-width: 920px;
+  text-align: center;
+}
+.lp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: #9db8ff;
+  border: 1px solid rgba(140, 175, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(74, 123, 255, 0.1);
+}
+.lp-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.9);
+}
+.lp-title {
+  margin: 20px 0 14px;
+  font-size: 40px;
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #f2f6ff;
+}
+.lp-title-glow {
+  background: linear-gradient(135deg, #6f9bff, #b39dff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 18px rgba(111, 155, 255, 0.45));
+}
+.lp-subtitle {
+  margin: 0 auto;
+  max-width: 640px;
+  font-size: 14px;
+  line-height: 1.9;
+  color: #9aa8cc;
+}
+
+/* 特性矩阵 */
+.lp-features {
+  margin-top: 36px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  text-align: left;
+}
+.lp-feature-card {
+  padding: 18px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(140, 175, 255, 0.18);
+  background: rgba(15, 22, 44, 0.55);
+  backdrop-filter: blur(12px);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.lp-feature-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(160, 195, 255, 0.42);
+}
+.lp-feature-icon {
+  font-size: 22px;
+}
+.lp-feature-title {
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e6ecff;
+}
+.lp-feature-desc {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #8b99c0;
+}
+
+/* 数据统计行 */
+.lp-stats {
+  margin-top: 34px;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 20px 56px;
+}
+.lp-stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #8fb4ff, #c4b5fd);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.lp-stat-label {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #7c89ab;
+}
+
+/* 登录卡片：深色玻璃拟态（迁移原 .auth-card 配色方案） */
+.lp-auth {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.lp-card {
   width: 404px;
+  max-width: 100%;
+  padding: 34px 34px 26px;
   color: #eaf0ff;
   border-radius: 18px;
   border: 1px solid rgba(140, 175, 255, 0.22);
@@ -369,60 +520,64 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(18px);
 }
-.login-page .auth-card :deep(.el-card__body) {
-  padding: 38px 36px 30px;
-}
-.login-page .auth-card .auth-title {
-  color: #f2f6ff;
+.lp-card-title {
+  margin: 0;
   font-size: 23px;
+  color: #f2f6ff;
   letter-spacing: 0.5px;
 }
-.login-page .auth-card .auth-sub {
+.lp-card-sub {
+  margin: 6px 0 22px;
+  font-size: 13px;
   color: #9aa8cc;
 }
-.login-page .auth-card :deep(.el-form-item__label) {
+.lp-card :deep(.el-form-item__label) {
   color: #b9c4e2;
   font-weight: 500;
 }
-.login-page .auth-card :deep(.el-input__wrapper) {
+.lp-card :deep(.el-input__wrapper) {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.05);
   box-shadow: 0 0 0 1px rgba(140, 175, 255, 0.28) inset;
 }
-.login-page .auth-card :deep(.el-input__wrapper:hover) {
+.lp-card :deep(.el-input__wrapper:hover) {
   box-shadow: 0 0 0 1px rgba(160, 195, 255, 0.5) inset;
 }
-.login-page .auth-card :deep(.el-input__wrapper.is-focus) {
+.lp-card :deep(.el-input__wrapper.is-focus) {
   box-shadow: 0 0 0 1px #6f9bff inset;
 }
-.login-page .auth-card :deep(.el-input__inner) {
+.lp-card :deep(.el-input__inner) {
   color: #eaf0ff;
 }
-.login-page .auth-card :deep(.el-input__inner::placeholder) {
+.lp-card :deep(.el-input__inner::placeholder) {
   color: #7c89ab;
 }
-.login-page .auth-card :deep(.el-input__suffix-inner) {
+.lp-card :deep(.el-input__suffix-inner) {
   color: #93a2c6;
 }
-.login-page .auth-submit {
+.lp-submit {
+  width: 100%;
   border: none;
   font-weight: 600;
   letter-spacing: 1px;
   background: linear-gradient(135deg, #4a7bff, #8a4bff);
   box-shadow: 0 10px 28px rgba(90, 100, 255, 0.4);
 }
-.login-page .auth-submit:hover {
+.lp-submit:hover {
   box-shadow: 0 12px 34px rgba(120, 110, 255, 0.6);
 }
-.login-page .auth-card .auth-footer {
+.lp-card-footer {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 13px;
   color: #93a2c6;
 }
-.login-page .auth-card .auth-footer :deep(.el-button) {
+.lp-card-footer :deep(.el-button) {
   color: #9db8ff;
 }
+
 .login-back {
   display: block;
-  margin-top: 16px;
   text-align: center;
   font-size: 13px;
   color: #7f8cb0;
@@ -432,13 +587,47 @@ const githubUrl = 'https://github.com/lidonganyp/PiNovelStudio';
 .login-back:hover {
   color: #c3cfea;
 }
-@media (max-width: 860px) {
-  .login-page .auth-main {
-    padding: 40px 20px;
+
+/* 底部开源信息：占满整行，位于双栏之下 */
+.lp-footer {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 14px 24px 22px;
+  font-size: 12px;
+  color: #7c89ab;
+}
+.lp-footer-link {
+  color: #9db8ff;
+  text-decoration: none;
+  word-break: break-all;
+  transition: color 0.2s;
+}
+.lp-footer-link:hover {
+  color: #c3d6ff;
+}
+
+/* 响应式 */
+@media (max-width: 1200px) {
+  .lp-features {
+    grid-template-columns: repeat(2, 1fr);
   }
-  .login-page .auth-card {
-    width: 100%;
-    max-width: 420px;
+}
+@media (max-width: 860px) {
+  .login-page .lp-main {
+    padding: 44px 20px 28px;
+    gap: 32px;
+  }
+  .lp-title {
+    font-size: 30px;
+  }
+  .lp-stats {
+    gap: 16px 32px;
   }
 }
 </style>
